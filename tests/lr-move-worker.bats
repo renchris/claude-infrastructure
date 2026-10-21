@@ -674,6 +674,7 @@ open(sys.argv[2], "w").write(s.replace(sys.argv[3], sys.argv[4]))' "$LRD/lr-move
   [ -x /bin/bash ] || skip "/bin/bash absent"
   /bin/bash -c 'case "$BASH_VERSION" in 3.*) ;; *) exit 1 ;; esac' || skip "/bin/bash is not 3.2"
   w16_env
+  # shellcheck disable=SC1003  # the trailing backslash is the worker's own line continuation, matched literally
   w16_mutant '      ${FOCUS_ENV[@]+"${FOCUS_ENV[@]}"} \' '      "${FOCUS_ENV[@]}" \'
   worker
   ! invoked || { echo "the mutant reached the actuator: the bash 3.2 case has no power"; false; }
@@ -702,6 +703,7 @@ open(sys.argv[2], "w").write(s.replace(sys.argv[3], sys.argv[4]))' "$LRD/lr-move
 @test "34 D9 mutant (unknown focus proceeds, as lr_focus_gate does): dies" {
   [ -x /bin/bash ] || skip "/bin/bash absent"
   w16_env; w16_plan "" 1; w16_focus bad
+  # shellcheck disable=SC1003  # the trailing backslash is the worker's own line continuation, matched literally
   w16_mutant '    *) [ "${LR_MOVE_FOCUS_UNKNOWN:-hold}" = proceed ] \' '    *) [ "${LR_MOVE_FOCUS_UNKNOWN:-proceed}" = proceed ] \'
   worker
   invoked || { echo "the mutant held too, so the unknown-focus case has no power"; false; }

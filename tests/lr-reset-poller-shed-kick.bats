@@ -54,8 +54,8 @@ mode() { mkdir -p "$PSTATE/shed"; printf '%s\n' "$1" > "$PSTATE/shed/mode"; }
 plog() { cat "$PSTATE/poller.log" 2>/dev/null; }
 kicked_pid() { sed -n 's/.*SHED-KICK started pid \([0-9][0-9]*\).*/\1/p' "$PSTATE/poller.log" | tail -1; }
 await_row() { # the detached controller's first decision row, bounded; it never waits on load
-  local i
-  for i in $(seq 1 150); do grep -q "\"ev\":\"$1\"" "$PSTATE/shed/decisions.jsonl" 2>/dev/null && return 0; sleep 0.2; done
+  local _i
+  for _i in $(seq 1 150); do grep -q "\"ev\":\"$1\"" "$PSTATE/shed/decisions.jsonl" 2>/dev/null && return 0; sleep 0.2; done
   return 1
 }
 
