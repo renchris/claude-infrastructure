@@ -1,0 +1,17 @@
+{
+  "_what": "Load harness assertion modes (B1 §8.3, W4). `hard` must hold now and a failure is FAIL. `target:<owner>` is reported XPASS/XFAIL and never fails the pair; its owner flips it to hard in its own commit, citing a pair run whose XPASS turned into a hard PASS. After W4 lands this file is written only by the slot-A wave in flight (plan Phase 0, shared expectation files); slot B/C waves send the lead a flip request. Per-member scopes (a group's `scope` in the matrix) override a row for that member alone.",
+  "H1": "hard",
+  "H2": "hard",
+  "H3": "hard",
+  "H4": "hard",
+  "H5": "hard",
+  "H6": "hard",
+  "H7": "hard",
+  "H8": "hard",
+  "H9": "hard",
+  "T1": "target:B3",
+  "T2": "target:B2",
+  "T3": "target:B2",
+  "T4": "target:A6",
+  "T5": "target:A7"
+}

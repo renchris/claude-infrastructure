@@ -18,10 +18,29 @@ the keys the scripts send: bracketed paste, \\r, \\x15, \\x7f, \\x0c, Esc, digit
 Every fault knob is per sid, read from $LR_RIG_SPECS/<sid>.json (rig_lib.py expand). Per-sid progress
 that must survive the process (a swallowed Enter happens once, a first-turn fault once) lives in
 $LR_RIG/tmp/stub/<sid>.json. Stdlib only.
+
+Load-harness knobs (B1 §9.2, W4). All off unless the spec carries them:
+  busy_for_s N             a late death: WORKING until go + N, then an assistant partial and the
+                           limit (records busy_until); replaces die_at_s for that member
+  goal_meta_after_limit    after the limit, an isMeta /goal record stamped 1 s BEFORE it (769b7294)
+  composer_unreadable_s N  from died_at to died_at + N the frame has no input box (garble_until)
+  heavy_lead_subagents K   at death, K subagent transcripts with mtime died_at − 60 (plan weight)
+  boot_delay_s N|[lo,hi]   per resume: sleep before READY; a [lo,hi] range is drawn per process
+  slow_boots K             only the first K resumes take boot_delay_s; later ones take boot_delay_bin
+  boot_delay_bin {median, p90, cap}  a lognormal draw per resume (gap-4's distribution for a bin)
+  boot_cpu_s N             per resume: burn N CPU-s before READY (calibrated from real boots)
+  busy_forever             a busy_extra pane: WORKING for ever, never dies (holds the restore budget)
+  stop_failure_hook PATH   at death, pipe a StopFailure JSON to PATH (the G2 seam; B1 uses none)
+Every invocation appends `t pid base stub mode` to $LR_RECON_ROOT/band-calls.log (F14: the band is
+read INSIDE the call path, where a 5 s sampler cannot see a short-lived child). A draft member logs
+any ^U, DEL or submit applied to its draft as `draft_mut` in its state file (H8).
 """
 
+import hashlib
 import json
+import math
 import os
+import random
 import select
 import signal
 import subprocess
@@ -38,6 +57,65 @@ VERSION = "2.1.284"
 ESC = "\x1b"
 LIMIT_NOTICE = "  ⎿  You've hit your session limit · resets 1:30am (America/Chicago)"
 PASTE_ON, PASTE_OFF = ESC + "[200~", ESC + "[201~"
+HARNESS_FIX = os.path.join(HERE, "..", "fixtures", "lr-load-harness")
+
+
+def band_record(mode):
+    """F14: this process's BASE priority, read in the call path, one line per invocation. Never
+    fatal: a stub that cannot record its band still runs (the harness counts the missing lines)."""
+    try:
+        sys.path.insert(0, os.path.join(HERE, "..", "..", "scripts", "limit-recover"))
+        from lr_recon import band as _band  # type: ignore
+
+        base = _band.base_priority(os.getpid())
+    except Exception:  # noqa: BLE001 — a reader, never a crash
+        base = None
+    root = os.environ.get("LR_RECON_ROOT") or os.path.join(RIG, "state")
+    try:
+        with open(os.path.join(root, "band-calls.log"), "a") as fh:
+            fh.write(
+                "%d\t%d\t%s\tstub\t%s\n"
+                % (time.time(), os.getpid(), "?" if base is None else base, mode)
+            )
+    except OSError:
+        pass
+
+
+def _limited_path(cfg):
+    return os.path.join(RIG, "tmp", "limited", os.path.basename(os.path.realpath(cfg)))
+
+
+def limited_until(cfg):
+    """The epoch an account's own limit lifts (go_barrier matrices: the limit is account-wide)."""
+    try:
+        with open(_limited_path(cfg)) as fh:
+            return float(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0.0
+
+
+def mark_limited(cfg, until):
+    os.makedirs(os.path.dirname(_limited_path(cfg)), exist_ok=True)
+    with open(_limited_path(cfg), "w") as fh:
+        fh.write("%.0f\n" % until)
+
+
+def burn_cpu(seconds):
+    """Real CPU in this process's band (the band tax is the point): sha256 over 1 MiB until
+    process_time has advanced by ``seconds``."""
+    if not seconds or seconds <= 0:
+        return
+    buf, end = b"\0" * (1 << 20), time.process_time() + float(seconds)
+    while time.process_time() < end:
+        hashlib.sha256(buf).digest()
+
+
+def lognormal_draw(rng, median, p90, cap):
+    """A lognormal with this median and p90 (z90 = 1.2816), capped: gap-4's boot+first-turn
+    distribution for one load bin (30-40/core: median 46 s, p90 212 s)."""
+    mu = math.log(max(0.1, float(median)))
+    sigma = max(0.0, (math.log(max(float(p90), float(median) + 0.1)) - mu) / 1.2816)
+    return min(float(cap), rng.lognormvariate(mu, sigma))
 
 
 # ── files ───────────────────────────────────────────────────────────────────────────────────────
@@ -249,6 +327,18 @@ class Tui:
         # the positional prompt a relauncher passed after --resume SID: submitted once, by the stub
         # itself, right after its first frame (the real CLI's self-submit; B1 M10)
         self.pending_prompt = ""
+        self.garble_until = 0.0
+        self.is_draft = False  # the buffer holds a draft knob's text (H8 watches it)
+        self.last_garble_draw = 0.0
+        self.marked_draft = None
+
+    def draft_mut(self, what):
+        """H8: a key that would clear or send a draft, applied while the buffer holds one. Logged
+        from the stub's own state (the world), never from the daemon's records."""
+        if self.is_draft and self.buf:
+            st = self.s.state()
+            st.setdefault("draft_mut", []).append([time.time(), what])
+            self.s.mark(draft_mut=st["draft_mut"])
 
     def shown(self):
         """CC collapses a big paste to a chip: over 800 chars or more than 2 newlines (HF:3159)."""
@@ -268,6 +358,21 @@ class Tui:
         w = self.cols()
         rule = "─" * w
         out = [ESC + "[H" + ESC + "[2J"]
+        if self.garble_until and time.time() < self.garble_until:
+            # composer_unreadable_s: a frame with no input box (no rule rows), so the composer
+            # reader returns unreadable, until garble_until; then the normal frame again
+            with open(
+                os.path.join(HARNESS_FIX, "composer-unreadable-%s.txt" % VERSION)
+            ) as fh:
+                out += fh.read().splitlines()
+            sys.stdout.write("\r\n".join(out))
+            sys.stdout.flush()
+            return
+        if self.is_draft and self.buf != self.marked_draft:
+            self.marked_draft = self.buf
+            self.s.mark(
+                draft_now=self.buf
+            )  # H8 reads what the composer holds at the end
         out.append(" ▐▛███▛█   Claude Code v%s" % VERSION)
         out.append("▝▜██████▀  Opus 5.5 · Claude Max")
         out.append(" ▝▝   ▝▝   %s" % self.s.cwd)
@@ -377,9 +482,19 @@ class Tui:
         target = self.resumed and os.path.realpath(self.s.cfg) != os.path.realpath(
             st.get("home_cfg", self.s.cfg)
         )
+        walled = limited_until(self.s.cfg) > time.time()
         if ft and target and not st.get("first_turn_done"):
             self.s.mark(first_turn_done=True)
             self.s.error(ft)
+            if ft.startswith("limit") and k.get("go_barrier"):
+                mark_limited(
+                    self.s.cfg, time.time() + float(k.get("reset_in_s") or 3 * 3600)
+                )
+        elif walled and k.get("go_barrier"):
+            # a limited ACCOUNT refuses every session's turn, not one session's: without this the
+            # other members on that account served turns after its limit, the daemon read the
+            # limit as contradicted ("served a turn since") and never re-placed (W4 shakedown)
+            self.s.error("limit")
         else:
             self.s.assistant("Continuing the task.")
         self.busy = False
@@ -464,15 +579,19 @@ class Tui:
                             self.s.mark(swallowed=True)
                             continue
                         if self.buf.strip():
+                            self.draft_mut("submit")
+                            self.is_draft = False
                             self.submit(self.buf)
                     elif ch == "\n":
                         self.buf += "\n"
                     elif ch == "\x7f":
+                        self.draft_mut("del")
                         if self.chip is not None:
                             self.buf, self.chip = self.buf[: self.chip[0]], None
                         else:
                             self.buf = self.buf[:-1]
                     elif ch == "\x15":
+                        self.draft_mut("ctrl-u")
                         self.buf, self.chip = "", None
                     elif ch == "\x0c":
                         pass
@@ -489,26 +608,108 @@ class Tui:
         ORIGINAL process dies, and only once: a resumed stub reads the same spec on the target
         account, so without both guards it would die again there and be moved twice (B1 C15)."""
         k = self.s.knobs
-        if not k.get("go_barrier") or k.get("idle") or self.resumed:
+        if (
+            not k.get("go_barrier")
+            or k.get("idle")
+            or k.get("busy_forever")
+            or self.resumed
+        ):
             return False
         try:
             go = os.stat(os.path.join(RIG, "go")).st_mtime
         except OSError:
             return False
-        if time.time() < go + float(k.get("die_at_s") or 0):
+        # busy_for_s is a LATE death (B1 C4): WORKING through the turn, limited at its end
+        at = (
+            k.get("busy_for_s")
+            if k.get("busy_for_s") is not None
+            else k.get("die_at_s")
+        )
+        if time.time() < go + float(at or 0):
             return False
         return not self.s.state().get("died_at")
+
+    def die(self):
+        """The limit death and every knob keyed to it, in transcript order."""
+        k, now = self.s.knobs, time.time()
+        self.s.mark(died_at=now)
+        if k.get("busy_for_s") is not None:
+            # the turn's assistant partial, then the limit: a turn that ran out mid-answer
+            # stamped at go: the turn streamed this BEFORE the account hit its wall, then ran a long
+            # tool call with no API request; a partial stamped at death reads as "the account served a
+            # turn since its limit" and the daemon rightly calls the cohort NOT_NEEDED (W4 shakedown)
+            try:
+                go = os.stat(os.path.join(RIG, "go")).st_mtime
+            except OSError:
+                go = now
+            self.s.back_s = max(0.0, time.time() - go)
+            self.s.assistant("Partial output before the limit.")
+            self.s.back_s = 0.0
+            self.s.mark(busy_until=time.time())
+        self.busy = False
+        self.s.error("limit")
+        if k.get("goal_meta_after_limit"):
+            # 769b7294's shape: an isMeta /goal record written AFTER the limit but stamped 1 s
+            # BEFORE it, so a reader that keys on "the last user record" sees a live turn
+            with open(os.path.join(HARNESS_FIX, "goal-meta-after-limit.jsonl")) as fh:
+                rec = json.loads(fh.readline())
+            self.s.back_s = 1.0
+            self.s.append(rec)
+            self.s.back_s = 0.0
+            self.s.mark(goal_meta_at=time.time())
+        n = int(k.get("heavy_lead_subagents") or 0)
+        if n:
+            # plan.subagents_written counts files written in [death − 600, death]
+            d = os.path.join(os.path.dirname(self.s.tx), self.s.sid, "subagents")
+            os.makedirs(d, exist_ok=True)
+            for i in range(n):
+                p = os.path.join(d, "agent-%02d.jsonl" % i)
+                with open(p, "w") as fh:
+                    fh.write('{"type":"assistant","isSidechain":true}\n')
+                os.utime(p, (now - 60, now - 60))
+            self.s.mark(subagents_written=n)
+        if k.get("composer_unreadable_s"):
+            self.garble_until = now + float(k["composer_unreadable_s"])
+            self.s.mark(garble_until=self.garble_until)
+        hook = k.get("stop_failure_hook")
+        if hook:
+            # the G2 seam: the real StopFailure path, fed what Claude Code would feed it
+            payload = {
+                "session_id": self.s.sid,
+                "transcript_path": self.s.tx,
+                "cwd": self.s.cwd,
+                "hook_event_name": "StopFailure",
+                "error": "rate_limit",
+            }
+            try:
+                subprocess.run(
+                    [hook],
+                    input=json.dumps(payload),
+                    text=True,
+                    timeout=60,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self.s.mark(stop_failure_hook_at=time.time())
+            except (OSError, subprocess.SubprocessError):
+                self.s.mark(stop_failure_hook_at=-1)
+        self.notice = LIMIT_NOTICE
+        self.draw()
 
     def tick(self):
         """Faults that fire on their own clock: the go_barrier death, a draft typed after confirm,
         a stub re-created."""
         k, tx = self.s.knobs, self.s.tx
         if self.due_death():
-            self.s.mark(died_at=time.time())
-            self.busy = False
-            self.s.error("limit")
-            self.notice = LIMIT_NOTICE
-            self.draw()
+            self.die()
+        if self.garble_until:
+            now = time.time()
+            if now >= self.garble_until:
+                self.garble_until = 0.0
+                self.draw()  # the normal frame again
+            elif now - self.last_garble_draw >= 2:
+                self.last_garble_draw = now
+                self.draw()
         confirmed = os.path.exists(tx + ".handed-off")
         dr = k.get("draft") or {}
         if (
@@ -519,6 +720,7 @@ class Tui:
         ):
             self.s.mark(draft_done=True)
             self.buf = dr.get("text", "draft")
+            self.is_draft = True
             self.draw()
         if (
             k.get("recreate_stub_on_append")
@@ -582,7 +784,9 @@ def fresh(sid):
     # go_barrier: alive and WORKING (a user turn in flight, the busy frame) until $LR_RIG/go +
     # die_at_s, never idle at rest, so the idle fan-out cannot move a member before it dies (C15).
     # Without it the member dies here, at boot, exactly as before.
-    barrier = bool(k.get("go_barrier")) and not k.get("idle")
+    barrier = (bool(k.get("go_barrier")) or bool(k.get("busy_forever"))) and not k.get(
+        "idle"
+    )
     dies_now = not k.get("idle") and not barrier
     if dies_now:
         s.error("limit")
@@ -596,6 +800,7 @@ def fresh(sid):
     dr = k.get("draft") or {}
     if dr.get("at") == "boot":
         t.buf = dr.get("text", "draft")
+        t.is_draft = True
     if dies_now:
         t.notice = LIMIT_NOTICE
     boot = os.path.join(RIG, "tmp", "boot")
@@ -603,6 +808,31 @@ def fresh(sid):
     open(os.path.join(boot, sid + ".ok"), "w").close()
     t.key_loop()
     return 0
+
+
+def boot_delay(s):
+    """Seconds this resume sleeps before READY (B1 F6). ``boot_delay_s`` is a number or a [lo, hi]
+    range drawn per process; ``slow_boots`` K applies it to the first K resumes only, after which
+    ``boot_delay_bin`` (a lognormal per resume) applies. Every draw is recorded in ``boots``."""
+    k, st = s.knobs, s.state()
+    n = int(st.get("resumes") or 0) + 1
+    rng = random.Random("%s:%d" % (s.sid, n))
+    fixed, slow = k.get("boot_delay_s"), k.get("slow_boots")
+    d = 0.0
+    if fixed is not None and (slow is None or n <= int(slow)):
+        d = (
+            rng.uniform(float(fixed[0]), float(fixed[1]))
+            if isinstance(fixed, list)
+            else float(fixed)
+        )
+    elif isinstance(k.get("boot_delay_bin"), dict):
+        b = k["boot_delay_bin"]
+        d = lognormal_draw(
+            rng, b.get("median", 46), b.get("p90", 212), b.get("cap", 300)
+        )
+    boots = list(st.get("boots") or []) + [[round(time.time(), 1), round(d, 1)]]
+    s.mark(resumes=n, boots=boots)
+    return d
 
 
 def resume(sid, prompt=""):
@@ -622,9 +852,10 @@ def resume(sid, prompt=""):
             return 1
         s.tx = found[0]
     s.parent = s.last_uuid()
-    delay = int(s.knobs.get("boot_delay_s") or 0)
+    delay = boot_delay(s)
     if delay:
         time.sleep(delay)
+    burn_cpu(float(s.knobs.get("boot_cpu_s") or 0))
     s.register(os.getpid())
     if s.knobs.get("crash_after_boot") and not s.state().get("crashed"):
         s.mark(crashed=True)
@@ -677,6 +908,11 @@ def main(argv):
         # pane's registry row and hid the sid from the rig daemon (W5 N=30, clean-idle stuck IN-FLIGHT).
         print("%s (Claude Code)" % VERSION)
         return 0
+    band_record(
+        "resume"
+        if ("--resume" in a or "-r" in a)
+        else ("dead" if "--rig-write-dead" in a else "fresh")
+    )
     if "--rig-write-dead" in a:
         return write_dead(
             a[a.index("--rig-write-dead") + 1], a[a.index("--rig-cwd") + 1]

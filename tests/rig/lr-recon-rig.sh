@@ -41,7 +41,18 @@ set -uo pipefail
 
 RIG="${LR_RIG_ROOT:-/tmp/lr-rig}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"
+# The code under test. The load harness points this at a frozen `git archive` tree (B1 C14: the cure
+# arm never reads a live worktree a /ship may be rebasing; the red arm can be a parent sha). The
+# stub, the fake placer and rig_lib always come from $HERE, the harness's own tree.
+REPO="${LR_RIG_TREE:-$(cd "$HERE/../.." && pwd)}"
+[ -d "$REPO/scripts/limit-recover/lr_recon" ] || { echo "lr-recon-rig: LR_RIG_TREE=$REPO has no lr_recon" >&2; exit 2; }
+# inherit (the cure arm: the caller's band, 31 from a session) | utility (the red arm: 20/20, the
+# launchd no-ProcessType ceiling, B1 §4). The measuring instruments never run under the clamp.
+BAND="${LR_RIG_BAND:-inherit}"
+case "$BAND" in inherit|utility) ;; *) echo "lr-recon-rig: LR_RIG_BAND=$BAND (inherit|utility)" >&2; exit 2 ;; esac
+# F23: production's watchdog plist sets no ProcessType, so it runs at 20; the harness asks for the
+# same in the cure arm (LR_RIG_WATCHDOG_BAND=utility). The legacy rig keeps the caller's band.
+WD_BAND="${LR_RIG_WATCHDOG_BAND:-inherit}"
 KITTEN="${LR_KITTEN_BIN:-/Applications/kitty.app/Contents/MacOS/kitten}"
 KITTY_REAL="${LR_RIG_REAL_KITTY:-/Applications/kitty.app/Contents/MacOS/kitty}"
 # Setup bounds (B1 §9.1): the load harness sizes them per arm (its red arm starts python at band
@@ -88,6 +99,15 @@ export LR_PRESEED_DONE=1 LR_RIG_PYAPP="$PYAPP" CC_KITTY_CONF="$REAL_HOME/.config
 export CC_TERM_KITTY_PID="${SOCK##*-}" DISABLE_AUTOUPDATER=1 CC_TERM=kitty
 export LR_RIG_TAG="$RIG_TAG" LR_RIG_REAL_KITTY="$KITTY_REAL" CC_LR_POLLER_LABEL=rig.invalid
 EOF
+  # kitty-slow (B1 §9.5): every actuator resolves kitty through CC_TERM_KITTY and the daemon's kitten
+  # through LR_KITTEN_BIN, so the wrapper sees each RC call; with no fault table it execs at once
+  if [ "${LR_RIG_KITTY_SLOW:-0}" = 1 ]; then
+    printf 'export CC_TERM_KITTY="%s" LR_KITTEN_BIN="%s"\n' "$RIG/bin/kitty-slow" "$RIG/bin/kitten-slow" >> "$RIG/env.sh"
+  fi
+  # the typed-relaunch arm (B1 F11/C6): a successor is never staged, every move types its relaunch
+  [ "${LR_RIG_TYPED_RELAUNCH:-0}" = 1 ] && printf 'export CC_PANE_SUCCESSOR=off\n' >> "$RIG/env.sh"
+  [ -s "$RIG/placer.env" ] && cat "$RIG/placer.env" >> "$RIG/env.sh"
+  return 0
 }
 # S2: never `kill $(cat pidfile)`. rig_lib checks the recorded (pid, lstart) and the argv first.
 killv() { /usr/bin/python3 "$HERE/rig_lib.py" kill-verified "$RIG" "$1" "${2:-TERM}"; }
@@ -139,7 +159,27 @@ mkdir -p "$RIG"/{bin,specs,work,tmp,lr,state,home/.claude/bin} || die "mkdir $RI
 for s in launchctl osascript; do ln -sf "$HERE/shims/$s" "$RIG/bin/$s"; done
 : > "$RIG/started"   # the mtime the real-HOME check below compares against
 
+for s in kitty-slow kitten-slow; do [ -e "$HERE/$s" ] && ln -sf "$HERE/$s" "$RIG/bin/$s"; done
+
 # ── 1. the rig HOME ───────────────────────────────────────────────────────────────────────────────
+# The matrix's placer block (B1 §6.1, C1) → the fake placer's knobs, for the HOME step (the router
+# KMAX in accounts.json) and every rig process (env.sh). Values are single-quoted, quotes stripped.
+/usr/bin/python3 - "$FAULTS" > "$RIG/placer.env" <<'PY' || die "placer block"
+import json, sys
+p = json.load(open(sys.argv[1])).get("placer") or {}
+env = {"RIG_PLACE_CPU_S": p.get("cpu_s"), "RIG_PLACE_MAP_CPU_S": p.get("map_cpu_s"),
+       "RIG_PLACE_SLEEP_S": p.get("sleep_s"), "RIG_PLACE_KMAX": p.get("kmax"),
+       "RIG_PLACE_CHARGE_TTL_S": p.get("charge_ttl_s"),
+       "RIG_PLACE_SLEEP_CALLS": ",".join(str(c) for c in p.get("sleep_calls") or []) or None,
+       "RIG_PLACE_OCCUPIED": json.dumps(p["occupied"], separators=(",", ":")) if p.get("occupied") else None}
+for k, v in env.items():
+    if v is not None:
+        print("export %s='%s'" % (k, str(v).replace("'", "")))
+PY
+if [ -s "$RIG/placer.env" ]; then
+  # shellcheck source=/dev/null
+  . "$RIG/placer.env"
+fi
 python3 "$HERE/rig_lib.py" home "$RIG" || die "rig home"
 IDLE_FANOUT="$(python3 -c 'import json,sys;print("on" if json.load(open(sys.argv[1])).get("idle_fanout") else "off")' "$FAULTS")"
 write_env
@@ -179,16 +219,17 @@ N_SPECS="$(python3 "$HERE/rig_lib.py" expand "$FAULTS" "$RIG/specs.json")" || di
 EXPECTED="$(python3 "$HERE/rig_lib.py" expected "$FAULTS")"
 printf '%s\n' "$EXPECTED" > "$RIG/expected.line"
 log "expected (derived from $(basename "$FAULTS") before the run): $EXPECTED"
+N_EXTRA="$(python3 "$HERE/rig_lib.py" extra-specs "$FAULTS" "$RIG/specs-extra.json")" || die "busy_extra specs"
 python3 - "$RIG" <<'PY' || die "specs"
 import json, os, sys
 rig = sys.argv[1]
-for s in json.load(open(os.path.join(rig, "specs.json"))):
+for s in json.load(open(os.path.join(rig, "specs.json"))) + json.load(open(os.path.join(rig, "specs-extra.json"))):
     json.dump(s, open(os.path.join(rig, "specs", s["sid"] + ".json"), "w"))
     os.makedirs(os.path.join(rig, "work", "s%02d" % s["n"]), exist_ok=True)
 PY
 
 # ── 2. panes: OS windows titled $RIG_TAG, one tab each, a control window plus ≤2 members ──────────
-: > "$RIG/windows"
+: > "$RIG/windows"; : > "$RIG/windows.sid"
 # B1 review S1: placement rule 2 scans EVERY kitty OS window for room (pane-placement.sh), so a rig
 # whose own window is full puts a successor into the operator's fullest window. One tab and at most
 # 3 panes per rig OS window keeps rule 1 (room in the source's own window) true for every member.
@@ -228,9 +269,14 @@ while IFS=$'\t' read -r n sid stale; do
         /usr/bin/env /bin/zsh -f -c "for v in \${(k)parameters[(I)CLAUDE*]} \${(k)parameters[(I)ANTHROPIC*]} ITERM_SESSION_ID CC_PANE_ID; do unset \$v; done; . $RIG/env.sh; export ZDOTDIR=$RIG/home CLAUDE_CONFIG_DIR=$RIG/home/.claude-next; cd $cwd && exec zsh -ic 'claude --session-id $sid; exec zsh -i'")" \
     || die "kitty launch for s$n"
   echo "$wid" >> "$RIG/windows"
+  printf '%s\t%s\n' "$wid" "$sid" >> "$RIG/windows.sid"   # kitty-slow's window → member map
 done < <(python3 -c 'import json,sys
-for s in json.load(open(sys.argv[1])): print("%d\t%s\t%s" % (s["n"], s["sid"], s["stale_request"]))' "$RIG/specs.json")
-log "opened $(wc -l < "$RIG/windows" | tr -d ' ') rig panes on $SOCK"
+for s in json.load(open(sys.argv[1])) + json.load(open(sys.argv[2])): print("%d\t%s\t%s" % (s["n"], s["sid"], s["stale_request"]))' "$RIG/specs.json" "$RIG/specs-extra.json")
+log "opened $(wc -l < "$RIG/windows" | tr -d ' ') rig panes on $SOCK (busy_extra $N_EXTRA)"
+python3 "$HERE/rig_lib.py" kitty-faults "$RIG" || die "kitty fault tables"
+# The load harness opens one arm's windows at a time (B1 review S5: two arms reading → launching →
+# handing focus back concurrently can hand focus to the other arm's window); this marks the end.
+: > "$RIG/windows.done"
 
 # every live stub reaches its starting state (limit death written, or idle at rest) before anything
 t0=$(date +%s)
@@ -265,10 +311,13 @@ OWNER_PID="${LR_RIG_OWNER_PID:-}" OWNER_LSTART="${LR_RIG_OWNER_LSTART:-}"
 if [ -z "$OWNER_PID" ] && [ "${LR_RIG_KEEP:-0}" != 1 ]; then OWNER_PID=$$; fi
 # LC_ALL=C on both sides: lstart is locale-formatted, and the supervisor runs under env.sh's LANG
 if [ -n "$OWNER_PID" ] && [ -z "$OWNER_LSTART" ]; then OWNER_LSTART="$(LC_ALL=C ps -o lstart= -p "$OWNER_PID" | xargs)"; fi
+WD_PFX=""; [ "$WD_BAND" = utility ] && WD_PFX=/usr/sbin/taskpolicy\ -c\ utility
 cat > "$RIG/supervisor.sh" <<EOF
 #!/bin/bash
 # KeepAlive + ThrottleInterval 10 for the daemon, StartInterval 30 for the watchdog.
 cd "$REPO/scripts/limit-recover" || exit 1
+# teardown TERMs this loop: record the reaped-descendant CPU (the arm's rig cost) on the way out
+trap 'times > "$RIG/state/supervisor.times"; exit 0' TERM
 last_wd=0
 deadman() { # 0 = this arm must stop now
   [ "\$(date +%s)" -ge "\$(cat "$RIG/deadline" 2>/dev/null || echo 0)" ] && return 0
@@ -283,7 +332,7 @@ while [ ! -e "$RIG/stop" ]; do
   while kill -0 "\$dpid" 2>/dev/null && [ ! -e "$RIG/stop" ]; do
     now=\$(date +%s)
     if [ \$((now - last_wd)) -ge 30 ]; then
-      /bin/bash "$REPO/scripts/limit-recover/lr-recon-watchdog.sh" >/dev/null 2>&1; last_wd=\$now
+      $WD_PFX /bin/bash "$REPO/scripts/limit-recover/lr-recon-watchdog.sh" >/dev/null 2>&1; last_wd=\$now
       # our own unreaped child, so its pid cannot have been reused: a plain kill is exact here
       if deadman; then echo "\$now deadman: deadline or owner gone" >> "$RIG/state/supervisor.log"; : > "$RIG/stop"; kill "\$dpid" 2>/dev/null; fi
     fi
@@ -292,11 +341,15 @@ while [ ! -e "$RIG/stop" ]; do
   wait 2>/dev/null
   [ -e "$RIG/stop" ] || { echo "\$(date +%s) daemon exited; restart in 10 s" >> "$RIG/state/supervisor.log"; sleep 10; }
 done
+times > "$RIG/state/supervisor.times"   # reaped-descendant CPU: the daemon and its waited children
 EOF
 # shellcheck source=/dev/null
 . "$REPO/scripts/lib/detach.sh"
+# The red arm: taskpolicy execs in place (B1 R-M1), so detach's printed pid IS the clamped supervisor,
+# and every route below it inherits 20/20. ${pfx[@]+…} keeps bash 3.2 safe under set -u.
+pfx=(); [ "$BAND" = utility ] && pfx=(/usr/sbin/taskpolicy -c utility)
 # shellcheck disable=SC2016 # $0/$1 are the inner shell's, on purpose
-SUP="$(detach "$RIG/state/supervisor.out" /usr/bin/env -i /bin/bash -c '. "$0"; exec /bin/bash "$1"' \
+SUP="$(detach "$RIG/state/supervisor.out" ${pfx[@]+"${pfx[@]}"} /usr/bin/env -i /bin/bash -c '. "$0"; exec /bin/bash "$1"' \
        "$RIG/env.sh" "$RIG/supervisor.sh")" || die "supervisor spawn"
 echo "$SUP" > "$RIG/supervisor.pid"
 record_id "$RIG/supervisor.pid" || die "supervisor $SUP gone before its identity was recorded"

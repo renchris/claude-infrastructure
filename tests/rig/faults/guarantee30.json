@@ -1,0 +1,27 @@
+{
+  "_what": "B1 §6.1 guarantee cohort at n = 30 (W4; run once guarantee9 is stable). guarantee9's groups scaled up, plus 3 idle members MOVED by the idle fan-out, 1 draft at boot (HOLD-DRAFT, a hard hold that must page by its max age) and 1 background job at boot (HOLD-BGWORK). Counts sum to 30. With idle_fanout on, go_barrier members boot WORKING, never idle (C15). KMAX 16 clamps the heavy lead to 15 and leaves 33 seats for the rest. Run with LR_RIG_HOLD_WINDOW=1 (the harness sets it) so the arm stays up until each hold has paged (C5).",
+  "source": "next",
+  "scope": "5h",
+  "go_barrier": true,
+  "idle_fanout": true,
+  "die_spread_s": 300,
+  "seed": "guarantee30",
+  "boot_delay_bin": {"median": 46, "p90": 212, "cap": 300},
+  "busy_extra": 4,
+  "placer": {"cpu_s": 4.0, "map_cpu_s": 0.15, "sleep_s": 200, "sleep_calls": [1, 2], "kmax": 16, "occupied": {}, "charge_ttl_s": 900},
+  "groups": [
+    {"name": "clean-limited", "count": 8, "knobs": {}, "expect": "ENGAGED"},
+    {"name": "slow-boot", "count": 2, "knobs": {"boot_delay_s": [190, 300], "slow_boots": 1}, "expect": "ENGAGED"},
+    {"name": "target-limited", "count": 3, "knobs": {"first_turn": "limit"}, "expect": "ENGAGED"},
+    {"name": "kitty-slow", "count": 2, "knobs": {"kitty_delay_s": [2, 15], "kitty_delay_k": 3}, "expect": "ENGAGED"},
+    {"name": "composer-unreadable-once", "count": 2, "knobs": {"composer_unreadable_s": 360}, "expect": "ENGAGED"},
+    {"name": "late-death", "count": 2, "knobs": {"busy_for_s": 300}, "expect": "ENGAGED"},
+    {"name": "goal-meta", "count": 2, "knobs": {"goal_meta_after_limit": true}, "expect": "ENGAGED"},
+    {"name": "heavy-lead", "count": 1, "knobs": {"heavy_lead_subagents": 18}, "expect": "ENGAGED"},
+    {"name": "restart-mid-actuation", "count": 1, "knobs": {}, "daemon_fault": "kill9_post_transplant", "expect": "ENGAGED", "scope": {"H3": "target:A6", "H6": "target:A6"}},
+    {"name": "c_rpc_fail_twice", "count": 2, "knobs": {"send_text_fail_n": 2}, "expect": "ENGAGED", "scope": {"H2": "target:W8", "H3": "target:W8"}},
+    {"name": "clean-idle", "count": 3, "knobs": {"idle": true}, "expect": "MOVED"},
+    {"name": "draft-at-boot", "count": 1, "knobs": {"draft": {"at": "boot", "text": "operator draft, do not send"}}, "expect": "HOLD-DRAFT"},
+    {"name": "bgwork-at-boot", "count": 1, "knobs": {"bg_job": {"at": "boot", "seconds": 7200}}, "expect": "HOLD-BGWORK"}
+  ]
+}

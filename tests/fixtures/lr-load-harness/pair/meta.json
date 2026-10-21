@@ -1,0 +1,21 @@
+{
+ "id": "fixture-pass",
+ "n": 2,
+ "every_s": 5,
+ "census_every_s": 15,
+ "started": 1000.0,
+ "ncpu": 10,
+ "pcores": 8,
+ "arms": {
+  "cure": {
+   "root": "/nonexistent/lrh-fixture-cure",
+   "band": "inherit",
+   "tree": "aaaaaaaaaaaa"
+  },
+  "red": {
+   "root": "/nonexistent/lrh-fixture-red",
+   "band": "utility",
+   "tree": "aaaaaaaaaaaa"
+  }
+ }
+}

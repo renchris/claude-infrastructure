@@ -12,6 +12,8 @@
   rig_lib.py sweep    RIG SIG [OUT]   signal every rig process by verified identity; leftovers → OUT
   rig_lib.py containment RIG          read `kitten @ ls` on stdin; rc 3 if a rig pane shares an OS window
   rig_lib.py result   RIG KEY=VAL…    merge keys into RIG/rig-result.json
+  rig_lib.py extra-specs FAULTS OUT   busy_extra N → N never-dying WORKING pane specs (not members)
+  rig_lib.py kitty-faults RIG         windows.sid + knobs → faults/kitty-{delay,fail}.tsv (kitty-slow)
 
 Pure stdlib, python 3.9 (the pinned /usr/bin/python3 the daemon runs under).
 """
@@ -45,9 +47,19 @@ def load(path: str) -> Dict[str, Any]:
 
 
 def expand(faults: Dict[str, Any], seed: str = "") -> List[Dict[str, Any]]:
-    """One spec per session, in matrix order. sids are fresh uuid4s (the stub writes them)."""
+    """One spec per session, in matrix order. sids are fresh uuid4s (the stub writes them).
+
+    Load-harness matrix keys (B1 §6.1, W4): ``die_spread_s`` draws each member's ``die_at_s`` from a
+    seeded uniform over [0, die_spread_s] (a member's own die_at_s or busy_for_s wins);
+    ``boot_delay_bin`` {median, p90, cap} is copied into every member that sets no boot delay of
+    its own (gap-4's boot distribution for the run's bin, F6). The seed is ``seed`` or the matrix's."""
+    import random
+
     out: List[Dict[str, Any]] = []
     i = 0
+    rng = random.Random(seed or str(faults.get("seed", "lr-rig")))
+    spread = float(faults.get("die_spread_s") or 0)
+    bdist = faults.get("boot_delay_bin")
     # matrix-level switches the stub must see per member (B1 C15): with go_barrier a member boots
     # alive and dies at $LR_RIG/go + die_at_s; with idle_fanout too it boots WORKING, never idle
     barrier = (
@@ -58,18 +70,45 @@ def expand(faults: Dict[str, Any], seed: str = "") -> List[Dict[str, Any]]:
     for g in faults["groups"]:
         for _ in range(int(g["count"])):
             i += 1
+            knobs = dict(g.get("knobs") or {}, **barrier)
+            draw = (
+                rng.uniform(0.0, spread) if spread else None
+            )  # drawn for every member
+            if (
+                draw is not None
+                and "die_at_s" not in knobs
+                and "busy_for_s" not in knobs
+            ):
+                knobs["die_at_s"] = round(draw, 1)
+            if (
+                isinstance(bdist, dict)
+                and "boot_delay_s" not in knobs
+                and "boot_delay_bin" not in knobs
+            ):
+                knobs["boot_delay_bin"] = dict(bdist)
+            if (
+                isinstance(bdist, dict)
+                and "slow_boots" in knobs
+                and "boot_delay_bin" not in knobs
+            ):
+                knobs["boot_delay_bin"] = dict(
+                    bdist
+                )  # after its slow boots, the bin's draw
             out.append(
                 {
                     "n": i,
                     "sid": str(uuid.uuid4()),
                     "group": g["name"],
-                    "knobs": dict(g.get("knobs") or {}, **barrier),
+                    "knobs": knobs,
                     "expect": g["expect"],
                     "recovers": g.get("recovers") or "",
                     "fold": bool(g.get("fold")),
                     "daemon_fault": g.get("daemon_fault") or "",
                     "legacy_holder": bool(g.get("legacy_holder")),
                     "stale_request": bool(g.get("stale_request")),
+                    # per-member assertion scope: {"H3": "target:A6"} keeps a known open defect
+                    # from failing the whole pair (B1 C9); the load harness reads it
+                    "scope": dict(g.get("scope") or {}),
                     "source": faults.get("source", "next"),
                 }
             )
@@ -196,6 +235,27 @@ def audit(root: str, specs: List[Dict[str, Any]], home: str) -> int:
             (" · OVER: " + ", ".join(bad)) if bad else "",
         )
     )
+    # P4 (B1 §9.4): a record under this root for a sid the matrix never named is the other arm's,
+    # or production's, leaking in; it must be 0
+    extra = set()
+    try:
+        extra = {
+            s["sid"]
+            for s in load(os.path.join(os.path.dirname(root), "specs-extra.json"))
+        }
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    sdir = os.path.join(root, "sessions")
+    foreign = sorted(
+        n[:-5]
+        for n in (os.listdir(sdir) if os.path.isdir(sdir) else [])
+        if n.endswith(".json") and n.count(".") == 1 and n[:-5] not in want | extra
+    )
+    print(
+        "foreign records: %d%s"
+        % (len(foreign), (" · " + ",".join(f[:8] for f in foreign)) if foreign else "")
+    )
+    ok = ok and not foreign
     for s in specs:
         if not s.get("fold"):
             continue
@@ -235,14 +295,17 @@ def build_home(rig: str) -> None:
         if not os.path.islink(link):
             os.symlink(d, link)
         accts.append({"name": name, "config_dir": "~/" + dot, "launcher": "claude"})
+    doc: Dict[str, Any] = {
+        "_what": "lr-recon rig accounts (throwaway)",
+        "accounts": accts,
+    }
+    if os.environ.get("RIG_PLACE_KMAX"):
+        # the reconciler's clamp reads the same KMAX the fake placer's seat model refuses at
+        doc["router"] = {"KMAX": int(os.environ["RIG_PLACE_KMAX"])}
     with open(
         os.path.join(home, ".claude", "accounts.json"), "w", encoding="utf-8"
     ) as fh:
-        json.dump(
-            {"_what": "lr-recon rig accounts (throwaway)", "accounts": accts},
-            fh,
-            indent=1,
-        )
+        json.dump(doc, fh, indent=1)
 
 
 # ── run-time helpers (lr-recon-rig.sh) ──────────────────────────────────────────────────────────
@@ -629,6 +692,36 @@ def cohort(rig: str) -> str:
 MOVING = ("TRANSPLANTED", "EXITING", "HUSK-RETIRED", "EXITED", "RELAUNCHED")
 
 
+def _live_actuator(rec: Dict[str, Any]) -> bool:
+    for p in rec.get("procs") or []:
+        try:
+            pid = int(p.get("pid") or 0)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if pid > 0:
+            try:
+                os.kill(pid, 0)
+                return True
+            except OSError:
+                continue
+    return False
+
+
+def _fault_log(rig: str, sid: str, fault: str, what: str) -> None:
+    """faults.log: one row per daemon fault the rig fired (or failed to): the P3 evidence."""
+    try:
+        with open(os.path.join(rig, "state", "faults.log"), "a") as fh:
+            fh.write("%d\t%s\t%s\t%s\n" % (time.time(), sid, fault, what))
+    except OSError:
+        pass
+
+
+# B1 C5: a hard hold pages at MAX_AGE_S (HOLD-DRAFT 900 s, HOLD-BGWORK 1200 s, types.py); a drive that
+# stops at "held 30 s" never sees the page. LR_RIG_HOLD_WINDOW=1 keeps it until entry + age + 2 passes.
+HOLD_PAGE_AGE_S = {"HOLD-DRAFT": 900, "HOLD-BGWORK": 1200}
+HOLD_PASS_MARGIN_S = 2 * 20.0
+
+
 def _daemon_pid(rig: str) -> int:
     try:
         return int(open(os.path.join(rig, "state", "daemon.pid")).read().strip())
@@ -646,7 +739,10 @@ def _settled(
         sub = rec.get("substate") or ""
         if rec.get("terminal") is None and sub == exp:
             held_since.setdefault(spec["sid"], now)
-            return now - held_since[spec["sid"]] >= 30
+            need = 30.0
+            if os.environ.get("LR_RIG_HOLD_WINDOW") == "1":
+                need = HOLD_PAGE_AGE_S.get(exp, 0) + HOLD_PASS_MARGIN_S
+            return now - held_since[spec["sid"]] >= need
         held_since.pop(spec["sid"], None)
         return False
     return rec.get("terminal") is not None
@@ -668,6 +764,24 @@ def drive(rig: str, timeout: float) -> int:
             f = s["daemon_fault"]
             r = recs.get(s["sid"])
             if not f or s["sid"] in fired or r is None:
+                continue
+            if f == "kill9_post_transplant":
+                # the incident's shape (REPORT.md:175): the daemon dies AFTER the transplant, while
+                # a recorded actuator of this attempt is still alive
+                if r.get("phase") in ("TRANSPLANTED", "EXITING") and _live_actuator(r):
+                    fired.add(s["sid"])
+                    rc = kill_verified(rig, dpf, "KILL")
+                    _fault_log(rig, s["sid"], f, "fired" if rc == 0 else "unverified")
+                    print(
+                        "[rig] fault %s %s on the daemon as %s sat in %s"
+                        % (
+                            f,
+                            "fired" if rc == 0 else "NOT fired",
+                            s["sid"][:8],
+                            r.get("phase"),
+                        ),
+                        flush=True,
+                    )
                 continue
             if r.get("phase") in MOVING or r.get("substate") == "PLANNED":
                 pid = _daemon_pid(rig)
@@ -696,7 +810,17 @@ def drive(rig: str, timeout: float) -> int:
                 flush=True,
             )
             return 3
+        if os.path.exists(os.path.join(rig, "stop")):
+            # the load harness stops an arm early (the red arm once power is shown, or an abort);
+            # the run still reads its status and writes rig-result.json
+            print("[rig] stopped by %s/stop after %ds" % (rig, now - t0), flush=True)
+            return 4
+        nheld = len(held)
         done = sum(1 for s in specs if _settled(s, recs.get(s["sid"]), held, now))
+        if len(held) != nheld:  # H4 reads each hold's observed entry
+            result(
+                rig, {"held_since": held}, path=os.path.join(rig, "state", "held.json")
+            )
         if now - last >= 30:
             last = now
             phases: Dict[str, int] = {}
@@ -731,6 +855,60 @@ def drive(rig: str, timeout: float) -> int:
             )
             return 1
         time.sleep(2)
+
+
+def kitty_faults(rig: str) -> int:
+    """The kitty-slow wrapper's tables, from windows.sid (wid<TAB>sid, written as each member pane
+    opens) and each member's knobs: faults/kitty-delay.tsv `wid lo hi k` (kitty_delay_s [lo, hi],
+    the first kitty_delay_k calls only, default 3: B1 F15) and faults/kitty-fail.tsv `wid n`
+    (send_text_fail_n). rc 0; prints how many rows each table got."""
+    by_sid = {s["sid"]: s for s in _specs(rig)}
+    delay, fail = [], []
+    try:
+        rows = [
+            ln.rstrip("\n").split("\t") for ln in open(os.path.join(rig, "windows.sid"))
+        ]
+    except OSError:
+        rows = []
+    for row in rows:
+        if len(row) < 2 or row[1] not in by_sid:
+            continue
+        k = by_sid[row[1]]["knobs"]
+        if isinstance(k.get("kitty_delay_s"), list) and len(k["kitty_delay_s"]) == 2:
+            lo, hi = k["kitty_delay_s"]
+            delay.append(
+                "%s\t%s\t%s\t%s" % (row[0], lo, hi, int(k.get("kitty_delay_k") or 3))
+            )
+        if int(k.get("send_text_fail_n") or 0) > 0:
+            fail.append("%s\t%d" % (row[0], int(k["send_text_fail_n"])))
+    os.makedirs(os.path.join(rig, "faults"), exist_ok=True)
+    for name, body in (("kitty-delay.tsv", delay), ("kitty-fail.tsv", fail)):
+        with open(os.path.join(rig, "faults", name), "w") as fh:
+            fh.write("".join(b + "\n" for b in body))
+    print("kitty faults: delay %d · send-text fail %d" % (len(delay), len(fail)))
+    return 0
+
+
+def extra_specs(faults: Dict[str, Any], out: str) -> int:
+    """busy_extra N (B1 F5): N more rig panes, WORKING for ever, never members. They hold the
+    reconciler's restore budget and drip the way a busy fleet does. Written to specs-extra.json
+    (never specs.json: the expected line and the audits count members only)."""
+    n = int(faults.get("busy_extra") or 0)
+    specs = [
+        {
+            "n": 100 + i,
+            "sid": str(uuid.uuid4()),
+            "group": "busy-extra",
+            "knobs": {"busy_forever": True},
+            "expect": "",
+            "stale_request": False,
+        }
+        for i in range(n)
+    ]
+    with open(out, "w", encoding="utf-8") as fh:
+        json.dump(specs, fh, indent=1)
+    print(n)
+    return 0
 
 
 def _pct(xs: List[float], q: float) -> float:
@@ -782,6 +960,10 @@ def main(argv: List[str]) -> int:
     if cmd == "expected":
         print(expected_line(load(argv[2])))
         return 0
+    if cmd == "extra-specs":
+        return extra_specs(load(argv[2]), argv[3])
+    if cmd == "kitty-faults":
+        return kitty_faults(argv[2])
     if cmd == "audit":
         return audit(argv[2], load(argv[3]), argv[4] if len(argv) > 4 else "")
     if cmd == "booted":

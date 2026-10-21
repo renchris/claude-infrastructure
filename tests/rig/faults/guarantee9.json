@@ -1,0 +1,23 @@
+{
+  "_what": "B1 §6.1 guarantee cohort for the live load harness (W4), with every review change: one member per fault, all expected ENGAGED, dying behind the go barrier while the daemon is live (t0 = death). n = 10, not the incident's 9: target-limited (F20), slow-boot (F6) and c_rpc_fail_twice (W8's power group) were added and two clean members folded away. late-death is the design's true-busy member relabelled (C4): WORKING through a 300 s turn, limited at its end. Boots draw from gap-4's 30-40/core distribution (F6); two busy_extra panes hold the restore budget (F5). The placer block makes the heavy lead placeable by making the clamp bind (C1): KMAX 8 clamps weight 19 to 7. Per-member scope keeps known open defects from failing the pair: the restart member's H3/H6 belong to A6 (C9) and the RPC-failure member's H2/H3 to W8 until their owners flip them in load-expect.json or here.",
+  "source": "next",
+  "scope": "5h",
+  "go_barrier": true,
+  "die_spread_s": 120,
+  "seed": "guarantee9",
+  "boot_delay_bin": {"median": 46, "p90": 212, "cap": 300},
+  "busy_extra": 2,
+  "placer": {"cpu_s": 4.0, "map_cpu_s": 0.15, "sleep_s": 200, "sleep_calls": [1, 2], "kmax": 8, "occupied": {}, "charge_ttl_s": 900},
+  "groups": [
+    {"name": "clean-limited", "count": 1, "knobs": {}, "expect": "ENGAGED"},
+    {"name": "slow-boot", "count": 1, "knobs": {"boot_delay_s": [190, 300], "slow_boots": 1}, "expect": "ENGAGED"},
+    {"name": "target-limited", "count": 1, "knobs": {"first_turn": "limit"}, "expect": "ENGAGED"},
+    {"name": "kitty-slow", "count": 1, "knobs": {"kitty_delay_s": [2, 15], "kitty_delay_k": 3}, "expect": "ENGAGED"},
+    {"name": "composer-unreadable-once", "count": 1, "knobs": {"composer_unreadable_s": 360}, "expect": "ENGAGED"},
+    {"name": "late-death", "count": 1, "knobs": {"busy_for_s": 300}, "expect": "ENGAGED"},
+    {"name": "goal-meta", "count": 1, "knobs": {"goal_meta_after_limit": true}, "expect": "ENGAGED"},
+    {"name": "heavy-lead", "count": 1, "knobs": {"heavy_lead_subagents": 18}, "expect": "ENGAGED"},
+    {"name": "restart-mid-actuation", "count": 1, "knobs": {}, "daemon_fault": "kill9_post_transplant", "expect": "ENGAGED", "scope": {"H3": "target:A6", "H6": "target:A6"}},
+    {"name": "c_rpc_fail_twice", "count": 1, "knobs": {"send_text_fail_n": 2}, "expect": "ENGAGED", "scope": {"H2": "target:W8", "H3": "target:W8"}}
+  ]
+}
