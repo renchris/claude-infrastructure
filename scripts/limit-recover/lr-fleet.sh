@@ -875,8 +875,8 @@ lf_recon_placed() {
   local rec="${LR_RECON_ROOT:-$STATE/recon}/sessions/$1.json" t
   [ -f "$rec" ] || return 1
   t="$(jq -r 'select(.terminal == null and (.plan_only == true | not) and (.escalated == true | not)
-                     and .substate == "PLANNED" and ((.target_acct // "") != "")) | .target_acct' "$rec" 2>/dev/null)" || return 1
-  [ -n "$t" ] || return 1
+                     and .substate == "PLANNED") | .target_acct // ""' "$rec" 2>/dev/null)" || return 1
+  [ -n "$t" ] || return 1   # placed means placed ONTO an account
   printf '%s' "$t"
 }
 # ── THE ADMIT SECTION — everything under the lock, and NOTHING ELSE ─────────────────────────────
