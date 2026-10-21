@@ -521,7 +521,7 @@ stay_why() { jq -r 'select(.class=="recycle-repick-stay") | .why' "$(LOGF)"; }
   run_repick next3
   [ "$status" -eq 0 ]
   [ -z "$output" ]
-  ! called '--assign'
+  ! called '--assign' || false
   grep -qF 'SHADOW: would have moved to next' "$ERRF"
   run jq -r 'select(.class=="recycle-repick-stay") | [.why,.best,.repick_held] | join("|")' "$(LOGF)"
   [ "$output" = "held-shadow|next|shadow" ]
@@ -532,7 +532,7 @@ stay_why() { jq -r 'select(.class=="recycle-repick-stay") | .why' "$(LOGF)"; }
   _held_fleet off next3 next3
   run_repick next3
   [ -z "$output" ]
-  ! called '--assign'
+  ! called '--assign' || false
   # review R.3 change 9: the pressure reason survives in its own field and on stderr
   grep -qF "next (0.000185) does not beat its 0.000166 by the router's 4x threshold" "$ERRF"
   run jq -r 'select(.class=="recycle-repick-stay") | [.why,.pressure,.held_token] | join("|")' "$(LOGF)"
@@ -543,7 +543,7 @@ stay_why() { jq -r 'select(.class=="recycle-repick-stay") | .why' "$(LOGF)"; }
   _held_fleet "" next3 next3
   run_repick next3
   [ -z "$output" ]
-  ! called '--assign'
+  ! called '--assign' || false
   run stay_why
   [ "$output" = "held-mode-off" ]
 }
@@ -552,7 +552,7 @@ stay_why() { jq -r 'select(.class=="recycle-repick-stay") | .why' "$(LOGF)"; }
   _held_fleet on next3,next,next2,next4 next3,next,next2,next4
   run_repick next3
   [ -z "$output" ]
-  ! called '--assign'
+  ! called '--assign' || false
   grep -qF 'so is every routable account' "$ERRF"
   run stay_why
   [ "$output" = "held-everywhere" ]
@@ -572,7 +572,7 @@ stay_why() { jq -r 'select(.class=="recycle-repick-stay") | .why' "$(LOGF)"; }
   printf 'route-meta: acct=next2 repick_ratio=4 dispatch_floor=next3:on-pace:0.0 dispatch_held=next3 repick_leave=next3 repick_unknown=- repick_held=on\n' > "$ROUTE_ERR"
   run_repick next
   [ -z "$output" ]
-  ! called '--assign'
+  ! called '--assign' || false
   run stay_why
   [ "$output" = "below-threshold" ]
 }
@@ -653,7 +653,7 @@ stay_why() { jq -r 'select(.class=="recycle-repick-stay") | .why' "$(LOGF)"; }
   export DRY=1
   run_repick next3
   [ "$output" = "next" ]
-  ! called '--assign'
+  ! called '--assign' || false
   grep -qF 'recycle RE-PICK: next3 → next' "$ERRF"
   [ ! -e "$(LOGF)" ]
   [ ! -e "$HOME/.claude/state/repick-held-moves.jsonl" ]
@@ -671,7 +671,7 @@ stay_why() { jq -r 'select(.class=="recycle-repick-stay") | .why' "$(LOGF)"; }
   printf 'route-meta: acct=next repick_ratio=4 dispatch_floor=next3:claimed:6.0 dispatch_held=next3 repick_leave=- repick_unknown=- repick_held=on\n' > "$ROUTE_ERR"
   run_repick next3
   [ -z "$output" ]
-  ! called '--assign'
+  ! called '--assign' || false
   run jq -r 'select(.class=="recycle-repick-stay") | [.why,.held_token] | join("|")' "$(LOGF)"
   [ "$output" = "held-not-leave|claimed" ]
 }
@@ -681,7 +681,7 @@ stay_why() { jq -r 'select(.class=="recycle-repick-stay") | .why' "$(LOGF)"; }
   printf 'route-meta: acct=next repick_ratio=4 dispatch_floor=next3:pace-stale:- dispatch_held=next3 repick_leave=- repick_unknown=next3 repick_held=on\n' > "$ROUTE_ERR"
   run_repick next3
   [ -z "$output" ]
-  ! called '--assign'
+  ! called '--assign' || false
   grep -qF 'unknown, so no move' "$ERRF"
   run stay_why
   [ "$output" = "held-unknown" ]
