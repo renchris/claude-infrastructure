@@ -25,6 +25,11 @@ setup() {
   # point it at the real backlog, intent records or reboot prep.
   unset CC_BACKLOG_FILE CC_BACKLOG_BIN CC_SELF_CLOSE_INTENT_DIR CC_REBOOT_PREP_DIR CC_RESTORE_PROJECT_ROOTS
   export CC_RESTORE_TX_CACHE="$BATS_TEST_TMPDIR/tx-cache"
+  # The library resolves handoff-fire.sh for the verified paste, so pin what a fire would read off the
+  # machine: its load gate and the account tooling (absent paths: those sensors fail open on one).
+  export CC_FIRE_CAPACITY_GATE=off CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-claude-accounts" \
+    HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json" \
+    CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/claude-accounts-heal-"
   export CC_NOTIFY_BIN="$REPO/bin/cc-notify" CC_NOTIFY_WAKE=0 CC_WAKE=off
   export CC_WAKE_BIN="$BATS_TEST_TMPDIR/stub-wake"
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\nexit 1\n' > "$CC_WAKE_BIN"; chmod +x "$CC_WAKE_BIN"
