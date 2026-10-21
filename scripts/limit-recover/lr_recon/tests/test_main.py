@@ -1701,6 +1701,96 @@ class MainTests(unittest.TestCase):
             M._plan(ctx, snap, {}, "act", now)
         self.assertEqual(ctx.place_misses["general"], 0)
 
+    def _holds_pass(self, ctx, run):
+        """One run_pass with the real ProjectsIndex (ctx.projects) and plan.place spied: the
+        real place runs over ``run``, so the --movers file is the one --place would read."""
+        import time
+
+        got = []
+        real = plan.place
+
+        def spy(lane, mvs, facts_dir, kw, timeout=30.0):
+            got.extend(mvs)
+            return real(lane, mvs, facts_dir, kw, run=run, timeout=timeout)
+
+        with (
+            mock.patch(
+                "lr_recon.observe.observe", return_value=_snap(time.time(), self.tmp)
+            ),
+            mock.patch.object(plan, "place", side_effect=spy),
+            mock.patch.object(plan, "assign_many", return_value=0),
+            mock.patch.object(M.act, "spawn"),
+        ):
+            M.run_pass(ctx)
+        with open(self.paths.events, encoding="utf-8") as fh:
+            ev = [json.loads(x) for x in fh]
+        return got, [e for e in ev if e["ev"] == "place"][-1]["detail"]
+
+    def test_w10_run_pass_hands_place_the_holds_map_from_its_index(self):
+        """B4 R1 end to end (review F7): run_pass → _plan → with_holds on the loop thread, inside
+        the pass's index. Every mover's map equals the old glob and the event reads holds=n/n;
+        an unreadable accounts.json or recon/place-holds.off sends no holds key (holds=0/n).
+        Mutant: with_holds called from a worker thread ⇒ holds None ⇒ this goes red (R7)."""
+        import glob as G
+        import subprocess
+
+        sid = "abcdef01-0000-0000-0000-000000000001"
+        st = {a: os.path.join(self.tmp, "st-" + a) for a in ("next3", "next4", "next5")}
+        for a, cfg in st.items():
+            os.makedirs(os.path.join(cfg, "projects", "-w-" + a))
+        open(
+            os.path.join(st["next3"], "projects", "-w-next3", sid + ".jsonl"), "w"
+        ).close()
+        open(
+            os.path.join(st["next5"], "projects", "-w-next5", sid + ".jsonl"), "w"
+        ).close()
+        acj = os.path.join(self.home, ".claude", "accounts.json")
+        os.makedirs(os.path.dirname(acj))
+        with open(acj, "w") as fh:
+            json.dump(
+                {"accounts": [{"name": a, "config_dir": c} for a, c in st.items()]}, fh
+            )
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        for k in ("CLAUDE_ACCOUNTS_JSON", "LR_RECON_PLACE_HOLDS"):
+            os.environ.pop(k, None)
+        files = []
+
+        def run(argv, **kw):
+            with open(argv[argv.index("--movers") + 1]) as fh:
+                files.append([json.loads(x) for x in fh])
+            return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+        ctx = M.Ctx(self.paths, None, self.home)
+        got, detail = self._holds_pass(ctx, run)
+        self.assertEqual([m.sid for m in got], [sid])
+        want = {
+            a: [c, bool(G.glob(os.path.join(c, "projects", "*", sid + ".jsonl")))]
+            for a, c in st.items()
+        }
+        self.assertEqual(sorted(v[1] for v in want.values()), [False, True, True])
+        self.assertEqual(got[0].holds, want)
+        self.assertEqual(files[-1][0]["holds"], want)
+        for tok in ("holds=1/1", "holds_s="):
+            self.assertIn(tok, detail)
+
+        open(
+            self.paths.p("place-holds.off"), "w"
+        ).close()  # read every pass, no restart
+        got, detail = self._holds_pass(ctx, run)
+        self.assertIsNone(got[0].holds)
+        self.assertNotIn("holds", files[-1][0])
+        self.assertIn("holds=0/1", detail)
+        os.unlink(self.paths.p("place-holds.off"))
+
+        with open(acj, "w") as fh:
+            fh.write("{unreadable")
+        got, detail = self._holds_pass(ctx, run)
+        self.assertIsNone(got[0].holds)
+        self.assertNotIn("holds", files[-1][0])
+        self.assertIn("holds=0/1", detail)
+
     def test_run_pass_hands_plan_the_pre_census_substates(self):
         """The census rebuckets WAIT_RESET to DETECTED before _plan, so keep_waits must read the
         substate the pass started with (the safety skeptic's 04:04:56Z rebucket)."""

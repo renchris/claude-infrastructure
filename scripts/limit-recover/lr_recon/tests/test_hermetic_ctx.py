@@ -34,19 +34,15 @@ import subprocess
 import tempfile
 import unittest
 from typing import Dict, List, Optional, Tuple
+from unittest import mock
 
 TESTS = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(TESTS, "..", "..", "..", ".."))
 PRE_W0B = "6b5848067"  # the parent of W0b's hermetic fix (3471aebea): red here by construction
 
 # (file, scope) → owner and reason. Printed on every run; a stale row prints RESOLVED and passes.
-KNOWN: Dict[Tuple[str, str], str] = {
-    (
-        "test_band.py",
-        "DaemonWiring",
-    ): "debt:lead — builds Ctx over a from_env(root=tmp) with no env and no LR_STATE_DIR patch; "
-    "only _band runs (writes under root), but Ctx's boot-slot store points at the live lr_root",
-}
+# test_band.py DaemonWiring was paid off by W10 (LR_STATE_DIR/HOME patched in its setUp).
+KNOWN: Dict[Tuple[str, str], str] = {}
 
 TEMPISH = ("tmp", "tempfile", "TemporaryDirectory", "mkdtemp")
 
@@ -339,9 +335,10 @@ class P:
         self.assertEqual(len(scan_source("test_p.py", planted)), 1)
 
     def test_a_stale_known_row_passes_as_resolved(self) -> None:
-        viol, debt, resolved = split_known([])
+        with mock.patch.dict(KNOWN, {("test_gone.py", "Gone"): "debt:x — planted"}):
+            viol, debt, resolved = split_known([])
         self.assertEqual((viol, debt), ([], []))
-        self.assertEqual(len(resolved), len(KNOWN))
+        self.assertEqual(resolved, ["RESOLVED (remove row): test_gone.py Gone"])
 
 
 class PreW0bTreeIsRed(unittest.TestCase):

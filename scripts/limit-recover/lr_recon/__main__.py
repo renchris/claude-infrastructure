@@ -1293,6 +1293,13 @@ def _plan(
     mvs = plan.movers(list(recs.values()), snap, now, facts)
     if not mvs:
         return 0
+    # B4 R1 (W10): on the loop thread, inside run_pass's pass_index, so the map is the kept
+    # index's answer as of this pass's walk; recon/place-holds.off is re-read every pass
+    t_h = time.monotonic()
+    mvs = plan.with_holds(
+        mvs, plan.holds_amap(), off=os.path.exists(paths.p(plan.PLACE_HOLDS_OFF))
+    )
+    holds_s = time.monotonic() - t_h
     kw = plan.kwork(snap, _accounts(ctx.home), now)
     placed: Dict[str, T.Placement] = {}
     for lane in ("general", "fable"):
@@ -1313,7 +1320,7 @@ def _plan(
             paths,
             "place",
             detail="lane=%s rc=%d cause=%s n=%d kept=%d misses=%d dur=%.1fs timeout=%.0fs "
-            "load1=%.0f"
+            "load1=%.0f holds=%d/%d holds_s=%.2f"
             % (
                 lane,
                 rc,
@@ -1324,6 +1331,9 @@ def _plan(
                 dur,
                 timeout,
                 load1,
+                sum(1 for m in lane_mvs if m.holds is not None),
+                len(lane_mvs),
+                holds_s,
             ),
         )
         tel = _tel(ctx)

@@ -270,13 +270,29 @@ class ProjectsIndex:
         _, key, st = self._store(cfg)
         if (key, name) not in self._rechecked:
             self._rechecked.add((key, name))
-            if st.full != self._pass:
-                st.full = self._pass
-                self._reads = 0
-                for d in list(st.order):
-                    if d in st.mtimes:
-                        self._check(key, st, d)
-                self._step()
+            self._walk(key, st)
+        return self.find(cfg, name)
+
+    def _walk(self, key: str, st: _Store) -> None:
+        """An mtime check of every dir in the store, at most once per store per pass."""
+        if st.full != self._pass:
+            st.full = self._pass
+            self._reads = 0
+            for d in list(st.order):
+                if d in st.mtimes:
+                    self._check(key, st, d)
+            self._step()
+
+    def exact(self, cfg: str, name: str) -> List[str]:
+        """``find`` after this pass's full walk of the store, asked for or not before: ``recheck``
+        without its once-per-name gate (B4 R1, the review's "exact every pass" variant). So the
+        answer is the glob's as of that walk, and a copy that appeared in an untouched dir since the
+        last pass is seen now, not within ROLL_PASSES. Cost: at most one walk per store per pass in
+        which it is asked. A file created after this pass's walk is seen next pass."""
+        if not name.endswith(INDEXED_SUFFIXES) or os.sep in name:
+            return self.find(cfg, name)
+        _, key, st = self._store(cfg)
+        self._walk(key, st)
         return self.find(cfg, name)
 
     def find(self, cfg: str, name: str) -> List[str]:
@@ -325,6 +341,16 @@ def in_projects(cfg: str, name: str, escape: bool = True) -> List[str]:
         return active[0].find(cfg, name)
     base = glob.escape(cfg) if escape else cfg
     return sorted(glob.glob(os.path.join(base, "projects", "*", name)))
+
+
+def exact_in_projects(cfg: str, name: str) -> Optional[List[str]]:
+    """``<cfg>/projects/*/<name>`` from this thread's pass index after the pass's full walk of the
+    store (``ProjectsIndex.exact``). None when no index is open on this thread: the caller must not
+    glob in its own loop, and must not touch an index another thread is serving (B4 R1)."""
+    active = _ACTIVE
+    if active is None or active[1] != threading.get_ident():
+        return None
+    return active[0].exact(cfg, name)
 
 
 def find_transcript(cfg_dirs: Sequence[str], cwd: str, sid: str) -> Optional[str]:

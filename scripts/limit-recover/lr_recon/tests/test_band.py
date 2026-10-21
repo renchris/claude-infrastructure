@@ -173,10 +173,25 @@ class DaemonWiring(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.mkdtemp(prefix="lr-band-main-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
+        env = mock.patch.dict(
+            os.environ,
+            {
+                "LR_STATE_DIR": os.path.join(self.tmp, "lr"),
+                "HOME": os.path.join(self.tmp, "home"),
+            },
+        )
+        env.start()
+        self.addCleanup(env.stop)
         self.paths = T.Paths.from_env(root=os.path.join(self.tmp, "lr", "recon"))
         store.ensure_dirs(self.paths)
         self.ctx = M.Ctx(self.paths, None, os.path.join(self.tmp, "home"))
         self.pages: List[str] = []
+
+    def test_the_ctx_tree_is_under_tmp(self) -> None:
+        """Ctx's boot-slot store lives under lr_root, not root: from_env(root=tmp) alone left it
+        on the live ~/.reso/limit-recover (W1 hermetic lint, the W0b leak class)."""
+        for p in (self.paths.lr_root, self.ctx.boots.store):
+            self.assertTrue(p.startswith(self.tmp), p)
 
     def _band(self, mode: str, pri: int) -> None:
         self.ctx.reporter = R.Reporter(self.paths, mode, page=self.pages.append)

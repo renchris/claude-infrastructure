@@ -877,6 +877,9 @@ class Mover:
     assign_id: Optional[str] = (
         None  # its own phantom's ledger id, exempt from its own charge
     )
+    # B4 R1 (W10): {acct: [config_dir, its store holds a live <sid>.jsonl]}, from the pass's index
+    # (plan.with_holds). --place trusts an entry only when realpath(config_dir) matches its own.
+    holds: Optional[Dict[str, List[Any]]] = None
 
 
 @dataclass

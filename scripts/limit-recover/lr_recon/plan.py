@@ -18,6 +18,7 @@ writing 17 records within 7 s, so a relaunched session already counts as an acti
 
 from __future__ import annotations
 
+import dataclasses
 import glob
 import json
 import os
@@ -27,6 +28,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from lr_recon import store
+from lr_recon import transcript
 from lr_recon import types as T
 from lr_recon.clock import run_bounded
 from lr_recon import working as W
@@ -169,15 +171,19 @@ def mover_weight(s: T.SessionObs, death_ts: float) -> int:
     return 1 + subagents_written(s.transcript.path, s.sid, death_ts)
 
 
+def accounts_json() -> str:
+    """The accounts.json claude-accounts reads: ``CLAUDE_ACCOUNTS_JSON``, else ~/.claude/."""
+    return os.environ.get("CLAUDE_ACCOUNTS_JSON") or os.path.expanduser(
+        "~/.claude/accounts.json"
+    )
+
+
 def kmax() -> Optional[int]:
     """The ACTIVE seat cap --place enforces: ``.router.KMAX`` of the SSOT claude-accounts reads
     (``CLAUDE_ACCOUNTS_JSON``, else ~/.claude/accounts.json). None when unreadable: --place cannot
     run without that file either, so there is no cap to clamp against."""
-    path = os.environ.get("CLAUDE_ACCOUNTS_JSON") or os.path.expanduser(
-        "~/.claude/accounts.json"
-    )
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(accounts_json(), encoding="utf-8") as fh:
             k = json.load(fh)["router"]["KMAX"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -282,6 +288,55 @@ def movers(
         rows.append((0 if rec.kind == "limited" else 1, death, m))
     rows.sort(key=lambda r: (r[0], r[1], r[2].sid))
     return [m for _k, _d, m in rows]
+
+
+def holds_amap() -> Dict[str, str]:
+    """account name → config dir from the accounts.json --place itself reads (``accounts_json``,
+    as ``kmax``), so a holds entry is keyed over --place's own file (B4 review F5). {} when it is
+    unreadable: no mover then carries a map, and --place globs as before."""
+    try:
+        with open(accounts_json(), encoding="utf-8") as fh:
+            rows = json.load(fh).get("accounts", [])
+        return {
+            a["name"]: os.path.normpath(os.path.expanduser(a["config_dir"]))
+            for a in rows
+            if a.get("name") and a.get("config_dir")
+        }
+    except (OSError, ValueError, KeyError, AttributeError, TypeError):
+        return {}
+
+
+PLACE_HOLDS_OFF = (
+    "place-holds.off"  # under recon/, re-read every pass: no map, --place globs
+)
+
+
+def with_holds(
+    mvs: Sequence[T.Mover], amap: Dict[str, str], off: bool = False
+) -> List[T.Mover]:
+    """B4 R1: each mover's ``holds``, {account: [config_dir, its store holds a live
+    ``<sid>.jsonl``]} for every account in ``amap`` (the source's included), from the pass's
+    ProjectsIndex after that pass's full walk of each store, so ``--place`` never globs
+    ``projects/*/<sid>.jsonl`` (an lstat in each of ~18,300 project dirs per store, per mover, per
+    account: ~64% of its CPU, B4 §1.2).
+
+    The answer is as of each store's walk in THIS pass, not as of --place: a copy written after
+    the walk reads False until the next pass (the intra-pass window, B4 review F1). Every mover goes
+    without a map, and --place globs as before, when ``off`` (``recon/place-holds.off``),
+    ``LR_RECON_PLACE_HOLDS=off``, ``amap`` is empty, or no index is open on this thread (a call
+    off the loop thread must not touch the index the loop is serving). Never raises for those."""
+    if off or os.environ.get("LR_RECON_PLACE_HOLDS", "on") == "off" or not amap:
+        return list(mvs)
+    out: List[T.Mover] = []
+    for m in mvs:
+        h: Dict[str, List[Any]] = {}
+        for acct, cfg in sorted(amap.items()):
+            hits = transcript.exact_in_projects(cfg, m.sid + ".jsonl")
+            if hits is None:
+                return list(mvs)
+            h[acct] = [cfg, bool(hits)]
+        out.append(dataclasses.replace(m, holds=h))
+    return out
 
 
 # ── the --place driver ──────────────────────────────────────────────────────────────────────────
