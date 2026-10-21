@@ -58,6 +58,7 @@ done
 exit 0
 SH
   # git: no directory here is a work tree, so the cwd-scoped tree guards are skipped hermetically.
+  # shellcheck disable=SC2016  # literal: the shim's own $1 / the subject's literal $FIRED_DIR
   printf '#!/bin/sh\n[ "$1" = rev-parse ] && exit 1\nexit 0\n' > "$SHIM/git"
   printf '#!/bin/sh\nexit 0\n' > "$SHIM/ps"
   chmod +x "$SHIM/osascript" "$SHIM/git" "$SHIM/ps"
@@ -143,7 +144,7 @@ load_fns() {
   # The stamp is the original fire's — never re-minted, never set aside.
   [ "$(jq -r .cwd "$CC_FIRED_DIR/$PEER.json")" = "$D" ]
   [ "$(jq -r .marker "$CC_FIRED_DIR/$PEER.json")" = "$ENGAGE" ]
-  [ -z "$(ls "$CC_FIRED_DIR" | grep superseded || true)" ] || { ls "$CC_FIRED_DIR"; false; }
+  ! compgen -G "$CC_FIRED_DIR/*.superseded-*" >/dev/null || { ls "$CC_FIRED_DIR"; false; }
 }
 
 @test "two recycles deep, both from the subdirectory, still resolve to the root fire" {
@@ -219,8 +220,10 @@ load_fns() {
 }
 
 @test "the subtree inherit MIGRATES the stamp to the dir the successor boots in (structural: one call site)" {
+  # shellcheck disable=SC2016  # literal: the shim's own $1 / the subject's literal $FIRED_DIR
   run grep -c 'hf_migrate_peer_stamp "\$FIRED_DIR"' "$HF"
   [ "$output" = 1 ] || { echo "expected exactly one migration call site, got $output"; false; }
+  # shellcheck disable=SC2016  # literal: the shim's own $1 / the subject's literal $FIRED_DIR
   run grep -B1 'hf_migrate_peer_stamp "\$FIRED_DIR"' "$HF"
   [[ "$output" == *'RCY_INHERIT_SUBTREE" = 1'* ]] || { echo "the migration is not reached by a subtree inherit: $output"; false; }
 }
