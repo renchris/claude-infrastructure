@@ -19,6 +19,8 @@
 #   rn_cut_phrase <restart|crash|reboot> <epoch>      "Kitty was restarted at 13:29" …
 #   rn_lost_phrase <lost.json> <sid>                  what died, as one clause ("" when nothing)
 #   rn_advice <lost.json> <sid>                       the per-kind instructions ("" when none apply)
+#   rn_reason_phrase <lost.json> <sid>                why this session is woken although nothing it
+#                                                     ran died: owner, promise, unblocked, mail ("" if none)
 #   rn_note_text <kind> <epoch> <lost.json> <sid>     the whole tier-1 note, one line
 #   rn_send_note <sid> <text>                         cc-notify --mailbox-only --no-wake; rc is its rc
 #   rn_nudge_wanted <verdict> <sid> <exhausted-sids>  rc 0 when this row gets a prompt file
@@ -120,6 +122,29 @@ rn_advice() { # <lost.json> <sid>
       ] | join(" ")' "$1" 2>/dev/null
 }
 
+# Why a session is woken when nothing it ran died: the classifier's reason kinds (cc-resume-classify.py
+# REASONS TO WAKE, 2026-10-21). The prompt quotes the reason itself, so the session acts on what it
+# promised, the row the reboot unblocked, or the mail it was sent, rather than on a generic "carry on".
+rn_reason_phrase() { # <lost.json> <sid>
+  [ -f "$1" ] || return 0
+  jq -r --arg sid "$2" '
+    def short($n): gsub("[[:space:]]+"; " ") | if length > $n then .[0:$n] + "…" else . end;
+    (.sessions[$sid].items // []) as $i
+    | [ ($i | map(select(.kind == "owner")) | select(length > 0)
+          | "You ran the reboot prep for this restart, so its follow-up is yours."),
+        ($i | map(select(.kind == "promise")) | select(length > 0) | .[0]
+          | "Before the restart you said: \"" + ((.detail // "") | short(240)) + "\" Do that now."),
+        ($i | map(select(.kind == "unblocked")) | .[]
+          | "Backlog row \(.id // "?") (" + ((.detail // "") | short(120)) + ") was blocked until `"
+            + ((.until // "") | short(120)) + "` passed, and it passes now: the row is unblocked and yours to finish."),
+        ($i | map(select(.kind == "mail")) | select(length > 0) | .[0]
+          | ((.count // 1) == 1) as $one
+          | (if $one then "An unread inbox message is" else "\(.count) unread inbox messages are" end)
+            + " waiting for you (newest from \(.from // "?"): \"" + ((.detail // "") | short(160)) + "\"); "
+            + (if $one then "read it and act on it." else "read them and act on them." end))
+      ] | join(" ")' "$1" 2>/dev/null
+}
+
 rn_note_text() { # <kind> <epoch> <lost.json> <sid>
   local lost advice
   lost="$(rn_lost_phrase "$3" "$4")"; advice="$(rn_advice "$3" "$4")"
@@ -142,6 +167,9 @@ rn_send_note() { # <sid> <text>
 }
 
 # A prompt costs a turn, so it needs evidence of open work AND an account that can run the turn.
+# Only the wake verdicts qualify (prompting every verdict was the 2026-08-24 defect): a reason to wake
+# (owner, promise, unblocked, mail) reaches here as WAKE-LOST, and RETIRED, a session that was closing
+# itself, never gets a prompt.
 rn_nudge_wanted() { # <verdict> <sid> <space-separated exhausted sids>
   [ "${CC_RESTORE_NUDGE:-on}" != off ] || return 1
   case "$1" in INTERRUPTED|WAKE-LOST) ;; *) return 1 ;; esac
@@ -150,18 +178,21 @@ rn_nudge_wanted() { # <verdict> <sid> <space-separated exhausted sids>
 }
 
 # C2-restore-command.md §2.7's text. An INTERRUPTED row is told its turn was cut and to run
-# /limit-recover; a WAKE-LOST row finished its turn, so it is told what was lost instead.
+# /limit-recover; a WAKE-LOST row finished its turn, so it is told what was lost instead, and why it is
+# woken when the reason is not a loss (rn_reason_phrase).
 rn_prompt_text() { # <kind> <epoch> <lost.json> <sid> <verdict> <nonce>
-  local lost advice
-  lost="$(rn_lost_phrase "$3" "$4")"; advice="$(rn_advice "$3" "$4")"
+  local lost advice why
+  lost="$(rn_lost_phrase "$3" "$4")"; advice="$(rn_advice "$3" "$4")"; why="$(rn_reason_phrase "$3" "$4")"
   printf '[restore] %s. This session was resumed in full: same session id, account, model and effort. ' "$(rn_cut_phrase "$1" "$2")"
   printf 'This message comes from the restore tool, not from the operator. '
   if [ "$5" = INTERRUPTED ]; then
     if [ -n "$lost" ]; then printf 'These ran under the old process and died with it: %s, and your last turn was cut off mid-way. ' "$lost"
     else printf 'Your last turn was cut off mid-way. '; fi
+    [ -n "$why" ] && printf '%s ' "$why"
     printf 'Run /limit-recover now. '
   else
-    printf 'These ran under the old process and died with it: %s. ' "${lost:-nothing recorded}"
+    if [ -n "$lost" ] || [ -z "$why" ]; then printf 'These ran under the old process and died with it: %s. ' "${lost:-nothing recorded}"; fi
+    [ -n "$why" ] && printf '%s ' "$why"
   fi
   printf 'Read finished results from disk, re-run only what is incomplete, and re-arm a watcher or Monitor only if you still need it and no /goal is live. '
   [ -n "$advice" ] && printf '%s ' "$advice"

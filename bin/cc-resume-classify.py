@@ -8,14 +8,19 @@ or was already AT-REST when the power died. Only the interrupted ones may be re-
             (THE SID IS FIELD 2. lr-select.py:434 emits acct/sid/cwd/branch and boot-resume.sh:293
              reads it back in that order. This file and cc-resume-layout.sh both shipped reading
              field 3 as the sid, which is the WORKTREE PATH — see THE FIELD-ORDER TRAP below.)
-            writes the same rows with one more LAST column: INTERRUPTED | AT-REST | UNKNOWN
+            writes the same rows with one more LAST column: INTERRUPTED | AT-REST | UNKNOWN | RETIRED
             (a row may carry more than 4 columns — the W3 row contract has 11 — and the verdict
              is always appended last, so readers take $NF)
             --wake-lost adds a fourth verdict, WAKE-LOST: at rest, but with work open at the cut
             that died with the process (see ASYNC WORK OPEN AT THE CUT; a watcher the session
-            armed itself is listed as lost and never decides the verdict). Without the flag the
-            output is byte-identical to before it existed. --lost-json writes what each session
-            lost; --hb-dir names a restore-heartbeat directory whose hb.bg.tsv says what was live.
+            armed itself is listed as lost and never decides the verdict), or with a reason to
+            wake that the restart did not kill (see REASONS TO WAKE). Without the flag the
+            output is byte-identical to before it existed, except RETIRED. --lost-json writes what
+            each session lost; --hb-dir names a restore-heartbeat directory whose hb.bg.tsv says
+            what was live. RETIRED (2026-10-21) is a session that was closing itself at the cut.
+            --owner SID names the session that ran the reboot prep (alarm-reboot-prep.sh's
+            reboot-<date>.owner); --prep-start and --backlog-json are seams for the promise and
+            unblocked kinds (default: the newest reboot-*.start, and `cc-backlog list --blocked --json`).
 
 WHY THIS EXISTS (operator ruling, 2026-08-24)
 ---------------------------------------------
@@ -79,8 +84,10 @@ import glob
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 
 STORES = (
     ".claude-next",
@@ -165,26 +172,150 @@ def classify(path, boot_dt, alive_window):
     return verdict, why, last
 
 
-def classify_full(path, boot_dt, alive_window, wake_lost=False, hb=None, sid=""):
+# ── WHAT THE SHUTDOWN ITSELF WRITES (2026-10-21) ──────────────────────────────────────────────────
+# The cut used to be the last heartbeat tick, 9.5 min before the real shutdown, so nothing written at
+# the shutdown was ever read. Read up to the real cut and the shutdown's own records come into view:
+# Claude Code, killed, enqueues a <task-notification> for every background task it was running and
+# writes "Exit code 137/143" for a foreground call it was inside. Measured on boot-1792609590: those
+# records sit 0.1-0.5 s before the tombstone burst, and they made 551eb39b and b81018a2 read "0.0 min
+# idle". Taken as turns, every stale session that had any background task would read alive and be
+# nudged, which is the 2026-08-24 defect. So a queue-operation record never dates a turn, and a user
+# record in the last SHUTDOWN_BURST_S before the cut that is only a task-notification or only a
+# 137/143 exit is the shutdown talking, not the session. It closes nothing either: that task died
+# with the process, which is what the lost items are for. The window is narrow on purpose:
+# 95d2333c's genuine hand-back prompt landed 6 s before the cut, and it is an agent-message.
+SHUTDOWN_BURST_S = 10
+_KILLED_RE = re.compile(r"\bExit code 1(?:37|43)\b")
+# Claude Code's own notice on resume ("...didn't finish before the previous session ended"), in its
+# single-task and __orphan_summary__ forms. It rides a user record but asks for nothing: counted as a
+# turn it made a session that was waiting read mid-turn (43e6eb4b, 4da72f17 and 509e3aad were saved
+# only by being stale).
+_RESUME_NOTICE_RE = re.compile(r"<status>stopped</status>.*didn't finish before the previous session ended", re.S)
+# A pending call to retire the pane: the session had finished and was closing itself when the power
+# went (5d19ef73, boot-1792609590). Relaunching it, nudged or idle, undoes that.
+_SELF_CLOSE_RE = re.compile(r"handoff-fire\.sh['\"]?\s+self-close\b")
+
+
+def _user_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(i.get("text") or "" for i in content if isinstance(i, dict) and i.get("type") == "text")
+    return ""
+
+
+def _shutdown_artifact(rec, when, boot_dt):
+    """A record the shutdown wrote: a queue-operation in the burst, or a user record in it that is
+    only a task-notification or only a killed call's result."""
+    if (boot_dt - when).total_seconds() > SHUTDOWN_BURST_S:
+        return False
+    if rec.get("type") == "queue-operation":
+        return True
+    if rec.get("type") != "user":
+        return False
+    content = (rec.get("message") or {}).get("content")
+    if _user_text(content).lstrip().startswith("<task-notification>"):
+        return True
+    if not isinstance(content, list):
+        return False
+    items = [i for i in content if isinstance(i, dict)]
+    return bool(items) and all(
+        i.get("type") == "tool_result" and _KILLED_RE.search(_text_of(i.get("content"))) for i in items
+    )
+
+
+def _resume_notice(rec):
+    return rec.get("type") == "user" and bool(
+        _RESUME_NOTICE_RE.search(_user_text((rec.get("message") or {}).get("content")))
+    )
+
+
+# ── PROMISE: the session said what it would do once the Mac came back (2026-10-21) ────────────────
+# 551eb39b's last words before the cut: "After you log in, it reopens with the others, and I'll
+# confirm the Mac is on 15.8.1, check how many sessions came back, and run the leak test." It was
+# restored at rest, told nothing, and sat until the operator typed. A promise is narrow on purpose:
+# the LAST thing the assistant said, in a completed turn, spoken after the reboot prep started (so it
+# is about this restart), with a first-person future verb and a restart word in one sentence, and
+# nothing in that sentence handing the choice back ("if you want", "shall I"). A question waits for
+# the operator; prompting it is the 2026-08-24 defect.
+_FUTURE_RE = re.compile(r"\b(?:I(?:'|’)ll|I will|I(?:'|’)m going to|I am going to)\b", re.I)
+_RESTART_RE = re.compile(
+    r"\b(?:restart\w*|reboot\w*|log(?:s|ged)? (?:back )?in|login|reopen\w*|comes? back|comes? up|"
+    r"back up|resum\w*|boot\w*)\b",
+    re.I,
+)
+_HANDBACK_RE = re.compile(r"\b(?:if you(?:'d)? (?:want|like|prefer)|say the word|want me to|shall I|should I)\b", re.I)
+PREP_WINDOW_S = 12 * 3600
+
+
+def _promise(text):
+    """The promising sentence of the assistant's last words, else ""."""
+    for sent in re.split(r"(?<=[.!?])\s+|\n+", text or ""):
+        if _FUTURE_RE.search(sent) and _RESTART_RE.search(sent) and not _HANDBACK_RE.search(sent):
+            return " ".join(sent.split())[:240]
+    return ""
+
+
+def prep_start_default(boot):
+    """Epoch of the newest reboot prep (alarm-reboot-prep.sh's reboot-<date>.start, epoch first) in
+    the 12 h before the cut, else None."""
+    d = os.environ.get("CC_REBOOT_PREP_DIR") or os.path.expanduser("~/.claude/autonomy")
+    best = None
+    for path in glob.glob(os.path.join(d, "reboot-*.start")):
+        try:
+            with open(path, errors="replace") as fh:
+                ep = int((fh.readline().split() or ["x"])[0])
+        except (OSError, ValueError):
+            continue
+        if ep <= boot and boot - ep <= PREP_WINDOW_S and (best is None or ep > best):
+            best = ep
+    return best
+
+
+def _intent_record(sid, boot_dt, last_start):
+    """handoff-fire.sh self-close's terminal-intent record, ~/.claude/autonomy/self-close-intent/<sid>
+    (removed on every abort path). Honoured only if the process alive at the cut wrote it: not older
+    than the session's last start, and not newer than the cut."""
+    if not sid:
+        return False
+    d = os.environ.get("CC_SELF_CLOSE_INTENT_DIR") or os.path.expanduser("~/.claude/autonomy/self-close-intent")
+    try:
+        mt = os.stat(os.path.join(d, sid)).st_mtime
+    except OSError:
+        return False
+    if mt > boot_dt.timestamp() + 60:
+        return False
+    return last_start is None or mt >= last_start.timestamp()
+
+
+def classify_full(path, boot_dt, alive_window, wake_lost=False, hb=None, sid="", extra=None, prep_start=None):
     """-> (verdict, why, last_assistant_text, lost_items)
 
     Only records strictly BEFORE boot are considered: a resumed session appends to the same
     transcript, so anything at or after boot is the recovery itself, not the pre-crash state.
     Reading past boot is how a naive pass concludes every session was mid-turn.
 
-    lost_items is what died with the old process (see ASYNC WORK below). With wake_lost, a session
-    at rest that had such work open is WAKE-LOST instead of AT-REST.
+    lost_items is what died with the old process (see ASYNC WORK below), plus the reasons to wake
+    that did not die with it (REASONS TO WAKE): `extra` carries the ones main() found outside the
+    transcript, and a promise is read here, bounded by `prep_start` (epoch). With wake_lost, a
+    session at rest that had either is WAKE-LOST instead of AT-REST.
+
+    RETIRED outranks every other verdict and needs no flag: a session closing itself at the cut (a
+    pending handoff-fire.sh self-close call, or its terminal-intent record) is not relaunched.
     """
     pending = set()  # tool_use ids awaiting a tool_result
     scan = AsyncScan()
     last_text = ""
+    last_text_ts = None
     saw_any = False
-    last_ts = None  # last pre-crash record -> the alive-at-crash half
+    last_ts = None  # last pre-crash TURN record -> the alive-at-crash half (the last real turn)
+    last_any = None  # last pre-crash record of any other kind, for a transcript with no turn yet
+    last_start = None  # the newest SessionStart:startup/resume: the process that was alive at the cut
     after_speech = 0  # content records since the assistant last actually spoke
     try:
         fh = open(path, errors="replace")
     except OSError as exc:
-        return "UNKNOWN", f"unreadable: {exc}", ""
+        return "UNKNOWN", f"unreadable: {exc}", "", []
     with fh:
         for line in fh:
             line = line.strip()
@@ -204,8 +335,14 @@ def classify_full(path, boot_dt, alive_window, wake_lost=False, hb=None, sid="")
             if when >= boot_dt:
                 break
             saw_any = True
-            last_ts = when
             role = rec.get("type")
+            if _shutdown_artifact(rec, when, boot_dt) or _resume_notice(rec):
+                continue
+            if role != "queue-operation":
+                last_any = when
+            att = rec.get("attachment") if role == "attachment" else None
+            if isinstance(att, dict) and att.get("hookName") in ("SessionStart:startup", "SessionStart:resume"):
+                last_start = when
             scan.record(rec, when)
             # ONLY user/assistant records are anyone's TURN. Everything else a session writes —
             # `attachment` (token reminders), `system` (hook output), bridge/last-prompt markers —
@@ -219,6 +356,7 @@ def classify_full(path, boot_dt, alive_window, wake_lost=False, hb=None, sid="")
             # silently re-breaking it.
             if role not in ("user", "assistant"):
                 continue
+            last_ts = when
             spoke = False
             content = (rec.get("message") or {}).get("content")
             if isinstance(content, list):
@@ -232,15 +370,29 @@ def classify_full(path, boot_dt, alive_window, wake_lost=False, hb=None, sid="")
                         pending.discard(item.get("tool_use_id"))
                     elif kind == "text" and role == "assistant":
                         last_text = item.get("text", "")
+                        last_text_ts = when
                         spoke = True
             elif isinstance(content, str) and role == "assistant":
                 last_text = content
+                last_text_ts = when
                 spoke = True
             after_speech = 0 if spoke else after_speech + 1
 
+    last_ts = last_ts or last_any
     if not saw_any or last_ts is None:
         return "UNKNOWN", "no pre-crash records", "", []
     lost = scan.lost(path, boot_dt, pending, hb or {}, sid)
+
+    closing = [t for t in pending if _SELF_CLOSE_RE.search(scan.bash.get(t, ""))]
+    if closing or _intent_record(sid, boot_dt, last_start):
+        how = "a handoff-fire.sh self-close call was pending" if closing else "its self-close terminal-intent record"
+        return "RETIRED", f"closing itself at the cut ({how})", last_text, lost
+
+    lost = lost + list(extra or [])
+    if not pending and not after_speech and prep_start is not None and last_text_ts is not None:
+        said = _promise(last_text) if last_text_ts.timestamp() >= prep_start else ""
+        if said:
+            lost.append({"kind": "promise", "detail": said, "at": last_text_ts.isoformat()})
 
     # --- signal 1: was a turn in flight? ---
     if pending:
@@ -268,6 +420,14 @@ def classify_full(path, boot_dt, alive_window, wake_lost=False, hb=None, sid="")
             lost,
         )
     open_work = [i for i in lost if i["kind"] in WAKE_KINDS]
+    if mid_turn and wake_lost and any(i["kind"] == "owner" for i in open_work):
+        # The session that ran the reboot prep owns its follow-up however cold its turn looks.
+        return (
+            "WAKE-LOST",
+            f"mid-turn and {_ago(idle)} idle, but it ran the reboot prep ({tail_why})",
+            last_text,
+            lost,
+        )
     if mid_turn and wake_lost and open_work and sid in (hb or {}).get("live", ()):
         # Mid-turn and cold by the clock, but the heartbeat saw the process alive at its last tick
         # and it had work open: a session parked inside a long call (measured 2026-10-05 on the
@@ -328,8 +488,26 @@ def classify_full(path, boot_dt, alive_window, wake_lost=False, hb=None, sid="")
 # as evidence makes the loss harmless: the resume's SessionStart re-arms a watcher without a turn,
 # so a prompt for it alone spends a turn and buys nothing. It stays in the lost items, where the
 # restore note says to re-arm it unless a /goal is live; any other item beside it still decides.
-WAKE_KINDS = ("shell", "agent", "workflow", "monitor", "journal", "goal", "ship")
+#
+# REASONS TO WAKE (2026-10-21). Four kinds do not die with the process and still decide the verdict,
+# because a session holding one sat idle after the 2026-10-21 restart until the operator typed:
+#   - owner      the session that ran the reboot prep (--owner, from reboot-<date>.owner): it promised
+#                the post-restart checks, and nobody else will run them (551eb39b);
+#   - promise    its last words, after the prep started, say what it will do once the Mac is back;
+#   - unblocked  a blocked backlog row it filed carries an `until` probe that now exits 0 (row
+#                d4a65e8decc0, blocked on "macOS 15.8.1 installed");
+#   - mail       unread lines in its own inbox, i.e. the pane mail boot-resume carried to it with
+#                mailbox_migrate (9240c6a9's "W2 landed" reports sat in pane 31's box, then got
+#                sealed). cc-await-ping's WAKE-PATH lines and boot-resume's own notes are not mail.
+# The restore prompt quotes the reason (scripts/lib/restore-note.sh rn_reason_phrase).
+WAKE_KINDS = ("shell", "agent", "workflow", "monitor", "journal", "goal", "ship", "owner", "promise", "unblocked", "mail")
 PAD = "\x1f"  # boot-resume.sh's TSV_PAD / restore-heartbeat.sh's HB_PAD: an empty cell
+UNTIL_TIMEOUT_S = 10.0  # every `until` probe of one run shares this bound
+BACKLOG_LIST_TIMEOUT_S = 30
+MAIL_IGNORE = ("cc-await-ping", "boot-resume")
+_MBX_FWD_RE = re.compile(r"^\d{4}-\d\d-\d\dT[0-9:]+\S*\s+\[forwarded:[^\]]*\]\s")
+_MBX_LINE_RE = re.compile(r"^\d{4}-\d\d-\d\dT[0-9:]+\S*\s+\[([^\]]*)\]\s?(.*)$")
+_MBX_ENVELOPE_RE = re.compile(r"^\[@v1;[^\]]*\]\s*")
 JOURNAL_WINDOW_S = 900
 _TASK_ID_RES = (
     re.compile(r"Task ID: ([A-Za-z0-9_-]+)"),
@@ -522,6 +700,129 @@ class AsyncScan:
 
 def _shell_kind(cmd):
     return "watcher" if "cc-await-ping" in cmd and "--stand-down" not in cmd else "shell"
+
+
+def _mbx_cursor(path):
+    try:
+        with open(path, errors="replace") as fh:
+            return int((fh.read().split() or ["0"])[0])
+    except (OSError, ValueError):
+        return 0
+
+
+def _mail_items(sid):
+    """Unread mail in the session's own inbox (hooks/lib/mailbox-pending.sh's cursors: lines past
+    .acked, .acked clamped to .seen, a .seen past EOF reads 0). A line is "<ISO> [<from>] <msg>";
+    mailbox_migrate prefixes "<ISO> [forwarded:<8>] ", possibly more than once, so the sender is the
+    innermost one. Unparseable lines are not counted."""
+    if not sid or "/" in sid:
+        return []
+    d = os.environ.get("CC_MAILBOX_DIR") or os.path.expanduser("~/.claude/mailbox")
+    try:
+        with open(os.path.join(d, sid + ".md"), errors="replace") as fh:
+            lines = fh.read().split("\n")
+    except OSError:
+        return []
+    if lines and lines[-1] == "":
+        lines.pop()  # grep -c '' counts an unterminated last line, never the empty string after a newline
+    seen = _mbx_cursor(os.path.join(d, sid + ".seen"))
+    seen = 0 if seen > len(lines) else seen
+    acked = min(_mbx_cursor(os.path.join(d, sid + ".acked")), seen)
+    mail = []
+    for ln in lines[acked:]:
+        m = _MBX_FWD_RE.match(ln)
+        while m:
+            ln = ln[m.end():]
+            m = _MBX_FWD_RE.match(ln)
+        m = _MBX_LINE_RE.match(ln)
+        if m and m.group(1) not in MAIL_IGNORE:
+            mail.append((m.group(1), _MBX_ENVELOPE_RE.sub("", m.group(2))))
+    if not mail:
+        return []
+    sender, msg = mail[-1]
+    return [{"kind": "mail", "count": len(mail), "from": sender, "detail": " ".join(msg.split())[:200]}]
+
+
+def _backlog_bin():
+    for c in (
+        os.environ.get("CC_BACKLOG_BIN"),
+        os.path.join(os.path.dirname(os.path.realpath(__file__)), "cc-backlog"),
+        os.path.expanduser("~/.claude/bin/cc-backlog"),
+    ):
+        if c and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def unblocked_items(rows, backlog_json=None, timeout=UNTIL_TIMEOUT_S):
+    """{sid: [unblocked items]} — blocked backlog rows whose `session` is one of these rows and whose
+    `until` probe (cc-backlog block --until) exits 0. The probes run at once, in the row's worktree,
+    under one shared bound; a probe still running at the bound is killed and counts as not yet true.
+    A row without `until` gives nothing, so rows filed before the field existed keep working."""
+    by_sid = {r[1]: r for r in rows}
+    try:
+        if backlog_json:
+            with open(backlog_json, errors="replace") as fh:
+                data = json.load(fh)
+        else:
+            ledger = os.environ.get("CC_BACKLOG_FILE") or os.path.expanduser("~/.claude/autonomy/backlog.jsonl")
+            bl = _backlog_bin()
+            if not os.path.exists(ledger) or not bl:
+                return {}
+            out = subprocess.run(
+                [bl, "list", "--blocked", "--json"],
+                capture_output=True,
+                text=True,
+                timeout=BACKLOG_LIST_TIMEOUT_S,
+                stdin=subprocess.DEVNULL,
+            ).stdout
+            data = json.loads(out or "[]")
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        print(f"cc-resume-classify: backlog unreadable, no unblocked items: {exc}", file=sys.stderr)
+        return {}
+    procs = []
+    for r in data if isinstance(data, list) else []:
+        if not isinstance(r, dict) or not r.get("until") or r.get("session") not in by_sid:
+            continue
+        if r.get("status", "blocked") != "blocked":
+            continue
+        cwd = by_sid[r["session"]][2]
+        try:
+            p = subprocess.Popen(
+                ["/bin/bash", "-c", str(r["until"])],
+                cwd=cwd if os.path.isdir(cwd) else os.path.expanduser("~"),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            continue
+        procs.append((r, p))
+    deadline = time.monotonic() + timeout
+    found = {}
+    for r, p in procs:
+        try:
+            rc = p.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            p.wait()
+            rc = None
+        if rc == 0:
+            found.setdefault(r["session"], []).append(
+                {"kind": "unblocked", "id": str(r.get("id") or "?"), "detail": " ".join(str(r.get("title") or "").split())[:160],
+                 "until": str(r["until"])[:200]}
+            )
+    return found
+
+
+def reason_items(sid, owners, unblocked):
+    """The reasons to wake that main() finds outside the transcript: owner, mail, unblocked."""
+    items = [{"kind": "owner", "detail": "this session ran the reboot prep"}] if sid in owners else []
+    return items + _mail_items(sid) + list(unblocked.get(sid, []))
 
 
 def _fresh_journals(path, boot_dt):
@@ -729,11 +1030,36 @@ def _att(**att):
     return {"type": "attachment", "attachment": att}
 
 
+def _a_say(text):
+    return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def _u_say(text):
+    return {"type": "user", "message": {"content": text}}
+
+
+def _q_notif(tid, task, status="killed"):
+    return {"type": "queue-operation", "operation": "enqueue", "content": "<task-notification>\n<task-id>" + task
+            + "</task-id>\n<tool-use-id>" + tid + "</tool-use-id>\n<status>" + status + "</status>\n</task-notification>"}
+
+
+def _u_stopped(orphan=False):
+    ids = "<task-id>b1</task-id>\n<task-id>b2</task-id>\n<task-id>__orphan_summary__:shell</task-id>\n" if orphan \
+        else "<task-id>b1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n"
+    what = "2 background shell command tasks didn't" if orphan else "Background shell command didn't"
+    return _u_say("<task-notification>\n" + ids + "<status>stopped</status>\n<summary>" + what
+                  + " finish before the previous session ended</summary>\n</task-notification>")
+
+
 _WF = "Workflow launched in background. Task ID: wtcaytsys\nTranscript dir: /p/s/subagents/workflows/wf_d4508a0a-f86"
 _MON = "Monitor started (task bv3wgaxut, expires in 30m unless the source ends first)"
 _SH = "Command running in background with ID: bzrbwj020"
 _AG = "Async agent launched successfully.\nagentId: a81e9ac94a5566598"
 _SID = "5e1f7e57-0000-4000-8000-000000000001"
+_PROMISE = "This session closes too. After you log in, it reopens with the others, and I'll confirm the Mac is on 15.8.1 and run the leak test."
+_SELF_CLOSE = "$HOME/.claude/scripts/handoff-fire.sh self-close --terminal"
+_ROW = {"id": "d4a65e8decc0", "status": "blocked", "session": _SID, "title": "leak test after 15.8.1"}
+_TS = "2026-01-01T23:50:00-0600"
 
 
 def _has(kind, **kv):
@@ -811,6 +1137,75 @@ WAKE_CASES = [
      "AT-REST", {}, _has("shell")),
     ("cold_mid_turn_alive_nothing_open", [(3000, _a_use("t9", "Bash", command="make"))], "AT-REST", {"hb": "live"},
      lambda items: not items),
+    # ── 2026-10-21: read to the real cut, and what the shutdown itself writes there ──
+    ("speech_after_the_last_tick_decides", [(720, _a_use("t9", "Bash", command="make")), (700, _u_result("t9", "ok")),
+                                            (300, _a_text())], "AT-REST", {"hb": "live"}, lambda items: not items),
+    ("shutdown_notification_is_not_alive", [(3000, _a_use("t9", "Bash", command="make")), (1, _q_notif("b7", "bx7")),
+                                            (1, _u_notif("b7", "bx7", "killed"))], "AT-REST", {}, lambda items: not items),
+    ("killed_call_result_is_not_alive", [(3000, _a_use("t9", "Bash", command="sleep 9999")),
+                                         (1, _u_result("t9", "Exit code 143"))], "AT-REST", {}, lambda items: not items),
+    ("killed_call_mid_wait_is_interrupted", [(500, _a_use("t9", "Bash", command="timeout 585 tail -F x")),
+                                             (1, _u_result("t9", "Exit code 137"))], "INTERRUPTED", {}, lambda items: True),
+    ("notification_before_the_burst_is_a_turn", [(600, _a_text()), (20, _u_notif("x1", "bq9"))], "INTERRUPTED", {},
+     lambda items: True),
+    ("housekeeping_after_a_cold_turn_is_not_alive", [(3000, _a_use("t9", "Bash", command="make")),
+                                                     (100, _att(type="total_tokens_reminder"))], "AT-REST", {},
+     lambda items: not items),
+    ("handback_just_before_the_cut_is_a_turn", [(60, _a_text()), (6, _u_say("Another Claude session sent a message: "
+                                                "<agent-message from=\"a1\"> [Subagent hand-back] report</agent-message>"))],
+     "INTERRUPTED", {}, lambda items: True),
+    ("shell_killed_by_the_shutdown_is_lost", [(500, _a_use("b1", "Bash", command="bats tests/x.bats", run_in_background=True)),
+                                              (499, _u_result("b1", _SH)), (400, _a_text()), (1, _q_notif("b1", "bzrbwj020")),
+                                              (1, _u_notif("b1", "bzrbwj020", "killed"))], "WAKE-LOST", {}, _has("shell")),
+    ("resume_notice_is_not_a_turn", [(600, _a_text()), (300, _u_stopped())], "AT-REST", {}, lambda items: True),
+    ("orphan_summary_notice_is_not_a_turn", [(600, _a_text()), (300, _u_stopped(orphan=True))], "AT-REST", {},
+     lambda items: True),
+    ("a_finished_task_notification_is_a_turn", [(600, _a_text()), (300, _u_notif("x1", "bq9"))], "INTERRUPTED", {},
+     lambda items: True),
+    # ── RETIRED ──
+    ("pending_self_close_is_retired", [(300, _a_say("Done. Retiring this pane.")), (240, _a_use("s1", "Bash", command=_SELF_CLOSE))],
+     "RETIRED", {}, lambda items: True),
+    ("refused_self_close_is_not_retired", [(300, _a_text()), (240, _a_use("s1", "Bash", command=_SELF_CLOSE)),
+                                           (230, _u_result("s1", "self-close: refused, the tree is dirty")), (200, _a_text())],
+     "AT-REST", {}, lambda items: True),
+    ("terminal_intent_record_is_retired", [(400, _a_text())], "RETIRED", {"intent": 100}, lambda items: True),
+    ("intent_record_of_an_earlier_process_is_ignored", [(3000, _att(type="hook_success", hookName="SessionStart:resume")),
+                                                        (400, _a_text())], "AT-REST", {"intent": 5000}, lambda items: True),
+    ("retired_outranks_the_owner", [(300, _a_text()), (240, _a_use("s1", "Bash", command=_SELF_CLOSE))], "RETIRED",
+     {"owner": True}, lambda items: True),
+    # ── REASONS TO WAKE: owner, promise, unblocked, mail ──
+    ("owner_at_rest_is_woken", [(400, _a_text())], "WAKE-LOST", {"owner": True}, _has("owner")),
+    ("owner_cold_mid_turn_is_woken", [(3000, _a_use("t9", "Bash", command="make"))], "WAKE-LOST", {"owner": True}, _has("owner")),
+    ("owner_without_the_flag", [(400, _a_text())], "AT-REST", {"owner": True, "wake": False}, lambda items: True),
+    ("promise_after_the_prep_is_woken", [(300, _a_say(_PROMISE))], "WAKE-LOST", {"prep": 3600},
+     lambda items: any(i["kind"] == "promise" and "I'll confirm the Mac" in i["detail"] for i in items)),
+    ("promise_before_the_prep_does_not_fire", [(1000, _a_say(_PROMISE))], "AT-REST", {"prep": 600}, _lacks("promise")),
+    ("promise_without_a_prep_does_not_fire", [(300, _a_say(_PROMISE))], "AT-REST", {}, _lacks("promise")),
+    ("promise_handed_back_is_a_question", [(300, _a_say("If you want, after the restart I'll run the leak test."))],
+     "AT-REST", {"prep": 3600}, _lacks("promise")),
+    ("restart_word_without_a_promise", [(300, _a_say("Done. Restart whenever you like."))], "AT-REST", {"prep": 3600},
+     _lacks("promise")),
+    ("unblocked_probe_passes", [(400, _a_text())], "WAKE-LOST", {"backlog": [dict(_ROW, until="true")]},
+     _has("unblocked", id="d4a65e8decc0")),
+    ("unblocked_probe_fails", [(400, _a_text())], "AT-REST", {"backlog": [dict(_ROW, until="false")]}, _lacks("unblocked")),
+    ("unblocked_row_of_another_session", [(400, _a_text())], "AT-REST",
+     {"backlog": [dict(_ROW, until="true", session="other")]}, _lacks("unblocked")),
+    ("unblocked_row_without_until", [(400, _a_text())], "AT-REST", {"backlog": [_ROW]}, _lacks("unblocked")),
+    ("unblocked_probe_that_hangs_is_bounded", [(400, _a_text())], "AT-REST",
+     {"backlog": [dict(_ROW, until="sleep 30")], "until_timeout": 1.0}, _lacks("unblocked")),
+    ("unread_handoff_ping_wakes", [(400, _a_text())], "WAKE-LOST",
+     {"mail": [_TS + " [macapp-extract-55] [@v1;pane=55;sid=e80b61f4;title=x] HANDOFF-PING fire-x: DONE — W2 landed fa03894"]},
+     lambda items: any(i["kind"] == "mail" and i["count"] == 1 and i["detail"].startswith("HANDOFF-PING") for i in items)),
+    ("forwarded_handoff_ping_wakes", [(400, _a_text())], "WAKE-LOST",
+     {"mail": [_TS + " [forwarded:31] " + _TS + " [peer-7] HANDOFF-PING fire-y: DONE"]},
+     _has("mail", **{"from": "peer-7"})),
+    ("wake_path_and_restore_lines_are_not_mail", [(400, _a_text())], "AT-REST",
+     {"mail": [_TS + " [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [31] was TERMINATED",
+               _TS + " [boot-resume] [restore] The Mac rebooted at 13:59."]}, _lacks("mail")),
+    ("forwarded_wake_path_line_is_not_mail", [(400, _a_text())], "AT-REST",
+     {"mail": [_TS + " [forwarded:aaaaaaaa] " + _TS + " [cc-await-ping] WAKE-PATH-CLASS: verdict=B-BENIGN"]}, _lacks("mail")),
+    ("acked_mail_is_not_unread", [(400, _a_text())], "AT-REST", {"mail": [_TS + " [peer-7] HANDOFF-PING: DONE"], "acked": 1},
+     _lacks("mail")),
 ]
 
 
@@ -819,10 +1214,13 @@ def _selftest_wake(boot):
     import tempfile
 
     failures = 0
-    home_was = os.environ.get("HOME")
+    seams = ("HOME", "CC_MAILBOX_DIR", "CC_SELF_CLOSE_INTENT_DIR", "CC_REBOOT_PREP_DIR", "CC_BACKLOG_FILE")
+    env_was = {k: os.environ.get(k) for k in seams}
     for name, recs, expected, opt, check in WAKE_CASES:
         home = tempfile.mkdtemp()
         os.environ["HOME"] = home  # _teammates reads ~/.claude*/teams: never the real one here
+        for k in seams[1:]:
+            os.environ.pop(k, None)  # every store under the fixture HOME, whatever the caller exported
         try:
             pdir = os.path.join(home, ".claude", "projects", "-x")
             os.makedirs(pdir)
@@ -857,17 +1255,77 @@ def _selftest_wake(boot):
             if opt.get("hb") == "live":
                 with open(os.path.join(hbdir, "hb.session.tsv"), "w") as fh:
                     fh.write(_SID + "\tclaude-next\tm\thigh\tauto\tbr\t100\n")
-            got, why, _, items = classify_full(path, boot, 900.0, opt.get("wake", True), load_heartbeat([hbdir]), _SID)
-            ok = got == expected and check(items)
+            if "intent" in opt:
+                idir = os.path.join(home, ".claude", "autonomy", "self-close-intent")
+                os.makedirs(idir)
+                open(os.path.join(idir, _SID), "w").close()
+                os.utime(os.path.join(idir, _SID), (boot.timestamp() - opt["intent"],) * 2)
+            if "mail" in opt:
+                mdir = os.path.join(home, ".claude", "mailbox")
+                os.makedirs(mdir)
+                with open(os.path.join(mdir, _SID + ".md"), "w") as fh:
+                    fh.writelines(ln + "\n" for ln in opt["mail"])
+                for cur in ("seen", "acked"):
+                    with open(os.path.join(mdir, f"{_SID}.{cur}"), "w") as fh:
+                        fh.write(f"{opt.get('acked', 0)}\n")
+            unblocked, took = {}, 0.0
+            if "backlog" in opt:
+                bj = os.path.join(home, "blocked.json")
+                with open(bj, "w") as fh:
+                    json.dump(opt["backlog"], fh)
+                t0 = time.monotonic()
+                unblocked = unblocked_items([["next", _SID, home, "br"]], bj, opt.get("until_timeout", UNTIL_TIMEOUT_S))
+                took = time.monotonic() - t0
+            extra = reason_items(_SID, {_SID} if opt.get("owner") else set(), unblocked)
+            prep = boot.timestamp() - opt["prep"] if "prep" in opt else None
+            got, why, _, items = classify_full(path, boot, 900.0, opt.get("wake", True), load_heartbeat([hbdir]), _SID,
+                                               extra, prep)
+            ok = got == expected and check(items) and took < opt.get("until_timeout", UNTIL_TIMEOUT_S) + 3
         finally:
             shutil.rmtree(home, ignore_errors=True)
         failures += 0 if ok else 1
         print(f"{'ok  ' if ok else 'FAIL'} wake: {name:<32} expected={expected:<12} got={got:<12} ({why})", file=sys.stderr)
-    if home_was is None:
-        os.environ.pop("HOME", None)
-    else:
-        os.environ["HOME"] = home_was
+    for k, v in env_was.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
     return failures
+
+
+def _selftest_unreadable(boot):
+    """An unreadable transcript (here a directory where the .jsonl should be) is one UNKNOWN row, never
+    a crash: classify_full returned 3 values where every caller unpacks 4, the ValueError killed the
+    run, and boot-resume then marked EVERY row UNKNOWN and prompted nobody."""
+    import shutil
+    import tempfile
+
+    home = tempfile.mkdtemp()
+    cases = []
+    try:
+        pdir = os.path.join(home, ".claude", "projects", "-x")
+        os.makedirs(os.path.join(pdir, "bad00000-0000-4000-8000-000000000000.jsonl"))
+        got = classify_full(os.path.join(pdir, "bad00000-0000-4000-8000-000000000000.jsonl"), boot, 900.0, True)
+        cases.append(("a directory transcript is UNKNOWN, 4 values", len(got) == 4 and got[0] == "UNKNOWN"))
+        stamp = (boot - datetime.timedelta(seconds=400)).isoformat().replace("+00:00", "Z")
+        for good in ("aaaa0000-0000-4000-8000-000000000000", "cccc0000-0000-4000-8000-000000000000"):
+            with open(os.path.join(pdir, good + ".jsonl"), "w") as fh:
+                fh.write(json.dumps(dict(_a_text(), timestamp=stamp)) + "\n")
+        rows = "".join(f"next\t{s}\t/x\tbr\n" for s in ("aaaa0000-0000-4000-8000-000000000000",
+                                                        "bad00000-0000-4000-8000-000000000000",
+                                                        "cccc0000-0000-4000-8000-000000000000"))
+        env = {k: v for k, v in os.environ.items() if not k.startswith("CC_")}
+        env["HOME"] = home
+        run = subprocess.run([sys.executable, os.path.abspath(__file__), "--boot-epoch", str(int(boot.timestamp())),
+                              "--wake-lost"], input=rows, capture_output=True, text=True, env=env, timeout=60)
+        verdicts = [ln.split("\t")[-1] for ln in run.stdout.splitlines()]
+        cases.append(("one output row per input row, exit 0", run.returncode == 0
+                      and verdicts == ["AT-REST", "UNKNOWN", "AT-REST"]))
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+    for name, ok in cases:
+        print(f"{'ok  ' if ok else 'FAIL'} unreadable: {name}", file=sys.stderr)
+    return sum(0 if ok else 1 for _, ok in cases), len(cases)
 
 
 def _selftest():
@@ -909,8 +1367,9 @@ def _selftest():
             f"{'ok  ' if ok else 'FAIL'} {name:<20} expected={expected:<12} got={got:<12} ({why})",
             file=sys.stderr,
         )
-    anchor_failures = _selftest_anchor() + _selftest_wake(boot)
-    total = len(SELFTEST_CASES) + 4 + len(WAKE_CASES)
+    bad_failures, bad_total = _selftest_unreadable(boot)
+    anchor_failures = _selftest_anchor() + _selftest_wake(boot) + bad_failures
+    total = len(SELFTEST_CASES) + 4 + len(WAKE_CASES) + bad_total
     passed = total - failures - anchor_failures
     print(
         f"cc-resume-classify --selftest: {passed}/{total} passed",
@@ -966,6 +1425,28 @@ def main():
         help="a restore-heartbeat directory (hb.bg.tsv); repeatable",
     )
     ap.add_argument(
+        "--owner",
+        action="append",
+        default=[],
+        metavar="SID",
+        help="the session that ran the reboot prep (reboot-<date>.owner): with --wake-lost it gets an "
+        "owner item and is woken; repeatable",
+    )
+    ap.add_argument(
+        "--prep-start",
+        type=int,
+        default=None,
+        metavar="SECS",
+        help="epoch the reboot prep started; a promise spoken before it never wakes "
+        "(default: the newest ~/.claude/autonomy/reboot-*.start in the 12 h before the cut)",
+    )
+    ap.add_argument(
+        "--backlog-json",
+        default=None,
+        metavar="PATH",
+        help="read backlog rows from this file instead of `cc-backlog list --blocked --json`",
+    )
+    ap.add_argument(
         "--explain",
         action="store_true",
         help="also print the evidence and the session's last words to stderr",
@@ -999,11 +1480,12 @@ def main():
             file=sys.stderr,
         )
 
-    counts = {"INTERRUPTED": 0, "AT-REST": 0, "UNKNOWN": 0, "WAKE-LOST": 0}
+    counts = {"INTERRUPTED": 0, "AT-REST": 0, "UNKNOWN": 0, "WAKE-LOST": 0, "RETIRED": 0}
     hb = load_heartbeat(args.hb_dir)
     lost_all = {}
     notfound = 0  # UNKNOWNs caused by a transcript lookup MISS, not by an unreadable transcript
     nopre = 0  # rows with NO records before the anchor -> the anchor predates the session entirely
+    rows = []
     for raw in sys.stdin:
         row = raw.rstrip("\n")
         if not row or row.startswith("#"):
@@ -1015,6 +1497,17 @@ def main():
                 file=sys.stderr,
             )
             return 2
+        rows.append((row, cols))
+    # The reasons to wake that live outside the transcript. Only --wake-lost can act on them, so
+    # without it nothing is probed and the output stays what it was.
+    owners, unblocked, prep_start = set(args.owner), {}, None
+    if args.wake_lost and rows:
+        prep_start = args.prep_start if args.prep_start is not None else prep_start_default(boot)
+        unblocked = unblocked_items([c for _, c in rows], args.backlog_json)
+        if args.explain:
+            when = datetime.datetime.fromtimestamp(prep_start, tz=datetime.timezone.utc).isoformat() if prep_start else "none"
+            print(f"cc-resume-classify: reboot prep started {when}; owner {' '.join(sorted(owners)) or 'none'}", file=sys.stderr)
+    for row, cols in rows:
         sid = cols[1]
         path = find_transcript(sid)
         if path is None:
@@ -1026,11 +1519,13 @@ def main():
                 [],
             )
         else:
+            extra = reason_items(sid, owners, unblocked) if args.wake_lost else []
             verdict, why, last, lost = classify_full(
-                path, boot_dt, args.alive_window, args.wake_lost, hb, sid
+                path, boot_dt, args.alive_window, args.wake_lost, hb, sid, extra, prep_start
             )
         lost_all[sid] = {"verdict": verdict, "why": why, "items": lost}
         if path is not None:
+            lost_all[sid]["transcript"] = path
             if why == "no pre-crash records":
                 nopre += 1
         counts[verdict] += 1
@@ -1053,10 +1548,11 @@ def main():
             print(f"cc-resume-classify: could not write --lost-json {args.lost_json}: {exc}", file=sys.stderr)
 
     wake = f"{counts['WAKE-LOST']} WAKE-LOST (re-engage: work died with the process), " if args.wake_lost else ""
+    retired = f", {counts['RETIRED']} RETIRED (closing itself at the cut: do not relaunch)" if counts["RETIRED"] else ""
     print(
         f"cc-resume-classify: {counts['INTERRUPTED']} INTERRUPTED (re-engage), {wake}"
         f"{counts['AT-REST']} AT-REST (restore, do NOT nudge), "
-        f"{counts['UNKNOWN']} UNKNOWN (treat as AT-REST)",
+        f"{counts['UNKNOWN']} UNKNOWN (treat as AT-REST){retired}",
         file=sys.stderr,
     )
 

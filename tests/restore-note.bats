@@ -21,6 +21,9 @@ setup() {
   # gate asks every suite that names it to pin the converge kick off.
   export SHIP_LAND_CONVERGE=off DEPLOY_REPO="$BATS_TEST_TMPDIR/deploy-repo"
   unset KITTY_PID KITTY_LISTEN_ON KITTY_WINDOW_ID ITERM_SESSION_ID CC_PANE_ID CC_RESTORE_NUDGE CC_RESTORE_PASTE_CMD
+  # The classifier's reason stores default under the fixture HOME; an exported override must not
+  # point it at the real backlog, intent records or reboot prep.
+  unset CC_BACKLOG_FILE CC_BACKLOG_BIN CC_SELF_CLOSE_INTENT_DIR CC_REBOOT_PREP_DIR CC_RESTORE_PROJECT_ROOTS
   export CC_NOTIFY_BIN="$REPO/bin/cc-notify" CC_NOTIFY_WAKE=0 CC_WAKE=off
   export CC_WAKE_BIN="$BATS_TEST_TMPDIR/stub-wake"
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\nexit 1\n' > "$CC_WAKE_BIN"; chmod +x "$CC_WAKE_BIN"
@@ -48,11 +51,12 @@ tx() { # <sid> <"secs json">...
 A_TEXT='{"type":"assistant","message":{"content":[{"type":"text","text":"done."}]}}'
 use() { jq -cn --arg id "$1" --arg n "$2" --argjson i "$3" '{type:"assistant",message:{content:[{type:"tool_use",id:$id,name:$n,input:$i}]}}'; }
 res() { jq -cn --arg id "$1" --arg t "$2" '{type:"user",message:{content:[{type:"tool_result",tool_use_id:$id,content:$t}]}}'; }
-classify() { # <sid>... → writes $LOST from the real classifier over the fixture
+classify() { # <sid>... → writes $LOST from the real classifier over the fixture ($CL_ARGS: more flags)
   local s; for s in "$@"; do printf 'next\t%s\t/x\tbr\n' "$s"; done \
     | python3 "$REPO/bin/cc-resume-classify.py" --boot-epoch "$CUT" --wake-lost --lost-json "$LOST" --hb-dir "$BATS_TEST_TMPDIR/hb" \
-        2> "$BATS_TEST_TMPDIR/classify.err"
+        ${CL_ARGS:-} 2> "$BATS_TEST_TMPDIR/classify.err"
 }
+verdicts() { printf '%s\n' "$1" | awk -F'\t' '{ print $NF }' | tr '\n' ' '; }
 
 @test "the library parses and defines its functions under /bin/bash 3.2" {
   run /bin/bash -c '. "$1" && command -v rn_note_text rn_send_note rn_nudge_wanted rn_prompt_text rn_write_prompt rn_confirm rn_fallback' _ "$LIB"
@@ -175,6 +179,7 @@ seal_fixture() {
   run rn rn_nudge_wanted WAKE-LOST   "$SID_A" "$SID_B";            [ "$status" -eq 0 ]
   run rn rn_nudge_wanted AT-REST     "$SID_A" "";                  [ "$status" -eq 1 ]
   run rn rn_nudge_wanted UNKNOWN     "$SID_A" "";                  [ "$status" -eq 1 ]
+  run rn rn_nudge_wanted RETIRED     "$SID_A" "";                  [ "$status" -eq 1 ]
   run rn rn_nudge_wanted INTERRUPTED "$SID_A" "$SID_B $SID_A";     [ "$status" -eq 1 ]
   run rn rn_nudge_wanted WAKE-LOST   "$SID_A" "$SID_A";            [ "$status" -eq 1 ]
   CC_RESTORE_NUDGE=off run rn rn_nudge_wanted INTERRUPTED "$SID_A" ""
@@ -254,4 +259,90 @@ ASST_OK='{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"t
   [ "$output" = "verdict=unconfirmed via=none why=cc-wake-rc-1,no-single-registry-pane" ] || { echo "$output"; false; }
   [ "$(cat "$CC_WAKE_BIN.log")" = "$SID_A --wait 60 --from boot-resume" ]
   grep -q '(restore ref R-feedc0de)' "$CC_MAILBOX_DIR/$SID_A.md"
+}
+
+# ── 2026-10-21 restart (docs/plans/REBOOT_RESUME_PERFECTION_2026-10-21.md, wave T1) ───────────────
+# 15 of 26 restored sessions got only a note, and two of them held work: the reboot's own lead had
+# promised the post-restart checks, and the sevenrooms lead had unread "W2 landed" mail. One session
+# that was closing itself was relaunched. These pin who is woken, what the prompt quotes, and who is not.
+SID_C="cccccccc-1111-4222-8333-444444444444"
+SID_D="dddddddd-1111-4222-8333-444444444444"
+say() { jq -cn --arg t "$1" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'; }
+PROMISE="This session closes too. After you log in, it reopens with the others, and I'll confirm the Mac is on 15.8.1 and run the leak test."
+
+@test "the classifier's own selftest passes in full" {
+  run python3 "$REPO/bin/cc-resume-classify.py" --selftest
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" =~ cc-resume-classify\ --selftest:\ ([0-9]+)/([0-9]+)\ passed ]] || { echo "$output"; false; }
+  [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[2]}" ] && [ "${BASH_REMATCH[2]}" -ge 72 ] || { echo "$output"; false; }
+}
+
+@test "the owner and a promise spoken after the prep are woken and quoted; a promise from before the prep is not; a pending self-close is RETIRED and never prompted" {
+  mkdir -p "$HOME/.claude/autonomy"
+  printf '%s\n' "$((CUT - 1800))" > "$HOME/.claude/autonomy/reboot-2026-10-21.start"
+  tx "$SID_A" "300 $(say "$PROMISE")"
+  tx "$SID_B" "400 $A_TEXT"
+  tx "$SID_C" "300 $A_TEXT" "240 $(use s1 Bash '{"command":"$HOME/.claude/scripts/handoff-fire.sh self-close --terminal"}')"
+  tx "$SID_D" "2400 $(say "$PROMISE")"
+  CL_ARGS="--owner $SID_B" run classify "$SID_A" "$SID_B" "$SID_C" "$SID_D"
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$BATS_TEST_TMPDIR/classify.err"; false; }
+  [ "$(verdicts "$output")" = "WAKE-LOST WAKE-LOST RETIRED AT-REST " ] || { echo "$output"; cat "$BATS_TEST_TMPDIR/classify.err"; false; }
+  run rn rn_nudge_wanted WAKE-LOST "$SID_A" "";  [ "$status" -eq 0 ]
+  run rn rn_nudge_wanted WAKE-LOST "$SID_B" "";  [ "$status" -eq 0 ]
+  run rn rn_nudge_wanted RETIRED "$SID_C" "";    [ "$status" -eq 1 ]
+  run rn rn_nudge_wanted AT-REST "$SID_D" "";    [ "$status" -eq 1 ]
+  p="$(rn rn_prompt_text reboot "$CUT" "$LOST" "$SID_A" WAKE-LOST R-0a1b2c3d)"
+  [[ "$p" == *"Before the restart you said: \"After you log in, it reopens with the others, and I'll confirm the Mac is on 15.8.1 and run the leak test.\" Do that now."* ]] || { echo "$p"; false; }
+  [[ "$p" != *"died with it: nothing recorded"* ]] || { echo "$p"; false; }
+  [[ "$p" == *"(restore ref R-0a1b2c3d)" ]] || false
+  o="$(rn rn_prompt_text reboot "$CUT" "$LOST" "$SID_B" WAKE-LOST R-0a1b2c3d)"
+  [[ "$o" == *"You ran the reboot prep for this restart, so its follow-up is yours."* ]] || { echo "$o"; false; }
+  # The tier-1 note is about what died, so a reason alone leaves it saying nothing was lost.
+  [[ "$(rn rn_note_text reboot "$CUT" "$LOST" "$SID_A")" == *"Nothing it had running is recorded as lost"* ]] || false
+}
+
+@test "a blocked row whose until probe passes wakes the session that filed it and is quoted; a failing probe, another session's row and a row without until do not" {
+  tx "$SID_A" "400 $A_TEXT"
+  tx "$SID_B" "400 $A_TEXT"
+  jq -n --arg a "$SID_A" --arg b "$SID_B" '[
+    {id:"d4a65e8decc0",status:"blocked",session:$a,title:"leak test after 15.8.1",until:"test -d /"},
+    {id:"aaaa00000001",status:"blocked",session:$b,title:"not yet",until:"false"},
+    {id:"aaaa00000002",status:"blocked",session:"someone-else",title:"theirs",until:"true"},
+    {id:"aaaa00000003",status:"blocked",session:$b,title:"no until"}]' > "$BATS_TEST_TMPDIR/blocked.json"
+  CL_ARGS="--backlog-json $BATS_TEST_TMPDIR/blocked.json" run classify "$SID_A" "$SID_B"
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$BATS_TEST_TMPDIR/classify.err"; false; }
+  [ "$(verdicts "$output")" = "WAKE-LOST AT-REST " ] || { echo "$output"; false; }
+  [ "$(jq -r --arg b "$SID_B" '.sessions[$b].items | length' "$LOST")" -eq 0 ]
+  p="$(rn rn_prompt_text reboot "$CUT" "$LOST" "$SID_A" WAKE-LOST R-0a1b2c3d)"
+  [[ "$p" == *'Backlog row d4a65e8decc0 (leak test after 15.8.1) was blocked until `test -d /` passed, and it passes now: the row is unblocked and yours to finish.'* ]] || { echo "$p"; false; }
+}
+
+@test "mail carried from the old pane box by mailbox_migrate wakes the session and is quoted; WAKE-PATH and restore lines, forwarded or not, stay AT-REST" {
+  ts="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [31] was TERMINATED\n%s [macapp-extract-55] [@v1;pane=55;sid=e80b61f4;title=x] HANDOFF-PING fire-x: DONE — W2 landed on origin/main at fa03894\n' \
+    "$ts" "$ts" > "$CC_MAILBOX_DIR/31.md"
+  printf '%s [cc-await-ping] WAKE-PATH-CLASS: verdict=B-BENIGN\n%s [boot-resume] [restore] The Mac rebooted at 13:59.\n' "$ts" "$ts" > "$CC_MAILBOX_DIR/32.md"
+  run /bin/bash -c '. "$1"; mailbox_migrate 31 "$2" && mailbox_migrate 32 "$3"' _ "$REPO/hooks/lib/mailbox-pending.sh" "$SID_A" "$SID_B"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # The carried lines keep their sender behind the provenance prefix, which is what the classifier strips.
+  grep -q '\[forwarded:31\] .* \[cc-await-ping\] WAKE-PATH-DOWN' "$CC_MAILBOX_DIR/$SID_A.md"
+  grep -q '\[forwarded:32\] .* \[cc-await-ping\] WAKE-PATH-CLASS' "$CC_MAILBOX_DIR/$SID_B.md"
+  tx "$SID_A" "400 $A_TEXT"
+  tx "$SID_B" "400 $A_TEXT"
+  run classify "$SID_A" "$SID_B"
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$BATS_TEST_TMPDIR/classify.err"; false; }
+  [ "$(verdicts "$output")" = "WAKE-LOST AT-REST " ] || { echo "$output"; false; }
+  [ "$(jq -r --arg a "$SID_A" '.sessions[$a].items[] | select(.kind == "mail") | .count' "$LOST")" = 1 ]
+  p="$(rn rn_prompt_text reboot "$CUT" "$LOST" "$SID_A" WAKE-LOST R-0a1b2c3d)"
+  [[ "$p" == *'An unread inbox message is waiting for you (newest from macapp-extract-55: "HANDOFF-PING fire-x: DONE — W2 landed on origin/main at fa03894"); read it and act on it.'* ]] || { echo "$p"; false; }
+}
+
+@test "an unreadable transcript among good rows is one UNKNOWN row: every row comes back and the run exits 0" {
+  tx "$SID_A" "400 $A_TEXT"
+  tx "$SID_B" "400 $A_TEXT"
+  mkdir -p "$HOME/.claude-next/projects/-x/$SID_C.jsonl"     # a directory where the transcript should be
+  run classify "$SID_A" "$SID_C" "$SID_B"
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$BATS_TEST_TMPDIR/classify.err"; false; }
+  [ "$(verdicts "$output")" = "AT-REST UNKNOWN AT-REST " ] || { echo "$output"; false; }
+  [[ "$(jq -r --arg c "$SID_C" '.sessions[$c].why' "$LOST")" == unreadable:* ]] || false
 }
