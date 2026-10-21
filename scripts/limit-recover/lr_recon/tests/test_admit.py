@@ -409,5 +409,158 @@ class Boots(unittest.TestCase):
             self.assertEqual(os.path.basename(b.disk["c"]), "slot-1")
 
 
+LRD = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DEAD_PID = 999999  # above kern.maxproc's pid range on this box: never a live process
+
+
+def _dead_slots(store: str, n: int) -> None:
+    """n slot dirs whose holder is dead, older than the 60 s no-pid grace."""
+    for i in range(1, n + 1):
+        d = os.path.join(store, "slot-%d" % i)
+        os.makedirs(d)
+        with open(os.path.join(d, "pid"), "w", encoding="utf-8") as fh:
+            fh.write("%d\n" % DEAD_PID)
+        with open(os.path.join(d, "lstart"), "w", encoding="utf-8") as fh:
+            fh.write("Thu Jan 1 00:00:00 2026\n")
+        os.utime(d, (1, 1))
+
+
+class SlotRace(unittest.TestCase):
+    """The shared slot store (<lr_root>/locks/swap-slots) under real takers: bash
+    lr_swap_slot_acquire and Python BootSlots. ``_race`` holds every taker alive until all have
+    acted, so a slot two of them believe they hold is visible."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp(prefix="lr-slots-race.", dir="/tmp")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.store = os.path.join(self.tmp, "st", "locks", "swap-slots")
+        os.makedirs(self.store)
+
+    def assert_bound(self, held: List[str]) -> None:
+        self.assertLessEqual(len(held), 6, held)
+        self.assertEqual(
+            len(held), len(set(held)), "two takers believe they hold one slot"
+        )
+
+    PY_TAKER = (
+        "import os, sys, time\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from lr_recon import admit\n"
+        "go, rel, store = sys.argv[2], sys.argv[3], sys.argv[4]\n"
+        "b = admit.BootSlots(env={}, store=store); b.limit = 6\n"
+        "while not os.path.exists(go): time.sleep(0.005)\n"
+        "ok = b._disk_take('s')\n"
+        "print('py %s' % (b.disk.get('s', '-') if ok else '-'), flush=True)\n"
+        "while not os.path.exists(rel): time.sleep(0.02)\n"
+    )
+    SH_TAKER = (
+        'source "$1/lr-lib.sh"; source "$1/lr-move-lib.sh"\n'
+        'while [ ! -e "$2" ]; do sleep 0.01; done\n'
+        'if lr_swap_slot_acquire 6; then echo "sh $LR_SWAP_SLOT"; else echo "sh -"; fi\n'
+        'while [ ! -e "$3" ]; do sleep 0.05; done\n'
+    )
+
+    def _race(self, n_py: int, n_sh: int) -> List[str]:
+        _dead_slots(self.store, 6)
+        go, rel = os.path.join(self.tmp, "go"), os.path.join(self.tmp, "rel")
+        env = dict(
+            os.environ,
+            HOME=os.path.join(self.tmp, "home"),
+            LR_STATE_DIR=os.path.join(self.tmp, "st"),
+            LR_RECON_ROOT=os.path.join(self.tmp, "st", "recon"),
+            TMPDIR="/tmp",
+            PYTHONDONTWRITEBYTECODE="1",
+        )
+        procs = [
+            subprocess.Popen(
+                ["/usr/bin/python3", "-c", self.PY_TAKER, LRD, go, rel, self.store],
+                stdout=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            for _ in range(n_py)
+        ] + [
+            subprocess.Popen(
+                ["/bin/bash", "-c", self.SH_TAKER, "taker", LRD, go, rel],
+                stdout=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            for _ in range(n_sh)
+        ]
+        try:
+            open(go, "w").close()
+            lines = []
+            for p in procs:
+                assert p.stdout is not None
+                lines.append(
+                    p.stdout.readline().strip()
+                )  # every taker has acted, all still alive
+        finally:
+            open(rel, "w").close()
+            for p in procs:
+                try:
+                    p.communicate(timeout=60)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.communicate()
+        return [x.split(" ", 1)[1] for x in lines if not x.endswith(" -")]
+
+
+class SwapSlotBash(SlotRace):
+    """lr-move-lib.sh lr_swap_slot_acquire alone. Its steal used to mv a slot judged dead aside
+    and mkdir it again, so a racer's fresh take was moved too: 12 bash takers over 6 dead slots
+    held 7-11 in 11 of 12 trials (2026-10-20, load1 ~70-90 on 10 cores). It now takes a dead slot
+    in place under slot-N.steal, re-judging the holder there."""
+
+    def test_race_bash_only_holds_at_most_six(self) -> None:
+        self.assert_bound(self._race(0, 12))
+
+    # A second, real taker takes slot-1 between the first one's judgment and its lock: the first
+    # must re-judge under the lock and move on. Deterministic, where the race above is a sample.
+    SH_INTERLEAVED = (
+        'LIB="$1"; OUT_A="$2"\n'
+        'source "$LIB/lr-lib.sh"; source "$LIB/lr-move-lib.sh"\n'
+        'eval "orig_$(declare -f lr_swap_slot_orphan)"\n'
+        'FIRED=""\n'
+        "lr_swap_slot_orphan() {\n"
+        '  local rc=0; orig_lr_swap_slot_orphan "$1" || rc=$?\n'
+        '  if [ -z "$FIRED" ] && [ "${1##*/}" = slot-1 ]; then\n'
+        "    FIRED=1\n"
+        '    /bin/bash -c \'source "$1/lr-lib.sh"; source "$1/lr-move-lib.sh"\n'
+        '      lr_swap_slot_acquire 2 && printf "%s\\n" "$LR_SWAP_SLOT" > "$2"; exec sleep 5\' \\\n'
+        '      inner "$LIB" "$OUT_A" </dev/null >/dev/null 2>&1 &\n'
+        '    while [ ! -s "$OUT_A" ]; do sleep 0.05; done\n'
+        "  fi\n"
+        '  return "$rc"\n'
+        "}\n"
+        'lr_swap_slot_acquire 2 && printf "%s\\n" "$LR_SWAP_SLOT"\n'
+    )
+
+    def test_interleaved_steal_never_shares_a_slot(self) -> None:
+        _dead_slots(self.store, 1)
+        out_a = os.path.join(self.tmp, "a.slot")
+        env = dict(
+            os.environ,
+            HOME=os.path.join(self.tmp, "home"),
+            LR_STATE_DIR=os.path.join(self.tmp, "st"),
+            TMPDIR="/tmp",
+        )
+        cp = subprocess.run(
+            ["/bin/bash", "-c", self.SH_INTERLEAVED, "outer", LRD, out_a],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+        with open(out_a, encoding="utf-8") as fh:
+            a = fh.read().strip()
+        self.assertEqual(
+            os.path.basename(a), "slot-1", "the inner taker took the dead slot"
+        )
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        self.assertEqual(os.path.basename(cp.stdout.strip()), "slot-2", cp.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

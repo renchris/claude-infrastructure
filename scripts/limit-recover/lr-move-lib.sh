@@ -235,29 +235,46 @@ EOF
 #   · width LR_MOVE_SLOTS, default 4 until a canary measures a safe width.
 lr_swap_slot_dir() { printf '%s/locks/swap-slots' "$(lr_move_state)"; }
 LR_SWAP_SLOT=""
+lr_swap_slot_orphan() { # $1=slot dir → 0 when its holder is gone (dead, reused, or never stamped)
+  lr_pidlock_live "$1" && return 1
+  # A slot younger than a minute with no pid yet is a taker between its mkdir and its stamp.
+  if [ ! -s "$1/pid" ] && [ -z "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then return 1; fi
+  return 0
+}
 lr_swap_slot_acquire() { # $1=width → 0 taken (LR_SWAP_SLOT set) · 1 none free
   local w="${1:-4}" root i=1 d
   case "$w" in ''|*[!0-9]*) w=4 ;; esac
   [ "$w" -ge 1 ] || w=1
   root="$(lr_swap_slot_dir)"
   mkdir -p "$root" 2>/dev/null || return 1
+  # A DEAD SLOT IS TAKEN IN PLACE, UNDER ITS OWN LOCK (W9; lr_recon/admit.py BootSlots._steal_locked
+  # is the same protocol). The steal used to mv slot-N away once it had judged the holder dead, then
+  # mkdir it again, so a racer's fresh take made in between was moved too and both believed they held
+  # it: 12 bash takers over 6 dead slots held 7-11 in 11 of 12 trials. Verifying the moved tomb cut
+  # that to 2 in 30 and no further, because a third taker can mkdir the empty path before the
+  # mistaken move is undone. So nothing is moved: the taker that wins mkdir slot-N.steal re-judges
+  # the holder there (a fresh read, not the one it acted on) and overwrites pid/lstart in place;
+  # every other taker skips the slot this round. Every stamp is re-read, and a failed stamp no
+  # longer rmdirs, since the directory may be someone else's. A lock older than a minute is a
+  # stealer that died holding it, and the next taker clears it.
   while [ "$i" -le "$w" ]; do
     d="$root/slot-$i"; i=$((i + 1))
     if mkdir "$d" 2>/dev/null; then
-      lr_pidlock_stamp "$d" "$$" || { rmdir "$d" 2>/dev/null; continue; }
+      lr_pidlock_stamp "$d" "$$" || continue
+      [ "$(cat "$d/pid" 2>/dev/null || true)" = "$$" ] || continue
       LR_SWAP_SLOT="$d"; return 0
     fi
-    lr_pidlock_live "$d" && continue
-    # A holder that is gone. A slot younger than 10 s with no pid yet is a taker between its mkdir
-    # and its stamp, not an orphan.
-    if [ ! -s "$d/pid" ] && [ -z "$(find "$d" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then continue; fi
-    if mv "$d" "$d.dead.$$" 2>/dev/null; then
-      rm -f "$d.dead.$$/pid" "$d.dead.$$/lstart" 2>/dev/null; rmdir "$d.dead.$$" 2>/dev/null || true
-      if mkdir "$d" 2>/dev/null; then
-        lr_pidlock_stamp "$d" "$$" || { rmdir "$d" 2>/dev/null; continue; }
-        LR_SWAP_SLOT="$d"; return 0
-      fi
+    lr_swap_slot_orphan "$d" || continue
+    if ! mkdir "$d.steal" 2>/dev/null; then
+      [ -n "$(find "$d.steal" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$d.steal" 2>/dev/null
+      continue
     fi
+    if [ -d "$d" ] && lr_swap_slot_orphan "$d" && lr_pidlock_stamp "$d" "$$"; then
+      rmdir "$d.steal" 2>/dev/null || true
+      [ "$(cat "$d/pid" 2>/dev/null || true)" = "$$" ] || continue
+      LR_SWAP_SLOT="$d"; return 0
+    fi
+    rmdir "$d.steal" 2>/dev/null || true
   done
   return 1
 }
@@ -273,7 +290,7 @@ lr_swap_slots_held() { # → the number of slots whose holder is alive
   local d n=0
   for d in "$(lr_swap_slot_dir)"/slot-*; do
     [ -d "$d" ] || continue
-    case "$d" in *.dead.*) continue ;; esac
+    case "$d" in *.dead.*|*.steal) continue ;; esac
     lr_pidlock_live "$d" && n=$((n + 1))
   done
   printf '%s' "$n"
