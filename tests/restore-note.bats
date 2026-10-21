@@ -20,10 +20,6 @@ setup() {
   # No test here runs ship-land (the string is a fixture's lost background command), but the land
   # gate asks every suite that names it to pin the converge kick off.
   export SHIP_LAND_CONVERGE=off DEPLOY_REPO="$BATS_TEST_TMPDIR/deploy-repo"
-  # The fixtures name handoff-fire, so the land gate asks for its capacity gate and account-sweep
-  # seams pinned off the live machine; absent paths are right, since those sensors fail open.
-  export CC_FIRE_CAPACITY_GATE=off HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
-  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts" CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/claude-accounts-heal-"
   unset KITTY_PID KITTY_LISTEN_ON KITTY_WINDOW_ID ITERM_SESSION_ID CC_PANE_ID CC_RESTORE_NUDGE CC_RESTORE_PASTE_CMD
   # The classifier's reason stores default under the fixture HOME; an exported override must not
   # point it at the real backlog, intent records or reboot prep.
