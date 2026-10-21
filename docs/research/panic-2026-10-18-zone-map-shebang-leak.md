@@ -316,3 +316,27 @@ What to expect: 24 of 104 hook commands still run by bare path, the ~570 `#!` ex
 `hooks/ bin/ scripts/` still call each other by path, and a session that was already running at the
 cutover may keep the hook list it loaded at startup (not verified), so a residual floor is expected;
 `reduced` is the fix working at fleet scale, `unchanged` refutes the hooks as the dominant source.
+
+The planned reboot for macOS 15.8.1 (shutdown 2026-10-21 13:59 CDT = 18:59 UTC, boot 14:06:30 CDT,
+epoch 1792609590) cut the after side at about 16.6 h, under the 90% the instrument needs, and the zone
+reset with it. The after side therefore restarts on the new boot, which is post-0070 from its first
+exec: read a 24 h fit of this boot's series per Bash call against the 52.1 elements/call baseline
+once the boot is 24 h old (from about 2026-10-22 19:10 UTC).
+
+## macOS 15.8.1 does not fix the per-exec leak (2026-10-21)
+
+Measured on 15.8.1 (24H32) at load 184-389 on 10 cores, about 40 minutes after the restore: 6
+interleaved pairs of 3000 execs per arm plus 4 idle arms, residual = data.kalloc.1024 − cred, least
+squares with a drift term.
+
+| Arm | per exec (elements) |
+|---|---|
+| `#!` leaf run by path | **1.098 ± 0.104** (fit through zero 1.120 ± 0.082; arm median 1.06, range 0.93-1.48) |
+| `/bin/bash leaf.sh` | 0.007 ± 0.101 |
+
+A first run at 300 execs per arm could not beat the drift at this load (spread ~390 elements per
+arm) and is not used. The test itself left ~47 MiB in the zone until the next reboot. Raw rows and
+the fit: `~/.cache/kalloc-158-ab/` (`rows-n3000.tsv`, `fit.py`).
+
+So 15.8.1 carries no fix: the hook-interpreter mitigation and forecast reboots stay the bridge, and
+the only reported fix is macOS 27 (decision `a172a41d0d79`, "upgrade to 27.0.1 now or wait for 27.2").
