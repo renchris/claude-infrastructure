@@ -27,7 +27,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility "$HOME/.claude/scripts/boot-resume.sh"; fi; exec "$HOME/.claude/scripts/boot-resume.sh"</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec /bin/bash "$HOME/.claude/scripts/boot-resume.sh"</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -36,28 +36,31 @@
     <key>StartInterval</key>
     <integer>300</integer>
 
-    <key>LowPriorityIO</key>
-    <true/>
-
-    <key>Nice</key>
-    <integer>5</integer>
-
     <!--
       NO ProcessType KEY, DELIBERATELY (2026-09-30). `ProcessType Background` is Darwin's darwinbg
       TASK ROLE: every descendant is pinned at PRI 4 on the E-cores and nothing inside can lift it
       (the measurement is in com.claude.postland-verify.plist, which dropped the key for the same
       reason). This job runs at login, INTO the boot storm (loadavg 346 at boot+2 min), and at PRI 4
       it starves: measured 2026-09-30 at load 185, one run sat 10 minutes inside
-      `sysctl -n kern.boottime` alone, and the login run took more than 17 minutes, all of it time
-      the resumed fleet was not coming back. Demoted to `utility` instead (still below interactive,
-      P-core eligible), fail-open to a direct exec with no taskpolicy(8). The storm it runs into is
-      bounded where the spawning happens: capacity admission per pane in cc-resume-layout.sh.
+      `sysctl -n kern.boottime` alone, and the login run took more than 17 minutes.
+
+      NO taskpolicy CLAMP, Nice OR LowPriorityIO EITHER (2026-10-21, REPORT.md R5). The utility band
+      that replaced the task role still ranked the restore below every claude process (priority 20
+      against 31): the same glob took 3.4 s at default priority and 24-46 s at the job's, admission to
+      launch grew from 4 s to 278 s, and the 2026-10-21 restore took 88 minutes. The restore now runs
+      at normal priority; only the routine tick of an already-handled boot demotes itself, inside
+      boot-resume.sh (`taskpolicy -c utility`, fail-open). The storm is bounded where the spawning
+      happens: capacity admission per pane in cc-resume-layout.sh. Run by interpreter path, not by its
+      #! line: a #! exec keeps 1 KiB of kernel memory per exec on 15.x.
+
+      Logs go to ~/.claude/logs (launchd expands no $HOME here), not /tmp: a reboot erases /tmp, and
+      the run worth reading is always the one just before or after a reboot.
     -->
 
     <key>StandardOutPath</key>
-    <string>/tmp/claude-boot-resume.stdout.log</string>
+    <string>/Users/chrisren/.claude/logs/boot-resume.stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/tmp/claude-boot-resume.stderr.log</string>
+    <string>/Users/chrisren/.claude/logs/boot-resume.stderr.log</string>
 </dict>
 </plist>

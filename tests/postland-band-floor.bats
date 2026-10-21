@@ -194,14 +194,24 @@ _descendant_pris() {
   [ "$status" -eq 0 ] || false                             # and an explicit demotion present
 }
 
-@test "(viii) the boot-resume plist SSOT declares no darwinbg ProcessType, and does demote explicitly" {
-  # Same invariant as (vi), on the login job that resumes the fleet INTO the boot storm. Under the
-  # task role it starved: 10 min inside `sysctl -n kern.boottime` at load 185 (2026-09-30), >17 min
-  # for the login run — every minute of it a fleet not yet coming back.
+@test "(viii) the boot-resume plist SSOT declares no darwinbg ProcessType and no demotion; only the same-boot tick demotes itself" {
+  # Same invariant as (vi) on the task role: under it the login job starved, 10 min inside
+  # `sysctl -n kern.boottime` at load 185 (2026-09-30). Changed 2026-10-21 (reboot-resume REPORT.md
+  # R5): the utility band, Nice 5 and LowPriorityIO that replaced it still ranked the RESTORE below
+  # every claude process, and that restore took 88 minutes. So the plist demotes nothing, and
+  # boot-resume.sh re-runs only its routine already-handled tick under `taskpolicy -c utility`.
+  # Read as a parsed plist, not grepped: the plist's own comment names the clamp it no longer has.
   local plist="$REPO/launchd/com.claude.boot-resume.plist"
   [ -f "$plist" ] || false
-  run grep -qE '<string>Background</string>' "$plist"
+  run /usr/bin/plutil -extract ProcessType raw -o - "$plist"
   [ "$status" -ne 0 ] || false                             # the task role must be absent
-  run grep -q 'taskpolicy -c utility' "$plist"
-  [ "$status" -eq 0 ] || false                             # and an explicit demotion present
+  run /usr/bin/plutil -extract Nice raw -o - "$plist"
+  [ "$status" -ne 0 ] || false
+  run /usr/bin/plutil -extract LowPriorityIO raw -o - "$plist"
+  [ "$status" -ne 0 ] || false
+  run /usr/bin/plutil -extract ProgramArguments.2 raw -o - "$plist"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" != *taskpolicy* ]] || false                 # the restore runs at normal priority
+  [[ "$output" == *'exec /bin/bash "$HOME/.claude/scripts/boot-resume.sh"'* ]] || false
+  grep -q 'exec "$_tp" -c utility /bin/bash "$0"' "$REPO/scripts/boot-resume.sh"   # the same-boot tick's demotion
 }
