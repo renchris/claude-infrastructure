@@ -430,8 +430,10 @@ spent_stamp() {
   # origin/main before this change). Bumped against that diff, having read the site.
   # 5 → 7 (pane-lifecycle fixes items 1-2, 2026-10-01): the M9 marker-owner check and the stale-stamp
   # set-aside both read the predicate — a named class consults no stamp, so neither may touch its.
+  # 7 → 8 (pane 69, 2026-10-21): the INSIDE-THE-STAMPED-TREE arm (hf_peer_in_stamped_tree) reads it,
+  # scoped like M9 — a named class consults no stamp. Bumped against that diff, having read the site.
   run grep -c '"\$SC_CLASS_EXEMPT" = 0' "$HF"
-  [ "$output" = "7" ] || { echo "expected 7 class-gated sites reading the predicate, got $output"; false; }
+  [ "$output" = "8" ] || { echo "expected 8 class-gated sites reading the predicate, got $output"; false; }
   # and no site still spells the old single-class test
   run grep -c 'SC_ORIGIN_CLASS" != "assignee"' "$HF"
   [ "$output" = "0" ] || { echo "a class-gated site still tests only for 'assignee'"; false; }
