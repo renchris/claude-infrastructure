@@ -611,6 +611,13 @@ and a default, as the plan specifies.
 | B3 per-record deadline (rescoped) | LANDED | W11 `b54efff86` + `c8c922dc8` + `ed6f47072` (`Record.deadline_at` shifted across a sleep, per-record deadline, the move lane yields boot slots to overdue records); 925 unittest OK, bats 1..46; live after reload R4; Tier-L guarantee9/30 pairs owed |
 | B5 kitty off the pre-commit path | LANDED | W12 `c85b7063b` (kernel pane identity, one-window probe, in shadow; identity flips to `on` once 30 shadow rows agree; rows come only from remote recycles and prechecks, so the flip is parked as row `a76128229b2a`) and W14 `4b4edf0de` (kitty-free pane binding in the census, shadow; 979 unittest OK, live census 36/36 agree); live after reload R5; Tier-L kitty-deaf pair owed |
 | C2 socket transport for the owed prompt | FILED | full transport dropped by the plan (reviewer: "works as specified" ≈ 0%); C2-lite LANDED in W8 `72fc09748`; re-open row `649ebd06939f`, parked not-yet-true until its trigger fires |
+| A1-A4, Gap 1, Gap 3 | LANDED | §8 waves 1-4 (`9316d9842`, `a8ebaa7c0`, `a24255bf6` and the wave-1 and wave-3 shas in the table above) |
+| Gap 4 priority-31 fix valid at 30-40/core | LANDED as evidence | a measurement, not a lever: it supports A1 (landed, §8 wave 1) and sized every bound from the priority-31 p90 at 40/core |
+| Census pid-reuse (found by the live harness, 2026-10-21) | LANDED | W14f `b8ce080ca`: a session or registry row whose pid was reused is no longer a live holder. Both guarantee9 cure arms had failed H5 with split-brain 1, from a latent census defect (since ab51142a24), not from this plan's waves. 991 unittest OK, 8/8 mutants; live after reload R5 |
+| Owed Tier-L pairs (every LANDED row above that names one) | FILED | row `bbe7b5b1ba63`, parked not-yet-true: a pair needs ≥15/core for most of a ~75 min run. Two W2 tries on 2026-10-21 were NO-VERDICT (20% and 2% of samples in premise), and the queue order and `--red` trees are in `impl/PLAN-STATUS.md` |
+
+Every §4 and §7 lever is now LANDED or FILED (2026-10-21 08:20 CDT, successor lead). Flips parked behind
+evidence or a ruling: W12 identity `on` (row `a76128229b2a`), W5 Part A `on` (row `718ef4662d91`).
 
 Safety precondition wave W0b (test hermeticity, reaper whitelist, hook cwd, and the same cwd
 import hijack in `lr-predicate.sh`) LANDED `9f005ae66` + `b24389ff7` before any slot started.

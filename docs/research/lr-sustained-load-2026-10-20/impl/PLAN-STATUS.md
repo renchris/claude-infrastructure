@@ -29,10 +29,16 @@ whichever session holds it. Fire kit (template + helper): `impl/lead-kit/` (copi
 | W17 | A | — | PARKED | — | entry trigger unmet: packet `4ab193daae88` unruled (deadline 2026-11-03), R4 not live, no measured wall and no failing guarantee9 cure run. Row stays FILED |
 | W15 | B | lrsl-w15 | `83e99fccc` + 3 fixups to `01fee6a42` (5/5 paths; repick 1..52, recovery-lane 1..42, 31/31 mutants; custody returned 06:11) | — (a ≥30/core latency bin is owed before mode `on`) | mode `off`; packet `0223cae3d185` sets it |
 | W16 | B | lrsl-w16 | `abb17fa10` `d0ffedbfe` (per-arm rig env, granted `load_lib.py`) + 3 fixups to `721539ac6`, 12/12 paths verified; post-land 1..123 0 not ok; custody returned 07:51 | E1 pair `--matrix tests/rig/faults/shed-e1.json --red tree:0ae7363f8@31 --arm-env red:LR_RIG_MOVE_SLOTS=4` (PASS with power); T6 needs a rig matrix that runs `lr-shed.py --tick` in an arm (not built) | shadow only (packet `76a584cc935b`; shadow step `f259e20643bf`). D13 replay (`/tmp/d2w16/REPLAY.md`): the coded rule avoids 4-6/43 walls at L30 and 3-5/43 at L45, not the 15/43 the design claimed, because `select()` spends the 4-per-look budget on cold, days-dormant sessions. That is input for the packet's `on` ruling. Kill switches added to `LIMIT_RECOVER_FLEET_V2.md` |
-| W14f | A | lrsl-w14f | IN FLIGHT pane 451 (fired 07:40). Scope (grown): +census ignores a session row whose pid was reused (H5 root cause, `/tmp/lrsl-h5-splitbrain.md`, 93%) | re-run the W2 guarantee9 pair after it lands | files: `observe_rows.py`, `observe.py`, new `test_session_row_reuse.py` |
+| W14f | A | lrsl-w14f | `b8ce080ca` (3/3 paths; 991 unittest OK, shadow 1..28, phase 1..5, red proof 2 cases, 8/8 mutants; custody returned 08:12; activates with R5). Scope (grown): +census ignores a session row whose pid was reused (H5 root cause, `/tmp/lrsl-h5-splitbrain.md`, 93%) | re-run the W2 guarantee9 pair after it lands | files: `observe_rows.py`, `observe.py`, new `test_session_row_reuse.py` |
 | C2 re-open | — | — | backlog `649ebd06939f`, blocked not-yet-true | — | — |
 
 Next per slot (Phase 0 order and edges): A W14 → W17 · B W15 → W16 (W16 also needs the W5 Part A flip, packet `4ffc4e1e5f1c`) · C done after W12b part 1.
+
+**Closing state (2026-10-21 08:20 CDT, successor lead):** every buildable wave is landed. W17 is parked behind its
+entry trigger (packet `4ab193daae88`). Open lead work is in parked backlog rows: the owed Tier-L queue
+`bbe7b5b1ba63`, the W12 identity flip `a76128229b2a` and the W5 Part A flip `718ef4662d91`. Operator: the reconciler
+reload R4+R5 (one run covers both; steps `3853d91f9626` and `7f151e71f291`), the D2b shadow step `f259e20643bf`, and
+the B8 kitty restart `1c94119a286d`.
 
 ## Operator
 
