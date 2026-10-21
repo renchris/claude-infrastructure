@@ -41,7 +41,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from lr_recon import census, store
+from lr_recon import census, clock, store
 from lr_recon import types as T
 from lr_recon.clock import run_bounded
 
@@ -482,7 +482,13 @@ def prune_dead(rec: T.Record, snap: T.Snapshot) -> List[T.ProcRole]:
 
 
 def reap_children() -> int:
-    """waitpid(WNOHANG) on every pass so our own exited actuators never linger as zombies."""
+    """Reap REGISTERED children only, every pass, so our exited actuators never linger as zombies.
+
+    W9 (B2 F2) deleted the ``waitpid(-1)`` loop that followed: it reaped ANY child, so it stole the
+    exit status another owner was about to read — CPython maps the ECHILD its own poll() then gets
+    to returncode 0, and a capacity refusal (rc 9) read as an admit (/tmp/b2meas/steal.py). Every
+    child is now in a registry (act._CHILDREN, clock's in-flight, orphan and detached lists) and is
+    polled through its own Popen. ``recon/bounded-pass.off`` restores the old loop."""
     n = 0
     # our own actuators first: poll() owns their waitpid and keeps returncode on the object, so
     # no other reaper can race it (negative = signal, as below)
@@ -492,9 +498,11 @@ def reap_children() -> int:
             EXIT_CODES[pid] = rc
             del _CHILDREN[pid]
             n += 1
-    # W9 (B2) deletes this loop; until then a child we did not spawn as an actuator (the
-    # provenance Popen) is reaped and its code DROPPED: pids wrap in ~86 s here, and a stranger's
-    # code under an actuator's pid was scored as that actuator's verdict (A6 §1.4)
+    n += clock.reap_orphans()
+    if clock.BOUNDED_PASS:
+        return n
+    # the pre-W9 reaper, behind the kill switch: a child we did not spawn as an actuator is reaped
+    # and its code DROPPED (pids wrap in ~86 s here; A6 §1.4)
     while True:
         try:
             pid, _status = os.waitpid(-1, os.WNOHANG)
@@ -509,6 +517,13 @@ def reap_children() -> int:
                 else -os.WTERMSIG(_status)
             )
         n += 1
+
+
+def any_exited() -> bool:
+    """An actuator of ours has exited: the daemon's wait wakes on it, so the exit is settled and
+    its retry scheduled within ~1 s instead of 3-20 s later. poll() reaps it and keeps the code on
+    the Popen, where the next reap_children reads it."""
+    return any(p.poll() is not None for p, _nonce in list(_CHILDREN.values()))
 
 
 def read_exit(paths: T.Paths, pr: T.ProcRole) -> Optional[int]:
@@ -729,7 +744,26 @@ def hold_claim(
     return verdict not in ("held", "lost-race"), verdict
 
 
+# W9: the legacy-holder argv reads one pass may start (each ≤ 5 s + the reap grace). Past it a
+# claim reads store.UNKNOWN, which claim_take holds: retried next pass, never stolen. Without the
+# cap a cohort of n records with legacy holders put n × 7 s on the serial path. None = uncapped
+# (recon/pass-caps.off); __main__ resets it at every pass start.
+ARGV_READS_PER_PASS = 6
+_ARGV_LEFT: List[Optional[int]] = [None]
+
+
+def begin_pass(capped: bool) -> None:
+    _ARGV_LEFT[0] = ARGV_READS_PER_PASS if capped else None
+
+
 def _argv_of(pid: int) -> str:
+    """A holder's argv, "" when it has none (dead), store.UNKNOWN when it could not be read this
+    pass (our own timeout, or the per-pass cap): unknown is never a verdict that steals."""
+    left = _ARGV_LEFT[0]
+    if left is not None:
+        if left <= 0:
+            return store.UNKNOWN
+        _ARGV_LEFT[0] = left - 1
     try:
         cp = run_bounded(
             ["ps", "-o", "command=", "-p", str(pid)],
@@ -737,7 +771,9 @@ def _argv_of(pid: int) -> str:
             text=True,
             timeout=5,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        return store.UNKNOWN
+    except OSError:
         return ""
     return str(cp.stdout or "") if cp.returncode == 0 else ""
 

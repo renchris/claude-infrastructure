@@ -291,6 +291,27 @@ hb_due() {  # $1=progress $2=progress_wall $3=step_due $4=child_bound_s — the 
   grep -q "KILL -TERM pid=$HOLDER: progress=9 unchanged 420s; CPU +0.00s" "$LR_RECON_ROOT/watchdog.log"
 }
 
+hb_w9() {  # hb_due's heartbeat plus W6's phase keys and W9's pages_queued, orphans and spawn_s_max(_at),
+  # each set to a number that would read as a different pid / wall / due were it ever matched instead
+  printf '{"pid":%s,"lstart":"%s","progress":%s,"wall":%s.5,"uptime_raw":12.0,"progress_wall":%s.1,"step_due":%s.0,"child_bound_s":%s.0,"max_step_gap_s":0.0,"max_step_gap_bound_s":0.0,"max_step_gap_at":0.0,"phase":"dispatch","phase_at":%s.0,"pass_seq":4,"pass_at":%s.0,"pages_queued":64,"orphans":16,"spawn_s_max":4242.0,"spawn_s_max_at":%s.0}\n' \
+    "$HOLDER" "$HOLDER_LSTART" "$1" "$2" "$2" "$3" "$4" "$2" "$2" $((T + 9999)) > "$LR_RECON_ROOT/heartbeat"
+}
+
+@test "W9: a heartbeat with pages_queued, orphans and spawn_s_max keeps every verdict of the one before it" {
+  # the case above, replayed through the W9 heartbeat: same wait inside the bound, same kill after it
+  fake_cpu
+  printf '  0:01.00\n' > "$CPUF"
+  hb_w9 9 $((T - 300)) $((T + 60)) 360
+  ticks_cpu $((T - 300)) "$T" 100 0
+  [ ! -e "$KLOG" ]
+  grep -q "inside a bounded child: pid=$HOLDER progress=9 unchanged 300s" "$LR_RECON_ROOT/watchdog.log"
+  ticks_cpu $((T + 90)) $((T + 90)) 100 0
+  [ ! -e "$KLOG" ]
+  ticks_cpu $((T + 120)) $((T + 120)) 100 0
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
+  grep -q "KILL -TERM pid=$HOLDER: progress=9 unchanged 420s; CPU +0.00s" "$LR_RECON_ROOT/watchdog.log"
+}
+
 @test "a holder whose lstart mismatches (pid reuse) is not killed" {
   hb "$HOLDER" "$DEAD_LSTART" 7 $((T - 300)) $((T - 400))
   tick $((T - 300))

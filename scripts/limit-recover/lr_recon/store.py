@@ -396,6 +396,8 @@ def claim_take(
                 verdict = "stolen-dead"
             else:
                 argv = argv_of(cur.pid)
+                if argv == UNKNOWN:
+                    return "held"  # W9: an argv we could not read this pass is not a dead holder
                 if ("lr-fleet" in argv or "cc-lr" in argv) and sid in argv:
                     return "held"
                 verdict = "stolen-legacy"
@@ -527,9 +529,108 @@ PROC_LSTART_TIMEOUT_S = (
 )
 
 
-def proc_lstart(pid: int, run: Callable[..., Any] = run_bounded) -> str:
-    """ps LSTART under TZ=UTC LC_ALL=C, so (pid, lstart) is an exact identity (§10 #12). Bounded:
-    it ran with no timeout, the one child the loop could wait on forever; a timeout reads as ""."""
+# W9: a read we could not make. Distinct from "" (no such process): a caller that judges liveness
+# keeps a holder whose identity read timed out (unknown, retry), never steals it (B2 review C8).
+UNKNOWN = "\x00unknown"
+INPROC_LSTART = True  # cleared by recon/inproc-lstart.off (read every pass by __main__)
+_DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_MONTHS = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)  # fmt: skip
+_PROC_PIDTBSDINFO = 3
+_LIBPROC: List[Any] = []  # [ctypes handle or None], loaded on first use
+
+
+def _bsdinfo() -> Any:
+    """``struct proc_bsdinfo`` (sys/proc_info.h, 136 bytes): the start time is its last two u64."""
+    import ctypes
+
+    class BSDInfo(ctypes.Structure):
+        _fields_ = [
+            ("u", ctypes.c_uint32 * 12),
+            ("comm", ctypes.c_char * 16),
+            ("name", ctypes.c_char * 32),
+            ("v", ctypes.c_uint32 * 5),
+            ("nice", ctypes.c_int32),
+            ("sec", ctypes.c_uint64),
+            ("usec", ctypes.c_uint64),
+        ]
+
+    return BSDInfo
+
+
+def _libproc() -> Any:
+    if not _LIBPROC:
+        try:
+            import ctypes
+
+            lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            _LIBPROC.append((lib, _bsdinfo()))
+        except Exception:  # noqa: BLE001 — no libproc (not macOS): ps is the only reader
+            _LIBPROC.append(None)
+    return _LIBPROC[0]
+
+
+def lstart_text(sec: int) -> str:
+    """``ps -o lstart=`` under TZ=UTC LC_ALL=C, spaces collapsed: ``Tue Oct 20 18:01:02 2026``.
+    Names from fixed tables, never strftime's locale."""
+    tm = time.gmtime(sec)
+    return "%s %s %d %02d:%02d:%02d %d" % (
+        _DAYS[tm.tm_wday],
+        _MONTHS[tm.tm_mon - 1],
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec,
+        tm.tm_year,
+    )
+
+
+def inproc_lstart(pid: int) -> Optional[str]:
+    """``proc_pidinfo(PROC_PIDTBSDINFO)`` in process: no child, ~15 µs a pid (40 of 41 pids matched
+    ps, 0.6 ms for all 41, B2 efficacy review R.3 4b). "" = no such process (ESRCH, confirmed by
+    kill 0); None = not readable here (a zombie, a permission refusal, no libproc): ask ps."""
+    lp = _libproc()
+    if lp is None or pid <= 0:
+        return None
+    import ctypes
+
+    lib, info_t = lp
+    info = info_t()
+    try:
+        n = lib.proc_pidinfo(
+            int(pid),
+            _PROC_PIDTBSDINFO,
+            ctypes.c_uint64(0),
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    if n == ctypes.sizeof(info) and info.sec > 0:
+        return lstart_text(int(info.sec))
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return ""
+    except OSError:
+        pass
+    return None
+
+
+def proc_lstart(
+    pid: int, run: Callable[..., Any] = run_bounded, unknown: str = ""
+) -> str:
+    """ps LSTART under TZ=UTC LC_ALL=C, so (pid, lstart) is an exact identity (§10 #12). Read in
+    process first (W9); ps is the fallback, bounded. "" = no such process. A ps that timed out or
+    could not start returns ``unknown`` — "" by default (the pre-W9 reading); a liveness caller
+    passes UNKNOWN so its own timeout is not read as a death."""
+    if (
+        INPROC_LSTART and run is run_bounded
+    ):  # an injected ``run`` is a test's ps: honour it
+        got = inproc_lstart(pid)
+        if got is not None:
+            return got
     env = dict(os.environ, TZ="UTC", LC_ALL="C")
     try:
         cp = run(
@@ -540,10 +641,33 @@ def proc_lstart(pid: int, run: Callable[..., Any] = run_bounded) -> str:
             timeout=PROC_LSTART_TIMEOUT_S,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ""
+        return unknown
     # Collapse runs of spaces ("Sep  9" → "Sep 9"): the one rendering observe.py, the fence and the
     # watchdog all compare, so a padded day never reads as a different process.
     return " ".join(str(cp.stdout or "").split()) if cp.returncode == 0 else ""
+
+
+_SELF_LSTART: List[Any] = [
+    0,
+    "",
+]  # (pid, lstart) of this process, cached once non-empty
+
+
+def self_lstart() -> str:
+    """This process's lstart, read once per process (in process: no ps). Only a non-empty read is
+    cached, so a failed read is retried on the next call (act._SELF_LSTART's rule)."""
+    pid = os.getpid()
+    if _SELF_LSTART[0] == pid and _SELF_LSTART[1]:
+        return str(_SELF_LSTART[1])
+    got = proc_lstart(pid)
+    if got:
+        _SELF_LSTART[0], _SELF_LSTART[1] = pid, got
+    return got
+
+
+def cached_self_lstart() -> str:
+    """The cached self lstart, or "" — never a read (BootSlots' own-slot check runs no child)."""
+    return str(_SELF_LSTART[1]) if _SELF_LSTART[0] == os.getpid() else ""
 
 
 # ── §4.5 write order: claim → owned/<sid> → record-with-intent ───────────────────────────────────

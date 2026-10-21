@@ -490,6 +490,13 @@ class Heartbeat:
     phase_at: float = 0.0
     pass_seq: int = 0
     pass_at: float = 0.0
+    # W9 (B2 stage 1): the page outbox's depth (a boundary restart can wait for 0), the killed
+    # children not yet reaped, and the slowest Popen constructor this process has timed. Flat keys
+    # that equal no watchdog key (lr_recon/tests/test_bounded_pass.py HeartbeatKeys pins it).
+    pages_queued: int = 0
+    orphans: int = 0
+    spawn_s_max: float = 0.0
+    spawn_s_max_at: float = 0.0
 
 
 # ── account facts (C4) ───────────────────────────────────────────────────────────────────────────

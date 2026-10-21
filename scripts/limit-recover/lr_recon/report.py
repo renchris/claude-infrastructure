@@ -36,6 +36,12 @@ REQUESTER_MAIL_TRIES = (
     3  # a requester mail that fails (not rc 124) is retried this many passes
 )
 PAGE_TIMEOUT_S = 45  # lr-page.sh: Notification Center (10 s) + phone (20 s) + slack
+# W9: one synchronous send a pass, pages and requester mails together: ≤ NOTIFY 10 + lr-page 45 s
+SENDS_PER_PASS = 1
+OUTBOX = "outbox"  # under recon/: one JSON file per latched, unsent page
+OUTBOX_TRIES = (
+    3  # a page whose sinks all fail is retried on this many passes, then dropped
+)
 _NOTIFY_VERDICT = re.compile(r"cc-notify: verdict=([A-Za-z-]+)")
 GOOD = ("CLOSED", "NOT_NEEDED", "REPLACED", "REPLACED-NEW-WINDOW")
 
@@ -78,6 +84,9 @@ _IMMEDIATE: Dict[str, str] = {
     "HELD:team": "held: a team session",
     "WAKE-FAILED": "the continue at the reset could not be typed",
 }
+IMMEDIATE_KINDS = frozenset(
+    _IMMEDIATE
+)  # W9: these leave the outbox before every other send
 
 
 # D3.3: --place's reasons for "no account passes the floors". Decision 3 ruled wait, so such a
@@ -647,6 +656,107 @@ class Reporter:
         self._mail: MailSink = mail or default_mail
         self.failures = 0
         self._shadowed: List[str] = []
+        # W9 (B2 stage 1): off until the daemon's _report turns it on each pass (begin_pass), so a
+        # Reporter built anywhere else sends inline exactly as before
+        self.outbox = False
+        self.sends_left: Optional[int] = None  # None = uncapped
+        self._seq = 0
+
+    # ── W9: the durable outbox and the per-pass send cap ─────────────────────────────────────────
+    def begin_pass(self, outbox: bool, sends: Optional[int]) -> None:
+        """One pass's send allowance: ``sends`` synchronous sends (pages and requester mails
+        together; None = uncapped), and whether latched pages queue in ``recon/outbox/``."""
+        self.outbox, self.sends_left = outbox, sends
+
+    def _outbox_dir(self) -> str:
+        return self.paths.p(OUTBOX)
+
+    def _may_send(self) -> bool:
+        return self.sends_left is None or self.sends_left > 0
+
+    def _spend(self) -> None:
+        if self.sends_left is not None:
+            self.sends_left -= 1
+
+    def queued(self) -> int:
+        """Pages waiting in the outbox (heartbeat ``pages_queued``)."""
+        try:
+            return sum(1 for n in os.listdir(self._outbox_dir()) if n.endswith(".json"))
+        except OSError:
+            return 0
+
+    def _enqueue(self, kind: str, cid: str, text: str, pane: Optional[str]) -> None:
+        """Written (atomically) before any send: a kill between latch and send no longer loses the
+        page — the next daemon finds it here. At least once: a kill mid-send may repeat it."""
+        self._seq += 1
+        prio = 0 if (kind in IMMEDIATE_KINDS or cid == "_daemon") else 1
+        t = self.now()
+        name = "%d-%017.6f-%d-%d.json" % (prio, t, os.getpid(), self._seq)
+        row = {"t": t, "kind": kind, "cid": cid, "text": text, "pane": pane, "tries": 0}
+        d = self._outbox_dir()
+        os.makedirs(d, exist_ok=True)
+        store.atomic_write_json(os.path.join(d, name), row)
+
+    def flush_outbox(
+        self, immediate_only: bool = False, deadline: Optional[float] = None
+    ) -> int:
+        """Send queued pages oldest first within priority (immediate kinds first) while the pass's
+        send allowance lasts and, when given, monotonic ``deadline`` has not passed. A file is
+        unlinked after its sink returns; a failed send stays queued and is retried on later passes,
+        then dropped at OUTBOX_TRIES with an event. Observe mode sends nothing. Returns sends."""
+        if self.mode == "observe":
+            return 0
+        d = self._outbox_dir()
+        try:
+            names = sorted(n for n in os.listdir(d) if n.endswith(".json"))
+        except OSError:
+            return 0
+        sent = 0
+        for name in names:
+            if immediate_only and not name.startswith("0-"):
+                break
+            if not self._may_send():
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            path = os.path.join(d, name)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    row = json.load(fh)
+                if not isinstance(row, dict):
+                    raise ValueError("not an object")
+            except OSError:
+                continue  # gone (another flush took it) or unreadable now: next pass
+            except ValueError:
+                store._unlink(path)
+                self.failures += 1
+                continue
+            self._spend()
+            pane = row.get("pane")
+            try:
+                if pane is not None:
+                    self._mail(str(pane), str(row.get("text", "")))
+                else:
+                    self._page(str(row.get("text", "")))
+            except Exception:  # noqa: BLE001 — a failed page must never stop the daemon
+                self.failures += 1
+                row["tries"] = int(row.get("tries", 0) or 0) + 1
+                if row["tries"] >= OUTBOX_TRIES:
+                    store._unlink(path)
+                    self._event(
+                        "page-gave-up",
+                        detail="%s %s"
+                        % (row.get("kind", "?"), str(row.get("text", ""))[:160]),
+                    )
+                else:
+                    try:
+                        store.atomic_write_json(path, row)
+                    except OSError:
+                        pass
+                continue
+            store._unlink(path)
+            sent += 1
+        return sent
 
     # ── latches ────────────────────────────────────────────────────────────────────────────────
     def _latch_path(self, cid: str) -> str:
@@ -704,6 +814,12 @@ class Reporter:
         if self.mode == "observe":
             self._shadow(kind, cid, text, pane)
             return
+        if self.outbox:
+            try:
+                self._enqueue(kind, cid, text, pane)
+                return
+            except OSError:
+                pass  # an unwritable outbox must not lose the page: send it inline
         try:
             if pane is not None:
                 self._mail(pane, text)
@@ -905,6 +1021,8 @@ class Reporter:
                 due.setdefault(req, []).append((r, key))
         sent = 0
         for req, items in sorted(due.items()):
+            if self.mode != "observe" and not self._may_send():
+                break  # W9: this pass's send is spent; unlatched, so a later pass mails it
             parts = [_verdict_part(r) for r, _k in items]
             text = (
                 "lr-recon: recovery verdict for %d session(s) — %s — detail: cc-lr status %s"
@@ -915,6 +1033,8 @@ class Reporter:
                 )
             )
             res = self._send_mail(items[0][0].cohort_id, req, text)
+            if res != "shadowed":
+                self._spend()
             if res == "unverified":
                 self._event("requester-mail-unverified", req, detail=text[:200])
             for r, key in items:

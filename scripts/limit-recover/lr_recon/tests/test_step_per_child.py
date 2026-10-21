@@ -98,7 +98,7 @@ class StepPerChild(unittest.TestCase):
 
     def run_unit(self, run_fn: Any) -> None:
         with (
-            mock.patch.object(C.subprocess, "run", side_effect=run_fn),
+            mock.patch.object(C, "_run_reaped", side_effect=run_fn),
             mock.patch("lr_recon.plan.T.to_dict", return_value={"sid": "s1"}),
         ):
             self.unit()
@@ -126,7 +126,7 @@ class StepPerChild(unittest.TestCase):
         # under load eating the gap): only step_due tells the watchdog it is still inside it
         bound = STALL_AGE_S + 60.0
         C.bind_steps(None)
-        with mock.patch.object(C.subprocess, "run", side_effect=self.child):
+        with mock.patch.object(C, "_run_reaped", side_effect=self.child):
             C.run_bounded(["/usr/bin/true"], timeout=bound)
         self.assertTrue(
             self.kills, "control: with no declared bound it reads as a wedge"
@@ -134,7 +134,7 @@ class StepPerChild(unittest.TestCase):
         self.kills.clear()
         C.bind_steps(self.hb)
         self.hb.advance()
-        with mock.patch.object(C.subprocess, "run", side_effect=self.child):
+        with mock.patch.object(C, "_run_reaped", side_effect=self.child):
             C.run_bounded(["/usr/bin/true"], timeout=bound)
         self.assertEqual(self.kills, [])
 
@@ -146,7 +146,7 @@ class StepPerChild(unittest.TestCase):
             self.sample()
             raise subprocess.TimeoutExpired(args[0], bound)
 
-        with mock.patch.object(C.subprocess, "run", side_effect=wedged):
+        with mock.patch.object(C, "_run_reaped", side_effect=wedged):
             self.assertEqual(plan.unassign("a1"), 124)
         self.assertTrue(
             self.kills, "a loop past its own declared bound + margin is a wedge"
@@ -161,7 +161,7 @@ class StepPerChild(unittest.TestCase):
         def boom(*args: Any, **kw: Any) -> Any:
             raise subprocess.TimeoutExpired(args[0], kw["timeout"])
 
-        with mock.patch.object(C.subprocess, "run", side_effect=boom):
+        with mock.patch.object(C, "_run_reaped", side_effect=boom):
             self.assertEqual(plan.assign_many([{"sid": "x"}]), 124)
         self.assertEqual(self.hb.progress, 1)
 
@@ -211,6 +211,71 @@ class EveryLoopChildIsBounded(unittest.TestCase):
                 ):
                     bad.append("%s:%d" % (name, n.lineno))
         self.assertEqual(bad, [])
+
+    # W9 (B2 T15): with waitpid(-1) gone, a child nobody registers is a zombie nothing reaps, so
+    # every Popen site is one that registers or polls its own child.
+    POPEN_SITES = {
+        ("clock.py", "_run_reaped"),  # _INFLIGHT, then _ORPHANS
+        ("clock.py", "popen_detached"),  # _DETACHED
+        ("clock.py", "Caffeinate"),  # holds and polls its one child
+        ("act.py", "spawn"),  # act._CHILDREN
+        (
+            "plan.py",
+            "start_fresh_sweep",
+        ),  # the default only: __main__ passes popen_detached
+    }
+
+    @classmethod
+    def popen_sites(cls, pkg: str = PKG) -> List[str]:
+        bad = []
+        for name in sorted(os.listdir(pkg)):
+            if not name.endswith(".py"):
+                continue
+            with open(os.path.join(pkg, name), encoding="utf-8") as fh:
+                tree = ast.parse(fh.read(), name)
+            allowed = set()
+            for n in ast.walk(tree):
+                if (
+                    isinstance(n, (ast.FunctionDef, ast.ClassDef))
+                    and (name, n.name) in cls.POPEN_SITES
+                ):
+                    allowed |= {id(x) for x in ast.walk(n)}
+            for n in ast.walk(tree):
+                if (
+                    isinstance(n, ast.Attribute)
+                    and n.attr == "Popen"
+                    and isinstance(n.value, ast.Name)
+                    and n.value.id == "subprocess"
+                    and id(n) not in allowed
+                    and not isinstance(getattr(n, "ctx", None), ast.Store)
+                ):
+                    bad.append("%s:%d" % (name, n.lineno))
+        return bad
+
+    def test_every_popen_site_registers_its_child(self) -> None:
+        self.assertEqual(self.popen_sites(), [])
+
+    def test_popen_site_mutant_dies(self) -> None:
+        # mutant: a Popen added anywhere else (the pre-W9 __main__._provenance shape) is found
+        import shutil
+        import tempfile
+
+        tmp = tempfile.mkdtemp(prefix="lr-popen-mutant.", dir="/tmp")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        for name in os.listdir(PKG):
+            if name.endswith(".py"):
+                shutil.copy(os.path.join(PKG, name), tmp)
+        with open(os.path.join(tmp, "__main__.py"), "a", encoding="utf-8") as fh:
+            fh.write("\n\ndef _mutant():\n    subprocess.Popen(['/usr/bin/true'])\n")
+        self.assertEqual(len(self.popen_sites(tmp)), 1)
+
+    def test_the_fresh_sweep_is_started_registered(self) -> None:
+        with open(os.path.join(PKG, "__main__.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        calls = re.findall(r"plan\.start_fresh_sweep\(([^)]*)\)", src)
+        self.assertTrue(calls)
+        for args in calls:
+            self.assertIn("popen=clock.popen_detached", args)
 
 
 if __name__ == "__main__":

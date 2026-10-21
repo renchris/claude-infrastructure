@@ -562,5 +562,95 @@ class SwapSlotBash(SlotRace):
         self.assertEqual(os.path.basename(cp.stdout.strip()), "slot-2", cp.stdout)
 
 
+class BootSlotsW9(SlotRace):
+    """W9 (B2 F5, G2 C6, review C6): our own slot runs no ps and stays live on an unknown self
+    lstart; a dead slot is taken in place under slot-N.steal with the holder re-judged there
+    (lr-move-lib.sh's protocol), so no two takers, Python or bash, ever share one."""
+
+    def test_own_slot_reads_no_lstart(self) -> None:
+        # T21. Red at HEAD: 5 proc_lstart calls (one ps each) on our own 5 slots for the 6th
+        from lr_recon import store as S
+
+        b = A.BootSlots(env={}, store=self.store)
+        with mock.patch.object(
+            S, "_SELF_LSTART", [os.getpid(), "Mon Oct 19 01:02:03 2026"]
+        ):
+            for i in range(5):
+                self.assertTrue(b.acquire("s%d" % i))
+            calls: List[int] = []
+            real = S.proc_lstart
+            with mock.patch.object(
+                S,
+                "proc_lstart",
+                side_effect=lambda pid, *a, **k: (
+                    calls.append(pid) or real(pid, *a, **k)
+                ),
+            ):
+                self.assertTrue(b.acquire("s5"))
+        self.assertEqual(calls, [], "own slots are judged from the cached self lstart")
+        self.assertEqual(len(set(b.disk.values())), 6)
+
+    def test_unknown_self_lstart_keeps_our_slot_live(self) -> None:
+        # review C6: a "" self read made our own live slot read dead and handed it to a 2nd sid
+        from lr_recon import store as S
+
+        b = A.BootSlots(env={}, store=self.store)
+        b.limit = 1
+        with mock.patch.object(
+            S, "_SELF_LSTART", [os.getpid(), "Mon Oct 19 01:02:03 2026"]
+        ):
+            self.assertTrue(b.acquire("a"))
+        with (
+            mock.patch.object(S, "_SELF_LSTART", [0, ""]),
+            mock.patch.object(S, "proc_lstart", return_value=""),
+        ):
+            self.assertFalse(b.acquire("b"), "slot-1 is ours and live")
+        self.assertEqual(list(b.disk), ["a"])
+
+    def _interleaved(self, steal_mode: str) -> List[str]:
+        """B judges slot-1 dead, then A takes it, then B steals: the C6 double occupancy, made
+        deterministic. Returns every (sid → dir) a taker believes it holds."""
+        _dead_slots(self.store, 1)
+        a = A.BootSlots(env={}, store=self.store)
+        b = A.BootSlots(env={}, store=self.store)
+        a.limit = b.limit = 2
+        real = A.BootSlots._slot_live
+        fired = []
+
+        def judged_then_a_takes(d: str) -> bool:
+            live = real(d)
+            if not fired and os.path.basename(d) == "slot-1":
+                fired.append(1)
+                self.assertTrue(
+                    a.acquire("A")
+                )  # A takes the dead slot between B's judge and act
+            return live
+
+        env = {"LR_BOOT_SLOT_STEAL": steal_mode} if steal_mode else {}
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(
+                A.BootSlots, "_slot_live", staticmethod(judged_then_a_takes)
+            ),
+        ):
+            self.assertTrue(b.acquire("B"))
+        return [a.disk["A"], b.disk["B"]]
+
+    def test_interleaved_steal_never_shares_a_slot(self) -> None:
+        held = self._interleaved("")
+        self.assertEqual(len(set(held)), 2, held)
+
+    def test_unlink_mutant_shares_a_slot(self) -> None:
+        # the pre-W9 unlocked wipe: B overwrites A's fresh stamp and both believe they hold slot-1
+        held = self._interleaved("unlink")
+        self.assertEqual(len(set(held)), 1, held)
+
+    def test_race_python_only_holds_at_most_six(self) -> None:
+        self.assert_bound(self._race(12, 0))
+
+    def test_race_python_against_the_bash_taker_holds_at_most_six(self) -> None:
+        self.assert_bound(self._race(6, 6))
+
+
 if __name__ == "__main__":
     unittest.main()

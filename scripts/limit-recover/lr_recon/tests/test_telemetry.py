@@ -257,7 +257,9 @@ class RedControls(Base):
 
         with (
             mock.patch("lr_recon.observe.observe", side_effect=fake_observe),
-            mock.patch("subprocess.run", side_effect=slow_run),
+            mock.patch.object(
+                C, "_run_reaped", side_effect=slow_run
+            ),  # W9: run_bounded's child
         ):
             M.run_pass(ctx)
         row = self.rows("pass")[-1]
@@ -359,7 +361,9 @@ class Roles(Base):
             ),
             T.ProcRow(13, 1, "S", L, "jq -n 'cc-dispatch' --arg x lr-move-worker.sh"),
             T.ProcRow(14, 1, "S", L, "ugrep -n lr-recon-act --record-id"),
-            T.ProcRow(15, 1, "S", L, "ugrep -rn lr-move-worker.sh scripts/limit-recover"),
+            T.ProcRow(
+                15, 1, "S", L, "ugrep -rn lr-move-worker.sh scripts/limit-recover"
+            ),
             T.ProcRow(20, 1, "S", L, "/bin/bash /x/lr-fire-resume.sh next /w e80b61f4"),
             T.ProcRow(21, 20, "S", L, "expect -c set timeout 240"),
             T.ProcRow(22, 21, "S", L, "cc-close-attrib next4 claude --resume e80b61f4"),

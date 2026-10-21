@@ -19,6 +19,7 @@ import subprocess
 import time
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
+from lr_recon import clock as _clock
 from lr_recon import types as T
 from lr_recon.clock import run_bounded, step
 from lr_recon.observe_rows import (
@@ -128,12 +129,13 @@ def _ps_read(
     deadline: float,
     clock: Callable[[], float],
     accept: Callable[[str], Optional[Any]],
+    attempts: int = PS_ATTEMPTS,
 ) -> Tuple[Any, int]:
     """(parsed, tries) for one ps call. A timeout, a non-zero exit or output ``accept`` rejects
     (None) is retried once; each try is bounded by min(bound, the budget left). Raises naming every
     try's failure, so the abstain event says whether ps hung, failed or returned nothing."""
     why: List[str] = []
-    for attempt in range(1, PS_ATTEMPTS + 1):
+    for attempt in range(1, attempts + 1):
         left = deadline - clock()
         if left < PS_MIN_CALL_S:
             why.append("ps budget spent")
@@ -167,6 +169,11 @@ def read_ps(
     env = _ps_env()
     b = ps_bound() if bound is None else bound
     deadline = clock() + budget
+    # W9 (B2 efficacy 6): with the kill-wait bounded, a kernel stall now parks each timed-out ps as
+    # an orphan, and a second try forks another reader into the same stuck path. While
+    # ORPHAN_RETRY_SKIP_AT of them are still alive, one try per call — never zero: a census that
+    # never runs recovers nothing.
+    tries = 1 if _clock.orphans_of("ps") >= _clock.ORPHAN_RETRY_SKIP_AT else PS_ATTEMPTS
     procs, n1 = _ps_read(
         run,
         ["/bin/ps", "-axww", "-o", "pid=,ppid=,stat=,lstart=,args="],
@@ -175,6 +182,7 @@ def read_ps(
         deadline,
         clock,
         lambda out: _parse_procs(out) or None,
+        tries,
     )
     ttys, n2 = _ps_read(
         run,
@@ -184,6 +192,7 @@ def read_ps(
         deadline,
         clock,
         lambda out: _parse_ttys(out) if out.strip() else None,
+        tries,
     )
     if stats is not None:
         stats["attempts"] = max(n1, n2)

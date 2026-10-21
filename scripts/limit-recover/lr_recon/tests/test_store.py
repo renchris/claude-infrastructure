@@ -8,7 +8,9 @@ import tempfile
 import time
 import unittest
 from typing import List, Tuple
+from unittest import mock
 
+from lr_recon import clock as C
 from lr_recon import store as S
 from lr_recon import types as T
 
@@ -557,6 +559,119 @@ class SaveRecords(Base):
         self.assertEqual(self.disk(SID).attempt, before)
         self.assertEqual(
             [n for n in os.listdir(self.paths.sessions) if n.startswith(".")], []
+        )
+
+
+def _ps_lstart(pid: int) -> str:
+    """The reference: ``ps -o lstart=`` under TZ=UTC LC_ALL=C, spaces collapsed (lr_pid_lstart)."""
+    env = dict(os.environ, TZ="UTC", LC_ALL="C")
+    cp = subprocess.run(
+        ["/bin/ps", "-o", "lstart=", "-p", str(pid)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+    return " ".join(cp.stdout.split()) if cp.returncode == 0 else ""
+
+
+class InProcessLstart(unittest.TestCase):
+    """W9 (B2 efficacy R.3 4b): lstart from proc_pidinfo in process — no child on the serial path
+    — in exactly ps's rendering, ps the fallback; a read we could not make is UNKNOWN, not dead."""
+
+    def tearDown(self) -> None:
+        S.INPROC_LSTART = True
+
+    def test_matches_ps_for_live_pids(self) -> None:
+        sleeper = subprocess.Popen(["/bin/sleep", "30"])
+        self.addCleanup(sleeper.wait)
+        self.addCleanup(sleeper.kill)
+        for pid in (os.getpid(), os.getppid(), sleeper.pid):
+            self.assertEqual(S.inproc_lstart(pid), _ps_lstart(pid), pid)
+
+    def test_a_dead_pid_reads_empty_without_ps(self) -> None:
+        p = subprocess.Popen(["/usr/bin/true"])
+        p.wait()
+        self.assertEqual(S.inproc_lstart(p.pid), "")
+        with (
+            mock.patch.object(C, "_run_reaped") as child,
+            mock.patch.object(C.subprocess, "run") as bare,
+        ):
+            self.assertEqual(S.proc_lstart(p.pid), "")
+        child.assert_not_called()
+        bare.assert_not_called()
+
+    def test_rendering_pads_nothing(self) -> None:
+        # a one-digit day: ps prints "Oct  5" and every reader collapses it to "Oct 5"
+        for epoch in (1791158405, 1792549190, 1767225599):
+            out = subprocess.run(
+                ["/bin/date", "-u", "-r", str(epoch), "+%a %b %e %H:%M:%S %Y"],
+                capture_output=True,
+                text=True,
+                env=dict(os.environ, LC_ALL="C"),
+                timeout=60,
+            ).stdout
+            self.assertEqual(S.lstart_text(epoch), " ".join(out.split()), epoch)
+
+    def test_mutant_strftime_padding_dies(self) -> None:
+        # the mutant rendering (%d, zero-padded) differs on a one-digit day, so the test above bites
+        tm = time.gmtime(1791158405)
+        self.assertEqual(tm.tm_mday, 5)
+        self.assertNotEqual(
+            time.strftime("%a %b %d %H:%M:%S %Y", tm), S.lstart_text(1791158405)
+        )
+
+    def test_switch_off_reads_through_ps(self) -> None:
+        S.INPROC_LSTART = False
+        with mock.patch.object(S, "inproc_lstart") as inproc:
+            self.assertEqual(S.proc_lstart(os.getpid()), _ps_lstart(os.getpid()))
+        inproc.assert_not_called()
+
+    def test_ps_timeout_is_unknown_only_when_asked(self) -> None:
+        def stuck(*a: object, **k: object) -> object:
+            raise subprocess.TimeoutExpired("ps", 40)
+
+        self.assertEqual(
+            S.proc_lstart(4242, run=stuck), ""
+        )  # the pre-W9 reading, kept as default
+        self.assertEqual(S.proc_lstart(4242, run=stuck, unknown=S.UNKNOWN), S.UNKNOWN)
+
+    def test_self_lstart_caches_only_a_real_read(self) -> None:
+        with mock.patch.object(S, "_SELF_LSTART", [0, ""]):
+            with mock.patch.object(S, "proc_lstart", return_value=""):
+                self.assertEqual(S.self_lstart(), "")
+                self.assertEqual(S.cached_self_lstart(), "")
+            with mock.patch.object(
+                S, "proc_lstart", return_value=LSTART
+            ) as pl:
+                self.assertEqual(S.self_lstart(), LSTART)
+                self.assertEqual(S.self_lstart(), LSTART)
+            self.assertEqual(pl.call_count, 1)
+            self.assertEqual(S.cached_self_lstart(), LSTART)
+
+
+class UnknownArgvHolds(Base):
+    """W9: a legacy (lstart-less) holder whose argv could not be read this pass is held, never
+    stolen — our own timeout (or the per-pass argv cap) is not a verdict."""
+
+    def _legacy(self) -> None:
+        d = S.claim_dir(self.paths, SID)
+        os.makedirs(d)
+        with open(os.path.join(d, "holder"), "w", encoding="utf-8") as fh:
+            fh.write('{"pid": 4242}')
+
+    def test_unknown_argv_holds(self) -> None:
+        self._legacy()
+        me = T.RunClaimHolder(pid=1, lstart=LSTART, owner="x", record_id="r1")
+        got = S.claim_take(self.paths, SID, me, live, lambda pid: S.UNKNOWN)
+        self.assertEqual(got, "held")
+
+    def test_control_empty_argv_steals(self) -> None:
+        # the reading an unknown argv had before W9 (a ps timeout returned "")
+        self._legacy()
+        me = T.RunClaimHolder(pid=1, lstart=LSTART, owner="x", record_id="r1")
+        self.assertEqual(
+            S.claim_take(self.paths, SID, me, live, no_argv), "stolen-legacy"
         )
 
 

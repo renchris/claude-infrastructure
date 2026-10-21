@@ -20,6 +20,7 @@ import fcntl
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -29,6 +30,7 @@ from lr_recon import (
     act,
     capped,
     census,
+    clock,
     classify,
     evidence,
     observe,
@@ -154,6 +156,28 @@ class Ctx:
         self.pass_clock = "wall"
         # C2 E5 T4: the last kitty-degraded event's key, so an outage writes one event, not one a pass
         self.kitty_degraded: Optional[str] = None
+        # W9 (B2 stage 1) kill switches, re-read every pass by _w9_switches: the page outbox and the
+        # per-pass caps (composer reads, sends, draft snapshots, claim argv reads, the assign memo)
+        self.page_outbox = True
+        self.pass_caps = True
+        self.composer_gate: Optional[ComposerGate] = None
+        self.composer_last: Dict[
+            str, int
+        ] = {}  # sid → pass_seq of its last composer read
+        self.composer_want: List[
+            str
+        ] = []  # the sids that asked for a read last pass, in order
+        # --assign-many memo: re-assert only on a changed row set, a failed call, or every 120 s
+        self.assign_key: Optional[Tuple[Tuple[str, str, int], ...]] = None
+        self.assign_at = 0.0
+        self.assign_rc = 0
+        self.pass_mints = 0
+        self.zombies: Dict[
+            int, int
+        ] = {}  # unregistered zombie child pid → consecutive passes seen
+        self.orphans_paged = False
+        self.pass_exc_streak = 0
+        self.pass_exc_paged_at = 0.0
 
     def wall(self) -> float:
         """B7 R2: the instant a decision or an action is taken (``now`` is the census instant).
@@ -196,7 +220,32 @@ def _ph(ctx: Ctx, name: str) -> None:
 
 
 def _alive(pid: int, lstart: str) -> bool:
-    return bool(lstart) and store.proc_lstart(pid) == lstart
+    """A claim holder is dead only on evidence: no such process, or another process's lstart. A
+    read we could not make (our own ps timeout) keeps it alive — read as dead, it handed a live
+    driver's claim to a second driver (W9, B2 review C8: the claim-steal split-brain)."""
+    if not lstart:
+        return False
+    cur = store.proc_lstart(pid, unknown=store.UNKNOWN)
+    return cur == store.UNKNOWN or cur == lstart
+
+
+BOUNDED_PASS_OFF = (
+    "bounded-pass.off"  # under recon/: subprocess.run and the waitpid(-1) reaper
+)
+INPROC_LSTART_OFF = "inproc-lstart.off"  # under recon/: lstart through ps only
+PAGE_OUTBOX_OFF = "page-outbox.off"  # under recon/: pages sent inline as they latch
+PASS_CAPS_OFF = (
+    "pass-caps.off"  # under recon/: no composer, send, snapshot, argv or assign cap
+)
+
+
+def _w9_switches(ctx: Ctx) -> None:
+    """W9's kill switches, re-read every pass (no reload)."""
+    p = ctx.paths.p
+    clock.BOUNDED_PASS = not os.path.exists(p(BOUNDED_PASS_OFF))
+    store.INPROC_LSTART = not os.path.exists(p(INPROC_LSTART_OFF))
+    ctx.page_outbox = not os.path.exists(p(PAGE_OUTBOX_OFF))
+    ctx.pass_caps = not os.path.exists(p(PASS_CAPS_OFF))
 
 
 def _event(
@@ -390,7 +439,7 @@ def _census(
             # ahead of the bucket: a record whose session no longer buckets into a record type
             # never reaches upsert, and its pane evidence is read by this pass's derive
             _event(paths, "rebind", s.sid, old.record_id, "pane %d:%d" % tuple(s.pane))
-        _read_composer(s, snap, facts, now, old)
+        _read_composer(s, snap, facts, now, old, _own(ctx, "composer_gate", None))
         b = census.bucket(s, snap, facts, now)
         buckets.append(b)
         if (
@@ -600,7 +649,7 @@ def _provenance(paths: T.Paths, now: float) -> bool:
     if not os.path.isfile(check):
         return False
     try:
-        subprocess.Popen(
+        clock.popen_detached(  # W9: registered, so reap_children collects it with no waitpid(-1)
             ["/bin/bash", check],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -629,6 +678,7 @@ def _band(ctx: Ctx, now: float) -> None:
 
 
 SNAP_TIMEOUT_S = 20
+DRAFT_SNAPS_PER_PASS = 1
 
 
 def snap_bin() -> str:
@@ -656,14 +706,24 @@ def _draft_snapshots(ctx: Ctx, snap: T.Snapshot) -> int:
     """D6.7: once per attempt, a record held on an operator draft (HOLD-DRAFT) gets its pane's raw
     --ansi screen saved (lr-composer-snapshot.sh snap: a read, it types nothing) and the draft row
     kept, so the page can quote what the operator wrote. Draft stash stays off (decision 6): this
-    snapshot is the only record of the draft. A failed read records nothing and says so."""
-    n = 0
+    snapshot is the only record of the draft. A failed read records nothing and says so.
+
+    W9: at most DRAFT_SNAPS_PER_PASS snapshots a pass (each is 2 × 22 s at its bound); the rest are
+    left untouched (no attempt stamp) and taken on later passes. recon/pass-caps.off lifts it."""
+    n = tried = 0
+    cap = DRAFT_SNAPS_PER_PASS if _own(ctx, "pass_caps", False) else None
     for rec in ctx.records.values():
         step()
         if not rec.open or rec.substate != "HOLD-DRAFT" or not rec.pane:
             continue
         if rec.close.get("draft_snap_attempt") == rec.attempt:
             continue
+        if cap is not None and tried >= cap:
+            tel = _tel(ctx)
+            if tel is not None:
+                tel.gate("draft", "pass-cap")
+            continue
+        tried += 1
         rec.close["draft_snap_attempt"] = rec.attempt
         pane = snap.panes.get("%d:%d" % rec.pane)
         rc, out = _run_snap(
@@ -764,21 +824,104 @@ def _reads_limited_composer(
     )
 
 
+COMPOSER_BUDGET_S = (
+    20.0  # W9: composer reads one pass may spend (started while under it)
+)
+COMPOSER_READ_S = 7.0  # one read at its bound: kitten's 5 s plus the reap grace
+
+
+class ComposerGate:
+    """W9 (B2 review F-D 4a): the census's composer reads were one 7 s child per limited session, so
+    n = 20 in a kitty stall put 140 s in the census alone. Per pass:
+
+      * a per-socket breaker: after one read on a socket times out, the rest on it return "unknown"
+        with no child — the bucket a timed-out read already gets (census.py "an unreadable
+        composer ... stays with the actuator's precheck"), so it is never assumed empty;
+      * a budget: a read starts only while the pass has spent < COMPOSER_BUDGET_S on reads (so
+        ≤ budget + one read), and past it a read returns "unknown" with no child;
+      * oldest-read-first rotation: a sid read more recently than a sid from last pass's queue that
+        is still unserved this pass reserves COMPOSER_READ_S for each such older sid, so the
+        census's fixed session order cannot starve the sessions behind the budget forever.
+
+    ``capped`` False (recon/pass-caps.off) reads every composer, as before W9."""
+
+    def __init__(
+        self,
+        seq: int,
+        last: Dict[str, int],
+        prev: List[str],
+        capped: bool = True,
+        budget_s: float = COMPOSER_BUDGET_S,
+        mono: Optional[Callable[[], float]] = None,
+    ) -> None:
+        self.seq, self.last, self.prev, self.capped = seq, last, list(prev), capped
+        self.budget_s = budget_s
+        self.mono = mono if mono is not None else time.monotonic
+        self.spent = 0.0
+        self.broken: Set[str] = set()
+        self.served: Set[str] = set()
+        self.wanted: List[str] = []
+        self.reads = self.skipped = 0
+
+    def _reserved(self, sid: str) -> float:
+        mine = self.last.get(sid, 0)
+        older = sum(
+            1
+            for o in self.prev
+            if o != sid and o not in self.served and self.last.get(o, 0) < mine
+        )
+        return older * COMPOSER_READ_S
+
+    def read(self, sid: str, sock: str, window_id: int) -> str:
+        self.wanted.append(sid)
+        self.served.add(sid)
+        if self.capped and (
+            sock in self.broken or self.spent + self._reserved(sid) >= self.budget_s
+        ):
+            self.skipped += 1
+            return "unknown"
+        late: List[bool] = []
+
+        def run(*a: Any, **kw: Any) -> Any:
+            try:
+                return run_bounded(*a, **kw)
+            except subprocess.TimeoutExpired:
+                late.append(True)
+                raise
+
+        t0 = self.mono()
+        try:
+            return observe.composer_state(sock, window_id, run=run)
+        finally:
+            self.spent += self.mono() - t0
+            self.reads += 1
+            self.last[sid] = self.seq
+            if late:
+                self.broken.add(sock)
+
+
+def _composer(gate: Optional[ComposerGate], sid: str, pane: T.PaneObs) -> str:
+    if gate is None:
+        return observe.composer_state(pane.sock, pane.window_id)
+    return gate.read(sid, pane.sock, pane.window_id)
+
+
 def _read_composer(
     s: T.SessionObs,
     snap: T.Snapshot,
     facts: Dict[str, T.Fact],
     now: float,
     old: Optional[T.Record] = None,
+    gate: Optional[ComposerGate] = None,
 ) -> None:
     """The one kitty read per session per pass, spent only where the answer decides a bucket: a
     LIMITED session that is or is about to be a mover (census.bucket holds a draft, W7h), and an
     idle fan-out candidate, which needs an affirmatively EMPTY composer (census._idle) and is read
-    only with fan-out on."""
+    only with fan-out on. ``gate`` (the daemon's per-pass ComposerGate) bounds the reads."""
     if s.pane and _reads_limited_composer(s, old, snap):
         pane = snap.panes.get("%d:%d" % s.pane)
         if pane is not None and pane.state == "claude":
-            s.composer = observe.composer_state(pane.sock, pane.window_id)
+            s.composer = _composer(gate, s.sid, pane)
         return
     if (
         os.environ.get("LR_IDLE_FANOUT", "off") != "on"
@@ -790,7 +933,7 @@ def _read_composer(
         return
     pane = snap.panes.get("%d:%d" % s.pane)
     if pane is not None and pane.state == "claude":
-        s.composer = observe.composer_state(pane.sock, pane.window_id)
+        s.composer = _composer(gate, s.sid, pane)
 
 
 def _rearm_inputs(rec: T.Record, snap: T.Snapshot) -> Dict[str, str]:
@@ -1189,7 +1332,7 @@ def _plan(
         if (
             rc == 3 and mode != "observe"
         ):  # a sweep hits the usage endpoint: never in shadow
-            plan.start_fresh_sweep(paths, now)
+            plan.start_fresh_sweep(paths, now, popen=clock.popen_detached)
         placed.update(got)
     if mode == "act":
         placed = {
@@ -1210,8 +1353,8 @@ def _plan(
 def _own_and_charge(ctx: Ctx, now: float) -> None:
     """act mode only: claims + owned/ + one --assign-many for everything holding a phantom."""
     me = T.RunClaimHolder(
-        pid=os.getpid(), lstart=store.proc_lstart(os.getpid()), owner="lr-reconciler"
-    )
+        pid=os.getpid(), lstart=store.self_lstart(), owner="lr-reconciler"
+    )  # W9: one in-process read per process, not a ps every act pass
     for rec in ctx.records.values():
         step()
         if not rec.open or rec.plan_only or rec.substate != "PLANNED":
@@ -1231,10 +1374,30 @@ def _own_and_charge(ctx: Ctx, now: float) -> None:
             )
             _event(ctx.paths, "own", rec.sid, rec.record_id, verdict)
     step()
-    plan.assign_many(plan.phantom_rows(list(ctx.records.values())))
+    rows = plan.phantom_rows(list(ctx.records.values()))
+    # W9 (B2 F6): --assign-many ran every pass while any phantom lived — a claude-accounts start
+    # each 3-5 s re-asserting unchanged rows with a 1200 s TTL. Now only on a changed row set (a
+    # new placement is charged in its own pass: invariant 16), after a failed call, or every
+    # ASSIGN_REFRESH_S (a 10x margin on the TTL). A restart's empty memo assigns at once.
+    key = tuple(sorted((str(r["acct"]), str(r["id"]), int(r["w"])) for r in rows))
+    wall = time.time()
+    if (
+        not _own(ctx, "pass_caps", False)
+        or key != ctx.assign_key
+        or ctx.assign_rc != 0
+        or wall - ctx.assign_at >= ASSIGN_REFRESH_S
+    ):
+        ctx.assign_rc = plan.assign_many(rows)
+        ctx.assign_key, ctx.assign_at = key, wall
+
+
+ASSIGN_REFRESH_S = 120.0
 
 
 FIRST_TURN = settle.MOVE_ACTUATORS + ("C", "C-retry")
+MINTS_PER_PASS = (
+    6  # admit.PACE_BURST: the most first-turn tokens one pass may mint (W9)
+)
 
 
 def _active_now(snap: T.Snapshot) -> int:
@@ -1301,6 +1464,12 @@ def _admit(
         # delivers that turn. A second admission charged it twice and, under the CPU brake that
         # never lifts at 15-40/core, held the owed continue indefinitely (gap 1 lever 3).
         return True, "launcher-admitted"
+    if isinstance(ctx, Ctx) and ctx.pass_caps and ctx.pass_mints >= MINTS_PER_PASS:
+        # W9: the pace bucket refills 1 per 20 s DURING a pass, so it alone does not bound a long
+        # pass's mints; this does (P_cap's "mints 6 × 32"). Nothing is taken: next pass decides.
+        if which in act.BOOTING:
+            ctx.boots.release(rec.sid)
+        return False, "pass-cap"
     unredeemed = sum(
         1
         for r in ctx.records.values()
@@ -1329,6 +1498,10 @@ def _admit(
     rec.admit_token = (
         ctx.admission.mint_token(rec.sid, owes_prompt=rec.kind != "idle") or ""
     )
+    # W9: mints are counted per pass (summary "mints"). Each is ≤ 30 s + the reap grace, and a pass
+    # mints at most MINTS_PER_PASS (6, the pace bucket's burst; the cap above enforces it)
+    if isinstance(ctx, Ctx):
+        ctx.pass_mints += 1
     return True, why
 
 
@@ -1648,6 +1821,15 @@ def _report(ctx: Ctx, mode: str, now: float, snap: Optional[T.Snapshot] = None) 
     # running daemon, and built once it kept every page in observe until a restart.
     rep.mode = mode
     ctx.reporter = rep
+    # W9: latched pages go to the durable outbox (recon/outbox/) and at most one synchronous send a
+    # pass is made, pages and requester mails together: immediate pages first, then mails, then the
+    # rest. A page or mail over the cap waits for a later pass, never lost (the outbox file / the
+    # mail's latch-on-result). recon/page-outbox.off and recon/pass-caps.off each lift part of it.
+    caps = _own(ctx, "pass_caps", False)
+    rep.begin_pass(
+        outbox=_own(ctx, "page_outbox", False),
+        sends=report.SENDS_PER_PASS if caps else None,
+    )
     by_cid: Dict[str, List[T.Record]] = {}
     for r in ctx.records.values():
         by_cid.setdefault(r.cohort_id, []).append(r)
@@ -1667,12 +1849,20 @@ def _report(ctx: Ctx, mode: str, now: float, snap: Optional[T.Snapshot] = None) 
             report.write_cohort(ctx.paths, cohort, recs, now)
         except Exception as e:  # a surface failure never stops the loop
             _event(ctx.paths, "report-error", detail=repr(e)[:200])
+    try:
+        rep.flush_outbox(immediate_only=True)
+    except Exception as e:
+        _event(ctx.paths, "report-error", detail=repr(e)[:200])
     if snap is not None:
         try:
             live, held = _requester_sets(ctx, snap)
             rep.requester_mails(list(ctx.records.values()), live, held)
         except Exception as e:
             _event(ctx.paths, "report-error", detail=repr(e)[:200])
+    try:
+        rep.flush_outbox()
+    except Exception as e:
+        _event(ctx.paths, "report-error", detail=repr(e)[:200])
     try:
         # operator-readout.sh reads this one file instead of loading every record: a Stop hook
         # has a ~2-3 s budget and no python on its path. Empty file ⇒ nothing open ⇒ no line.
@@ -1871,6 +2061,17 @@ def _abstain(
         )
     except Exception as e:
         _event(ctx.paths, "report-error", detail=repr(e)[:200])
+    rep = _own(ctx, "reporter", None)
+    if rep is not None and _own(ctx, "page_outbox", False):
+        # W9: pages latched by earlier passes do not depend on this census; a ps stall that lasts
+        # minutes must not hold them, so an abstained pass spends its one send on the outbox too
+        try:
+            rep.mode = mode
+            caps = _own(ctx, "pass_caps", False)
+            rep.begin_pass(outbox=True, sends=report.SENDS_PER_PASS if caps else None)
+            rep.flush_outbox()
+        except Exception as e:
+            _event(ctx.paths, "report-error", detail=repr(e)[:200])
     summary = {
         "mode": mode,
         "census": observe.census_line(snap),
@@ -1890,6 +2091,51 @@ def _abstain(
         )
     ctx.last_summary = summary
     return summary
+
+
+ZOMBIE_PASSES = (
+    2  # an unregistered zombie child seen this many passes running is an event
+)
+
+
+def _unowned_zombies(ctx: Ctx, snap: T.Snapshot) -> None:
+    """W9 safety net for registered-only reaping: a zombie child of ours that no registry holds
+    means a Popen site nothing polls (the waitpid(-1) loop that hid one is gone). One event per
+    pid, and only after ZOMBIE_PASSES consecutive passes: a child that exited a moment before the
+    census and is reaped this pass, or one CPython's own _cleanup collects, is not one."""
+    me = os.getpid()
+    owned = clock.registered_pids() | set(act._CHILDREN)
+    seen = {
+        r.pid
+        for r in snap.procs.values()
+        if r.ppid == me and r.zombie and r.pid not in owned
+    }
+    prev = ctx.zombies
+    ctx.zombies = {pid: prev.get(pid, 0) + 1 for pid in seen}
+    for pid, n in ctx.zombies.items():
+        if n == ZOMBIE_PASSES:
+            row = snap.procs.get(pid)
+            _event(
+                ctx.paths,
+                "unowned-zombie",
+                detail="pid %d %s" % (pid, (row.args if row else "")[:120]),
+            )
+
+
+def _orphan_page(ctx: Ctx) -> None:
+    """W9: killed children the kernel has not let go of yet (a ps stuck past its kill) pile up in
+    clock._ORPHANS. ORPHAN_PAGE_AT of them at once is one event and one page per process."""
+    n = clock.orphan_count()
+    if n < clock.ORPHAN_PAGE_AT or ctx.orphans_paged:
+        return
+    ctx.orphans_paged = True
+    text = "%d killed children not yet reaped (a kernel stall?); oldest argv %s" % (
+        n,
+        " ".join(str(x) for x in (getattr(clock._ORPHANS[0], "args", None) or [])[:3]),
+    )
+    _event(ctx.paths, "orphan-backlog", detail=text[:200])
+    rep = ctx.reporter or report.Reporter(ctx.paths, read_mode(ctx.paths, ctx.mode_cap))
+    rep.daemon_page("ORPHANS", text)
 
 
 def _keep_claims(ctx: Ctx, snap: T.Snapshot) -> None:
@@ -1938,6 +2184,9 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
 def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     paths = ctx.paths
     store.ensure_dirs(paths)  # cheap, and a wiped root must never crash the loop
+    _w9_switches(ctx)
+    act.begin_pass(ctx.pass_caps)
+    ctx.pass_mints = 0
     act.reap_children()  # before ps, so an exited actuator is gone AND its exit code is kept
     mode = "observe" if force_observe else read_mode(paths, ctx.mode_cap)
     # W8 kill switches, read every pass (no reload): B7's clocks, and classify's two mappings
@@ -1968,6 +2217,7 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     if why:
         return _abstain(ctx, snap, mode, now, why)
     ctx.abstain_streak = 0
+    _unowned_zombies(ctx, snap)
     if ctx.keeper:
         _keep_claims(ctx, snap)
     for sid in (
@@ -1987,7 +2237,21 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     _ph(ctx, "census")
     reqs = store.list_requests(paths)
     ctx.pre_census = {s: r.substate or "" for s, r in ctx.records.items()}
-    buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
+    gate = ctx.composer_gate = ComposerGate(
+        ctx.pass_seq, ctx.composer_last, ctx.composer_want, ctx.pass_caps
+    )
+    try:
+        buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
+    finally:
+        ctx.composer_gate = None
+        ctx.composer_want = gate.wanted
+        for sid in [s for s in ctx.composer_last if s not in snap.sessions]:
+            del ctx.composer_last[
+                sid
+            ]  # a session gone from the census needs no rotation slot
+    tel = _tel(ctx)
+    if tel is not None and gate.skipped:
+        tel.gate("composer", "pass-cap")
     _focus_ledger(paths, snap, buckets, mode, now)
     _ph(ctx, "derive")
     _derive(ctx, snap, now, facts, capped.latest_usage(ctx.home, now))
@@ -2039,6 +2303,9 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
         "defects": defects,
         "degraded": list(snap.degraded),
         "facts": len(facts),
+        "mints": ctx.pass_mints,
+        "composer_reads": gate.reads,
+        "composer_skipped": gate.skipped,
     }
     if mode == "observe":
         store.atomic_write_json(os.path.join(paths.shadow, "last-pass.json"), summary)
@@ -2067,18 +2334,62 @@ def _signature(paths: T.Paths, home: str) -> Tuple[Tuple[str, float, int], ...]:
 
 
 def wait_for_change(
-    paths: T.Paths, home: str, timeout: float, hb: Optional[Heartbeat]
+    paths: T.Paths,
+    home: str,
+    timeout: float,
+    hb: Optional[Heartbeat],
+    wake: Optional[Callable[[], bool]] = None,
+    tick_s: float = 1.0,
 ) -> bool:
-    """1 s stat poll of the wake dirs; returns True on a change, False on timeout."""
+    """1 s stat poll of the wake dirs; returns True on a change, False on timeout. W9: ``wake``
+    (the daemon passes act.any_exited) is also polled each tick, so an actuator's exit starts the
+    next pass within ~1 s — settled, and its retry's backoff scheduled — instead of 3-20 s later."""
     sig = _signature(paths, home)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        time.sleep(1.0)
+        time.sleep(tick_s)
         if hb is not None:
             hb.advance()  # progress inside a wait: the loop is alive, just idle (§C2)
+        if wake is not None and wake():
+            return True
         if _signature(paths, home) != sig:
             return True
     return False
+
+
+PASS_EXC_EXIT_AFTER = (
+    3  # consecutive raising passes before the daemon exits 1 (KeepAlive restarts)
+)
+PASS_EXC_PAGE_EVERY_S = 3600.0
+
+
+def _sigterm(signum: int, frame: Any) -> None:
+    """W9 (B2 review C5): SIGTERM — launchd's kickstart -k, the watchdog's TERM — raises SystemExit
+    on the main thread, so daemon()'s finally runs. There was no handler, so a kill skipped it."""
+    raise SystemExit(128 + signum)
+
+
+def _pass_exception(ctx: Ctx, e: Exception) -> bool:
+    """W9: a pass that raises is an event and (hourly) a page instead of an instant crash. Returns
+    True when it is the PASS_EXC_EXIT_AFTER-th in a row: the daemon then exits 1, and KeepAlive's
+    restart is safe (A6). Answers B3 review F-B: one bad record no longer restarts the daemon."""
+    ctx.pass_exc_streak += 1
+    import traceback
+
+    tb = traceback.extract_tb(e.__traceback__)
+    where = "%s:%d" % (os.path.basename(tb[-1].filename), tb[-1].lineno) if tb else "?"
+    detail = "%d in a row at %s: %r" % (ctx.pass_exc_streak, where, e)
+    try:
+        _event(ctx.paths, "pass-exception", detail=detail[:300])
+        if time.time() - ctx.pass_exc_paged_at >= PASS_EXC_PAGE_EVERY_S:
+            ctx.pass_exc_paged_at = time.time()
+            rep = ctx.reporter or report.Reporter(
+                ctx.paths, read_mode(ctx.paths, ctx.mode_cap)
+            )
+            rep.daemon_page("PASS-EXCEPTION", "reconciler pass raised " + detail[:200])
+    except Exception:  # noqa: BLE001 — the guard must not raise out of the loop it guards
+        pass
+    return ctx.pass_exc_streak >= PASS_EXC_EXIT_AFTER
 
 
 RESTART_REQUEST = "restart.request"  # under recon/ctl: a pass-boundary restart (A6 (f))
@@ -2280,7 +2591,10 @@ def daemon(ctx: Ctx) -> int:
     # A6 F-E ii: read the previous heartbeat, then write ours BEFORE _startup's claim loop, with
     # one ps for both. The watchdog's kill already let the old heartbeat go stale, so until ours
     # is written the fence's freshness rule holds nothing off an inherited record.
-    me = store.proc_lstart(os.getpid())
+    _w9_switches(ctx)
+    me = (
+        store.self_lstart()
+    )  # W9: in process, cached for _own_and_charge and the boot slots
     prev = _prev_heartbeat(paths)
     hb = Heartbeat(paths.heartbeat, os.getpid(), me, ctx.clock)
     hb.write_now()
@@ -2292,6 +2606,12 @@ def daemon(ctx: Ctx) -> int:
     if ctx.telem is not None:
         bind_child_hook(ctx.telem.child)
     caf = Caffeinate(os.getpid())
+    old_term = signal.signal(signal.SIGTERM, _sigterm)
+    queued = report.Reporter(ctx.paths, "act").queued()
+    if queued:
+        _event(
+            paths, "outbox-replay", detail="%d page(s) left by the last daemon" % queued
+        )
     try:
         while True:
             slept = ctx.clock.tick()
@@ -2299,7 +2619,13 @@ def daemon(ctx: Ctx) -> int:
             if slept:
                 for rec in ctx.records.values():
                     shift_record(rec, slept)
-            summary = run_pass(ctx, force_observe=ctx.clock.take_observe_only())
+            try:
+                summary = run_pass(ctx, force_observe=ctx.clock.take_observe_only())
+                ctx.pass_exc_streak = 0
+            except Exception as e:  # noqa: BLE001 — SystemExit / KeyboardInterrupt still end it
+                if _pass_exception(ctx, e):
+                    return 1
+                summary = {"open": sum(1 for r in ctx.records.values() if r.open)}
             if _restart_requested(paths):
                 return (
                     0  # after this pass's save_records; launchd KeepAlive restarts us
@@ -2309,8 +2635,11 @@ def daemon(ctx: Ctx) -> int:
             ):  # the daemon only: a --once or test pass never pages it
                 _provenance(ctx.paths, time.time())
             _band(ctx, time.time())
+            _orphan_page(ctx)
             if ctx.telem is not None:
                 ctx.telem.box()  # off the loop thread, ≤ 2.5 s wait, throttled on its own CPU
+            rep = ctx.reporter
+            hb.note_pass(rep.queued() if rep is not None else 0, clock.orphan_count())
             hb.advance()
             moving = any(
                 r.open and r.phase in MOVING or r.substate == "PLANNED"
@@ -2318,16 +2647,34 @@ def daemon(ctx: Ctx) -> int:
             )
             caf.set_hold(moving)
             if moving:
-                wait_for_change(paths, ctx.home, ACTIVE_FAST_S, hb)
+                wait_for_change(paths, ctx.home, ACTIVE_FAST_S, hb, act.any_exited)
             elif summary["open"]:
-                wait_for_change(paths, ctx.home, ACTIVE_S, hb)
+                wait_for_change(paths, ctx.home, ACTIVE_S, hb, act.any_exited)
             else:
-                wait_for_change(paths, ctx.home, DORMANT_S, hb)
+                wait_for_change(paths, ctx.home, DORMANT_S, hb, act.any_exited)
     finally:
+        # W9 (A6 §2.7): flush the page outbox and release the flock — nothing else. No record is
+        # saved here: a pass cut mid-way is replayed by the next daemon from its files.
+        try:
+            signal.signal(signal.SIGTERM, old_term)
+        except (ValueError, TypeError):
+            pass
         bind_child_hook(None)
         bind_steps(None)
+        try:
+            if ctx.reporter is not None and ctx.page_outbox:
+                ctx.reporter.begin_pass(outbox=True, sends=None)
+                ctx.reporter.flush_outbox(deadline=time.monotonic() + FINAL_FLUSH_S)
+        except Exception:  # noqa: BLE001 — leftovers stay queued for the next daemon
+            pass
         caf.close()
         hb.stop()
+        lockf.close()
+
+
+FINAL_FLUSH_S = (
+    10.0  # daemon exit: queued pages are sent while this lasts (launchd waits 20 s)
+)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

@@ -374,60 +374,118 @@ class BootSlots:
         self.disk: Dict[str, str] = {}
 
     @staticmethod
-    def _slot_live(d: str) -> bool:
-        from lr_recon.store import proc_lstart
-
+    def _holder(d: str) -> Tuple[Optional[int], str]:
+        """(pid, lstart) a slot dir names; pid None when it names none (or is unreadable)."""
         try:
             with open(os.path.join(d, "pid"), "r", encoding="utf-8") as fh:
-                pid = int(fh.read().strip() or "0")
+                pid: Optional[int] = int(fh.read().strip() or "0") or None
         except (OSError, ValueError):
+            pid = None
+        try:
+            with open(os.path.join(d, "lstart"), "r", encoding="utf-8") as fh:
+                want = " ".join(fh.read().split())
+        except OSError:
+            want = ""
+        return pid, want
+
+    @staticmethod
+    def _slot_live(d: str) -> bool:
+        """Is the slot's holder alive? Unknown (our own ps timeout) reads as alive."""
+        from lr_recon.store import UNKNOWN, cached_self_lstart, proc_lstart
+
+        pid, want = BootSlots._holder(d)
+        if pid is None:
             # no pid yet: a taker between its mkdir and its stamp, unless the slot is old
             try:
                 return time.time() - os.stat(d).st_mtime < 60
             except OSError:
                 return False
+        if pid == os.getpid():
+            # W9 (B2 F5, review C6): our own slot runs no ps (acquiring the 6th cost 5 self reads),
+            # and an unknown self lstart keeps it live — a "" read wiped our own slot for a 2nd sid
+            me = cached_self_lstart()
+            return not want or not me or want == me
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return False
         except OSError:
             pass
+        cur = proc_lstart(pid, unknown=UNKNOWN)
+        return not want or not cur or cur == UNKNOWN or want == cur
+
+    STEAL_LOCK_STALE_S = (
+        60.0  # a slot-N.steal this old is a stealer that died holding it
+    )
+
+    @staticmethod
+    def _stamp(d: str) -> None:
+        from lr_recon.store import self_lstart
+
+        with open(os.path.join(d, "pid"), "w", encoding="utf-8") as fh:
+            fh.write("%d\n" % os.getpid())
+        with open(os.path.join(d, "lstart"), "w", encoding="utf-8") as fh:
+            fh.write(self_lstart() + "\n")
+
+    def _steal_locked(self, d: str) -> bool:
+        """Take a slot judged dead IN PLACE, under its own lock — lr_swap_slot_acquire's protocol
+        (lr-move-lib.sh), so the two dispatchers serialize on one name. The taker that wins
+        ``mkdir <slot>.steal`` re-judges the holder there (a fresh read, not the one it acted on)
+        and overwrites pid/lstart; every other taker skips the slot this round. Nothing is moved, so
+        no live take can be displaced: unlinking in place without a lock let 12 processes believe
+        they held 6 slots (G2 C6), and moving the slot aside still let a third taker re-create the
+        path before a mistaken move was undone. Returns whether we stamped it."""
+        lock = d + ".steal"
         try:
-            with open(os.path.join(d, "lstart"), "r", encoding="utf-8") as fh:
-                want = " ".join(fh.read().split())
+            os.mkdir(lock)
+        except FileExistsError:
+            try:
+                if time.time() - os.stat(lock).st_mtime > self.STEAL_LOCK_STALE_S:
+                    os.rmdir(lock)
+            except OSError:
+                pass
+            return False
         except OSError:
-            want = ""
-        cur = proc_lstart(pid)
-        return not want or not cur or want == cur
+            return False
+        try:
+            if not os.path.isdir(d) or self._slot_live(d):
+                return False
+            self._stamp(d)
+            return True
+        except OSError:
+            return False
+        finally:
+            try:
+                os.rmdir(lock)
+            except OSError:
+                pass
 
     def _disk_take(self, sid: str) -> bool:
-        from lr_recon.store import proc_lstart
-
         try:
             os.makedirs(self.store, exist_ok=True)
         except OSError:
             return True  # an unwritable store must not stop every boot: memory still bounds them
+        locked = os.environ.get("LR_BOOT_SLOT_STEAL", "") != "unlink"
         for i in range(1, self.limit + 1):
             d = os.path.join(self.store, "slot-%d" % i)
             try:
                 os.mkdir(d)
+                self._stamp(d)
             except FileExistsError:
                 if self._slot_live(d):
                     continue
-                for name in ("pid", "lstart"):
+                if locked:
+                    if not self._steal_locked(d):
+                        continue
+                else:  # the pre-W9 unlocked wipe (LR_BOOT_SLOT_STEAL=unlink, the race's control)
                     try:
-                        os.unlink(os.path.join(d, name))
+                        self._stamp(d)
                     except OSError:
-                        pass
+                        continue
             except OSError:
                 continue
-            try:
-                with open(os.path.join(d, "pid"), "w", encoding="utf-8") as fh:
-                    fh.write("%d\n" % os.getpid())
-                with open(os.path.join(d, "lstart"), "w", encoding="utf-8") as fh:
-                    fh.write(proc_lstart(os.getpid()) + "\n")
-            except OSError:
-                continue
+            if locked and self._holder(d)[0] != os.getpid():
+                continue  # every stamp is re-read: a racer took it between our judge and stamp
             self.disk[sid] = d
             return True
         return False

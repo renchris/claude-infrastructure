@@ -35,7 +35,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from lr_recon import types as T
 
@@ -243,6 +243,8 @@ class Heartbeat:
         self.phase_at = 0.0
         self.pass_seq = 0
         self.pass_at = 0.0
+        self.pages_queued = 0
+        self.orphans = 0
         self.write_errors = 0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -265,6 +267,10 @@ class Heartbeat:
                 phase_at=self.phase_at,
                 pass_seq=self.pass_seq,
                 pass_at=self.pass_at,
+                pages_queued=self.pages_queued,
+                orphans=self.orphans,
+                spawn_s_max=_SPAWN_MAX[0],
+                spawn_s_max_at=_SPAWN_MAX[1],
             )
 
     def set_phase(self, name: str, seq: int) -> None:
@@ -275,6 +281,11 @@ class Heartbeat:
             self.phase, self.phase_at, self.pass_seq = name[:24], now, int(seq)
             if name == "begin":
                 self.pass_at = now
+
+    def note_pass(self, pages_queued: int, orphans: int) -> None:
+        """W9: the page outbox's depth and the killed children not yet reaped, at a pass end."""
+        with self._lock:
+            self.pages_queued, self.orphans = int(pages_queued), int(orphans)
 
     def render(self) -> str:
         # Compact separators: bash readers sed `"key":value` out of it.
@@ -383,13 +394,165 @@ def run_bounded(*args: Any, **kw: Any) -> "subprocess.CompletedProcess[Any]":
     declare_child(float(timeout))
     t0, late = time.monotonic(), False
     try:
-        return subprocess.run(*args, **kw)
+        if BOUNDED_PASS:
+            return _run_reaped(*args, **kw)
+        return subprocess.run(
+            *args, **kw
+        )  # recon/bounded-pass.off: the pre-W9 unbounded kill-wait
     except subprocess.TimeoutExpired:
         late = True
         raise
     finally:
         step()
         _note_child(args[0] if args else kw.get("args"), time.monotonic() - t0, late)
+
+
+# ── W9 (B2 stage 1): a true wall bound for every inline child ────────────────────────────────────
+# ``subprocess.run`` kills a child at its timeout and then waits for the corpse WITHOUT a bound: a
+# 0.2 s timeout cost 6.29 s (/tmp/b2meas/killwait.py), and the four largest PRI-31 pass gaps (98-193
+# s) were ps calls stuck in the kernel after their kill. ``_run_reaped`` waits REAP_GRACE_S for the
+# corpse, then abandons it to ``_ORPHANS``, which ``reap_orphans`` polls each pass. Every child the
+# loop starts is in exactly one registry while it lives (``_INFLIGHT`` while waited on, then
+# ``_ORPHANS``; ``_DETACHED`` for fire-and-forget; act._CHILDREN for actuators), because nothing
+# reaps by ``waitpid(-1)`` any more (act.reap_children: it stole other owners' exit codes).
+BOUNDED_PASS = True  # cleared by recon/bounded-pass.off (read every pass by __main__)
+REAP_GRACE_S = (
+    2.0  # after SIGKILL the loop waits this long for the corpse, then abandons it
+)
+ORPHAN_PAGE_AT = (
+    16  # this many abandoned children alive at once is paged, once per process
+)
+ORPHAN_RETRY_SKIP_AT = (
+    2  # ≥ this many orphans of one argv0 alive: one try per pass, not two
+)
+_ORPHANS: List[Any] = []  # killed, not yet reaped
+_DETACHED: List[Any] = []  # fire-and-forget children (fresh sweep, provenance)
+_INFLIGHT: Set[int] = set()  # pids a _run_reaped call is waiting on right now
+_SPAWN_MAX: List[float] = [
+    0.0,
+    0.0,
+]  # (slowest Popen constructor, its wall time) this process
+_REG_LOCK = threading.Lock()
+
+
+def _grace() -> float:
+    try:
+        return max(
+            0.2, float(os.environ.get("LR_RECON_REAP_GRACE_S", "") or REAP_GRACE_S)
+        )
+    except ValueError:
+        return REAP_GRACE_S
+
+
+def _abandon(proc: Any) -> None:
+    """After the kill: close our pipe ends (a stuck child cannot hold them), wait ≤ the grace, and
+    park a child the kernel has not let go of yet."""
+    for f in (proc.stdin, proc.stdout, proc.stderr):
+        if f is not None:
+            try:
+                f.close()
+            except OSError:
+                pass
+    try:
+        proc.wait(timeout=_grace())
+    except subprocess.TimeoutExpired:
+        with _REG_LOCK:
+            _ORPHANS.append(proc)
+
+
+def _run_reaped(
+    *popenargs: Any,
+    input: Any = None,
+    capture_output: bool = False,
+    timeout: Optional[float] = None,
+    check: bool = False,
+    **kw: Any,
+) -> "subprocess.CompletedProcess[Any]":
+    """``subprocess.run`` with one difference: after the timeout's SIGKILL it waits at most the
+    reap grace, then abandons the child. Not ``with Popen(...)``: its ``__exit__`` waits unbounded.
+    The constructor's own time (fork, then the errpipe read until exec) is recorded as spawn_s."""
+    if input is not None:
+        kw["stdin"] = subprocess.PIPE
+    if capture_output:
+        kw["stdout"] = kw["stderr"] = subprocess.PIPE
+    t0 = time.monotonic()
+    proc = subprocess.Popen(*popenargs, **kw)
+    spawn_s = time.monotonic() - t0
+    if spawn_s > _SPAWN_MAX[0]:
+        _SPAWN_MAX[0], _SPAWN_MAX[1] = spawn_s, time.time()
+    pid = int(getattr(proc, "pid", 0) or 0)
+    with _REG_LOCK:
+        _INFLIGHT.add(pid)
+    try:
+        try:
+            out, err = proc.communicate(input, timeout=timeout)
+        except (
+            BaseException
+        ):  # TimeoutExpired, KeyboardInterrupt, SystemExit: as run() does
+            proc.kill()  # Popen.kill polls first: an already-exited child is not signalled
+            _abandon(proc)
+            raise
+    finally:
+        with _REG_LOCK:
+            _INFLIGHT.discard(pid)
+    cp: "subprocess.CompletedProcess[Any]" = subprocess.CompletedProcess(
+        proc.args, proc.returncode, out, err
+    )
+    if check:
+        cp.check_returncode()
+    return cp
+
+
+def reap_orphans() -> int:
+    """Poll the orphan and detached registries; returns how many were reaped."""
+    with _REG_LOCK:
+        n = 0
+        for reg in (_ORPHANS, _DETACHED):
+            alive = [p for p in reg if p.poll() is None]
+            n += len(reg) - len(alive)
+            reg[:] = alive
+    return n
+
+
+def detach(proc: Any) -> None:
+    """Register a child nobody waits on, so reap_orphans collects its exit (no zombie)."""
+    if hasattr(proc, "poll"):
+        with _REG_LOCK:
+            _DETACHED.append(proc)
+
+
+def popen_detached(*args: Any, **kw: Any) -> Any:
+    """``subprocess.Popen`` for a fire-and-forget child, registered for reaping (the ``popen`` seam
+    of plan.start_fresh_sweep, and __main__._provenance)."""
+    proc = subprocess.Popen(*args, **kw)
+    detach(proc)
+    return proc
+
+
+def orphan_count() -> int:
+    with _REG_LOCK:
+        return len(_ORPHANS)
+
+
+def orphans_of(argv0: str) -> int:
+    """Live orphans whose argv0 basename is ``argv0`` (``ps``): their kernel path is still stuck."""
+    with _REG_LOCK:
+        procs = list(_ORPHANS)
+    n = 0
+    for p in procs:
+        args = getattr(p, "args", None)
+        a0 = args[0] if isinstance(args, (list, tuple)) and args else args
+        if os.path.basename(str(a0 or "")) == argv0 and p.poll() is None:
+            n += 1
+    return n
+
+
+def registered_pids() -> Set[int]:
+    """Every child pid a registry here holds (in flight, orphaned, detached)."""
+    with _REG_LOCK:
+        pids = set(_INFLIGHT)
+        pids.update(int(getattr(p, "pid", 0) or 0) for p in _ORPHANS + _DETACHED)
+    return pids
 
 
 def set_phase(name: str, seq: int = 0) -> None:
