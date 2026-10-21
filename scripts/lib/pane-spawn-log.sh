@@ -146,8 +146,9 @@ cc_log_pane_spawn() { # → always 0
        + {marker:   (if $mk == "" then null else $mk end)}
        + {item:     (if $it == "" then null else $it end)}
        + {detail:   (if $dt == "" then null else $dt end)}' 2>/dev/null) || line=""
-    [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; return 0; }
+    [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; _cc_spawn_tree_refresh "$backend"; return 0; }
   fi
+  _cc_spawn_tree_refresh "$backend"
   # DEGRADED ROW — and it SAYS SO. A jq-less box still has to leave evidence, because the whole
   # inference above turns on "no row ⇒ not from this tree"; a silent no-op here would manufacture
   # exactly the false conviction this file exists to prevent. `degraded:true` keeps a consumer from
@@ -158,6 +159,45 @@ cc_log_pane_spawn() { # → always 0
     "$(_cc_spawn_scrub "$chain")" "$(_cc_spawn_scrub "$ancestry")" "$(_cc_spawn_scrub "$pane")" \
     "$(_cc_spawn_scrub "$cwd")" "$(_cc_spawn_scrub "$detail")" \
     >> "$log" 2>/dev/null || true
+  return 0
+}
+
+# ── THE KITTY TREE, RE-READ WHEN A PANE OPENS (R23, reboot-resume 2026-10-21) ─────────────────
+# The restore heartbeat read kitty's tree only every 300 s, and pane 476 opened two minutes after
+# the last read, so the 2026-10-21 restore rebuilt it from the fallback plan instead of where it
+# was. A kitty spawn therefore asks restore-heartbeat.sh's hb_tree_refresh to re-read that kitty's
+# tree CC_HB_REFRESH_DELAY (20) seconds later, long enough for the new session to register. It runs
+# DETACHED in its own session (scripts/lib/detach.sh's reason: a launchd job or a reaped tool call
+# kills its process group) and is DEBOUNCED per kitty by a lock directory, so a restore opening 26
+# panes in a row costs one read per delay, not 26. The kitty is the one the socket names
+# (CC_SPAWN_KITTY_TO, else KITTY_LISTEN_ON: unix:/tmp/kitty-<pid>), else KITTY_PID.
+# CC_HB_TREE_REFRESH=0 turns it off. Under bats it runs only with the kitten seam set, so no test
+# reaches the live kitty. Always 0, like the rest of this file. A pane CLOSE asks the same through
+# the CLI verb `tree-refresh` below.
+_cc_spawn_tree_refresh() { # $1=backend → always 0
+  [ "${1:-}" = kitty ] || return 0
+  [ "${CC_HB_TREE_REFRESH:-1}" != 0 ] || return 0
+  if [ -n "${BATS_TEST_FILENAME:-}${BATS_TEST_TMPDIR:-}${BATS_VERSION:-}" ] && [ -z "${CC_HB_KITTEN_BIN:-}" ]; then
+    return 0
+  fi
+  local sock="${CC_SPAWN_KITTY_TO:-${KITTY_LISTEN_ON:-}}" kp="" lib lock
+  case "$sock" in unix:*/kitty-*) kp="${sock##*/kitty-}" ;; esac
+  case "$kp" in ''|*[!0-9]*) kp="${KITTY_PID:-}" ;; esac
+  case "$kp" in ''|*[!0-9]*) return 0 ;; esac
+  lib="$(dirname "${BASH_SOURCE[0]:-.}" 2>/dev/null)/restore-heartbeat.sh"
+  [ -f "$lib" ] && [ -x /usr/bin/python3 ] || return 0
+  lock="${TMPDIR:-/tmp}/cc-hb-refresh-$kp.lock"
+  if ! mkdir "$lock" 2>/dev/null; then
+    # A refresh is already pending and will read the tree after this pane opened. A lock older than
+    # two minutes is one whose refresh died, and is taken over.
+    [ -n "$(find "$lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] || return 0
+    touch "$lock" 2>/dev/null || return 0
+  fi
+  /usr/bin/python3 - "${CC_HB_REFRESH_DELAY:-20}" "$lock" "$lib" "$kp" "$sock" >/dev/null 2>&1 <<'PY' || rmdir "$lock" 2>/dev/null
+import subprocess, sys
+subprocess.Popen(["/bin/bash", "-c", 'sleep "$1"; rmdir "$2" 2>/dev/null; . "$3" && hb_tree_refresh "$4" "$5"', "_"] + sys.argv[1:],
+                 start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+PY
   return 0
 }
 
@@ -236,7 +276,10 @@ else
   _cc_spawn_chain_push "${CC_SPAWN_CALLER:-${0##*/}}"
   case "${1:-}" in
     log) shift; cc_log_pane_spawn "$@"; exit 0 ;;
-    "")  printf 'usage: pane-spawn-log.sh log <surface> <backend> <pane> <cwd> [detail]\n' >&2; exit 64 ;;
+    # tree-refresh — a pane CLOSED (or anything else changed the tree): the same detached, debounced
+    # re-read a kitty spawn asks for, of the caller's kitty.
+    tree-refresh) _cc_spawn_tree_refresh kitty; exit 0 ;;
+    "")  printf 'usage: pane-spawn-log.sh log <surface> <backend> <pane> <cwd> [detail] | tree-refresh\n' >&2; exit 64 ;;
     *)   printf 'pane-spawn-log.sh: unknown verb %s\n' "${1:-}" >&2; exit 64 ;;
   esac
 fi

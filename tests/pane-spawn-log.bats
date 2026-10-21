@@ -189,3 +189,61 @@ EOF
   bash -c ". '$LIB'; cc_log_pane_spawn split kitty 1 /tmp d"
   [ "$(wc -l < "$CC_SPAWN_LOG_FILE" | tr -d ' ')" = 1 ]
 }
+
+# ── R23 (reboot-resume 2026-10-21): a kitty spawn re-reads that kitty's tree between heartbeat ticks.
+# The library is copied beside a stub restore-heartbeat.sh whose hb_tree_refresh logs its arguments,
+# so no case reaches a real kitty or the real heartbeat. RED-proof: against cc1d441f6 the first case
+# times out with no refresh.log (nothing asked for a refresh) and `tree-refresh` exits 64.
+refresh_setup() {
+  FX="$BATS_TEST_TMPDIR/lib"; mkdir -p "$FX"
+  cp "$LIB" "$FX/pane-spawn-log.sh"; LIB="$FX/pane-spawn-log.sh"
+  printf 'hb_tree_refresh() { printf "%%s|%%s\\n" "$1" "${2:-}" >> "$BATS_TEST_TMPDIR/refresh.log"; }\n' > "$FX/restore-heartbeat.sh"
+  export TMPDIR="$BATS_TEST_TMPDIR" CC_HB_KITTEN_BIN=/nonexistent/kitten CC_HB_REFRESH_DELAY=1
+  unset KITTY_LISTEN_ON KITTY_PID CC_SPAWN_KITTY_TO CC_HB_TREE_REFRESH || true
+}
+await_refresh() { local i=0; while [ ! -s "$BATS_TEST_TMPDIR/refresh.log" ] && [ "$i" -lt 50 ]; do sleep 0.2; i=$((i + 1)); done; }
+
+@test "R23: a kitty spawn asks for ONE detached tree refresh of the socket's kitty, debounced by a per-kitty lock" {
+  refresh_setup
+  KITTY_LISTEN_ON=unix:/tmp/kitty-4242 bash -c ". '$LIB'; cc_log_pane_spawn split kitty 1 /tmp a"
+  await_refresh; sleep 0.5
+  [ "$(cat "$BATS_TEST_TMPDIR/refresh.log")" = "4242|unix:/tmp/kitty-4242" ]
+  [ ! -e "$BATS_TEST_TMPDIR/cc-hb-refresh-4242.lock" ]
+  # A pending refresh (its lock held, fresh) covers the next spawns: they ask for nothing more.
+  rm -f "$BATS_TEST_TMPDIR/refresh.log"; mkdir "$BATS_TEST_TMPDIR/cc-hb-refresh-4242.lock"
+  KITTY_LISTEN_ON=unix:/tmp/kitty-4242 bash -c ". '$LIB'; cc_log_pane_spawn split kitty 2 /tmp b; cc_log_pane_spawn tab kitty 3 /tmp c"
+  sleep 2.5
+  [ ! -e "$BATS_TEST_TMPDIR/refresh.log" ]
+  [ -d "$BATS_TEST_TMPDIR/cc-hb-refresh-4242.lock" ]
+  # A lock older than two minutes is a refresh that died: the next spawn takes it over.
+  touch -t 202601010000 "$BATS_TEST_TMPDIR/cc-hb-refresh-4242.lock"
+  KITTY_LISTEN_ON=unix:/tmp/kitty-4242 bash -c ". '$LIB'; cc_log_pane_spawn split kitty 4 /tmp d"
+  await_refresh
+  [ "$(cat "$BATS_TEST_TMPDIR/refresh.log")" = "4242|unix:/tmp/kitty-4242" ]
+  [ "$(wc -l < "$CC_SPAWN_LOG_FILE" | tr -d ' ')" = 4 ]
+  # CC_SPAWN_KITTY_TO outranks KITTY_LISTEN_ON.
+  rm -f "$BATS_TEST_TMPDIR/refresh.log"
+  CC_SPAWN_KITTY_TO=unix:/tmp/kitty-55 KITTY_LISTEN_ON=unix:/tmp/kitty-4242 bash -c ". '$LIB'; cc_log_pane_spawn os-window kitty 9 /tmp d"
+  await_refresh
+  [ "$(cat "$BATS_TEST_TMPDIR/refresh.log")" = "55|unix:/tmp/kitty-55" ]
+}
+
+@test "R23: no refresh for another backend, with CC_HB_TREE_REFRESH=0, with no kitty pid, or under bats without the kitten seam" {
+  refresh_setup
+  export CC_HB_REFRESH_DELAY=0
+  KITTY_LISTEN_ON=unix:/tmp/kitty-4242 bash -c ". '$LIB'; cc_log_pane_spawn split iterm2 1 /tmp a"
+  CC_HB_TREE_REFRESH=0 KITTY_LISTEN_ON=unix:/tmp/kitty-4242 bash -c ". '$LIB'; cc_log_pane_spawn split kitty 1 /tmp a"
+  bash -c ". '$LIB'; cc_log_pane_spawn split kitty 1 /tmp a"
+  KITTY_LISTEN_ON=unix:/tmp/kitty-4242 CC_HB_KITTEN_BIN='' bash -c ". '$LIB'; cc_log_pane_spawn split kitty 1 /tmp a"
+  sleep 2
+  [ ! -e "$BATS_TEST_TMPDIR/refresh.log" ]
+  [ "$(wc -l < "$CC_SPAWN_LOG_FILE" | tr -d ' ')" = 4 ]
+}
+
+@test "R23: the CLI verb tree-refresh (a pane close) asks for the same refresh, of KITTY_PID when no socket names one" {
+  refresh_setup
+  run env KITTY_PID=77 "$LIB" tree-refresh
+  [ "$status" -eq 0 ]
+  await_refresh
+  [ "$(cat "$BATS_TEST_TMPDIR/refresh.log")" = "77|" ]
+}
