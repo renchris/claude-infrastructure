@@ -53,6 +53,10 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
   absolute path, so the `shasum` count pins in the beacon and waiting-recycle fork suites now assert 0
   and lean on the paired `cut` count. Migration 0076 is c10: it waits for the operator's
   `--confirm launchd`, and until then the LOADED jobs still run their mains by path.
+- **Follow-up land** `67a27da86`: a function extracted or run before the `shasum-direct.sh` source read
+  `CC_SHA256`/`CC_SHA1` empty (handoff-fire's recycle lock hashed to `<no digest>`); every use site now
+  defaults itself to `/sbin`. Its 168-suite sweep found that one regression; the other reds failed
+  identically on the pre-wave base `c11e679c3`. Also re-pinned cc-fleet #20 (label count 56 → 57).
 - **Not built, and why:** `~/.zshrc:504,508,705-706` (operator dotfile); the `technical-analysis` and
   `reso-management-app` project hooks (other repos); T-0 (needs the operator's clean-lineage window).
   Same `exec "$CC_PANE_RUNNER"` root also sits at `scripts/handoff-fire.sh:1318` and
