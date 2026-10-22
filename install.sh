@@ -1160,12 +1160,73 @@ echo ""
 echo "Status line → $CONFIG_DIR/"
 copy_file "$REPO_DIR/statusline.sh" "$CONFIG_DIR/statusline.sh"
 
+# cc-shim (2026-10-22, docs/research/kalloc-longterm-2026-10-21/shim.md): a compiled #! launcher,
+# because macOS 15 keeps ~1.1 KiB of kernel memory per #! exec until reboot. Best effort: no
+# compiler or a red build prints `unavailable` and install carries on, since every consumer must
+# already work without it. CC_SHIM_INSTALL=0 skips the compile (hermetic install tests). Built
+# BEFORE the it2 and qos-shim entries below, which put it in front of themselves when it exists.
+if $IS_GLOBAL && [[ "${CC_SHIM_INSTALL:-1}" != 0 && -f "$REPO_DIR/tools/cc-shim/build.sh" ]]; then
+  echo ""
+  echo "cc-shim → $CONFIG_DIR/libexec/cc-shim"
+  if $DRY_RUN; then
+    echo "  [dry-run] tools/cc-shim/build.sh"
+  elif _shim_out=$(CC_SHIM_LINK="$CONFIG_DIR/libexec/cc-shim" /bin/bash "$REPO_DIR/tools/cc-shim/build.sh" 2>&1); then
+    echo "  ✓ ${_shim_out##*$'\n'}"
+  else
+    echo "  ⚠ cc-shim NOT installed — ${_shim_out##*$'\n'}"
+  fi
+fi
+
+# Names behind cc-shim (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4). Code we do not
+# control runs bin/it2 (Claude Code) and the qos-shim names (any agent command line) by path, so
+# each call is a kernel #! exec. With cc-shim built, bin/<name> becomes a link to libexec/cc-shim and
+# the real file moves to .bin-real/<name>, which cc-shim runs by its #! line with no kernel #! exec.
+# Otherwise, or with CC_SHIM_ENTRIES=0 (the rollback switch), today's layout exactly. Each entry is
+#   shim_place <name>, the usual copy or link of the repo source into $SHIM_DEST, shim_front <src> <name>
+# so the deploy itself stays a literal copy_file/link_file line, the shape the deploy-parity
+# coverage arms extract from this file (never quote that call shape in a comment here: they scan it).
+shim_on() {
+  [[ "${CC_SHIM_INSTALL:-1}" != 0 && "${CC_SHIM_ENTRIES:-1}" != 0 && -x "$CONFIG_DIR/libexec/cc-shim" ]]
+}
+shim_place() {   # sets SHIM_DEST: where <name>'s real file goes
+  if shim_on; then
+    run mkdir -p "$CONFIG_DIR/.bin-real"
+    SHIM_DEST="$CONFIG_DIR/.bin-real/$1"
+  else
+    SHIM_DEST="$CONFIG_DIR/bin/$1"
+  fi
+}
+shim_front() {   # <src> <name>: point bin/<name> at cc-shim, or clear the shim layout's leftovers
+  local src="$1" dest="$CONFIG_DIR/bin/$2" real="$CONFIG_DIR/.bin-real/$2"
+  if shim_on; then
+    # The previous layout's real copy is tracked content: drop it rather than have link_file's
+    # backup guard save it as an "unversioned" .pre-link.bak beside the new link.
+    if [[ -f "$dest" && ! -L "$dest" ]] && diff -q "$src" "$dest" >/dev/null 2>&1; then
+      run rm -f "$dest"
+    fi
+    link_file "$CONFIG_DIR/libexec/cc-shim" "$dest"
+  elif [[ -e "$real" || -L "$real" ]]; then
+    # Rolled back: a stale shim link at bin/<name> was already replaced by the deploy (copy_file
+    # unlinks a symlink dest before its cp, so it never writes THROUGH it into the cc-shim binary).
+    run rm -f "$real"
+  fi
+}
+
 # --- it2 wrapper ---
 if [[ -f "$REPO_DIR/bin/it2-wrapper" ]]; then
   echo ""
   echo "iTerm2 wrapper → $CONFIG_DIR/bin/"
   mkdir -p "$CONFIG_DIR/bin"
-  copy_file "$REPO_DIR/bin/it2-wrapper" "$CONFIG_DIR/bin/it2"
+  shim_place it2
+  copy_file "$REPO_DIR/bin/it2-wrapper" "$SHIM_DEST"
+  shim_front "$REPO_DIR/bin/it2-wrapper" it2
+  # Claude Code resolves it2 through scripts/kitty-setup.sh's shims/it2 → bin/it2 link, and cc-shim
+  # derives its target from the UNRESOLVED path, so that route runs .shims-real/it2: point it at the
+  # same copy. Shim layout only; a leftover after a rollback is never exec'd and is left alone.
+  if shim_on; then
+    run mkdir -p "$CONFIG_DIR/.shims-real"
+    link_file "$CONFIG_DIR/.bin-real/it2" "$CONFIG_DIR/.shims-real/it2"
+  fi
 fi
 
 # --- PATH tools (global only) → ~/.claude/bin/ ---
@@ -1212,24 +1273,10 @@ if $IS_GLOBAL; then
   if [[ -f "$REPO_DIR/config/qos-shim.names" && -f "$REPO_DIR/bin/cc-qos-exec" ]]; then
     while IFS= read -r _qos_name || [[ -n "$_qos_name" ]]; do
       case "$_qos_name" in ''|'#'*|*/*|*[[:space:]]*) continue ;; esac
-      link_file "$REPO_DIR/bin/cc-qos-exec" "$CONFIG_DIR/bin/$_qos_name"
+      shim_place "$_qos_name"
+      link_file "$REPO_DIR/bin/cc-qos-exec" "$SHIM_DEST"
+      shim_front "$REPO_DIR/bin/cc-qos-exec" "$_qos_name"
     done < "$REPO_DIR/config/qos-shim.names"
-  fi
-
-  # cc-shim (2026-10-22, docs/research/kalloc-longterm-2026-10-21/shim.md): a compiled #! launcher,
-  # because macOS 15 keeps ~1.1 KiB of kernel memory per #! exec until reboot. Best effort: no
-  # compiler or a red build prints `unavailable` and install carries on, since every consumer must
-  # already work without it. CC_SHIM_INSTALL=0 skips the compile (hermetic install tests).
-  if [[ "${CC_SHIM_INSTALL:-1}" != 0 && -f "$REPO_DIR/tools/cc-shim/build.sh" ]]; then
-    echo ""
-    echo "cc-shim → $CONFIG_DIR/libexec/cc-shim"
-    if $DRY_RUN; then
-      echo "  [dry-run] tools/cc-shim/build.sh"
-    elif _shim_out=$(CC_SHIM_LINK="$CONFIG_DIR/libexec/cc-shim" /bin/bash "$REPO_DIR/tools/cc-shim/build.sh" 2>&1); then
-      echo "  ✓ ${_shim_out##*$'\n'}"
-    else
-      echo "  ⚠ cc-shim NOT installed — ${_shim_out##*$'\n'}"
-    fi
   fi
 fi
 
