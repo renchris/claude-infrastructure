@@ -25,6 +25,11 @@
 # POSITIVE CONTROLS: every absence assertion ("no row", "not retried", "never delivered") is paired
 # in the same test with a case that DOES fire off the same fixture — a detector that fires on
 # nothing is not a detector.
+#
+# Exec'd stubs go through cc_stub (no kernel #! exec under cc-shim); create-api.py stays a plain file
+# because bin/cc-offload runs it as `python3 "$api"`.
+
+load helpers/cc-stub
 
 setup() {
   SUT="${BATS_TEST_DIRNAME}/../bin/cc-offload"
@@ -79,7 +84,7 @@ setup() {
 {"id":"session_dead","branch":"claude/b","age_s":90000,"account":"next2","url":"https://claude.ai/code/session_dead","state":"NOT-STARTED","retired":false}
 {"id":"session_gone","branch":"claude/c","age_s":99999,"account":"next","url":"https://claude.ai/code/session_gone","state":"ABANDONED","retired":true}
 EOF
-  cat >"$STUBDIR/cc-cloud" <<'EOF'
+  cc_stub "$STUBDIR" cc-cloud - <<'EOF'
 #!/usr/bin/env bash
 echo "cc-cloud $*" >>"$CALLS"
 case "$1" in
@@ -91,7 +96,7 @@ case "$1" in
   *) exit 2 ;;
 esac
 EOF
-  cat >"$STUBDIR/cc-notify" <<'EOF'
+  cc_stub "$STUBDIR" cc-notify - <<'EOF'
 #!/usr/bin/env bash
 echo "cc-notify $*" >>"$CALLS"
 # The ENVIRONMENT is part of this call's contract, not decoration: cc-notify's --cloud transport
@@ -101,25 +106,24 @@ echo "cc-notify $*" >>"$CALLS"
 echo "cc-notify-env CC_CLAUDE_BIN=${CC_CLAUDE_BIN-UNSET}" >>"$CALLS"
 exit "${NOTIFY_RC:-0}"
 EOF
-  cat >"$STUBDIR/handoff-fire.sh" <<'EOF'
+  cc_stub "$STUBDIR" handoff-fire.sh - <<'EOF'
 #!/usr/bin/env bash
 echo "fire optin=${CC_FIRE_CLOUD:-UNSET} $*" >>"$CALLS"
 exit "${FIRE_RC:-0}"
 EOF
-  cat >"$STUBDIR/cloud-reconcile.sh" <<'EOF'
+  cc_stub "$STUBDIR" cloud-reconcile.sh - <<'EOF'
 #!/usr/bin/env bash
 echo "reconcile confirm=${CONFIRM:-UNSET} $*" >>"$CALLS"
 echo "BRANCH	STATE	DECL	DETAIL"
 EOF
-  cat >"$STUBDIR/claude-accounts" <<'EOF'
+  cc_stub "$STUBDIR" claude-accounts - <<'EOF'
 #!/usr/bin/env bash
 echo "accounts $*" >>"$CALLS"; echo next3
 EOF
-  cat >"$STUBDIR/kitty-split-launch.sh" <<'EOF'
+  cc_stub "$STUBDIR" kitty-split-launch.sh - <<'EOF'
 #!/usr/bin/env bash
 echo "split $*" >>"$CALLS"
 EOF
-  chmod +x "$STUBDIR"/*
 }
 
 # ══ ls — the board ══════════════════════════════════════════════════════════════════════════════
@@ -155,11 +159,10 @@ EOF
   # THE load-bearing test. `cc-cloud list --json` prints zero bytes for an empty store, so an empty
   # read is ambiguous by construction: it means "nothing declared" OR "the sensor died". Conflating
   # them reports a healthy silent fleet while N cloud sessions burn quota.
-  cat >"$STUBDIR/cc-cloud" <<'EOF'
+  cc_stub "$STUBDIR" cc-cloud - <<'EOF'
 #!/usr/bin/env bash
 exit 1
 EOF
-  chmod +x "$STUBDIR/cc-cloud"
   run "$SUT" ls
   [ "$status" -eq 1 ]
   [[ "$output" == *UNKNOWN* ]] || false
@@ -212,7 +215,7 @@ EOF
   # binary) until it was pinned by hand. The assertion is on the ENV of the call, because that is
   # where the whole difference lives — both call sites print identical argv.
   export CC_CLOUD_CREATE_BIN="$BATS_TEST_TMPDIR/claude-220"
-  printf '#!/usr/bin/env bash\nexit 0\n' >"$CC_CLOUD_CREATE_BIN"; chmod +x "$CC_CLOUD_CREATE_BIN"
+  cc_stub "${CC_CLOUD_CREATE_BIN%/*}" "${CC_CLOUD_CREATE_BIN##*/}" "$(printf '#!/usr/bin/env bash\nexit 0\n')"
   run "$SUT" say session_alive "steer"
   [ "$status" -eq 0 ]
   grep -q "cc-notify-env CC_CLAUDE_BIN=$CC_CLOUD_CREATE_BIN" "$CALLS"
@@ -282,7 +285,7 @@ EOF
 
 @test "setup FAILS when the create binary cannot do --cloud" {
   local fake="$BATS_TEST_TMPDIR/oldclaude"
-  printf '#!/usr/bin/env bash\necho "2.1.114 (Claude Code)"\n' >"$fake"; chmod +x "$fake"
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/usr/bin/env bash\necho "2.1.114 (Claude Code)"\n')"
   CC_CLOUD_CREATE_BIN="$fake" run "$SUT" setup
   [ "$status" -eq 3 ]
   [[ "$output" == *"no --cloud verb"* ]] || false
@@ -293,12 +296,12 @@ EOF
   # The glob 2.1.2[2-9]* read 2.1.300 as "no --cloud verb" and 2.1.29 (January, no verb) as fine.
   local fake="$BATS_TEST_TMPDIR/verclaude" v
   for v in 2.1.300 2.1.1000 10.0.0; do
-    printf '#!/usr/bin/env bash\necho "%s (Claude Code)"\n' "$v" >"$fake"; chmod +x "$fake"
+    cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/usr/bin/env bash\necho "%s (Claude Code)"\n' "$v")"
     CC_CLOUD_CREATE_BIN="$fake" PATH="$STUBDIR:$PATH" run "$SUT" setup
     [[ "$output" != *"no --cloud verb"* ]] || false
   done
   for v in 2.1.29 2.1.219; do
-    printf '#!/usr/bin/env bash\necho "%s (Claude Code)"\n' "$v" >"$fake"; chmod +x "$fake"
+    cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/usr/bin/env bash\necho "%s (Claude Code)"\n' "$v")"
     CC_CLOUD_CREATE_BIN="$fake" PATH="$STUBDIR:$PATH" run "$SUT" setup
     [[ "$output" == *"$v (Claude Code) has no --cloud verb"* ]] || false
   done
@@ -309,7 +312,7 @@ EOF
   # App JWT or an installation token — a credential CLASS wall. The check-suites proxy can only
   # PROVE PRESENT; its silence proves nothing, so absence must never be asserted.
   local fake="$BATS_TEST_TMPDIR/newclaude"
-  printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n' >"$fake"; chmod +x "$fake"
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n')"
   CC_CLOUD_CREATE_BIN="$fake" PATH="$STUBDIR:$PATH" run "$SUT" setup
   [[ "$output" == *"NOT DETECTABLE"* ]] || false
   [[ "$output" != *"App is not installed"* ]]
@@ -321,7 +324,7 @@ EOF
   mkdir -p "$CC_CLOUD_STATE"
   printf 'verdict=absent\nts=1\n' >"$CC_CLOUD_STATE/github-app.observed"
   local fake="$BATS_TEST_TMPDIR/newclaude"
-  printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n' >"$fake"; chmod +x "$fake"
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n')"
   CC_CLOUD_CREATE_BIN="$fake" run "$SUT" setup
   [ "$status" -eq 3 ]
   [[ "$output" == *"PROVEN ABSENT"* ]] || false
@@ -333,26 +336,24 @@ EOF
   # other reason says nothing about the App, and inferring from it would be the exact
   # absence-is-ambiguous error the subsystem exists to refuse.
   echo "task" >"$BATS_TEST_TMPDIR/t.txt"
-  cat >"$STUBDIR/handoff-fire.sh" <<'EOF'
+  cc_stub "$STUBDIR" handoff-fire.sh - <<'EOF'
 #!/usr/bin/env bash
 echo "fire optin=${CC_FIRE_CLOUD:-UNSET} $*" >>"$CALLS"
 echo "!! cloud fire: REFUSED — refused-bundle" >&2
 exit 10
 EOF
-  chmod +x "$STUBDIR/handoff-fire.sh"
   run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --via cli
   [ -f "$CC_CLOUD_STATE/github-app.observed" ]
   grep -q 'verdict=absent' "$CC_CLOUD_STATE/github-app.observed"
 
   # NEGATIVE CONTROL, same fixture, only the refusal reason changed.
   rm -f "$CC_CLOUD_STATE/github-app.observed"
-  cat >"$STUBDIR/handoff-fire.sh" <<'EOF'
+  cc_stub "$STUBDIR" handoff-fire.sh - <<'EOF'
 #!/usr/bin/env bash
 echo "fire optin=${CC_FIRE_CLOUD:-UNSET} $*" >>"$CALLS"
 echo "!! cloud fire: REFUSED — refused-quota" >&2
 exit 10
 EOF
-  chmod +x "$STUBDIR/handoff-fire.sh"
   run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --via cli
   [ ! -f "$CC_CLOUD_STATE/github-app.observed" ]
 }
@@ -372,33 +373,31 @@ EOF
 
   # NEGATIVE CONTROL: a create that DID bundle leaves the absent verdict standing.
   printf 'verdict=absent\nts=1\n' >"$CC_CLOUD_STATE/github-app.observed"
-  cat >"$STUBDIR/handoff-fire.sh" <<'EOF'
+  cc_stub "$STUBDIR" handoff-fire.sh - <<'EOF'
 #!/usr/bin/env bash
 echo "fire optin=${CC_FIRE_CLOUD:-UNSET} $*" >>"$CALLS"
 echo "cloud-create: attempt 1/3 hit refused-bundle — retrying" >&2
 exit 0
 EOF
-  chmod +x "$STUBDIR/handoff-fire.sh"
   run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --via cli
   grep -q 'verdict=absent' "$CC_CLOUD_STATE/github-app.observed" || false
 }
 
 @test "setup FAILS when the reconciler kill-switch is off (every check would pass vacuously)" {
   local fake="$BATS_TEST_TMPDIR/newclaude"
-  printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n' >"$fake"; chmod +x "$fake"
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n')"
   CC_CLOUD_CREATE_BIN="$fake" CC_CLOUD_RECONCILE=off run "$SUT" setup
   [ "$status" -eq 3 ]
   [[ "$output" == *VACUOUSLY* ]]
 }
 
 @test "setup reports a router that could not SEE the fleet as UNKNOWN, not exhausted" {
-  cat >"$STUBDIR/claude-accounts" <<'EOF'
+  cc_stub "$STUBDIR" claude-accounts - <<'EOF'
 #!/usr/bin/env bash
 exit 3
 EOF
-  chmod +x "$STUBDIR/claude-accounts"
   local fake="$BATS_TEST_TMPDIR/newclaude"
-  printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n' >"$fake"; chmod +x "$fake"
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n')"
   CC_CLOUD_CREATE_BIN="$fake" run "$SUT" setup
   [[ "$output" == *"could not be SEEN"* ]] || false
   [[ "$output" != *"nothing routable"* ]]
@@ -408,17 +407,16 @@ EOF
 # thin account is budgeted for one fire — so both router calls switch promotion off (LEAD-SPEC
 # amendment 5, 2026-10-09). An env prefix is invisible in argv, so this stub records the variable.
 _accounts_env_stub() {
-  cat >"$STUBDIR/claude-accounts" <<'EOF'
+  cc_stub "$STUBDIR" claude-accounts - <<'EOF'
 #!/usr/bin/env bash
 echo "accounts $* FIRST=${CC_ROUTE_DISPATCH_STRAND_FIRST-UNSET}" >>"$CALLS"; echo next3
 EOF
-  chmod +x "$STUBDIR/claude-accounts"
 }
 
 @test "setup asks the router with thin-account promotion OFF" {
   _accounts_env_stub
   local fake="$BATS_TEST_TMPDIR/newclaude"
-  printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n' >"$fake"; chmod +x "$fake"
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n')"
   CC_CLOUD_CREATE_BIN="$fake" run "$SUT" setup
   grep -q '^accounts --route general FIRST=off$' "$CALLS" || false
 }
@@ -495,12 +493,11 @@ EOF
   cat >"$HOME/.claude/accounts.json" <<'EOF'
 {"accounts":[{"name":"next3","email":"who@example.com","dia_profile":"Claude3"}]}
 EOF
-  cat >"$STUBDIR/cc-cloud" <<'EOF'
+  cc_stub "$STUBDIR" cc-cloud - <<'EOF'
 #!/usr/bin/env bash
 echo "cc-cloud $*" >>"$CALLS"
 [ "$1" = show ] && { echo "account=next3"; echo "url=https://claude.ai/code/$2"; }
 EOF
-  chmod +x "$STUBDIR/cc-cloud"
   run "$SUT" open session_abc --print
   [ "$status" -eq 0 ]
   [[ "$output" == *next3* ]] || false
@@ -510,11 +507,10 @@ EOF
 
   # POSITIVE CONTROL for the other arm: an undeclared account must say UNKNOWN, never go silent —
   # a bare URL with no warning is exactly the trap this test exists to prevent.
-  cat >"$STUBDIR/cc-cloud" <<'EOF'
+  cc_stub "$STUBDIR" cc-cloud - <<'EOF'
 #!/usr/bin/env bash
 [ "$1" = show ] && { echo "url=https://claude.ai/code/$2"; }
 EOF
-  chmod +x "$STUBDIR/cc-cloud"
   run "$SUT" open session_abc --print
   [[ "$output" == *UNKNOWN* ]] || false
 }
@@ -582,12 +578,11 @@ print(" ".join(sys.argv[1:]), file=sys.stderr)
 print("session_apitest")
 EOF
   chmod +x "$STUBDIR/create-api.py"
-  cat >"$STUBDIR/cc-custody" <<'EOF'
+  cc_stub "$STUBDIR" cc-custody - <<'EOF'
 #!/usr/bin/env bash
 echo "cc-custody $*" >>"$CALLS"
 exit "${CUSTODY_RC:-0}"
 EOF
-  chmod +x "$STUBDIR/cc-custody"
   export CC_OFFLOAD_CUSTODY_BIN="$STUBDIR/cc-custody"
   export CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py"
 }
