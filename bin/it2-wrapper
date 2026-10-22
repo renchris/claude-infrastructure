@@ -111,6 +111,9 @@ TIMEOUT_S="${IT2_WRAPPER_TIMEOUT_S:-30}"
 if [[ -n "${KITTY_WINDOW_ID:-}" && -z "${IT2_WRAPPER_NO_KITTY:-}" ]] \
    || [[ "${CC_TERM:-}" == kitty && -z "${IT2_WRAPPER_NO_KITTY:-}" ]]; then
   _it2_bin="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")"
+  # Behind cc-shim this copy runs from $CFG/.bin-real/it2, beside none of its siblings: they stay in
+  # $CFG/bin (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4).
+  case "$_it2_bin" in */.bin-real) _it2_bin="${_it2_bin%/.bin-real}/bin" ;; esac
   _it2_kitty="$_it2_bin/it2-kitty"
   _cc_in_kitty="$_it2_bin/cc-in-kitty"
   if [[ ! -x "$_cc_in_kitty" ]]; then

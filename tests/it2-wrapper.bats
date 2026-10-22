@@ -387,3 +387,27 @@ real_kitty_verifier() {
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 1 ] || { echo "$output"; false; }
 }
+
+# ── behind cc-shim (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4) ─────────────────────
+# install.sh's shim layout puts the real copy at $CFG/.bin-real/it2 and leaves it2-kitty and
+# cc-in-kitty in $CFG/bin, so the wrapper must look for its siblings in bin/, not beside itself.
+# The sibling stubs are plain (CC_SHIM=) on purpose: under the shim their bodies would land in
+# .bin-real/ too, and the pre-fix lookup would find them there, so the test could not go red.
+@test "from a .bin-real copy (the cc-shim layout) the divert finds its siblings in bin/" {
+  load helpers/cc-stub
+  local cfg="$BATS_TEST_TMPDIR/cfg"
+  CC_SHIM='' cc_stub "$cfg/bin" it2-kitty $'#!/bin/bash\nprintf "KITTYPATH:%s\\n" "$*"'
+  CC_SHIM='' cc_stub "$cfg/bin" cc-in-kitty $'#!/bin/bash\nexit 0'
+  mkdir -p "$cfg/.bin-real"
+  cp "$W" "$cfg/.bin-real/it2"
+  [ ! -e "$cfg/.bin-real/it2-kitty" ]           # the discriminator: nothing to find beside the copy
+  local entry="$cfg/.bin-real/it2"
+  if [ -n "${CC_SHIM:-}" ] && [ -x "$CC_SHIM" ]; then ln -s "$CC_SHIM" "$cfg/bin/it2"; entry="$cfg/bin/it2"; fi
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset IT2_WRAPPER_NO_KITTY
+  export KITTY_WINDOW_ID=7
+  run "$entry" session list
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | grep -c 'KITTYPATH:session list')" -eq 1 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 0 ] || { echo "$output"; false; }
+}
