@@ -121,7 +121,7 @@ now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time*1000'; }
   run /bin/bash -x "$T" --timeout 0
   [ "${lines[${#lines[@]}-1]}" = timeout ]
   grep -qE "^\+ exec $CUR --timeout 0$" <<<"$output"
-  run ! grep -qE '^\+\+|shasum|uname' <<<"$output"
+  run ! grep -qE '^\+\+|shasum|sha256sum|uname' <<<"$output"
 }
 
 @test "changed source: a stale cached binary is never run; it rebuilds under a new key" {

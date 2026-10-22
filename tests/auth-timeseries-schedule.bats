@@ -245,7 +245,7 @@ print("OK")'
   p="$(printf '%s' "$wrapper" | sed -n 's/.*export PATH="\([^"]*\)".*/\1/p')"
   [ -n "$p" ] || { echo "could not extract PATH from: $wrapper"; false; }
   p="${p//\$HOME/$REAL_HOME}"
-  for b in security shasum cut date sed head wc python3 ps mkdir dirname mktemp sleep cat rm; do
+  for b in security sha256sum cut date sed head wc python3 ps mkdir dirname mktemp sleep cat rm; do
     found=0
     IFS=: read -ra dirs <<< "$p"
     for d in "${dirs[@]}"; do [ -x "$d/$b" ] && { found=1; break; }; done
