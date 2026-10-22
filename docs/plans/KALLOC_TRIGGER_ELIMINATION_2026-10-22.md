@@ -45,8 +45,15 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
   (`bdd199890`); kitty resolvers unwrap Homebrew's cask wrapper (`96d43d707`); it2-kitty runner and the
   lr-fire-resume `cc-close-attrib` root through their interpreter (`07ad2628e`); cc-settings-parity through
   python3 in all 26 migrations that call it and in c10-batch, not only the three lines the REPORT named
-  (`1ab1a938a`); shasum → `/sbin/sha{256,1}sum` (teammate sha, plus `31730cb2a`); launchd plists, the plist
-  lint arm and the installed-plist migration (teammate ld).
+  (`1ab1a938a`); shasum → `/sbin/sha{256,1}sum` in 63 files with byte-identical output, plus
+  `scripts/shasum-lint.sh` at the land gate (teammate sha, "fix(kalloc): shasum call sites run the mach-o
+  sha256sum/sha1sum" and "feat(lint): shasum-lint …", plus `31730cb2a`); 36 launchd plists through their own
+  interpreter, `hook-shebang-lint.sh` extended to plists, and c10 migration 0076 for the installed copies
+  (teammate ld, `b508bc635`, `55e900e2f`, `1492549c3`).
+- **Learnings:** the PATH-stub fork census (`tests/stop-hook-forks-helpers.bash`) cannot see a tool run by
+  absolute path, so the `shasum` count pins in the beacon and waiting-recycle fork suites now assert 0
+  and lean on the paired `cut` count. Migration 0076 is c10: it waits for the operator's
+  `--confirm launchd`, and until then the LOADED jobs still run their mains by path.
 - **Not built, and why:** `~/.zshrc:504,508,705-706` (operator dotfile); the `technical-analysis` and
   `reso-management-app` project hooks (other repos); T-0 (needs the operator's clean-lineage window).
   Same `exec "$CC_PANE_RUNNER"` root also sits at `scripts/handoff-fire.sh:1318` and
