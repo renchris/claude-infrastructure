@@ -108,7 +108,7 @@ installed() { # <repo-relative plist> <loaded|idle> — a by-path copy installed
     cmp -s "$REPO/$p" "$HOME/Library/LaunchAgents/$(basename "$p")"
   done
   ! grep -qE '^(bootout|bootstrap).*relogin' "$LCS/log" || false
-  [ "$(ls "$HOME/Library/LaunchAgents/"*.bak-0076-* | wc -l | tr -d ' ')" -eq 4 ]
+  [ "$(find "$HOME/Library/LaunchAgents" -maxdepth 1 -name '*.bak-0076-*' | wc -l | tr -d ' ')" -eq 4 ]
   run m0076 --verify
   [ "$status" -eq 0 ]
   cp "$LCS/log" "$F/log1"
