@@ -1,5 +1,10 @@
 # Pattern-matching sites in hooks/validate-bash.sh — the population the backlog row 8942f3b1506d
 #
+# 2026-10-20 (permission widening, decision 29d62f1ad390) — LINE SHIFT ONLY, no population
+#   change, no pattern change. AGENT SCRATCH, the GIT-OWNERSHIP cd/-C/PUSH rewrite and the rm
+#   SCRATCH-TEMP category add NO grep site (bash-native and python only). Re-pinned by a difflib
+#   line map from the merge base, then CHECKED by the drift and coverage assertions.
+#
 # 2026-10-21 (husk mass-SIGTERM, multi-line quote strip) — LINE SHIFT ONLY, no population change, no
 #   pattern change. CMD_NOQ is now built by vb_strip_quotes, an awk quote-state scan that carries its
 #   state across lines, unioned with the old sed copy (docs/research/husk-mass-sigterm-2026-10-21.md).
@@ -161,9 +166,9 @@ S22	1394	qE	raw	clause	lit	DIVERGENT	git\b.*\bconfig\b.*\buser\.(email|name)\b
 S23	1396	qE	raw	clause	lit	DIVERGENT	\-\-(get|get-all|get-regexp|get-urlmatch|list|unset|unset-all|remove-section|rename-section|global|system|file|blob)\b
 S24	1397	qE	raw	clause	lit	EQUIVALENT	[[:space:]]-(l|e)([[:space:]]|$)
 S25	1399	qE	raw	clause	lit	DIVERGENT	\buser\.(email|name)[[:space:]]+[^[:space:]]
-S27	2022	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
-S28	2328	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
-S29	2356	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
-S30	2359	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
-S31	2177	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
-S33	2303	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=("?\$\([^()]*\)"?|[^[:space:];&|]*)
+S27	2281	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
+S28	2645	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
+S29	2673	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
+S30	2676	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
+S31	2436	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
+S33	2565	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=("?\$\([^()]*\)"?|[^[:space:];&|]*)
