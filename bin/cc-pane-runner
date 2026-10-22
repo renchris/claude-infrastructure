@@ -209,7 +209,7 @@ _claude_verb() { # $1=command → prints the verb; rc 0 iff it is a claude sessi
 # Every other non-zero exit keeps the shell, as before. And no reason closes an IN-PLACE pane: a
 # recycle pending for this pane means handoff-fire is about to type the relaunch at this shell.
 _close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher delivered it (interactive mode) $4=claude_started true|false $5=1 iff an owed record exists
-  local _v _sd _c _lib="" _why
+  local _v _why
   if ! _v="$(_claude_verb "$1")"; then
     [ "${3:-0}" = 1 ] || return 0
     _v="the fleet launch line"
@@ -228,6 +228,14 @@ _close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher del
     _kept_line "$_v" "$2" "${3:-0}" "${4:-true}"
     return 0
   fi
+  _close_pane "$_v" "$_why"
+}
+
+# THE GATED CLOSE, shared by _close_on_exit and the no-command deadline below: recycle check, then
+# the fullscreen guard, then exit 0 (this runner IS the pane's process, so its exit closes the pane).
+# Returns 0 only when the pane must be KEPT; the caller then falls back to a shell.
+_close_pane() { # $1=what exited $2=why it may close
+  local _v="$1" _why="$2" _sd _c _lib=""
   _sd="$(_self_dir)"
   for _c in "${_sd:+$_sd/../lib/pane-recycle-pending.sh}" "${HOME:-}/.claude/lib/pane-recycle-pending.sh"; do
     [ -n "$_c" ] && [ -r "$_c" ] && { _lib="$_c"; break; }
@@ -525,9 +533,23 @@ _armed="$_dir/$_id.armed"
 # write with no reader blocks the writer, i.e. it would hang Claude Code's spawn call. A regular file
 # written atomically (tmp + mv) has no ordering requirement at all: the command either is there or is
 # not, and arriving early is indistinguishable from arriving on time.
+# NO COMMAND BY THE DEADLINE CLOSES THE PANE (2026-10-22). Reaching this loop at all means
+# bin/it2-kitty's arm branch launched us as an AGENT pane, and the one party that would deliver to
+# it has not: most often because the split's answer was lost (a client timeout under load — kitty
+# finished the launch after it2-kitty had reported failure, so nobody holds this pane's id; 9 such
+# shells sat ownerless on 2026-10-22). A shell here is a pane nobody will ever close. The other
+# _fallback causes above (no state dir, not kitty) and an empty delivery keep the shell: those are
+# a human's to read. CC_PANE_CLOSE_ON_EXIT=0 keeps it here too, and the close takes the same gates.
+_no_command() {
+  if [ "${CC_PANE_CLOSE_ON_EXIT:-1}" != 0 ]; then
+    _close_pane "this armed agent pane" "received no command within ${_wait}s"
+  fi
+  _fallback "no command arrived within ${_wait}s"
+}
+
 _deadline=$(( $(date +%s) + _wait ))
 while [ ! -f "$_cmdfile" ]; do
-  [ "$(date +%s)" -ge "$_deadline" ] && _fallback "no command arrived within ${_wait}s"
+  [ "$(date +%s)" -ge "$_deadline" ] && _no_command
   # 50ms: fast enough that spawn latency is invisible next to a shell start-up, slow enough that a
   # pane idling for the full 300s costs ~6k wakeups rather than a busy core.
   sleep 0.05

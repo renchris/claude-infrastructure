@@ -395,6 +395,39 @@ done
 # refuse rather than silently target the active pane, which would hijack the operator's own window.
 valid_id(){ case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
+# ── A TIMED-OUT LAUNCH IS NOT A FAILED LAUNCH (2026-10-22) ──────────────────────────────────────
+# kt's `timeout` kills the CLIENT, never kitty: the launch request has already reached the server,
+# which completes it whenever its event loop gets there. Measured at load ~450 (session kte-w3):
+# 9 teammate splits each failed "kitty launch failed (rc=124)" while kitty opened all 9 panes, and
+# with no id recorded nobody ever delivered a command to them or closed them. So every split carries
+# a unique `cc_spawn` user var, and a launch that timed out (124/137) or answered with a non-id is
+# reconciled against `kitty @ ls`: the ONE window carrying that exact tag is adopted as the spawn
+# (it worked, slowly — and an rc-0 "Created new pane" is the only answer Claude Code can act on).
+# Not found within the budget ⇒ fail as before; a window that turns up even later is an armed
+# runner with no command, and bin/cc-pane-runner closes it at its own deadline. A window without
+# the exact tag is never adopted. IT2_KITTY_RECONCILE_S=0 turns the reconcile off.
+RECONCILE_S="${IT2_KITTY_RECONCILE_S:-20}"
+reconcile_spawn() { # $1=spawn tag → prints the id of the one window carrying it; rc 0 iff found
+  local tag="$1" deadline now out id TIMEOUT_S="$TIMEOUT_S"
+  valid_id "$RECONCILE_S" && [ "$RECONCILE_S" -gt 0 ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  deadline=$(( $(date +%s) + RECONCILE_S ))
+  while :; do
+    now=$(date +%s)
+    # Each ls is capped at the budget left (the local TIMEOUT_S is what kt reads), so a wedged
+    # server cannot stretch the reconcile to TIMEOUT_S past its own deadline.
+    [ $(( deadline - now )) -lt "$TIMEOUT_S" ] && TIMEOUT_S=$(( deadline - now > 0 ? deadline - now : 1 ))
+    if out=$(kt ls --match "var:cc_spawn=^${tag}\$" 2>/dev/null); then
+      # --match is a regex; the exact-equality select is what makes "the exact tag" literal.
+      id=$(jq -r --arg t "$tag" '[.[].tabs[].windows[] | select((.user_vars // {}).cc_spawn == $t) | .id]
+             | if length == 1 then .[0] else empty end' <<<"$out" 2>/dev/null)
+      valid_id "$id" && { printf '%s\n' "$id"; return 0; }
+    fi
+    [ "$(date +%s)" -ge "$deadline" ] && return 1
+    sleep 1
+  done
+}
+
 # ── ARGV DELIVERY — the pane's COMMAND is never typed at a prompt (plan §9.1, 2026-08-03) ────────
 # Claude Code's ITermBackend spawns a teammate by TYPING: `session send -s <id> ^U` to clear the
 # prompt line, then `session run -s <id> <cmd>` for the text and Enter. Two process spawns against
@@ -1290,6 +1323,10 @@ case "$verb" in
       while IFS= read -r _le_tok; do launch_args+=("$_le_tok"); done < <(cc_lineage_child_env)
       unset _le_tok
     fi
+    # THE SPAWN TAG — read back only if the launch's answer is lost (reconcile_spawn above). Same
+    # placement reasoning as the lineage stamp: before the branches, so all three carry it.
+    spawn_tag="cc$$x$(date +%s)x$RANDOM$RANDOM"
+    launch_args+=(--var "cc_spawn=$spawn_tag")
 
     # ARM the pane: launch the runner instead of an interactive shell, so `run` can hand the command
     # over as a FILE. `-l -i` is load-bearing and not decoration — .zprofile puts ~/.claude/shims on
@@ -1343,7 +1380,12 @@ case "$verb" in
     new=$(kt "${launch_args[@]}" 2>&1)
     rc=$?
     if [ $rc -ne 0 ] || ! valid_id "$new"; then
-      err "kitty launch failed (rc=$rc): $new"; exit 1
+      if { [ $rc -eq 124 ] || [ $rc -eq 137 ] || [ $rc -eq 0 ]; } && late=$(reconcile_spawn "$spawn_tag"); then
+        err "kitty launch lost its answer (rc=$rc: $new) but window $late carries this spawn's tag — adopting it"
+        new="$late"
+      else
+        err "kitty launch failed (rc=$rc): $new"; exit 1
+      fi
     fi
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split kitty "$new" "${PWD:-}" "it2-kitty session split anchor:${SESSION:-} loc:${loc:-} argv:${arm:-0}"
     # EVEN OUT THE TAB THE PANE JUST ARRIVED IN. kitty's splits layout adds a window by HALVING the
