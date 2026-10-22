@@ -3988,6 +3988,56 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── EXEC FORM ratchet, rule R2 (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4) ─────────
+  # Our own shell code running a tracked #! file BY PATH ("$HOME/.claude/bin/cc-backlog", a seam
+  # variable holding one, through exec/timeout/nohup/env/xargs/find -exec) keeps ~1.1 KiB of kernel
+  # memory per call on macOS 15.8.1, the same leak as the two arms around this one. The cure is
+  # scripts/lib/cc-run.sh (cc_run / cc_argv). Ratchet: a shell file this land touches may not hold more
+  # by-path runs than config/exec-form-baseline.tsv grants it (a new file: 0), and raising a count IN
+  # the baseline is refused unless SHIP_LAND_EXEC_FORM_RAISE_OK=1. tests/ is rule R4's (above).
+  # gate_bounded: SHIP_LAND_EXEC_FORM_LINT=/nonexistent disarms a broken detector.
+  EFL_LINT="${SHIP_LAND_EXEC_FORM_LINT:-scripts/exec-form-lint.sh}"
+  if [[ -f "$EFL_LINT" ]]; then
+    local efl_own="" _eflf
+    local -a efl_files=()
+    efl_own="$(git diff --name-only --diff-filter=d "$range" -- . ':!docs' ':!tests' ':!vendor' ':!*.md' 2>/dev/null || true)"
+    while IFS= read -r _eflf; do
+      [[ -n "$_eflf" && -f "$_eflf" ]] && efl_files+=("$_eflf")
+    done <<< "$efl_own"
+    if (( ${#efl_files[@]} > 0 )) || ! git diff --quiet "$range" -- config/exec-form-baseline.tsv 2>/dev/null; then
+      echo "→ gate: exec-form ratchet R2 (this land edits ${#efl_files[@]} non-test file(s))" >&2
+      if ! selftest_ok "$EFL_LINT" scripts/exec-form-lint.py; then
+        echo "✗ gate: exec-form-lint --selftest FAILED — the detector no longer discriminates." >&2
+        echo "  Escape if it is the detector that is broken: SHIP_LAND_EXEC_FORM_LINT=/nonexistent" >&2
+        gate_red exec-form-selftest
+        return 1  # gate_bounded: SHIP_LAND_EXEC_FORM_LINT=/nonexistent — escape for a broken detector
+      fi
+      local _eflrc=0
+      if (( ${#efl_files[@]} > 0 )); then /bin/bash "$EFL_LINT" --files "${efl_files[@]}" >&2 || _eflrc=$?; fi
+      if (( _eflrc == 2 )); then arm_nonverdict "exec-form-lint"; return 1; fi
+      if (( _eflrc != 0 )); then
+        echo "✗ gate: exec-form RED — a file this land edits runs more tracked #! files by path than its baseline." >&2
+        echo "  Run them through scripts/lib/cc-run.sh: cc_run \"\$X\" …, or cc_argv \"\$X\"; <relay> \"\${CC_ARGV[@]}\" …. Sites are named above." >&2
+        gate_red exec-form
+        return 1  # gate_bounded: fires only on lands that add by-path #! runs
+      fi
+      local _efl_raised=""
+      # A baseline the range base does not hold yet (the land that creates it) has nothing to raise.
+      git cat-file -e "${range%%..*}:config/exec-form-baseline.tsv" 2>/dev/null &&
+      _efl_raised="$(awk -F'\t' 'NR==FNR { if ($0 !~ /^#/) old[$1]=$2; next }
+                                 $0 !~ /^#/ && ($2+0) > (old[$1]+0) { print "  " $1 ": " (old[$1]+0) " → " $2 }' \
+                       <(git show "${range%%..*}:config/exec-form-baseline.tsv" 2>/dev/null) \
+                       config/exec-form-baseline.tsv 2>/dev/null || true)"
+      if [[ -n "$_efl_raised" && "${SHIP_LAND_EXEC_FORM_RAISE_OK:-0}" != 1 ]]; then
+        echo "✗ gate: exec-form RED — this land RAISES baseline counts in config/exec-form-baseline.tsv:" >&2
+        printf '%s\n' "$_efl_raised" >&2
+        echo "  Run the new sites through cc_run instead; a deliberate raise needs SHIP_LAND_EXEC_FORM_RAISE_OK=1." >&2
+        gate_red exec-form-raise
+        return 1  # gate_bounded: SHIP_LAND_EXEC_FORM_RAISE_OK=1 — the operator's override for a deliberate raise
+      fi
+    fi
+  fi
+
   # ── SHASUM lint (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W1) ─────────────────────────
   # /usr/bin/shasum is a `#!` perl script, so every call keeps ~1.1 KiB of kernel memory on macOS
   # 15.8.1 — the same leak as the arm above, reached through a command instead of a hook entry.
