@@ -68,6 +68,7 @@ FAKE
   x_ttyc="$(sed -n '/^as_tty_classified() {/,/^}/p' "$HF")";     [ -n "$x_ttyc" ]
   x_tty="$(sed -n '/^as_tty() {/,/^}/p' "$HF")";                 [ -n "$x_tty" ]
   x_pin="$(sed -n '/^pin_term_verdict_for_watcher() {/,/^}/p' "$HF")"; [ -n "$x_pin" ]
+  # shellcheck source=../scripts/lib/cc-run.sh disable=SC1091  # the gate runs shellcheck without -x
   . "$REPO/scripts/lib/cc-run.sh"   # the pin runs cc-in-kitty through cc_run
   eval "$x_kitty"; eval "$x_kid"; eval "$x_ttyq"; eval "$x_ttyc"; eval "$x_tty"; eval "$x_pin"
 

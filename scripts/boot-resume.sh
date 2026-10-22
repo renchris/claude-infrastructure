@@ -1815,9 +1815,9 @@ EOF
     [ -z "$ka_sock" ] && [ -n "$KSOCK_BIN" ] && ka_sock="$(cc_run "$KSOCK_BIN" 2>/dev/null | head -1)"
     mkdir -p "$HOME/.reso" 2>/dev/null || true
     _dl="$(dirname "$0")/lib/detach.sh"
+    cc_argv "$KEEPALIVE"   # reso-keepalive is #!: detach/nohup run its interpreter (cc-run.sh)
     # shellcheck source=lib/detach.sh
     # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
-    cc_argv "$KEEPALIVE"   # reso-keepalive is #!: detach/nohup run its interpreter (cc-run.sh)
     if [ -f "$_dl" ] && . "$_dl" 2>/dev/null && command -v detach >/dev/null 2>&1; then
       detach "$HOME/.reso/keepalive.out" env CC_KEEPALIVE_MARKERS="$nudged" CC_TERM_KITTY_TO="$ka_sock" \
         "${CC_ARGV[@]}" "$KEEPALIVE_INTERVAL" >/dev/null 2>&1 || true

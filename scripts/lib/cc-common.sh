@@ -36,6 +36,7 @@
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 if [ -f "${BASH_SOURCE[0]%/*}/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/cc-run.sh"; else :; fi
 if ! command -v cc_argv >/dev/null 2>&1; then
+  # shellcheck disable=SC2034  # CC_ARGV is the output callers read
   cc_argv() { CC_ARGV=("$1"); }
   cc_run() { "$@"; }
 fi

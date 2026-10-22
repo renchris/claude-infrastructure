@@ -174,6 +174,7 @@ rc_row() { # $1=pane $2=account [$3=pid] — one registry row naming $SID
   local joined; joined="$(printf '%s\n' "${LR_LAUNCH_TAIL[@]}")"
   printf '%s\n' "$joined" | grep -qx 'CC_PANE_CMD=bash /tmp/lr-launch-x.sh'
   printf '%s\n' "$joined" | grep -qx 'CC_PANE_CMD_INTERACTIVE=1'
+  # shellcheck disable=SC2016  # the literal argv text, expanded by the pane's shell
   printf '%s\n' "$joined" | grep -qx 'exec /bin/bash "$CC_PANE_RUNNER"'
   ! printf '%s\n' "$joined" | grep -q 'exec bash'
 }
