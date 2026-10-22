@@ -95,9 +95,11 @@ files converted, lint R4 wired into ship-land beside the HOOK SHEBANG arm.
   ~95 left in ship-land are fixture-repo content the gate commits and shellchecks.
 - **Vendored shellcheck.** Upstream's files fail bare shellcheck on SC1091/SC2034/SC2154 only;
   `vendor/bats-core/.shellcheckrc` waives those three for that tree (the patch adds none).
-- **Not built, and why:** the plain arm of ship-land.bats was still running at land (shim arm 185/185);
-  the `-j` GNU-parallel path of the bats patch is untested (no `parallel` on this box); the upstream
-  bats PR is drafted, not opened (brief). Land: `git log origin/main --grep 'cc_stub\|cc-shim\|R4' --oneline`.
+- **Not built, and why:** the `-j` GNU-parallel path of the bats patch is untested (no `parallel` on
+  this box); the upstream bats PR is drafted, not opened (brief); delisting boot-resume and
+  operator-readout from `scripts/offbox-excluded.manifest` (the land's off-box arm reads both green now)
+  needs a named mechanism, which this wave did not establish. ship-land.bats' plain arm finished
+  185/185 after the land. Landed through `40de48c0b`; `git log origin/main --grep 'cc_stub\|cc-shim\|R4'`.
 
 ### W4 call sites — waiting on W3
 ### W5 keep-it-fixed loop — DONE 2026-10-22 (session kte-w5; landed through `f35645dea`, lead-verified by content)
