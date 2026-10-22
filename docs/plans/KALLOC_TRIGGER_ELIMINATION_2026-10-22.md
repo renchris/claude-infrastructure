@@ -59,7 +59,7 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
   `scripts/limit-recover/lr-lib.sh:1338`, and the `reso-resume-one` callers in `bin/cc-resume-layout.sh`
   and `scripts/boot-resume-launch.sh` run it by path: left to W4 (call sites), sized by T-0.
 ### W2 agent-context-sync harness — routed
-### W3 infra test suites — built 2026-10-22 (session kte-w3, fired 2026-10-22 after T-1 passed)
+### W3 infra test suites — DONE 2026-10-22 (session kte-w3; landed through `a3ff099a4`, lead-verified by content)
 
 Scope (frozen): tools/cc-shim + tests/cc-shim.bats, vendored bats-core 1.13.0 with "$BASH" internal
 calls run by bin/cc-bats, the tests/helpers cc_stub helper + tests/cc-stub.bats, the top-12 census test
@@ -103,7 +103,17 @@ files converted, lint R4 wired into ship-land beside the HOOK SHEBANG arm.
   needs a named mechanism, which this wave did not establish. ship-land.bats' plain arm finished
   185/185 after the land. Landed through `40de48c0b`; `git log origin/main --grep 'cc_stub\|cc-shim\|R4'`.
 
-### W4 call sites — waiting on W3
+### W4 call sites — ready, blocked on kitty (brief `/tmp/fire-kte-w4.txt`, worktree `kte-w4` kept)
+
+- Two fires on 2026-10-22 ~13:30Z came back outcome UNKNOWN with no session: kitty pid 1881 answers every
+  `kitten @` with `Error: EOF` and holds 258 peerless unix sockets, so no pane can open. Operator row
+  `13c537f2ed69` (reopen kitty). Re-fire with the same brief, `--worktree kte-w4`, once
+  `kitten @ ls --self` exits 0.
+- Brief scope: `scripts/lib/cc-run.sh` runner (bash 3.2 safe), `resolve_bin` (`scripts/lib/cc-common.sh:35`)
+  through it, lint R2 `scripts/exec-form-lint.sh` beside the HOOK SHEBANG arm (`scripts/ship-land.sh:~3956`),
+  call sites in census order including W1's leftovers (`handoff-fire.sh:~1321`, `lr-lib.sh:~1338`,
+  `reso-resume-one` callers), Mach-O entries for `~/.claude/bin/it2` (copied from `bin/it2-wrapper`,
+  `install.sh:~1164`) and `bin/cc-qos-exec` (PATH walk `:55-66`, `qos-rewrite.sh:~188`). No blanket shim.
 ### W5 keep-it-fixed loop — DONE 2026-10-22 (session kte-w5; landed through `f35645dea`, lead-verified by content)
 
 - **SLO check** `scripts/kalloc-slo.sh` (`tests/kalloc-slo.bats`), ticked by `capacity-alarm.sh`'s launchd
