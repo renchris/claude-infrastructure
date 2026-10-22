@@ -91,8 +91,10 @@ files converted, lint R4 wired into ship-land beside the HOOK SHEBANG arm.
   autonomy-sweep 11/22 (mostly red at load ~370 before and after on its 30 s subject bound; the 26
   cases that reach a converted stub pass with the bound raised), accounts-board 4/1 (42/42),
   operator-readout 8/56 (134/134), cc-reaper 49/3 (236/236), lr-fleet 36/4 (same 5 reds as before),
-  cc-offload 24/4 (60/60), deploy-live 9/13 (168/168); postland-verify follows in its own land. The
-  ~95 left in ship-land are fixture-repo content the gate commits and shellchecks.
+  cc-offload 24/4 (60/60), deploy-live 9/13 (168/168), postland-verify 19/13 (second land; 16 targeted
+  cases that reach every converted helper, 16/16 in all three arms — the full 152-test run was cut by
+  load ~500, ~10 min a case). The ~95 left in ship-land are fixture-repo content the gate commits and
+  shellchecks.
 - **Vendored shellcheck.** Upstream's files fail bare shellcheck on SC1091/SC2034/SC2154 only;
   `vendor/bats-core/.shellcheckrc` waives those three for that tree (the patch adds none).
 - **Not built, and why:** the `-j` GNU-parallel path of the bats patch is untested (no `parallel` on
