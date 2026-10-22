@@ -37,6 +37,9 @@ setup() {
   export CC_CAP_OSR9=off CC_CAP_ZONE_NOTIFY=off CC_CAP_CONVOY=off
   # The pages name alarm-reboot-prep.sh; were anything to run it, it must not reach the live cc-sessions.
   export CC_REBOOT_PREP_SESSIONS="$BATS_TEST_TMPDIR/no-cc-sessions"
+  export CC_REBOOT_PREP_CLAUDE_TMP="$BATS_TEST_TMPDIR/no-claude-tmp"
+  export CC_REBOOT_PREP_KITTY_SOCK_PREFIX="$BATS_TEST_TMPDIR/no-kitty-"
+  export CC_REBOOT_PREP_SOCKS_DIR="$BATS_TEST_TMPDIR/no-cc-socks"
   NOW="$(date -u +%s)"
   BOOT=$((NOW - 4 * 86400))
   export CC_CAP_BOOTTIME="$BOOT"
