@@ -13,7 +13,7 @@ for every refused row, a transcript count of classifier denies, and `replay.py` 
 
 ## 1. The answer first
 
-**Replayed against the last 14 days, the widened hooks plus migration 0074 auto-allow 97 of the
+**Replayed against the last 14 days, the widened hooks plus migration 0075 auto-allow 97 of the
 649 Bash permission dialogs (14.9%, 72.7 h of the 488 h sessions waited) as measured, and about
 224 (34.5%, ~240 h, roughly half the waiting) once the 127 dialogs that ask in the replay only
 because their worktree has since been reaped are counted at run time. They also clear 195 of the
@@ -28,10 +28,10 @@ and why it stays.
 
 **Landing and converging are the operator's.** The auto-mode classifier refused this session the
 guard-suite runs and the grep-site fixture re-pin as self-modification, and nothing was routed
-around it. The hook change, migration 0074 and this report are committed on branch
+around it. The hook change, migration 0075 and this report are committed on branch
 `perm-prompt-reduction-2026-10-20`; one script finishes it:
 `bash ~/Development/.worktrees/perm-prompt-reduction-2026-10-20/scripts/permission-widening-2026-10-20-finish.sh --confirm settings.json`
-(re-pin, gate, land, converge, then 0074; without `--confirm settings.json` it stops before the
+(re-pin, gate, land, converge, then 0075; without `--confirm settings.json` it stops before the
 settings write).
 
 ## 2. Census — where the prompts came from
@@ -119,7 +119,7 @@ smart-bash allow.
 | GIT-OWNERSHIP cd/`-C` | a literal `cd <dir>` / `git -C <dir>` is tracked instead of making the command opaque; every dir the statement may run in must pass | 102 of 116 reset asks carried `cd` or `-C` |
 | GIT-OWNERSHIP scratch | reset/restore in a scratch repo need no lossless proof; a stash drop needs the repo's COMMON dir in scratch too (a /tmp worktree of a real repo shares its stash) | reset 116, restore 19, drop 11 — all approved |
 | heredoc mentions | when heredoc bodies cannot execute (`vb_classify`), the scan reads `CMD_NOHD`, so a brief that mentions `git reset --hard` is not an invocation | the heredoc-brief share of the 116 |
-| PUSH (new) | asks unless non-force, literal remote and refspecs, and every remote is a github/gitlab/bitbucket repo owned by `CC_VB_PUSH_OWNERS` (default `renchris`) or a local path. **Inert until migration 0074** removes the blanket ask; it is what keeps third-party pushes behind a prompt after it | 307 push dialogs; of the 178 clones under `~/Development` with an `origin`, 96 are `renchris` and the rest someone else's — why owner, not remote name, is the test |
+| PUSH (new) | asks unless non-force, literal remote and refspecs, and every remote is a github/gitlab/bitbucket repo owned by `CC_VB_PUSH_OWNERS` (default `renchris`) or a local path. **Inert until migration 0075** removes the blanket ask; it is what keeps third-party pushes behind a prompt after it | 307 push dialogs; of the 178 clones under `~/Development` with an `origin`, 96 are `renchris` and the rest someone else's — why owner, not remote name, is the test |
 
 ### 3.2 `hooks/lib/smart-bash-allowlist.py` (the hook `allow` that clears structural prompts)
 
@@ -134,7 +134,7 @@ smart-bash allow.
 | inert builtins | `read`, `continue`, `break`, `exit`, `return`, `shift`, `wait`, `umask`, `unset`, `local`/`declare`, `command -v`; input-redirect-only segments | `read` 15, `continue` 8, `exit` 6, `break` 5 |
 | read-only verbs | `uptime`, `shellcheck`, `nproc`, `getconf`, `vm_stat`, `sha256sum`, `ioreg`; git `cherry`, `ls-remote`, `range-diff`, `show-ref`, `show-branch`, `fsck` | `uptime` 6, `shellcheck` 8, `git ls-remote` 5 |
 
-### 3.3 Settings — `migrations/0074-git-push-ask-to-hook.sh` (c10, operator-run)
+### 3.3 Settings — `migrations/0075-git-push-ask-to-hook.sh` (c10, operator-run)
 
 Removes exactly `Bash(git push:*)` from `~/.claude/settings.json` (every account links to it).
 Refuses unless the live `validate-bash.sh` carries the PUSH arm, backs up, verifies by content.
@@ -164,10 +164,10 @@ Refuses unless the live `validate-bash.sh` carries the PUSH arm, backs up, verif
 |---|---|---|---|
 | live `~/.claude/hooks` (today) | kept | 23 / 648 (3.5%) | 4.9 h / 488 h |
 | this branch | kept | 49 / 648 (7.6%) | 22.1 h |
-| this branch + migration 0074 | removed | **97 / 649 (14.9%)** | **72.7 h** |
+| this branch + migration 0075 | removed | **97 / 649 (14.9%)** | **72.7 h** |
 | same, counting the 127 rows whose worktree was reaped (they ask in the replay only because their remote cannot be read now) | removed | **~224 / 649 (~34.5%)** | **~240 h** |
 
-Of the 552 still asking after 0074 (classified against the new allowlist): arbitrary code
+Of the 552 still asking after 0075 (classified against the new allowlist): arbitrary code
 (interpreters, ad-hoc scripts) ~238; a push whose only blocker is the unreadable remote of a
 reaped worktree 127, plus 5 whose remote really is someone else's or unresolvable; validate-bash
 live-state asks that found something to lose ~76; other verbs not on the allowlist ~90; subshell

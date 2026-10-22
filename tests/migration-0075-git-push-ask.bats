@@ -1,12 +1,12 @@
 #!/usr/bin/env bats
-# migration 0074 (remove the blanket `Bash(git push:*)` ask; validate-bash's PUSH arm decides) —
+# migration 0075 (remove the blanket `Bash(git push:*)` ask; validate-bash's PUSH arm decides) —
 # docs/research/permission-prompt-reduction-2026-10-20/REPORT.md. c10: staged for the operator,
 # never self-run. Pins: nothing is written without --confirm; it REFUSES while the live hook lacks
 # the push check; the verify oracle discriminates; only that one ask entry changes (the force-push
 # denies and the other asks stay); every account stays LINKED; a second run is a no-op.
 #
 # Hermetic: $HOME is a fixture; the real bin/cc-settings-parity runs over fixture account dirs through
-# its CC_PARITY_DIRS seam, and the "live hook" is a fixture file through CC_0074_LIVE_HOOK.
+# its CC_PARITY_DIRS seam, and the "live hook" is a fixture file through CC_0075_LIVE_HOOK.
 
 setup() {
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -26,15 +26,15 @@ setup() {
     CC_PARITY_DIRS="${CC_PARITY_DIRS:+$CC_PARITY_DIRS:}$HOME/.claude-$a"
   done
   export CC_PARITY_DIRS
-  export CC_0074_LIVE_HOOK="$HOME/.claude/hooks/validate-bash.sh"
-  cp "$REPO_ROOT/hooks/validate-bash.sh" "$CC_0074_LIVE_HOOK"      # the hook WITH the push arm
+  export CC_0075_LIVE_HOOK="$HOME/.claude/hooks/validate-bash.sh"
+  cp "$REPO_ROOT/hooks/validate-bash.sh" "$CC_0075_LIVE_HOOK"      # the hook WITH the push arm
   S="$HOME/.claude/settings.json"
-  M="$REPO_ROOT/migrations/0074-git-push-ask-to-hook.sh"
+  M="$REPO_ROOT/migrations/0075-git-push-ask-to-hook.sh"
 }
 
 @test "c10 with a --confirm run line, and the shipped hook carries the arm it gates on" {
   grep -q '^# migration-class: c10' "$M"
-  grep -q '^# migration-run: bash .*0074-git-push-ask-to-hook.sh --confirm settings.json' "$M"
+  grep -q '^# migration-run: bash .*0075-git-push-ask-to-hook.sh --confirm settings.json' "$M"
   grep -q '_go_push_owned' "$REPO_ROOT/hooks/validate-bash.sh"
 }
 
@@ -49,7 +49,7 @@ setup() {
 }
 
 @test "REFUSES while the live hook lacks the push check, and writes nothing" {
-  printf '#!/bin/bash\n# a pre-0074 hook\n' > "$CC_0074_LIVE_HOOK"
+  printf '#!/bin/bash\n# a pre-0075 hook\n' > "$CC_0075_LIVE_HOOK"
   before="$(cat "$S")"
   run /bin/bash "$M" --confirm settings.json
   [ "$status" -eq 4 ]
@@ -65,7 +65,7 @@ setup() {
   [ "$(jq -c '.permissions.deny' "$S")" = '["Bash(git push --force:*)","Bash(git push -f:*)"]' ]
   [ "$(jq -c '.permissions.allow, .env' "$S" | tr -d '\n')" = '["Bash(git add:*)"]{"A":"1"}' ]
   for a in next secondary tertiary quaternary; do [ -L "$HOME/.claude-$a/settings.json" ]; done
-  ls "$HOME/.claude/backups/" | grep -q '^git-push-ask-0074-'
+  ls "$HOME/.claude/backups/" | grep -q '^git-push-ask-0075-'
 }
 
 @test "a second run is a no-op" {

@@ -27,7 +27,7 @@ setup() {
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
   command -v jq >/dev/null 2>&1 || skip "jq not installed"
-  # The fixture fence: the operator's ask rules AFTER migrations/0074 (no `git push`).
+  # The fixture fence: the operator's ask rules AFTER migrations/0075 (no `git push`).
   cat > "$HOME/.claude/settings.json" <<'JSON'
 {"permissions": {"allow": [], "ask": ["Bash(fly deploy:*)", "Bash(git stash clear:*)"],
  "deny": ["Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(wget:*)"]}}

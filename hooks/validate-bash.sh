@@ -1931,7 +1931,7 @@ is_scratch_temp_dir() {  # <absolute dir> → 0 iff it resolves to agent scratch
 #   · when the heredoc bodies cannot execute (vb_classify: VB_RAW=0), the scan reads CMD_NOHD, so
 #     a brief written with `cat > f <<EOF` that MENTIONS `git reset --hard` is not an invocation.
 # And one new arm, PUSH, for when the operator removes the blanket `Bash(git push:*)` ask
-# (migrations/0074): a push asks unless it is non-force, names a literal remote, and every remote
+# (migrations/0075): a push asks unless it is non-force, names a literal remote, and every remote
 # it can reach is the operator's own (CC_VB_PUSH_OWNERS, default renchris) or a local path.
 _git_own_scan() {  # → RESET/RESTORE/DROP/PUSH <mode> … lines, plus the dirs each may act in
   GO_SCAN="$_GO_TEXT" RAWCMD="$CMD" GO_CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)" \
@@ -2261,7 +2261,7 @@ if [[ "$CMD" =~ $_GO_ANY_RE ]]; then
     esac
   fi
   # PUSH. Inert while the blanket `Bash(git push:*)` ask stands (its prompt comes first either way);
-  # it is what keeps a push to someone ELSE's repo behind a prompt once migrations/0074 removes it.
+  # it is what keeps a push to someone ELSE's repo behind a prompt once migrations/0075 removes it.
   # Force spellings are denied by the settings deny rules and refused by the scan; this asks on
   # --delete/--mirror/--prune, a `+`/`:` refspec, a variable remote, and any remote not the operator's.
   if [[ "$CMD" =~ $_GO_PUSH_RE && "${CC_VB_PUSH_GATE:-on}" != "off" ]]; then

@@ -2,7 +2,7 @@
 # permission-widening-2026-10-20-finish.sh — the operator half of the 2026-10-20 permission widening
 # (docs/research/permission-prompt-reduction-2026-10-20/REPORT.md; decision 29d62f1ad390).
 #
-# WHY THIS IS YOURS. The agent wrote and committed the hook widening and migration 0074, then the
+# WHY THIS IS YOURS. The agent wrote and committed the hook widening and migration 0075, then the
 # auto-mode classifier refused it the rest — running the guard suites ([Self-Modification]) and
 # re-pinning the validate-bash grep-site fixture ([Security Weaken]). That refusal is the right one:
 # an agent should not be the party that widens its own guards AND certifies the result. Nothing was
@@ -17,7 +17,7 @@
 #      content-verify); then verify BY CONTENT that the landed paths are on origin/main
 #   5. converge the live ~/.claude: CC_DEPLOY_MAX_LAG_COMMITS=0 scripts/deploy-live.sh (the
 #      degraded tier this repo's CLAUDE.md sanctions; never --force), then check the live hook
-#   6. ONLY with --confirm settings.json: migration 0074 — removes `Bash(git push:*)` from the shared
+#   6. ONLY with --confirm settings.json: migration 0075 — removes `Bash(git push:*)` from the shared
 #      ~/.claude/settings.json (307 of the 644 prompts). It cannot be undone except by restoring the
 #      backup it prints or re-adding the rule. Without --confirm it runs `--check` and stops.
 #
@@ -92,10 +92,10 @@ PY
 fi
 
 say "2/6 gate"
-shellcheck hooks/validate-bash.sh migrations/0074-git-push-ask-to-hook.sh "$0" || die "step 2 (shellcheck)"
+shellcheck hooks/validate-bash.sh migrations/0075-git-push-ask-to-hook.sh "$0" || die "step 2 (shellcheck)"
 /usr/bin/python3 -m py_compile hooks/lib/smart-bash-allowlist.py docs/research/permission-prompt-reduction-2026-10-20/replay.py || die "step 2 (py_compile)"
 bash scripts/validate-bash-differential.sh >/dev/null || die "step 2 (validate-bash-differential: bash scripts/validate-bash-differential.sh)"
-SUITES="permission-widening-2026-10-20 migration-0074-git-push-ask smart-bash-allowlist-compound
+SUITES="permission-widening-2026-10-20 migration-0075-git-push-ask smart-bash-allowlist-compound
 smart-bash-allowlist-inert smart-bash-allowlist-narrow smart-bash-allowlist-sed-n smart-bash-allowlist-ssrf
 validate-bash-git-ownership validate-bash-scratchpad validate-bash-agent-rm-deny validate-bash-permharvest
 validate-bash-differential rm-safe-allowlist ship-rail-push-allow"
@@ -127,7 +127,7 @@ if [ "$(git rev-list --count origin/main..HEAD)" != 0 ]; then
   bash scripts/ship-land.sh || die "step 4 (ship-land.sh exit $? — see its own verdict above)"
 fi
 git fetch -q origin main || die "step 4 (re-fetch)"
-for p in hooks/validate-bash.sh hooks/lib/smart-bash-allowlist.py migrations/0074-git-push-ask-to-hook.sh \
+for p in hooks/validate-bash.sh hooks/lib/smart-bash-allowlist.py migrations/0075-git-push-ask-to-hook.sh \
          tests/permission-widening-2026-10-20.bats docs/research/permission-prompt-reduction-2026-10-20/REPORT.md; do
   [ -n "$(git ls-tree origin/main -- "$p")" ] || die "step 4 (not on origin/main: $p)"
   git diff --quiet origin/main HEAD -- "$p" || die "step 4 (origin/main differs from this branch on $p)"
@@ -140,14 +140,14 @@ grep -q '_go_push_owned' "$HOME/.claude/hooks/validate-bash.sh" || die "step 5 (
 grep -q '_rm_scratch_segment' "$HOME/.claude/hooks/lib/smart-bash-allowlist.py" || die "step 5 (the live smart-bash-allowlist.py is not the new one)"
 echo "  live layer carries the widening"
 
-say "6/6 migration 0074 (removes the blanket git push ask)"
-M="$SHARED/migrations/0074-git-push-ask-to-hook.sh"
+say "6/6 migration 0075 (removes the blanket git push ask)"
+M="$SHARED/migrations/0075-git-push-ask-to-hook.sh"
 if [ "$confirm" = 1 ]; then
-  bash "$M" --confirm settings.json || die "step 6 (migration 0074)"
-  bash "$M" --verify || die "step 6 (0074 --verify)"
+  bash "$M" --confirm settings.json || die "step 6 (migration 0075)"
+  bash "$M" --verify || die "step 6 (0075 --verify)"
   echo "  verified: Bash(git push:*) is no longer an ask; new sessions stop prompting on own-repo pushes"
 else
-  bash "$M" --check || die "step 6 (0074 --check)"
+  bash "$M" --check || die "step 6 (0075 --check)"
   echo "  not written: re-run with --confirm settings.json to remove the ask (307 of 644 prompts)"
 fi
 printf '\nDONE\n'

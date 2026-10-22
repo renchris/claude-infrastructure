@@ -1,11 +1,11 @@
 #!/bin/bash
 # migration-class: c10
-# migration-step: migration 0074 — remove the blanket permissions.ask rule Bash(git push:*) from ~/.claude/settings.json, which every account links to: it was 307 of the 644 permission prompts in the 14 days to 2026-10-20, every one answered yes. hooks/validate-bash.sh now asks on exactly the pushes worth a question (someone else's repository, a delete, mirror or forced refspec); the force-push deny rules stay. It refuses unless the LIVE hooks carry that push check. It writes settings.json, which is C10.
-# migration-run: bash ~/Development/claude-infrastructure/migrations/0074-git-push-ask-to-hook.sh --confirm settings.json
+# migration-step: migration 0075 — remove the blanket permissions.ask rule Bash(git push:*) from ~/.claude/settings.json, which every account links to: it was 307 of the 644 permission prompts in the 14 days to 2026-10-20, every one answered yes. hooks/validate-bash.sh now asks on exactly the pushes worth a question (someone else's repository, a delete, mirror or forced refspec); the force-push deny rules stay. It refuses unless the LIVE hooks carry that push check. It writes settings.json, which is C10.
+# migration-run: bash ~/Development/claude-infrastructure/migrations/0075-git-push-ask-to-hook.sh --confirm settings.json
 # migration-subject: hooks/validate-bash.sh hooks/lib/smart-bash-allowlist.py
-# migration-verify: bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0074-git-push-ask-to-hook.sh" --verify
+# migration-verify: bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0075-git-push-ask-to-hook.sh" --verify
 #
-# ══ 0074 — the blanket push ask becomes one owner-aware hook decision ══
+# ══ 0075 — the blanket push ask becomes one owner-aware hook decision ══
 # docs/research/permission-prompt-reduction-2026-10-20/REPORT.md; operator ruling of 2026-10-20 on
 # decision 29d62f1ad390 ("permission prompts is virtually always a yes … pattern recognized and
 # allowed"), scoped by that packet's "narrows" answer (third parties and publishing keep a yes/no).
@@ -33,18 +33,18 @@
 # entry. Idempotent. Revert: re-add "Bash(git push:*)" to .permissions.ask, or restore the printed
 # backup. Takes effect in NEW sessions.
 #
-# Usage: bash migrations/0074-git-push-ask-to-hook.sh --dry-run | --check | --verify
-#        bash migrations/0074-git-push-ask-to-hook.sh --confirm settings.json
+# Usage: bash migrations/0075-git-push-ask-to-hook.sh --dry-run | --check | --verify
+#        bash migrations/0075-git-push-ask-to-hook.sh --confirm settings.json
 # Exit: 0 applied / already applied / preflight ok · 1 failure, nothing written · 2 usage ·
 #       3 REFUSED, an account settings.json is still forked (run 0037 first) ·
 #       4 REFUSED, the live hook does not carry the push check yet (converge first)
 # bash 3.2-safe.
 set -uo pipefail
 
-N=0074
+N=0075
 RULE='Bash(git push:*)'
 f="$HOME/.claude/settings.json"
-hook="${CC_0074_LIVE_HOOK:-$HOME/.claude/hooks/validate-bash.sh}"
+hook="${CC_0075_LIVE_HOOK:-$HOME/.claude/hooks/validate-bash.sh}"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
 command -v jq >/dev/null 2>&1 || { printf '%s: jq required — nothing written\n' "$N" >&2; exit 1; }
 
