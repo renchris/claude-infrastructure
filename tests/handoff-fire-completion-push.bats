@@ -52,6 +52,11 @@ setup() {
   # the gate runs ON, against synthetic inputs.
   export CC_FIRE_CAPACITY_GATE=off
   export CC_FIRE_HEADROOM_GATE=off
+  # Every pane id here is fake, so self-close's no-answer watcher never sees it answer and re-arms
+  # CC_SELFCLOSE_NOANSWER_ARMS times (default 3) while the captured output stays open; the BOUND cases
+  # then read their own 60 s backstop as the subject never returning (2026-10-22). One arm, as the
+  # HERMETIC case already pins: this file tests the push, not the pane watcher.
+  export CC_SELFCLOSE_NOANSWER_ARMS=1
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   WORK="$BATS_TEST_TMPDIR/work"; mkdir -p "$WORK"
