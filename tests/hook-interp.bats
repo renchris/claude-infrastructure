@@ -166,7 +166,7 @@ fleet() { # one shared file linked from three dirs, plus one forked real copy
 }
 
 @test "shasum-direct: same digests as /usr/bin/shasum, from the Mach-O sha1sum/sha256sum, no #! exec" {
-  [ -x /sbin/sha256sum ] && [ -x /sbin/sha1sum ] || skip "no /sbin/sha*sum on this platform"
+  [ -x /sbin/sha256sum ] && [ -x /sbin/sha1sum ] || skip "no /sbin/sha*sum on this platform" || false
   [ "$(head -c 2 /sbin/sha256sum)" != '#!' ]
   run /bin/bash -c '. "$1/hooks/lib/shasum-direct.sh"; type -t shasum || echo none
                     printf "%s\n%s\n" "$CC_SHA1" "$CC_SHA256"
