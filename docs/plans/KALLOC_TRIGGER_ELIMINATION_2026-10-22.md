@@ -143,6 +143,16 @@ baseline wired into ship-land, call sites in census order incl. W1's session roo
   function that now calls `cc_run` load the runner first. (3) shlex is a weak shell reader: it splits
   `${X:-d}` on its braces, cuts `${#a[@]}` at the `#`, glues `));`, and cannot see inside a quoted
   `"$(cmd)"`. Each of these hid real sites until it was fixed.
+- **Mach-O entries (teammate macho).** With cc-shim built, install.sh makes `~/.claude/bin/it2` and
+  every `config/qos-shim.names` entry a link to `libexec/cc-shim`. The real file moves to
+  `.bin-real/<name>`: a copy of it2-wrapper, or a link to cc-qos-exec. `CC_SHIM_ENTRIES=0` restores
+  today's layout, and no `cp` writes through a link. Claude Code reaches it2 through kitty-setup's
+  `shims/it2 → bin/it2`, and cc-shim derives its target from the unresolved path, so
+  `.shims-real/it2 → .bin-real/it2` keeps that route working. it2-wrapper maps a `.bin-real` dir to its
+  `bin` siblings. cc-qos-exec and cc-bats skip a cc-shim candidate in their PATH walk, and qos-rewrite
+  accepts the shim layout. deploy-parity reads the `.bin-real` copy, and deploy-link-parity reports
+  `SHIMMISS`. `tests/install-cc-shim-entries.bats` runs the real built shim through `bin/it2`,
+  `shims/it2` (and a control without `.shims-real`) and `bin/shellcheck`.
 - **Left (baseline 42):** zsh-sourced libs (`lib/cc-resume-shell.sh` 10, `lib/*.zsh`; the bash runner
   is not zsh-safe), applied migrations (9, one-shots), `install.sh` and `deploy-parity-assert.sh` (the
   teammate's files this wave), test and bench drivers, and one false positive (`bin/cc-kqwait:301` execs
