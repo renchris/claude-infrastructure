@@ -9,7 +9,8 @@ bats_export_preprocess_source_BATS_TEST_SOURCE() {
 bats_preprocess_source() { # index
   bats_export_preprocess_source_BATS_TEST_SOURCE
   # shellcheck disable=SC2153
-  CHECK_BATS_COMMENT_COMMANDS=1 "$BATS_ROOT/libexec/bats-core/bats-preprocess" "$BATS_TEST_FILENAME" >"$BATS_TEST_SOURCE"
+  # cc-kalloc: run bats-preprocess as "$BASH" <path>, not as a kernel #! exec
+  CHECK_BATS_COMMENT_COMMANDS=1 "$BASH" "$BATS_ROOT/libexec/bats-core/bats-preprocess" "$BATS_TEST_FILENAME" >"$BATS_TEST_SOURCE"
 }
 
 bats_evaluate_preprocessed_source() {

@@ -72,4 +72,5 @@ BATS_BASE_LIBDIR=lib # this will be patched with the true value in install.sh
 
 export BATS_ROOT=${BATS_PATH%/*/*}
 export -f bats_readlinkf
-exec env BATS_ROOT="$BATS_ROOT" BATS_LIBDIR="${BATS_BASE_LIBDIR:-lib}" "$BATS_ROOT/libexec/bats-core/bats" "$@"
+# cc-kalloc: run libexec/bats as "$BASH" <path>, not as a kernel #! exec
+exec env BATS_ROOT="$BATS_ROOT" BATS_LIBDIR="${BATS_BASE_LIBDIR:-lib}" "$BASH" "$BATS_ROOT/libexec/bats-core/bats" "$@"

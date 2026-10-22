@@ -26,7 +26,25 @@ every test (`bats-exec-test` alone was 1268 execs in one census window). Running
 
 ## Local patches
 
-None: the files are byte-identical to the tarball.
+One idea: bats-core runs its own libexec `#!` files as `"$BASH" <full path>`. Every hunk carries a
+`# cc-kalloc:` comment (`grep -rn 'cc-kalloc:' vendor/bats-core`). Line numbers are v1.13.0's:
+
+| File:line (upstream) | Was | Now |
+|---|---|---|
+| `bin/bats:75` | `exec env … "$BATS_ROOT/libexec/bats-core/bats"` | `… "$BASH" "$BATS_ROOT/libexec/bats-core/bats"` |
+| `libexec/bats-core/bats:396,398` | `interpolated_formatter="bats-format-<name>"` (by name via PATH) | array `("$BASH" "$BATS_LIBEXEC/bats-format-<name>")`; an absolute-path user formatter stays `("<path>")` and runs as-is |
+| `libexec/bats-core/bats:427,429` | same, report formatter | same treatment |
+| `libexec/bats-core/bats:517,522` | `exec bats-exec-suite` (by name via PATH) | `exec "$BASH" "$BATS_LIBEXEC/bats-exec-suite"` |
+| `libexec/bats-core/bats-exec-file:236` | `"$BATS_LIBEXEC/bats-exec-test"` | `"$BASH" "$BATS_LIBEXEC/bats-exec-test"` |
+| `libexec/bats-core/bats-exec-suite:141` | `bats-gather-tests` (by name) | `"$BASH" "$BATS_LIBEXEC/bats-gather-tests"` |
+| `libexec/bats-core/bats-exec-suite:314` | GNU parallel command word `bats-exec-file` | `$(printf "%q %q" "$BASH" "$BATS_LIBEXEC/bats-exec-file")` |
+| `libexec/bats-core/bats-exec-suite:323` | `bats-exec-file` (by name) | `"$BASH" "$BATS_LIBEXEC/bats-exec-file"` |
+| `lib/bats-core/preprocessing.bash:12` | `"$BATS_ROOT/libexec/bats-core/bats-preprocess"` | `"$BASH" "$BATS_ROOT/…/bats-preprocess"` |
+
+Proof the patch is complete: a copy of this tree with `chmod a-x libexec/bats-core/*`, started as
+`bash bin/bats`, passes with every formatter, a report formatter and a failing test; the unpatched
+1.13.0 copy treated the same way fails at once with `Permission denied` (rc 126). The GNU parallel
+site (`-j N`) is untested here because `parallel` is not installed.
 
 ## How to re-vendor
 
