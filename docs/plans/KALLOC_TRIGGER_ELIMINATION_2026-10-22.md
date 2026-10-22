@@ -1,6 +1,12 @@
 ---
-status: in-progress
+status: complete
 ---
+
+All five waves landed 2026-10-22. Waves ran in parallel, so the cut was measured once for all of
+them, not per phase: one census window read 0.09 GiB/day (§ Measurements). The standing verdict on the
+≤ 0.3 GiB/day target is W5's hourly SLO check (`scripts/kalloc-slo.sh`), which files the census row
+itself on a breach. Operator-only items left out of scope: `~/.zshrc:504,508,705-706`, T-0's
+clean-lineage window, off-box CI (money), migration 0076's `--confirm launchd` (row `5e6ea2dc29e0`).
 
 # Stop setting off the #! kernel leak (2026-10-22)
 
@@ -62,13 +68,14 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
   Same `exec "$CC_PANE_RUNNER"` root also sits at `scripts/handoff-fire.sh:1318` and
   `scripts/limit-recover/lr-lib.sh:1338`, and the `reso-resume-one` callers in `bin/cc-resume-layout.sh`
   and `scripts/boot-resume-launch.sh` run it by path: left to W4 (call sites), sized by T-0.
-### W2 agent-context-sync harness — scheduled in that repo (round 23, lane K, item A97, branch `b13/r23-k`)
+### W2 agent-context-sync harness — DONE 2026-10-22 (that repo's round 23 lane K, item A97; `eb0938ee..9b8471d4` on its main, lead-verified ancestry, its CI green)
 
-- Owner session agent-context-sync-16 (pane 16) confirmed 2026-10-22 17:33 CDT: compiled trampoline
-  stubs for `_write_exe`, `_exe` and test_launcher's helper (built in its own conftest, not cc-shim),
-  `/sbin/sha256sum` in install.sh with shasum as fallback, launchctl stub poll 0.05 → 0.5 s. Its subset
-  measured 5,309 → 141 `#!` execs. Land gate green at `e2efdadb`, queued on that repo's land lock; DONE
-  with before/after counts goes to this plan's lead.
+- Test stubs run by path are Mach-O trampolines (a copy per stub, built in its conftest, not cc-shim);
+  agentsync's own stand-ins stay `#!` because macOS SIGKILLs a Mach-O copied over one that already ran.
+  `scripts/install.sh` hashes with `/sbin/sha256sum`, shasum only where it is missing; `launcher/build.sh`
+  unchanged (editing it changes its source hash, which costs a TCC re-approval). REPORT's launchctl-poll
+  premise refuted (18 getenv + 2 print calls per run, not polls). Its subset: 5,309 → 141 `#!` execs.
+  Detail: that repo's CONTRACTS §16.170.
 ### W3 infra test suites — DONE 2026-10-22 (session kte-w3; landed through `a3ff099a4`, lead-verified by content)
 
 Scope (frozen): tools/cc-shim + tests/cc-shim.bats, vendored bats-core 1.13.0 with "$BASH" internal
