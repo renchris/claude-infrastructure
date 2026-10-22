@@ -785,15 +785,69 @@ same_as_control() {  # [source] → the subject's bytes equal the control's, and
   same_as_control
 }
 
-@test "29d band: a STALE or HARD board keeps its labelled static text — never an unlabelled band" {
-  # the STALE text names the producer's launchd state; read live, a keepwarm tick starting between
+# A STALE BOARD GOES TO THE BAND (2026-10-22). It took the static path, and Claude Code re-wrapped
+# that grid at a 27-column pane: columns scattered, `28d 13h` split, `claude-accounts --re|adout`
+# (docs/research/accounts-narrow-2026-10-22/, P3). The mod labels it from the snapshot's mtime (its
+# own `⚠ STALE` head), so only the producer's diagnosis, which the band cannot know, stays static.
+# RED-proof: against the hook before this change, the first block fails (the grid was printed).
+@test "29d band: a STALE board goes to the band with its diagnosis; a HARD one keeps its static text" {
+  # the diagnosis names the producer's launchd state; read live, a keepwarm tick starting between
   # the control's run and the subject's makes the two differ (2026-10-22, the failed land's RED)
   stub_launchd idle0
   band_setup; age_board 900; touch -r "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD.ladder.json"
+  band_emit "$HOOK"
+  local msg; msg="$(jqv '.systemMessage')"
+  [[ "$msg" != *"$BOARDTOK"* ]] || { echo "the stale grid is still in the systemMessage: $msg"; false; }
+  [[ "$msg" == *"stale"* && "$msg" == *"exited 0 without refreshing"* ]] \
+    || { echo "the producer's diagnosis was lost: $msg"; false; }
+  cmp -s "$CC_ACCOUNTS_BOARD.ladder.json" "$CC_PANE_DIR/$BSID.board-band.json" \
+    || { echo "the ladder was not handed over"; ls -la "$CC_PANE_DIR"; false; }
+  [ "$(stat -f %m "$CC_PANE_DIR/$BSID.board-band.json")" = "$(stat -f %m "$CC_ACCOUNTS_BOARD")" ] \
+    || { echo "snapshot lost the board's mtime (the band's stale head reads its age from it)"; false; }
+  # the same stale board with no mod: byte-identical to the pre-band hook, grid and all
+  band_setup; age_board 900; touch -r "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD.ladder.json"
+  rm -f "$CC_PANE_DIR/$BSID.board-band.req" "$CC_PANE_DIR/$BSID.board-band.json"
   same_as_control
-  [[ "$(jqv '.systemMessage')" == *"STALE"* ]] || false
+  [[ "$(jqv '.systemMessage')" == *"STALE"* && "$(jqv '.systemMessage')" == *"$BOARDTOK"* ]] || false
+  # past the hard band: the static withheld text, stamp or not
   band_setup; age_board 7200; touch -r "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD.ladder.json"
   same_as_control
+  [[ "$(jqv '.systemMessage')" == *"withheld"* ]] || false
+}
+
+# THE DIAGNOSIS ABOVE A STALE BAND IS PARAGRAPHS CLAUDE CODE WRAPS ITSELF (2026-10-22). fit() wrapped
+# it at the pane's startup width with a two-space hanging indent, and Claude Code re-wrapped those
+# rows when the pane later narrowed: uneven indents (`  (launchd) is` beside `and idle, and its
+# last`) and `com.claude.a|ccounts-keepwarm` broken inside the sentence at 30 columns and under
+# (docs/research/accounts-narrow-2026-10-22/, probe3). Now: one sentence, one line, no indent, the
+# producer named in words a narrow row holds; the command alone on the line after it. RED-proof:
+# against the hook before, every state fails the indent and the label checks.
+@test "29f band: the stale diagnosis is one unwrapped sentence, the command to run alone on the next line" {
+  export CC_PANE_COLS=27
+  for st in idle0 running unloaded idle14; do
+    stub_launchd "$st"
+    band_setup; age_board 900; touch -r "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD.ladder.json"
+    band_emit "$HOOK"
+    local msg sent cmd
+    msg="$(jqv '.systemMessage')"
+    [ "$(printf '%s\n' "$msg" | sed '/^$/d' | wc -l | tr -d ' ')" = 2 ] \
+      || { echo "$st: not one sentence and one command: $msg"; false; }
+    ! printf '%s\n' "$msg" | grep -q '^ ' || { echo "$st: a hanging indent: $msg"; false; }
+    sent="$(printf '%s\n' "$msg" | sed -n '/^accounts board is stale: /p')"
+    cmd="$(printf '%s\n' "$msg" | sed '/^$/d' | tail -1)"
+    [[ -n "$sent" && "$sent" != *"com.claude."* && "$sent" != *"~/"* ]] \
+      || { echo "$st: the sentence carries a long token, or is missing: $msg"; false; }
+    [[ "$cmd" == "launchctl "*"com.claude.accounts-keepwarm"* || "$cmd" == "tail ~/.claude/logs/accounts-keepwarm."* ]] \
+      || { echo "$st: the command is not alone on the last line: $msg"; false; }
+    [[ "$msg" != *$'\x1f'* ]] || { echo "$st: fit's raw marker leaked into the message"; false; }
+  done
+  [[ "$sent" == *"last exit 14"* ]] || { echo "the last state was not the failing one: $sent"; false; }
+  # the static path (no mod) keeps its words byte for byte, hanging indent and all
+  band_setup; age_board 900; touch -r "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD.ladder.json"
+  rm -f "$CC_PANE_DIR/$BSID.board-band.req" "$CC_PANE_DIR/$BSID.board-band.json"
+  same_as_control
+  [[ "$(jqv '.systemMessage')" == *"Producer"*"(launchd)"*"$BOARDTOK"* ]] || false
+  unset CC_PANE_COLS
 }
 
 @test "29e band: CC_BOARD_BAND=off and a compact start leave the hook as it was" {

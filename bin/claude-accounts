@@ -2049,6 +2049,24 @@ def _expired_ms(ms):
         return None
 
 
+# ONE CLOCK PER LADDER (2026-10-22). A ladder lays the same rows out 100+ times, and at load ~100
+# one pass can outlast a minute boundary: every countdown then differs between the widths of one
+# ladder (tests/accounts-width-sweep.bats 14/16 flaked on exactly that). _pin_now runs a pass with
+# hrs_until's clock read once; a nested pass keeps the outer pin.
+_NOW_PIN = None
+
+
+def _pin_now(fn, *a, **k):
+    global _NOW_PIN
+    outer = _NOW_PIN
+    if outer is None:
+        _NOW_PIN = datetime.now(timezone.utc)
+    try:
+        return fn(*a, **k)
+    finally:
+        _NOW_PIN = outer
+
+
 def hrs_until(iso):
     if not iso:
         return None
@@ -2056,7 +2074,7 @@ def hrs_until(iso):
         dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return (dt - datetime.now(timezone.utc)).total_seconds() / 3600.0
+        return (dt - (_NOW_PIN or datetime.now(timezone.utc))).total_seconds() / 3600.0
     except (ValueError, TypeError):
         return None
 
@@ -8461,7 +8479,12 @@ BOARD_LADDER = (12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70)
 
 
 def _board_variants(cfg, rows, wj, cached, quota_ts=None):
-    """{width: lines} for every width on BOARD_LADDER, from a COPY of the rows (as _render_board)."""
+    """{width: lines} for every width on BOARD_LADDER, from a COPY of the rows (as _render_board),
+    on one clock (_pin_now)."""
+    return _pin_now(_board_variants_unpinned, cfg, rows, wj, cached, quota_ts)
+
+
+def _board_variants_unpinned(cfg, rows, wj, cached, quota_ts=None):
     rows = json.loads(json.dumps(rows))
     refresh_login_countdown(rows)
     apply_assignments(rows, cfg)
@@ -8491,7 +8514,11 @@ def _board_ladder(cfg, rows, wj, cached, quota_ts=None):
         apply_assignments(rows, cfg)
         apply_burn(rows, cfg)
         win = win_from_json(wj)
-        return pane_ladder(lambda n: readout_lines(rows, cfg, win, cached, quota_ts=quota_ts, pane=n))
+        memo = {}
+        return pane_ladder(
+            lambda n: readout_lines(rows, cfg, win, cached, quota_ts=quota_ts, pane=n, memo=memo),
+            lambda n, terse=False: readout_lines(rows, cfg, win, cached, quota_ts=quota_ts, pane=n,
+                                                 dense=True, terse=terse, memo=memo))
     except Exception:   # noqa: BLE001
         return None
 
@@ -9351,6 +9378,15 @@ def _cell(txt, w, align="<", rgb=None, bold=False):
               rgb, bold)
 
 
+def _pcell(txt, w, align="<", rgb=None, bold=False):
+    """_cell for the PANE layouts, padded by display CELLS (2026-10-22): `.ljust` counts a wide
+    character (`アカウント`) as one, so a CJK name's row ran past the pane. The board and chat keep
+    _cell, byte for byte; their columns are clipped to fixed widths and their fleet is ASCII."""
+    t = _clip(str(txt), w)
+    pad = " " * max(0, w - _disp_w(t))
+    return bc(t + pad if align == "<" else pad + t, rgb, bold)
+
+
 def strand_rgb(pp):
     """A strand is percentage points that DIE unspent at the reset, so high is BAD — the same
     polarity as usage_rgb, but keyed on a loss rather than on a fill."""
@@ -9605,8 +9641,14 @@ def _wrow(mark, name, live, p5, cd5, abs5, pwk, bar, pfb, cdw, absw, login, nw, 
 # ONE SET OF FACTS, a third LAYOUT. Every value — marks, `*` suffixes, notes, picks, the drain
 # sentence — is decided in readout_lines exactly as for chat; only placement and colour differ.
 PANE_GUTTER = 5         # the TUI's continuation indent: usable cells = pane columns − 5 (measured)
-PANE_MIN = 12           # the narrowest layout shipped (a 17-column pane less the gutter)
+# The narrowest layout shipped: 7 cells, the band of a 12-column pane (12 until 2026-10-22, when
+# the floor forms were added: a 12-16-column pane hands the band 7-11 cells, measured, and Ink
+# hard-wrapped the 12-cell layout mid-word there — `gener|al`, `4h|43m`; 8 until the same day's
+# real-pty probe, where Ink re-wrapped the 8-cell form at 12 columns into `5h` / `0%` / blank
+# rows). `5h  16%` and `next2 ←` are 7 cells: the floor forms fit it whole. Under 7 the mod wraps.
+PANE_MIN = 7
 PANE_FLOOR = 44         # never size below this for a split that has not happened (pane_width)
+_NB = "\N{NO-BREAK SPACE}"   # binds two words into one wrap token; renders as a space
 
 
 def pane_width(cols):
@@ -9676,8 +9718,36 @@ def pane_ladder_file(sid):
 PANE_BUDGET_COLS = range(PANE_MIN, 401)
 
 
-def pane_ladder(pane_at):
-    """{v, written_ms, gutter, budget, variants: [{cells, width, lines}]}, narrowest first.
+class _PaneLines(list):
+    """A pane layout's lines, and `values`: how many of them run through the last account row
+    (None: not known). pane_ladder ships it beside the lines. `costly`: a dense layout that spent
+    rows on saying what its numbers are (the column form's `reset` key row, a `← you` row), so
+    pane_ladder also ships its terse sibling (_pane_dense)."""
+    values = None
+    costly = False
+    lanes = None
+
+
+def _board_stale_s():
+    """hooks/accounts-board.sh's stale band (CC_BOARD_STALE_S, default 300 s): from this age the
+    board, and the band the mod draws from it, carry an age line of their own."""
+    v = os.environ.get("CC_BOARD_STALE_S", "")
+    return int(v) if v.isdigit() else 300
+
+
+def pane_ladder(pane_at, dense_at=None):
+    """_pane_ladder with one clock for the whole pass (_pin_now)."""
+    return _pin_now(_pane_ladder, pane_at, dense_at)
+
+
+def _pane_ladder(pane_at, dense_at=None):
+    """{v, written_ms, gutter, budget, variants: [{cells, width, lines[, dense]}]}.
+
+    TWO FAMILIES (2026-10-22): `dense_at(n)`'s layouts, each marked `"dense": true`, come FIRST,
+    then `pane_at(n)`'s; each family is narrowest first and deduplicated on its own. A reader that
+    knows the flag picks within one family; one that predates it still lands on the full family,
+    since every normal variant follows every dense one and the narrowest normal one is PANE_MIN
+    cells, inside every budget. `v` stays 1: the flag is additive and absent means not dense.
 
     `budget` is pane_width() for every pane width from PANE_MIN to 400 (`cells[cols - from]`),
     so the mod lays out for a width exactly as `_pane(cols)` would: the widest variant whose
@@ -9685,14 +9755,49 @@ def pane_ladder(pane_at):
     resize repaints only what is on screen (measured, docs/research/accounts-responsive-mod-
     2026-10-19/): a readout that has scrolled away stays at the width it was drawn at, and only
     the half-pane budget keeps that copy whole through a split. `width` is the widest line's
-    display cells, measured here so the mod never re-implements _disp_w."""
+    display cells, measured here so the mod never re-implements _disp_w.
+
+    `values` (2026-10-22, additive like `dense`): the rows through the last account row
+    (_PaneLines), where it is fewer than all of them, so the band can tell a layout whose cut
+    falls in its alerts from one whose cut falls in its accounts.
+
+    `terse` (2026-10-22, additive): where a dense layout spends rows on its labels (`costly`: the
+    column form's `reset` key row under ~17 cells, a `← you` the lanes could not carry), the same
+    width also ships `dense_at(n, True)`, the layout without them, right after it and marked
+    `"terse": true`, wherever it is shorter. The mod draws the labelled one wherever the band's height holds it and the
+    terse one only where it does not (pickFit), so a label never costs an account its place on the
+    first screen. A reader that predates the flag still lands on the labelled one when both fit
+    (it comes first) and on the terse one when neither does (fewer rows). Split lanes the terse
+    one says on fewer rows (`➤ next2 · ➤ᵍ next`, _dense_lanes) make a layout costly too.
+
+    `lanes` (2026-10-22, additive, dense only): the display cells of each lane row, the rows that
+    lead the layout, so the band can set a short stale head at the end of one rather than spend a
+    row on it (mods/accounts-readout bandLayout). Measured here, never in the mod (_disp_w)."""
     variants = []
-    for n in PANE_LADDER:
-        lines = pane_at(n)
-        if variants and variants[-1]["lines"] == lines:
+    for at, flag in ((dense_at, {"dense": True}), (pane_at, {})):
+        if at is None:
             continue
-        variants.append({"cells": n, "width": max((_disp_w(x) for x in lines), default=0),
-                         "lines": lines})
+        fam, last = [], {}
+
+        def add(n, lines, extra):
+            key = bool(extra)
+            if last.get(key) == lines:
+                return
+            last[key] = lines
+            vals = getattr(lines, "values", None)
+            lw = getattr(lines, "lanes", None)
+            fam.append({"cells": n, "width": max((_disp_w(x) for x in lines), default=0),
+                        "lines": list(lines), **flag, **extra,
+                        **({"values": vals} if vals is not None and vals < len(lines) else {}),
+                        **({"lanes": lw} if flag and lw else {})})
+        for n in PANE_LADDER:
+            lines = at(n)
+            add(n, lines, {})
+            if flag and getattr(lines, "costly", False):
+                terse = at(n, True)
+                if len(terse) < len(lines):     # a sibling that saves no row says less for nothing
+                    add(n, terse, {"terse": True})
+        variants += fam
     return {"v": 1, "written_ms": int(time.time() * 1000), "gutter": PANE_GUTTER,
             "budget": {"from": PANE_BUDGET_COLS.start,
                        "cells": [pane_width(c) for c in PANE_BUDGET_COLS]},
@@ -9707,55 +9812,224 @@ def _pane_wrap(s, width, first="", cont="  "):
     A ` · ` separator never sits at a row edge (operator screenshot 2026-10-22: `  ·` alone on a
     row at 35 cells): it is placed only when the item after it fits beside it, and otherwise the
     row break IS the separator. A `·` that LEADS the line is its glyph (a footnote, the Skipped
-    line) and stays."""
+    line) and stays.
+
+    AN ARROW NEVER ENDS A ROW AND NEVER STANDS ALONE (2026-10-22, a long pick printed `➤ desk` /
+    `→` / its name): a bare `→` goes where the first piece of the word after it fits beside it,
+    and that word is cut with a first piece two cells short of a row, so `→ piece` always fits.
+
+    The same holds for a line's leading glyph (`✖`, `▲`, `➤`…): it keeps the word it leads. A
+    leading `·` (a footnote) that cannot sit beside its first word even at the margin binds to it
+    without the space (`·Skipped`), else goes: it carries no fact, and alone on a row it read as
+    a stray separator (8 cells, 2026-10-22).
+
+    THE MARGIN (2026-10-22): a token that fits a row but not beside the hanging indent starts its
+    row at the margin instead of being cut (`Anthropic's` at 12 cells printed `Anthropic↩` /
+    `'s server`). At the floor (7-11 cells) the indent itself shrinks to one cell, and a piece of
+    a word cut to fit takes the whole row.
+
+    A WORD WIDER THAN A ROW breaks after a `-`, or after a `.`/`:`/`/`/`_`/`=` past the row's
+    middle; failing that its next piece through its next `-`, whole at the margin where it fits
+    one (`quaternary-`); else at the edge with `↩` (_WRAP_MARK), so a word cut mid-letter reads
+    as one that continues, and only that piece is cut (`quaternar↩` / `y-` / `extremely-`, never
+    `y-extreme↩` / `ly-long-`)."""
     ind = s[:len(s) - len(s.lstrip(" "))]
+    if width < 12:
+        cont, ind = cont[:1], ind[:1]
     rows, cur = [], first + ind
 
     def w(t):
         return _disp_w(t.replace("**", ""))
-    # A bound token too wide even for a fresh row gives its NBSPs back: a wrapped lane pair beats
-    # a row past the pane (`➤ fable → next-quaternary` at 25 cells).
-    words = [x for word in s.lstrip(" ").split(" ")
-             for x in (word.split("\u00a0") if w(cont + word) > width else [word])]
-    room = max(8, width - _disp_w(cont))
 
-    def chop(word):
-        """A word wider than a row (a config path, a long account name) breaks after its last
-        `.`/`:`/`/`/`_`/`=` past the row's middle, or after any `-` past its third cell (a name
-        cut mid-word reads as another name: `next-quatern` / `ary-`), else at the edge — never
-        past the pane."""
-        out = []
-        while w(word) > room:
+    def fresh(word):
+        return (cont if w(cont + word) <= width else "") + word
+    # A bound token too wide even for a row at the margin gives its NBSPs back: a wrapped lane pair
+    # beats a row past the pane. A `·` given back stays with the word before it, so a bold label's
+    # dot (`Pi · Codex backend`) is never the row break.
+    words = []
+    for word in s.lstrip(" ").split(" "):
+        parts = word.split(_NB) if w(word) > width else [word]
+        for p in parts:
+            if p == "·" and words and len(parts) > 1:
+                words[-1] += _NB + "·"
+            else:
+                words.append(p)
+    # a piece of a cut word takes the whole row at the floor (placed at the margin by fresh())
+    room = width if width < 12 else max(4, width - _disp_w(cont))
+    # glyphs that never end a row: the arrow, and a line's leading severity / pick glyph
+    bind = set(_PANE_GLYPH_RGB) | {"→", "¢"}
+
+    def chop(word, first_room=None):
+        """`word` in row-sized pieces (see the docstring above); `**` is one zero-width unit,
+        never split. `first_room`: the first piece shares its row with a glyph."""
+        out, lim, tail = [], first_room or room, False
+        mlim = width - (room - first_room) if first_room else width
+        while w(word) > lim:
             cut = ""
-            for ch in word:
-                if w(cut + ch) > room:
+            for u in re.findall(r"\*\*|.", word, re.S):
+                if w(cut + u) > lim:
                     break
-                cut += ch
+                cut += u
             k = max(cut.rfind(c) for c in ".:/_=")
             kh = cut.rfind("-")
-            k = max(k if k >= room // 2 else -1, kh if kh >= 3 else -1)
-            cut = cut[:k + 1] if k >= 0 else cut
-            out.append(cut)
+            k = max(k if k >= lim // 2 else -1, kh if kh >= 1 and cut[kh - 1] != "-" else -1)
+            head = re.match(r"(?:\*\*|[^-])+-?", word)
+            if tail and head and head.group().endswith("-") and w(head.group()) <= lim:
+                k = len(head.group()) - 1       # the rest of a cut word: alone, to its `-`
+            tail = False
+            # the word this row starts, to (not through) its next hyphen: whole where the row
+            # holds it, the `-` leading the next piece (`quaternary` / `-extremely` at 10 cells,
+            # which printed `quaternar↩` / `y-`, 2026-10-22; _name_chunks)
+            bare = re.match(r"-?(?:\*\*|[^-])+(?=-)", word)
+            if k >= 0:
+                cut = cut[:k + 1]
+                out.append(cut)
+            elif head and w(head.group()) <= mlim:
+                if head.group() == word:
+                    break                       # the rest fits a row at the margin, whole
+                cut = head.group()
+                out.append(cut)
+            elif bare and w(bare.group()) <= lim:
+                cut = bare.group()
+                out.append(cut)
+            else:
+                # cut mid-letter: give back a cell for the mark, and never half of a `**`
+                while len(cut) > 1 and w(cut + _WRAP_MARK) > lim:
+                    cut = cut[:-2] if cut.endswith("**") else cut[:-1]
+                out.append(cut + _WRAP_MARK)
+                tail = True
             word = word[len(cut):]
+            lim, mlim = room, width
+        head = re.match(r"(?:\*\*|[^-])+-", word)
+        if tail and head and head.group() != word:
+            out.append(head.group())            # …and so is a rest short enough to end it
+            word = word[len(head.group()):]
         return out + [word]
-    words = [x for word in words for x in (chop(word) if w(word) > room else [word]) if x]
-    for i, word in enumerate(words):
+    chopped, brk = [], set()        # brk: a piece of a cut word, whose row ends after it
+    for word in words:
+        g = chopped[-1] if chopped and chopped[-1] in bind else None
+        if g and w(word) > width - w(g) - 1:
+            # the word after a glyph: its first piece leaves room for `glyph ` on its row (the
+            # line's own indent when the glyph leads the line, else a continuation row's)
+            pieces = chop(word, (width - w(first + ind) if len(chopped) == 1 else room)
+                          - w(g) - 1)
+        elif w(word) > width:
+            pieces = chop(word)
+        else:
+            pieces = [word]
+        pieces = [x for x in pieces if x]
+        brk.update(range(len(chopped), len(chopped) + len(pieces) - 1))
+        chopped += pieces
+    words = chopped
+    i = -1
+    while i + 1 < len(words):
+        i += 1
+        word = words[i]
+        if i - 1 in brk and cur.strip():
+            rows.append(cur)            # never two pieces of one word on a row, a space apart
+            cur = cont
         lead = cur.strip() == ""
+        nxt = words[i + 1] if i + 1 < len(words) else ""
         if word == "·" and (rows or not lead):
-            nxt = words[i + 1] if i + 1 < len(words) else ""
             if not lead and nxt and w(cur) + 3 + w(nxt) <= width:
                 cur += " ·"
             elif not lead:
                 rows.append(cur)
                 cur = cont
             continue
-        if lead or w(cur) + 1 + w(word) <= width:
+        if word == "·" and nxt and w(cur) + 2 + w(nxt) > width:
+            # the line's footnote glyph: beside its first word at the margin, else bound tight to
+            # it, else gone
+            if w("· " + nxt) <= width:
+                cur = ""
+            else:
+                if w("·" + nxt) <= width:
+                    words[i + 1] = "·" + nxt
+                continue
+        if word in bind and nxt:
+            if not lead and w(cur) + 2 + w(word) + w(nxt) > width:
+                rows.append(cur)        # the glyph leads the next row, beside what it points at
+                cur, lead = cont, True
+            if lead and w(cur) + w(word) + 1 + w(nxt) > width:
+                cur = ""                # …at the margin, where its word fits beside it there
+        if lead and w(cur + word) > width:
+            cur = word
+        elif lead or w(cur) + 1 + w(word) <= width:
             cur += ("" if lead else " ") + word
         else:
             rows.append(cur)
-            cur = cont + word
+            cur = fresh(word)
     rows.append(cur)
     return [r for r in rows if r.strip()] or [""]
+
+
+# The mark a word cut mid-letter carries at the end of its row (_pane_wrap, _name_chunks): it
+# CONTINUES on the next row. A `-` would read as part of a hyphenated name.
+_WRAP_MARK = "↩"
+
+
+def _name_chunks(s, room, first=None):
+    """A name wider than its row, in row-sized pieces (2026-10-22): after the last `-` or
+    `.`/`_` that fits, else at the edge with _WRAP_MARK, so a name cut mid-letter reads as one
+    that continues. Never an ellipsis: a pane layout never cuts a name. `first` is the first
+    piece's room when it shares its row (`→ name`).
+
+    Only a PIECE wider than a row is cut mid-letter, and only that piece: the rest of it up to
+    its next `-` is a piece of its own (`quaternar↩` / `y-` / `extremely-`), so the cut never
+    spreads into the next word of the name (it printed `y-extreme↩` / `ly-long-`).
+
+    A WORD THAT FITS THE ROW IS NEVER CUT (2026-10-22). `quaternary` is 10 cells and a 10-cell
+    row holds it, but not with its `-`: the row then breaks BEFORE the hyphen (`quaternary` /
+    `-extremely`), where it printed `quaternar↩` / `y-`. The next piece leads with the `-`, which
+    says the name continues as plainly as a trailing one does."""
+    out, lim, tail = [], max(2, first or room), False
+    while _disp_w(s) > lim:
+        cut = ""
+        for ch in s:
+            if _disp_w(cut + ch) > lim:
+                break
+            cut += ch
+        kh = cut.rfind("-")
+        k = kh if kh >= 1 else max(cut.rfind(c) for c in "._")
+        if tail and 0 < cut.find("-"):
+            k = cut.find("-")                   # the rest of a cut piece: alone, to its `-`
+        tail = False
+        nh = s.find("-", 1)                     # the word this row starts, to its hyphen
+        if k < 1 and 0 < nh and _disp_w(s[:nh]) <= lim:
+            out.append(s[:nh])                  # whole, the hyphen leading the next piece
+            s = s[nh:]
+            lim = max(2, room)
+            continue
+        if k >= 1:
+            cut = cut[:k + 1]
+            out.append(cut)
+        else:
+            # measured in CELLS, never characters: a wide name (`アカウント…`) sliced by count
+            # put its `↩` on a row of its own
+            while len(cut) > 1 and _disp_w(cut + _WRAP_MARK) > lim:
+                cut = cut[:-1]
+            out.append(cut + _WRAP_MARK)
+            tail = True
+        s = s[len(cut):]
+        lim = max(2, room)
+    if tail and 0 < s.find("-") < len(s) - 1:
+        out.append(s[:s.find("-") + 1])         # …and so is a rest short enough to end the name
+        s = s[s.find("-") + 1:]
+    return out + [s]
+
+
+def _name_fit(name, width, gut):
+    """(pieces, gut) for a name on rows of its own behind a `gut`-cell mark gutter (2026-10-22): its
+    _name_chunks for the cells beside the gutter, unless the gutter is what forces a mid-letter cut
+    the full row would not (a 36-cell name at 36 cells, `アカウント一二三四五六` at 22): then the
+    pieces for the full row, at the margin, and gut 0. The mark goes with the gutter; the lanes
+    block names every pick in words, and a picked name stays bold."""
+    ch = _name_chunks(name, max(4, width - gut))
+    if gut and any(x.endswith(_WRAP_MARK) for x in ch):
+        alt = _name_chunks(name, width)
+        if sum(x.endswith(_WRAP_MARK) for x in alt) < sum(x.endswith(_WRAP_MARK) for x in ch):
+            return alt, 0
+    return ch, gut
 
 
 _PANE_GLYPH_RGB = {"➤ᵍ": BOARD_ACCENT, "➤ᶠ": BOARD_ACCENT,   # the lane marks, longest first
@@ -9780,6 +10054,9 @@ def _pane_prose(line, width, first="", cont="   "):
     plain = re.sub(r"\b(\d+[dh]) (\d+[hm])\b", "\\1\u00a0\\2", plain)
     plain = re.sub(r"\b(\d+) (seconds?|minutes?) ago\b", "\\1\u00a0\\2\u00a0ago", plain)
     plain = plain.replace(" → ", " →\u00a0")       # an arrow leads its row, never ends one
+    # A dot INSIDE a bold label is part of a name (`**Pi · Codex backend**`, providers.json), not a
+    # separator: _pane_wrap deletes a separator at a row break, which read as two agents.
+    plain = re.sub(r"\*\*[^*]+\*\*", lambda m: m.group(0).replace(" · ", _NB + "·" + _NB), plain)
     rows = _pane_wrap(plain, width, first, cont) if plain.strip() else [""]
     g = next((k for k in _PANE_GLYPH_RGB if plain.lstrip().startswith(k)), None)
     base = BOARD_TEXT if g else BOARD_LABEL
@@ -9811,13 +10088,21 @@ def _pane_grid(cells, width):
     if not cells:
         return []
     # (key, header, width, align, group). Display order; groups get a two-space gap before them.
-    nmw = max(len(c[1]) + 2 * c[2] for c in cells)
+    nmw = max(_disp_w(c[1]) + 2 * c[2] for c in cells)
     lgw = max([5] + [len(c[12]) for c in cells])
     ww = max([_CW_ABS5] + [len(c[11]) for c in cells])
-    spec = [("live", "live", _CW_LIVE, ">", None), ("p5", "used", _CW_PCT, ">", "5h"),
-            ("cd5", "resets", _CW_CD5, ">", "5h"), ("abs5", "", _CW_ABS5, "<", "5h"),
-            ("pwk", "used", _CW_PCT, ">", "wk"), ("bar", "", _NW_BAR, "<", "wk"),
-            ("pfb", "fable", _CW_PCT, ">", "wk"), ("cdw", "resets", _CW_CDW, ">", "wk"),
+
+    def cw_of(k, base):
+        """A value column as wide as its widest value, never under the board's width: a fixed
+        column clipped a 7-cell countdown to `12h 2…` (2026-10-22)."""
+        return max([base] + [_disp_w(c[k]) for c in cells])
+    spec = [("live", "live", cw_of(3, _CW_LIVE), ">", None),
+            ("p5", "used", cw_of(4, _CW_PCT), ">", "5h"),
+            ("cd5", "resets", cw_of(5, _CW_CD5), ">", "5h"),
+            ("abs5", "", cw_of(6, _CW_ABS5), "<", "5h"),
+            ("pwk", "used", cw_of(7, _CW_PCT), ">", "wk"), ("bar", "", _NW_BAR, "<", "wk"),
+            ("pfb", "fable", cw_of(9, _CW_PCT), ">", "wk"),
+            ("cdw", "resets", cw_of(10, _CW_CDW), ">", "wk"),
             ("absw", "", ww, "<", "wk"), ("login", "login", lgw, "<", "lg")]
     must = {"p5", "cd5", "pwk", "cdw"}
     prio = ["bar", "live", "login", "pfb", "abs5", "absw"]
@@ -9832,23 +10117,34 @@ def _pane_grid(cells, width):
             prev = grp
         return w
 
-    # A name clipped under 9 cells (`ne… ←`) no longer says which account it is: below that the
-    # two-row form, which gives the name the whole left column, is the better trade.
-    nw = min(_NW_NAME, nmw)
-    while nw > min(9, nmw) and total(must, 0, nw) > width:
-        nw -= 1
-    if total(must, 0, nw) > width:
+    # EVERY NAME WHOLE (2026-10-22). The name column was capped at the board's 13 cells and
+    # clipped past it (`next-quater…`), at every width: a clipped name no longer says which account
+    # a row is. A name wider than the column takes rows of its own above its values; when fewer
+    # than half the names fit, the two-row form (and under it the cards) gives each its own row.
+    #
+    # WHICH COLUMN WIDTH: the one that keeps the most optional columns, the widest on a tie. It
+    # used to be the longest name whenever the six fit beside it, so a 61-cell name inline at 95
+    # cells cost the bar, live, fable, login and both clocks that the 80-cell layout (the name on
+    # rows of its own) still had: a wider pane showed less. The optional columns join as a strict
+    # prefix of `prio` (the bar at 4 cells, upgraded to 8 where the row has the room), so a column
+    # a pane shows, every wider pane shows too. `acct` floors the column at 4, inside the fit
+    # test (it overflowed by up to 3 cells when every name was shorter).
+    widths = [_disp_w(c[1]) + 2 * c[2] for c in cells]
+    cands = sorted({max(4, x) for x in widths
+                    if x == nmw or 2 * sum(1 for y in widths if y <= x) >= len(cells)})
+    cands = [n for n in cands if total(must, 0, n) <= width]
+    if not cands:
         return _pane_stacked(cells, width)
-    keys, bw = set(must), 0
-    for k in prio:
-        if k == "bar":
-            for b in (_NW_BAR, 4):
-                if total(keys | {"bar"}, b, nw) <= width:
-                    keys.add("bar")
-                    bw = b
-                    break
-        elif total(keys | {k}, bw, nw) <= width:
-            keys.add(k)
+
+    def extras(n):
+        ks = set(must)
+        for k in prio:
+            if total(ks | {k}, 4, n) > width:
+                break
+            ks.add(k)
+        return ks, (_NW_BAR if "bar" in ks and total(ks, _NW_BAR, n) <= width else 4)
+    nw = max(cands, key=lambda n: (len(extras(n)[0]), extras(n)[1], n))
+    keys, bw = extras(nw)
 
     last = [k for k, *_x in spec if k in keys][-1]
 
@@ -9869,7 +10165,7 @@ def _pane_grid(cells, width):
             # The bar arrives pre-coloured and already `bw` wide, so it is appended as is; the
             # header row's bar cell is EMPTY and must still be padded to `bw`, or every header to
             # its right sits a bar's width left of its column (operator screenshot, 2026-10-19).
-            s += t if k == "bar" and t else _cell(t, cw, al, rgb, b)
+            s += t if k == "bar" and t else _pcell(t, cw, al, rgb, b)
         return s
 
     def cols_of(grp):
@@ -9894,18 +10190,30 @@ def _pane_grid(cells, width):
         head += " " * max(0, a - _disp_w(head))
         head += bc(lab, BOARD_LABEL) + " " + bc("─" * max(0, b - a - len(lab) - 1), BOARD_TRACK)
     out = [head.rstrip()]
-    out.append(_cell("", _NW_MARK) + _cell("account" if nw >= 7 else "acct", nw, "<", BOARD_LABEL)
+    out.append(_pcell("", _NW_MARK)
+               + _pcell("account" if nw >= 7 else "acct", nw, "<", BOARD_LABEL)
                + line({k: (h, BOARD_LABEL, False) for k, h, _w, _a, _g in spec}))
     for (mk, acct, me, live, p5, cd5, abs5, pwk, _bar, pfb, cdw, absw, login, r) in cells:
         usable = r.get("auth") not in ("login-required", "logged-out", "keychain-error") \
             and not r.get("auth_broken")
         wk_out = board_eff(r, "weekly_pct")[1] is True
         live_row = usable and not wk_out
-        nm = _clip(acct, nw - 2) + " ←" if me else _clip(acct, nw)
+        nm = acct + (" ←" if me else "")
         vt = BOARD_TEXT if usable else BOARD_MUTE
+        if _disp_w(nm) > nw:
+            # A name wider than the column: rows of its own (the mark on the first, pieces at a
+            # hyphen or marked `↩`, _name_chunks), then its values under an empty name cell.
+            ch, ng = _name_fit(acct, width, _NW_MARK)
+            if me:
+                ch = ch[:-1] + ([ch[-1] + " ←"] if _disp_w(ch[-1]) + 2 <= width - ng
+                                else [ch[-1], "← you"])
+            out += [(_pcell(mk if j == 0 else "", ng, "<", BOARD_ACCENT, bold=True) if ng else "")
+                    + bc(x, BOARD_TEXT if live_row else BOARD_MUTE, bool(mk))
+                    for j, x in enumerate(ch)]
+            mk, nm = "", ""
         out.append(
-            _cell(mk, _NW_MARK, "<", BOARD_ACCENT, bold=True)
-            + _cell(nm, nw, "<", BOARD_TEXT if live_row else BOARD_MUTE, bool(mk))
+            _pcell(mk, _NW_MARK, "<", BOARD_ACCENT, bold=True)
+            + _pcell(nm, nw, "<", BOARD_TEXT if live_row else BOARD_MUTE, bool(mk))
             + line({"live": (live, BOARD_TEXT if live_row and live != "?" else BOARD_MUTE, False),
                     "p5": (p5, BOARD_MUTE if wk_out else _bpct_text(r, "session_pct")[1], False),
                     "cd5": (cd5, vt, False), "abs5": (abs5, BOARD_LABEL, False),
@@ -9936,14 +10244,15 @@ def _meter_rgb(c):
             _bpct_text(r, "weekly_pct")[1], vt)
 
 
-def _meter_head(used_end, resets_end):
+def _meter_head(used_end, resets_end, word="resets"):
     """The legend over the narrow forms' two value columns: `used` ending where the percents end,
     `resets` where the countdowns end. The rows' `5h`/`wk` say WHICH limit; this says what the two
     numbers are, which the rows alone never did (`4%  25m` is not self-evidently a reset). A label
-    wider than its column overhangs left, and `used` gives way to `resets`, never the reverse."""
-    used_end = min(used_end, resets_end - len("resets") - 1)
+    wider than its column overhangs left, and `used` gives way to `resets`, never the reverse.
+    `word`: the dense family says `reset`, as every one of its legends does (_pane_dense)."""
+    used_end = min(used_end, resets_end - len(word) - 1)
     s = " " * max(0, used_end - len("used")) + "used"
-    return bc(s + " " * max(1, resets_end - len("resets") - len(s)) + "resets", BOARD_LABEL)
+    return bc(s + " " * max(1, resets_end - len(word) - len(s)) + word, BOARD_LABEL)
 
 
 def _pane_stacked(cells, width):
@@ -9971,14 +10280,14 @@ def _pane_stacked(cells, width):
         (mk, acct, me, live, p5, cd5, _a5, pwk, _bar, _pfb, cdw, _aw, _lg, r) = c
         nrgb, rgb5, rgbw, vt = _meter_rgb(c)
         bar = (" " + board_bar(*board_eff(r, "weekly_pct"), width=bw)) if bw else ""
-        out.append(_cell(mk, _NW_MARK, "<", BOARD_ACCENT, bold=True)
-                   + _cell(acct + (" ←" if me else ""), nw, "<", nrgb, bool(mk))
-                   + " " * gap + bc("5h", BOARD_LABEL) + " " + _cell(p5, pw, ">", rgb5)
-                   + " " + _cell(cd5, cw, ">", vt))
-        out.append(_cell("", _NW_MARK) + _cell(f"{live} live" if live not in ("", "?") else "",
+        out.append(_pcell(mk, _NW_MARK, "<", BOARD_ACCENT, bold=True)
+                   + _pcell(acct + (" ←" if me else ""), nw, "<", nrgb, bool(mk))
+                   + " " * gap + bc("5h", BOARD_LABEL) + " " + _pcell(p5, pw, ">", rgb5)
+                   + " " + _pcell(cd5, cw, ">", vt))
+        out.append(_pcell("", _NW_MARK) + _pcell(f"{live} live" if live not in ("", "?") else "",
                                                nw, "<", BOARD_LABEL)
-                   + " " * gap + bc("wk", BOARD_LABEL) + " " + _cell(pwk, pw, ">", rgbw)
-                   + " " + _cell(cdw, cw, ">", vt) + bar)
+                   + " " * gap + bc("wk", BOARD_LABEL) + " " + _pcell(pwk, pw, ">", rgbw)
+                   + " " + _pcell(cdw, cw, ">", vt) + bar)
     return out
 
 
@@ -9991,22 +10300,24 @@ def _pane_stacked(cells, width):
 _CARD_STEPS = ((_NW_MARK, 2, 2), (_NW_MARK, 2, 1), (_NW_MARK, 1, 1), (0, 2, 1), (0, 1, 1))
 
 
-def _card_chunks(s, room):
-    """A name wider than its row, in row-sized pieces: after the last `-` (past the third cell)
-    or `.`/`_` that fits, else at the edge. Never an ellipsis: on a card a name is never cut."""
-    out = []
-    while _disp_w(s) > room:
-        cut = ""
-        for ch in s:
-            if _disp_w(cut + ch) > room:
-                break
-            cut += ch
-        kh = cut.rfind("-")
-        k = kh if kh >= 3 else max(cut.rfind(c) for c in "._")
-        cut = cut[:k + 1] if k >= 3 else cut
-        out.append(cut)
-        s = s[len(cut):]
-    return out + [s]
+def _cd_compact(s):
+    """A countdown as ONE token, for the dense and floor forms (2026-10-22): `3h 33m` → `3h33m`,
+    `2d 3h` → `2d3h`. The same value, two cells shorter, and no row break can fall inside it."""
+    return re.sub(r"^(\d+[dh]) (\d+[hm])$", r"\1\2", s)
+
+
+def _split_rows(lab, pct, prgb, cd, vt, ind, vend):
+    """One limit at the floor (the split card and dense forms, 7-11 cells): `5h  16%` with its
+    countdown right-aligned under the percent, both ending at `vend`. A percent too wide to sit
+    beside its label (`≥99%*`, `100%*`: 5 cells, and `5h ≥99%*` is 8 at a 7-cell floor, 2026-10-22)
+    goes under it instead, right-aligned on the same edge: one row more, for that limit only, and
+    never a row past the band."""
+    if ind + 3 + _disp_w(pct) <= vend:
+        rows = [" " * ind + bc(lab, BOARD_LABEL) + " " + _cell(pct, vend - ind - 3, ">", prgb)]
+    else:
+        rows = [" " * ind + bc(lab, BOARD_LABEL),
+                " " * max(0, vend - _disp_w(pct)) + bc(pct, prgb)]
+    return rows + [" " * max(0, vend - _disp_w(cd)) + bc(cd, vt)]
 
 
 def _pane_cards(cells, width):
@@ -10021,37 +10332,44 @@ def _pane_cards(cells, width):
     Every fact the readout exists for survives to 15 cells (a 20-column pane less the gutter): the
     name, whole (wrapped at hyphens, never clipped), `← you`, the live count (beside the name, or
     on its own row when the name fills it), and each limit's use and reset, under one legend.
-    _CARD_STEPS gives back the gap, the indent and the gutter, in that order. Under the
-    floor (12-14 cells) each countdown moves under its percent, right-aligned to the same edge, and
-    the legend takes two rows to match (`used` over `resets`): a value is wrapped, never cut."""
+    _CARD_STEPS gives back the gap, the indent and the gutter, in that order. Under that (8-14
+    cells) each countdown moves under its percent in its one-token form (`3h33m`), right-aligned
+    to the same edge, and the legend takes two rows to match (`used` over `resets`): a value is
+    wrapped, never cut. A name wider than its row breaks at a hyphen, or carries `↩` where it
+    is cut mid-letter (_name_chunks)."""
     pw, cw = _meter_cols(cells)
     split = False
     for gut, off, gap in _CARD_STEPS:
-        if gut + off + 3 + pw + gap + cw <= width:
+        # `used resets` is 11 cells whatever the values: a narrower card splits it (2026-10-22)
+        if gut + off + 3 + pw + gap + cw <= width and width >= len("used resets"):
             break
     else:
-        gut, off, gap, split = 0, 1, 1, True
+        gut, gap, split = 0, 1, True
+        cw = max([3] + [_disp_w(_cd_compact(c[k])) for c in cells for k in (5, 10)])
+        off = 1 if 1 + 3 + max(pw, cw) <= width else 0
     ind = gut + off
-    vend = ind + 3 + (max(pw, cw) if split else pw)        # where the percents end
+    # where the percents end; split, never past the row (`≥99%` over `12d12h` at 8 cells was 9,
+    # and `5h ≥99%*` at 7 was 8: a percent its label cannot sit beside goes under it, _split_rows)
+    vend = (min(width, ind + 3 + max(pw, cw)) if split else ind + 3 + pw)
     if split:
         out = [bc("used".rjust(vend), BOARD_LABEL), bc("resets".rjust(vend), BOARD_LABEL)]
     else:
         out = [_meter_head(vend, vend + gap + cw)]
-    room = max(4, width - gut)
     for c in cells:
         (mk, acct, me, live, p5, cd5, _a5, pwk, _bar, _pfb, cdw, _aw, _lg, _r) = c
         nrgb, rgb5, rgbw, vt = _meter_rgb(c)
-        names = _card_chunks(acct, room)
+        names, ng = _name_fit(acct, width, gut)
+        nroom = max(4, width - ng)
         if me:
             # `← you` is one token: it rides the name's last row, or takes the next one whole.
-            names = names[:-1] + ([names[-1] + " ← you"] if _disp_w(names[-1]) + 6 <= room
+            names = names[:-1] + ([names[-1] + " ← you"] if _disp_w(names[-1]) + 6 <= nroom
                                   else [names[-1], "← you"])
         lv = f"{live} live" if live not in ("", "?") else ""
         for i, part in enumerate(names):
-            row = (_cell(mk if i == 0 else "", gut, "<", BOARD_ACCENT, bold=True) if gut else "") \
-                + bc(part, nrgb, bool(mk))
+            row = (_pcell(mk if i == 0 else "", ng, "<", BOARD_ACCENT, bold=True)
+                   if ng else "") + bc(part, nrgb, bool(mk))
             if i == len(names) - 1 and lv:
-                sp = next((g for g in (2, 1) if _disp_w(part) + g + _disp_w(lv) <= room), 0)
+                sp = next((g for g in (2, 1) if _disp_w(part) + g + _disp_w(lv) <= nroom), 0)
                 if sp:
                     row, lv = row + " " * sp + bc(lv, BOARD_LABEL), ""
             out.append(row)
@@ -10059,9 +10377,7 @@ def _pane_cards(cells, width):
             out.append(" " * gut + bc(lv, BOARD_LABEL))
         for lab, pct, prgb, cd in (("5h", p5, rgb5, cd5), ("wk", pwk, rgbw, cdw)):
             if split:
-                out.append(" " * ind + bc(lab, BOARD_LABEL) + " "
-                           + _cell(pct, vend - ind - 3, ">", prgb))
-                out.append(" " * (vend - _disp_w(cd)) + bc(cd, vt))
+                out += _split_rows(lab, pct, prgb, _cd_compact(cd), vt, ind, vend)
             else:
                 out.append(" " * ind + bc(lab, BOARD_LABEL) + " " + _cell(pct, pw, ">", prgb)
                            + " " * gap + _cell(cd, cw, ">", vt))
@@ -10069,6 +10385,47 @@ def _pane_cards(cells, width):
 
 
 _DESK_NONE = "no account routable; the launcher falls back to its pinned account"
+
+
+def _lane_lines(mark, label, pick, width, ind="  "):
+    """ONE LANE, `mark label → pick`, as markdown rows that each fit `width` (2026-10-22). The
+    arrow never ends a row and never stands alone (a long pick printed `➤ desk` / `→` / its
+    name): one row; else the label, then `→ pick` at `ind`; else `→ pick` at the margin; else
+    the pick in pieces (_name_chunks), the arrow on the first and the rest two cells in. `mark`
+    arrives with its padding (NBSP), so a caller can align a block.
+
+    THE MARK STAYS (2026-10-22). A label too wide to sit beside its mark used to give the mark up,
+    and the bare label then drew in the prose grey under the desk reason (`general` read as its
+    fourth word). Now it breaks after its dot (`➤ᵍ gen·` / `fable`), or takes its short form
+    (`➤ gen`); only a label that fits neither keeps no mark, and then draws bold, never grey."""
+    fits = (lambda s: _disp_w(_demark(s)) <= width)
+    p = pick or "none"
+    one = f"{mark}{label}{_NB}→{_NB}**{p}**"
+    if fits(one):
+        return [one]
+    lab = label.rstrip(_NB)
+    if not fits(mark + lab):
+        short = dict(_DENSE_LANES).get(lab)
+        if "·" in lab:
+            lab = lab.replace("·", "· ")        # `gen·fable` breaks after its dot, not mid-word
+        elif short and fits(mark + short):
+            lab = short
+    lab = mark + lab if fits(mark + lab) or " " in lab else f"**{lab}**"
+    if fits(f"{ind}→ {p}"):
+        return [lab, f"{ind}→{_NB}**{p}**"]
+    if fits(f"→ {p}"):
+        return [lab, f"→{_NB}**{p}**"]
+    ch = _name_chunks(p, max(2, width - 2))
+    return [lab, f"→{_NB}**{ch[0]}**"] + [f"  **{c}**" for c in ch[1:]]
+
+
+def _with_you(block, width, ind):
+    """`← you` after a lane's rows (2026-10-22): on its last row when it fits whole, else on a
+    row of its own at the lane's indent. Never dropped: it was, at 41-66 cells, for a long name."""
+    y = f"{_NB}←{_NB}you"
+    if _disp_w(_demark(block[-1] + y)) <= width:
+        return block[:-1] + [block[-1] + y]
+    return block + [f"{ind}←{_NB}you"]
 
 
 def _pane_head(rank_i, pick_i, pick_g, pick_f, cfg, width):
@@ -10085,10 +10442,9 @@ def _pane_head(rank_i, pick_i, pick_g, pick_f, cfg, width):
       · the desk verdict does not fit one row: the lanes as one block, arrows aligned, `(bare
         claude)` gone and the clause cut to its rung, in its short words (DESK_TIER_SHORT) once
         the rung would take more than 2 rows. Where the aligned block cannot fit, each lane is its
-        own row with the bare `➤`, and a lane too wide for that takes two, the arrow leading the
-        second (never `general →` ending a row). `← you` rides the desk row only where it fits
-        whole; the pick's own row says `← you` too."""
-    nb = "\u00a0"
+        own row with the bare `➤`, and a lane too wide for that falls through _lane_lines (the
+        arrow always beside the pick, never `general →` ending a row nor `→` alone). `← you`
+        rides the desk row where it fits whole, else takes the next row (_with_you)."""
     me = bool(rank_i and rank_i[0][1].get("is_self"))
     fits = (lambda s: _disp_w(_demark(s)) <= width)
     # The marks readout_lines puts on the grid, by the same de-dup rule (a louder lane's mark wins).
@@ -10097,7 +10453,7 @@ def _pane_head(rank_i, pick_i, pick_g, pick_f, cfg, width):
 
     def nrows(line):
         return len(_pane_prose(line, width, cont=line[:len(line) - len(line.lstrip())] or "  "))
-    verdict = f"➤ desk (bare `claude`) →{nb}**{pick_i or 'none'}**" + (" ← you" if me else "")
+    verdict = f"➤ desk (bare `claude`) →{_NB}**{pick_i or 'none'}**" + (" ← you" if me else "")
     if fits(verdict):
         if rank_i:
             cl = next((c for c in ("   " + desk_plain(rank_i[0][1], cfg, drop=d) for d in (0, 1))
@@ -10106,29 +10462,400 @@ def _pane_head(rank_i, pick_i, pick_g, pick_f, cfg, width):
         else:
             # ABSTENTION IS AN ANSWER: printed as "none", never omitted (see the board branch).
             head = [f"➤ desk (bare `claude`) → **none** — {_DESK_NONE}"]
-        pair = (f"➤{nb}general{nb}→{nb}**{pick_g or 'none'}** · "
-                f"➤{nb}fable{nb}→{nb}**{pick_f or 'none'}**")
+        pair = (f"➤{_NB}general{_NB}→{_NB}**{pick_g or 'none'}** · "
+                f"➤{_NB}fable{_NB}→{_NB}**{pick_f or 'none'}**")
         return head + ([pair] if fits(pair) else
-                       [f"{mg}{nb}general{nb}→{nb}**{pick_g or 'none'}**",
-                        f"{mf}{nb}fable{nb}→{nb}**{pick_f or 'none'}**"])
+                       _lane_lines(mg + _NB, "general", pick_g, width)
+                       + _lane_lines(mf + _NB, "fable", pick_f, width))
     lanes = (("➤", "desk", pick_i), (mg, "general", pick_g), (mf, "fable", pick_f))
-    aligned = [m + nb * (_NW_MARK - _disp_w(m)) + n + nb * (8 - len(n)) + f"→{nb}**{p or 'none'}**"
-               for m, n, p in lanes]
-    you = f"{nb}←{nb}you" if me else ""
+    aligned = [m + _NB * (_NW_MARK - _disp_w(m)) + n + _NB * (8 - len(n))
+               + f"→{_NB}**{p or 'none'}**" for m, n, p in lanes]
     if all(fits(x) for x in aligned):
         blocks, cind = [[x] for x in aligned], " " * _NW_MARK
     else:
-        blocks, cind = [], "  "
-        for _m, n, p in lanes:
-            one = f"➤{nb}{n}{nb}→{nb}**{p or 'none'}**"
-            blocks.append([one] if fits(one) else [f"➤{nb}{n}", f"{cind}→{nb}**{p or 'none'}**"])
-    if you and fits(blocks[0][-1] + you):
-        blocks[0][-1] += you
+        cind = "  "
+        blocks = [_lane_lines("➤" + _NB, n, p, width, cind) for _m, n, p in lanes]
+    if me:
+        blocks[0] = _with_you(blocks[0], width, cind)
     clause = cind + (desk_plain(rank_i[0][1], cfg, drop=2) if rank_i else _DESK_NONE)
     if rank_i and nrows(clause) > 2:
         clause = cind + DESK_TIER_SHORT.get(desk_keys(rank_i[0][1], cfg)[2], "rung unknown")
     # the desk lane's row(s), its clause under them, then general and fable
     return blocks[0] + [clause] + blocks[1] + blocks[2]
+
+
+# ---- THE DENSE FAMILY (2026-10-22) ---------------------------------------------------------------
+# The SessionStart band is height-capped: Claude Code gives it about half the pane's rows (10 on a
+# 30-row pane, 17 on 45, 30 on 70, each counting its `↓ N more` cue; measured on 2.1.293,
+# docs/research/accounts-narrow-2026-10-22/), and a taller board scrolls inside it with accounts
+# below the fold. So the ladder carries a second variant per width, marked `dense`, laid out for
+# ROWS: the picks, every account's name and its 5h and weekly use and reset, whole, on as few rows
+# as the width allows. What it gives up, in this order: the live counts, the desk clause, the drain
+# line, the `--fresh` hint and the blank separator rows. Alerts stay, after every account row; the
+# read clock is last. mods/accounts-readout draws it when the full layout would not fit the band.
+_DENSE_LANES = (("desk", "desk"), ("general", "gen"), ("fable", "fable"))
+
+
+def _dense_lanes(pick_i, pick_g, pick_f, me, width, terse=False):
+    """The lanes, dense, as (rows, you): lanes that agree share ONE row (`➤ desk·general·fable →
+    next2`), each group led by the mark its pick's table row carries. The first of these forms
+    whose rows all fit, in this order:
+
+      · split lanes on ONE row, ` · ` between them (2026-10-22: one row a lane at 69-75 cells
+        put the fixture's last account under the fold on an 80x30 pane);
+      · one row a group, arrows aligned, every label whole;
+      · the same rows unaligned, so `general` stays a word where only the padding did not fit
+        (2026-10-22: the aligned column cost `➤ general → next` its last cell at 17 cells);
+      · aligned again with `all lanes` for three agreeing lanes (a bare `all`, tried and judged on
+        screen, read as "every account") and `gen` for a split lane too narrow for its word;
+      · `➤ use next2` (2026-10-22: the two-row `all lanes` / `→ next2` put a 15-18-cell band's
+        last account below the fold), then `➤ next2` (2026-10-22: under 11 cells the agreeing
+        lanes fell to _lane_lines' three rows, `➤ all` / `lanes` / `→ next2`, and the desk
+        pick's own weekly reset went under a 12-15-column band's fold; a bare `use next2` was
+        tried and judged on screen, the one width band whose pick lost its `➤`);
+      · else each group through _lane_lines.
+
+    THE TERSE SIBLING'S LANES (`terse`, 2026-10-22) are the fewest rows any form takes, and of
+    those the narrowest (`➤ next2`), which leaves the band room to set its stale tag beside them
+    (`➤ next2 ⚠ 6m` at 15 cells). Split lanes add one more form for it: each group as its mark
+    and its pick, `➤ next2 ➤ᵍ next`, the lane names left to the marks. The desk's group keeps the bare `➤` (every lane in it follows the
+    desk); any other group carries `➤` and the superscript of each of its lanes, so `➤ᵍᶠ next` says
+    fable goes with general and `➤ᶠ none` that fable has no pick. On the operator's real board
+    (`desk·fable → next2`, `general → next`) the labelled lanes took 2-4 rows at 15-21 cells, so a
+    10-row band (a 30-row pane at 20-26 columns) lost an account under its cue; this takes one.
+    The band draws it only where the labelled layout does not fit its height (mods/accounts-readout
+    pickFit), and a sibling no shorter is never shipped (pane_ladder).
+
+    THE SELF MARK SAYS WHO IT IS (2026-10-22). `← you` follows the desk pick, never its label,
+    when this session runs on it (`me`), and that decides between the forms above: the first that
+    fits WITH it, then the first that fits at all. `you` reports whether it rode; when it did not,
+    _pane_dense spells `← you` beside the account's name instead of a bare `←` nothing on the
+    band explains (it was bare at 7-23 cells)."""
+    groups = []
+    for (full, short), p in zip(_DENSE_LANES, (pick_i, pick_g, pick_f)):
+        g = next((x for x in groups if x[0] == p), None)
+        if g:
+            g[1].append(full)
+            g[2].append(short)
+        else:
+            groups.append([p, [full], [short]])
+
+    def mark(p):
+        return "➤" if p == pick_i or p is None else "➤ᵍ" if p == pick_g else "➤ᶠ"
+
+    def labels(g):
+        # three agreeing lanes go straight to `all lanes`; `gen` is left only to a split lane
+        # too narrow for its whole word
+        full = "·".join(g[1])
+        return [full, "all lanes"] if len(g[1]) == 3 else [full, "·".join(g[2])]
+    fits = (lambda s: _disp_w(_demark(s)) <= width)
+    you = f"{_NB}←{_NB}you"
+    mw = max(_disp_w(mark(g[0])) for g in groups)
+
+    def lane(g, lab, lw=0, pad=1):
+        m = mark(g[0])
+        return (m + _NB * (pad + (mw - _disp_w(m) if lw else 0)) + lab
+                + _NB * max(0, lw - _disp_w(lab)) + f"{_NB}→{_NB}**{g[0] or 'none'}**")
+
+    def aligned(lv):
+        labs = [labels(g)[lv] for g in groups]
+        lw = max(_disp_w(x) for x in labs)
+        return [[lane(g, lab, lw)] for g, lab in zip(groups, labs)]
+    forms = []
+    if len(groups) > 1:
+        forms.append([[" · ".join(lane(g, labels(g)[0]) for g in groups)]])
+    forms += [aligned(0)]
+    if len(groups) > 1:
+        forms.append([[lane(g, labels(g)[0])] for g in groups])
+    forms.append(aligned(1))
+    if len(groups) == 1 and groups[0][0]:
+        p = groups[0][0]
+        forms += [[[f"➤{_NB}use{_NB}**{p}**"]], [[f"➤{_NB}**{p}**"]]]
+    if terse and len(groups) > 1:
+        sup = {"general": "ᵍ", "fable": "ᶠ"}
+        pairs = [("➤" if "desk" in g[1] else "➤" + "".join(sup[x] for x in g[1]))
+                 + f"{_NB}**{g[0] or 'none'}**" for g in groups]
+        forms += [[[" ".join(pairs)]], [[x] for x in pairs]]
+
+    def with_you(blocks):
+        """`← you` right after the desk pick: the end of its row, or inside a one-row form, before
+        the lanes that follow it (the desk's group leads, so its pick is the row's first `**`)."""
+        if not me:
+            return None
+        row = blocks[0][0]
+        at = row.find("**", row.find("**") + 2) + 2
+        row = row[:at] + you + row[at:]
+        return [[row]] + blocks[1:] if fits(row) else None
+    ok = [f for f in forms if all(fits(r) for b in f for r in b)]
+    if terse and ok:
+        # the fewest rows (never one more for `← you`), and of those the narrowest, so the band's
+        # stale tag fits beside them
+        least = min(sum(map(len, f)) for f in ok)
+        ok = sorted((f for f in ok if sum(map(len, f)) == least),
+                    key=lambda f: max(_disp_w(_demark(r)) for b in f for r in b))
+    pick = next((y for y in map(with_you, ok) if y), None)
+    if pick:
+        return [x for b in pick for x in b], True
+    blocks = ok[0] if ok else [
+        _lane_lines(mark(g[0]) + _NB, labels(g)[1 if len(g[1]) == 3 else 0], g[0], width)
+        for g in groups]
+    # the desk lane leads (groups keep lane order), and `← you` follows its pick, never its label
+    if me and fits(blocks[0][-1] + " ← you"):
+        blocks[0][-1] += you
+        return [x for b in blocks for x in b], True
+    return [x for b in blocks for x in b], False
+
+
+def _dense_head(w5, wk, gap_l, gap_m, pw):
+    """The dense one-row table's header: a group rule over each limit's pair (`5-hour ──`, the
+    grid's own words) and `used reset` under it, so it is never a question which percent is the
+    5-hour one or which countdown is whose reset. `used` may overhang the gap to its left."""
+    def rule(lab, span):
+        lab = lab if len(lab) + 2 <= span else {"5-hour": "5h", "weekly": "wk"}[lab]
+        return bc(lab, BOARD_LABEL) + " " + bc("─" * max(1, span - len(lab) - 1), BOARD_TRACK)
+    s5, sk = pw + 1 + w5, pw + 1 + wk
+    top = " " * gap_l + rule("5-hour", s5) + " " * gap_m + rule("weekly", sk)
+    sub = (" " * (gap_l + pw - 4) + "used" + " " + "reset".rjust(w5)
+           + " " * (gap_m + pw - 4) + "used" + " " + "reset".rjust(wk))
+    return [top, bc(sub, BOARD_LABEL)]
+
+
+def _pane_dense(cells, width, you_said=False, terse=False):
+    """The account block of a dense variant (2026-10-22): the first of these that fits `width`.
+
+      one row an account      5-hour ──  weekly ─      two rows        used reset
+      (D1, two header rows)  used reset used reset     (D2)      next2  5h 16% 3h33m
+                       ➤ next2  16% 3h33m  37% 2d3h                     wk 37%  2d3h
+
+      cards side by side (D1C)   used reset            columns (DY)  used     5h    wk
+                                 next        next2                   next2   16%   37%
+                               5h  0% 4h42m 16% 3h33m                reset 3h33m  2d3h
+                               wk  2% 2d20h 37%  2d3h
+
+      three rows (D3)  next2              five rows (D4, the floor)   next2
+                        5h 16% 3h33m                                  5h  16%
+                        wk 37%  2d3h                                    3h33m …
+
+    EVERY FORM SAYS WHICH NUMBER IS USED AND WHICH IS THE RESET (2026-10-22), in one vocabulary,
+    `used` and `reset`, at every width: the column form's reset rows had no label and its legend
+    said only `used`, and the cards' `used reset used reset` read one way at 30 columns and another
+    (the table's 5-hour pair then weekly) at 34.
+
+    readout_lines hands the accounts over PICKS FIRST (desk, general, fable, then config order), so
+    when a band is too short for every row, the rows it cuts are an unpicked account's.
+
+    Countdowns are one token (_cd_compact); every column is as wide as its widest value. A name
+    too wide for the name column takes rows of its own above its values (in pieces, _name_chunks)
+    rather than pushing every account down a form. `←` marks this session's account, as in the
+    grid, where the lanes above say `← you` (`you_said`, _dense_lanes); elsewhere the name says
+    `← you` itself. The lane marks lead each row.
+
+    TERSE (2026-10-22): the same forms without the labels that cost a row (the column form's
+    `reset` key row, a `← you` the name could not carry on its own row). The result is a
+    _PaneLines whose `costly` says whether this layout spent any; pane_ladder then ships the terse
+    one beside it, and the band draws it only where the labelled one would not fit its height."""
+    if not cells:
+        return []
+    P5, PK = [c[4] for c in cells], [c[7] for c in cells]
+    D5, DK = [_cd_compact(c[5]) for c in cells], [_cd_compact(c[10]) for c in cells]
+    pw = max(3, max(_disp_w(x) for x in P5 + PK))
+    w5 = max(5, max(_disp_w(x) for x in D5))
+    wk = max(5, max(_disp_w(x) for x in DK))
+    mw = max([0] + [_disp_w(c[0]) for c in cells])
+    mw += 1 if mw else 0
+    mine = " ←" if you_said or terse else " ← you"
+    spent = []                      # rows spent on labels, for `costly`
+    nm = [c[1] + (mine if c[2] else "") for c in cells]
+    nw = max(_disp_w(x) for x in nm)
+
+    def name_rows(i, room, gut):
+        """A name too wide for its column: its own rows, the mark on the first, and its self
+        mark after the last piece, or `← you` on a row of its own (never cut from the name with
+        a `↩`)."""
+        nrgb = _meter_rgb(cells[i])[0]
+        width_ = room + gut
+        ch, gut = _name_fit(cells[i][1], width_, gut)
+        room = width_ - gut
+        if cells[i][2]:
+            ch = ch[:-1] + ([ch[-1] + mine] if _disp_w(ch[-1] + mine) <= room
+                            else [ch[-1], "← you"])
+        return [(_pcell(cells[i][0] if j == 0 else "", gut, "<", BOARD_ACCENT, bold=True)
+                 if gut else "") + bc(x, nrgb, bool(cells[i][0])) for j, x in enumerate(ch)]
+
+    def lead(i, col, gut):
+        return (_pcell(cells[i][0], gut, "<", BOARD_ACCENT, bold=True) if gut else "") \
+            + _pcell(nm[i], col, "<", _meter_rgb(cells[i])[0], bool(cells[i][0]))
+
+    def fit_col(avail):
+        """The name column for `avail` cells: the widest name that fits it, so one long name
+        takes rows of its own instead of a column of blanks beside every short one. 0 when more
+        than half the names would leave the column."""
+        ok = [_disp_w(x) for x in nm if _disp_w(x) <= avail]
+        return max(ok) if ok and len(ok) * 2 >= len(nm) else 0
+
+    cw = max(3, max(_disp_w(x) for x in D5 + DK))
+    hdr = [(c[0] + " " if c[0] else "") + nm[i] for i, c in enumerate(cells)]
+
+    def d1():
+        """One row an account (three cells between the pairs where the width has them)."""
+        gap = 3 if width - mw - nw - (1 + pw + 1 + w5 + 3 + pw + 1 + wk) >= 0 else 2
+        col = fit_col(width - mw - (1 + pw + 1 + w5 + gap + pw + 1 + wk))
+        if not col:
+            return None
+        out = _dense_head(w5, wk, mw + col + 1, gap, pw)
+        for i, c in enumerate(cells):
+            _n, rgb5, rgbw, vt = _meter_rgb(c)
+            vals = (" " + _cell(P5[i], pw, ">", rgb5) + " " + _cell(D5[i], w5, ">", vt)
+                    + " " * gap + _cell(PK[i], pw, ">", rgbw) + " " + _cell(DK[i], wk, ">", vt))
+            if _disp_w(nm[i]) > col:
+                out += name_rows(i, width - mw, mw) + [" " * (mw + col) + vals]
+            else:
+                out.append(lead(i, col, mw) + vals)
+        return out
+
+    def d1c():
+        """The cards side by side, k to a band, sharing the `5h`/`wk` row labels, under ONE legend
+        row: `used` over the first card's percent and `reset` over its countdown, every other card
+        aligned under the same columns (2026-10-22: without it `0% 4h46m` said neither whether the
+        percent was used or left nor that the time was a reset, at 22-28 cells, the operator's own
+        widths). ONE copy at every width: one per card (24-28 cells) read `used reset used reset`,
+        which the one-row table from 29 cells prints under `5-hour ── weekly ──` to mean the
+        5-hour pair then the weekly one, so the same row changed meaning one column wider."""
+        cc = max(5, cw)                         # `reset` fits over its column
+        pc = pw + 1 + cc
+        k = min(len(cells), (width - 2) // (pc + 1))
+        if k < 2 or max(_disp_w(x) for x in hdr) > pc:
+            return None
+        # the cells a band has to spare go between the cards (up to 3), so one card's reset never
+        # reads as the next card's percent
+        g = max(1, min(3, (width - 2 - k * pc) // k))
+        # `used` (4) right-aligned over a 3-cell percent overhangs the gap, as the D1 header's does
+        out = [bc("  " + " " * max(0, g + pw - 4) + "used" + " " + "reset".rjust(cc), BOARD_LABEL)]
+        for b in range(0, len(cells), k):
+            blk = range(b, min(b + k, len(cells)))
+            # the name over its card, the mark before it; the last one unpadded (no trailing ink)
+            out.append("  " + "".join(
+                " " * g + (bc(cells[i][0] + " ", BOARD_ACCENT, bold=True) if cells[i][0] else "")
+                + _pcell(nm[i], _disp_w(nm[i]) if i == blk[-1] else pc - _disp_w(hdr[i])
+                         + _disp_w(nm[i]), "<", _meter_rgb(cells[i])[0], bool(cells[i][0]))
+                for i in blk))
+            for lab, P, D, j in (("5h", P5, D5, 1), ("wk", PK, DK, 2)):
+                out.append(bc(lab, BOARD_LABEL) + "".join(
+                    " " * g + _pcell(P[i], pw, ">", _meter_rgb(cells[i])[j]) + " "
+                    + _pcell(D[i], cc, ">", _meter_rgb(cells[i])[3]) for i in blk))
+        return out
+
+    def dy():
+        """THE COLUMN FORM (2026-10-22): two rows an account in 3 cells less than D2, so a
+        15-19-cell band no longer pays three. Each limit is a column, its percent over its reset;
+        the name sits beside the percents and the resets run under it, each reset row labelled:
+
+            used     5h    wk
+            next2   16%   37%
+            reset 3h33m  2d3h
+
+        `used` heads the name column and `reset` takes it on every reset row, so neither number is
+        left to its shape (2026-10-22: the reset row had no label and the legend said only
+        `used`). Where a reset row has no room for the word and a space (under ~17 cells), the
+        key takes a second row instead, `reset` under `used`, the order of every account's rows:
+        one row more, the price of saying it at all.
+
+        The marks lead the names where every name keeps its row; else the names go bold-only
+        (the lane block names every pick in words, as the cards do). A name wider than its
+        cells takes rows of its own above its percents."""
+        c5 = max(pw, max(_disp_w(x) for x in D5))
+        ck = max(pw, max(_disp_w(x) for x in DK))
+        e5 = width - 1 - ck                     # where the 5-hour column ends
+        room = e5 - pw - 1                      # the name's cells on the percent row
+        if e5 - c5 < 0 or room < 2:
+            return None
+        gut = mw if mw and all(mw + _disp_w(x) <= room for x in nm) else 0
+        if sum(1 for x in nm if gut + _disp_w(x) <= room) * 2 < len(nm):
+            return None
+        # the label column: the names' own, else the margin; None where `reset` has no room
+        at = next((a for a in (gut, 0) if a + len("reset") + 1 <= e5 - c5), None)
+        key = gut if at is None else at
+        used = key + len("used") + 1 <= e5 - 2
+        out = [bc(((" " * key + "used") if used else "").ljust(e5 - 2) + "5h" + " " * (ck - 1)
+                  + "wk", BOARD_LABEL)]
+        out += ([] if used else [bc(" " * key + "used", BOARD_LABEL)])
+        if at is None and not terse:
+            out.append(bc(" " * key + "reset", BOARD_LABEL))
+            spent.append("reset")
+        for i, c in enumerate(cells):
+            _n, rgb5, rgbw, vt = _meter_rgb(c)
+            if gut + _disp_w(nm[i]) > room:
+                out += name_rows(i, width - gut, gut)
+                head = " " * (e5 - pw)
+            else:
+                head = lead(i, e5 - pw - gut, gut)
+            out.append(head + _pcell(P5[i], pw, ">", rgb5) + " " + _pcell(PK[i], ck, ">", rgbw))
+            lab = "" if at is None else " " * at + bc("reset", BOARD_LABEL)
+            out.append(lab + " " * (e5 - c5 - (0 if at is None else at + len("reset")))
+                       + _pcell(D5[i], c5, ">", vt) + " " + _pcell(DK[i], ck, ">", vt))
+        return out
+
+    def d2():
+        """The name and the 5-hour limit on one row, the weekly under it."""
+        col = fit_col(width - mw - (1 + 2 + 1 + pw + 1 + cw))
+        if not col:
+            return None
+        vend = mw + col + 1 + 2 + 1 + pw
+        out = [_meter_head(vend, vend + 1 + cw, "reset")]
+        for i, c in enumerate(cells):
+            _n, rgb5, rgbw, vt = _meter_rgb(c)
+            r5 = (" " + bc("5h", BOARD_LABEL) + " " + _cell(P5[i], pw, ">", rgb5)
+                  + " " + _cell(D5[i], cw, ">", vt))
+            rk = (" " + bc("wk", BOARD_LABEL) + " " + _cell(PK[i], pw, ">", rgbw)
+                  + " " + _cell(DK[i], cw, ">", vt))
+            if _disp_w(nm[i]) > col:
+                out += name_rows(i, width - mw, mw) + [" " * (mw + col) + r5]
+            else:
+                out.append(lead(i, col, mw) + r5)
+            out.append(" " * (mw + col) + rk)
+        return out
+
+    def d34():
+        """The name on its own rows, the values under it: three rows (D3), five at the floor."""
+        gut = mw if mw + 1 + 2 + 1 + pw + 1 + cw <= width else 0
+        ind = gut + (1 if gut + 1 + 2 + 1 + pw + 1 + cw <= width else 0)
+        # `used reset` is 10 cells whatever the values: under that the legend splits too
+        one = ind + 2 + 1 + pw + 1 + cw <= width and width >= len("used reset")
+        # split, the percents and resets end on one edge, never past the row (_split_rows)
+        vend = ind + 3 + pw if one else min(width, ind + 3 + max(pw, cw))
+        out = ([_meter_head(vend, vend + 1 + cw, "reset")] if one
+               else [bc("used".rjust(vend), BOARD_LABEL), bc("reset".rjust(vend), BOARD_LABEL)])
+        for i, c in enumerate(cells):
+            _n, rgb5, rgbw, vt = _meter_rgb(c)
+            out += name_rows(i, width - gut, gut)
+            for lab, pct, prgb, cd in (("5h", P5[i], rgb5, D5[i]), ("wk", PK[i], rgbw, DK[i])):
+                if one:
+                    out.append(" " * ind + bc(lab, BOARD_LABEL) + " " + _cell(pct, pw, ">", prgb)
+                               + " " + _cell(cd, cw, ">", vt))
+                else:
+                    out += _split_rows(lab, pct, prgb, cd, vt, ind, vend)
+        return out
+
+    # The one-row table leads while every name sits in its column. Otherwise the form with the
+    # fewest rows wins, the earlier on a tie: the cards side by side beat a one-row table whose
+    # `next2 ←` had to take a row of its own (judged on screen at 28 cells), and D2's labelled
+    # rows beat the column form's at the same height.
+    def run(form):
+        """(rows, whether they spent any on labels), or None where the form does not fit."""
+        spent.clear()
+        out = form()
+        return (out, bool(spent)) if out else None
+    one_row = run(d1)
+    if one_row and len(one_row[0]) == len(cells) + 2:
+        pick = one_row
+    else:
+        pick = min([f for f in (run(d1c), one_row, run(d2), run(dy)) if f] + [run(d34)],
+                   key=lambda f: len(f[0]))
+    res = _PaneLines(pick[0])
+    # `← you` spelled out where the lanes did not carry it may cost a row in any form: the terse
+    # sibling (the bare `←`) is shipped too, and pane_ladder drops it where it is no different
+    res.costly = not terse and (pick[1] or (not you_said and any(c[2] for c in cells)))
+    return res
 
 
 def _read_time_line(cfg, cached, brief=False):
@@ -10155,6 +10882,19 @@ def _read_time_line(cfg, cached, brief=False):
            else f"{age // 60} minute{'' if age // 60 == 1 else 's'}" if age < 90 * 60
            else fmt_board_t(age / 3600.0))
     return f"Quota read at {now - timedelta(seconds=age):%H:%M}, {ago} ago · {again}"
+
+
+def _clock_row(cfg, cached, width):
+    """The read CLOCK for a narrow pane (2026-10-22): `Quota read at 05:33` where it fits one row,
+    else `read at 05:33`, else `read 05:33`, else `read at` over the clock — the time is one token
+    and never leaves its label for a row of its own mid-phrase."""
+    clk = _read_time_line(cfg, cached, brief=True)
+    m = re.search(r"\d\d:\d\d$", clk)
+    if not m or _disp_w(clk) <= width:
+        return clk
+    t = m.group()
+    return next((x for x in (f"read at{_NB}{t}", f"read{_NB}{t}") if _disp_w(x) <= width),
+                f"read at {t}")
 
 
 _DRAIN_PACE = "At the last 2 days' pace"
@@ -10200,7 +10940,8 @@ def _drain_line(rows, routable_g, pick_g=None, terse=False):
     unk = [f"no forecast yet for {', '.join(unknown)}"] if unknown and not terse else []
     lead = "Unused at weekly reset: " if terse else f"{_DRAIN_PACE}, unused at weekly reset: "
     if terse:
-        small, also = ([x.replace(" ", "\u00a0") for x in xs] for xs in (small, also))
+        # each figure bound to its account; a trailing `(not usable now)` wraps on its own
+        small, also = ([x.replace(" ", _NB, 1) for x in xs] for xs in (small, also))
     if targets and pick_g is not None and pick_g not in [a for a, _s in targets]:
         # The router sends new work elsewhere: state the forecast, never a directive it won't follow.
         return " · ".join([lead + " · ".join(
@@ -10289,7 +11030,8 @@ def render_readout(rows, cfg, win, cached, narrow=False):
     print("\n".join(readout_lines(rows, cfg, win, cached, narrow)))
 
 
-def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None):
+def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None, dense=False,
+                  memo=None, terse=False):
     """Build the /accounts readout as finished lines — the SINGLE renderer, in TWO presentations.
 
     Why this exists: the readout used to be ~200 lines of prose in commands/accounts.md
@@ -10323,6 +11065,8 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
     pick_i = rank_i[0][1]["acct"] if rank_i else None
     pick_g = rank_g[0][1]["acct"] if rank_g else None
     pick_f = rank_f[0][1]["acct"] if rank_f else None
+    you_said = False
+    lanes_costly, n_lanes = False, 0
 
     if narrow:
         # THE BOARD STATES ITS OWN AGE, on line 1, before any number it is about to print.
@@ -10355,7 +11099,16 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
         # THE ANSWER LEADS (2026-10-18). The desk line answers "which account do I use", so it is
         # line 1, above the grid, where bold renders (it would not inside the fence). Its clause is
         # desk_plain: the same rung and weekly countdown desk_why prints on the board, in words.
-        if pane:
+        if pane and dense:
+            # THE DENSE HEAD (2026-10-22): the picks alone, agreeing lanes on one row, no clause.
+            # `you_said`: `← you` rode the desk row, so the table's own `←` is explained.
+            me = bool(rank_i and rank_i[0][1].get("is_self"))
+            out, you_said = _dense_lanes(pick_i, pick_g, pick_f, me, pane, terse)
+            # lanes the terse sibling says in fewer rows make this layout `costly` (pane_ladder)
+            lanes_costly = not terse and len(_dense_lanes(pick_i, pick_g, pick_f, me, pane,
+                                                          True)[0]) < len(out)
+            n_lanes = len(out)
+        elif pane:
             # THE PANE HEAD (2026-10-22): _pane_head lays the three lanes out for the width, so
             # the picks keep row one and stay whole at every width down to the ladder's floor.
             out = _pane_head(rank_i, pick_i, pick_g, pick_f, cfg, pane)
@@ -10370,10 +11123,22 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
         # Chat puts general and fable on one line; the pane lays every lane out in _pane_head.
         if not pane:
             out.append(f"➤ general → **{pick_g or 'none'}** · ➤ fable → **{pick_f or 'none'}**")
-        out.append("")
+        if not dense:
+            out.append("")
+    dense = bool(pane) and dense
     notes, cells = [], []
     # A pane too narrow for `claude-accounts --readout --fresh` on one row: the narrow prose rules.
-    tight = bool(pane) and _disp_w("  claude-accounts --readout --fresh") > pane
+    # The dense variant takes them at every width: it is laid out for rows.
+    tight = bool(pane) and (dense or _disp_w("  claude-accounts --readout --fresh") > pane)
+
+    def _once(key, fn):
+        """A width-independent line, computed once per ladder pass (`memo`, shared by every width
+        pane_ladder lays out): fleet_pace_line re-read the util tails at every one of ~370."""
+        if memo is None:
+            return fn()
+        if key not in memo:
+            memo[key] = fn()
+        return memo[key]
     # (account, general-lane reason) pairs some line below explains — recorded where the line is
     # emitted, so the Skipped line after the loop names only exclusions nothing else printed.
     explained = set()
@@ -10630,7 +11395,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
     # this names the rest — an account at its live-session cap, uncountable sessions, weekly room
     # under the router floor with no server refusal, a login drain past the warn band — which
     # otherwise appeared only as an unmarked grid row. Severity OUT: it says why an account is off.
-    if not narrow:
+    if not narrow and not dense:
         sk = general_skips_line(rows, _gre, cfg, explained)
         if sk:
             _note(_SEV_OUT, "· " + sk)
@@ -10640,11 +11405,19 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
     # glance ("not intuitively clear"). Each account at the wall now carries its own sentence
     # above, so the cell is a plain percent and nothing on screen needs decoding.
     pre = set()         # pane: indices of rows already laid out and coloured (the grid)
+    if dense:
+        # PICKS FIRST (2026-10-22): the band cuts a dense board too tall for it from the bottom,
+        # and config order put the desk's own pick last (next, next4, next3, next2), so the account
+        # the operator is told to use was the first one cut. Desk, general, fable, then the rest.
+        lead = [p for p in (pick_i, pick_g, pick_f) if p]
+        cells.sort(key=lambda c: lead.index(c[1]) if c[1] in lead else len(lead))
     if pane:
-        for ln in _pane_grid(cells, pane):
+        blk = _pane_dense(cells, pane, you_said, terse) if dense else _pane_grid(cells, pane)
+        for ln in blk:
             pre.add(len(out))
             out.append(ln)
-        out.append("")
+        if not dense:
+            out.append("")
     elif not narrow:
         # THE GRID, laid out now that every name and clock width is known. The name column fits
         # the longest name (clipped at the board's cap, never the ← suffix); the weekly clock
@@ -10672,6 +11445,9 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
         _note(_SEV_MONEY, _bank_line)
     # Severity order (money, auth, out, near, 5h cutoff, cliff, stale, info, footnote), stable.
     notes.sort(key=lambda t: t[0])
+    if dense:
+        # Dense keeps every alert and drops the footnotes (a `·`-led line explains, it does not warn).
+        notes = [(s, n) for s, n in notes if not n.startswith("· ")]
     for _sev, n in notes:
         # Same note text, both surfaces: a glyph-led line in chat, plain wrapped prose on the
         # board. The SENTENCE is identical, which is the property that matters — an operator who
@@ -10679,7 +11455,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
         out.extend(_wrap_narrow(_demark(n)) if narrow else [n])
 
     # ---- footer: the router's own answer, never a re-rank of score_*
-    if notes or narrow:
+    if (notes or narrow) and not dense:
         out.append("")
     # THE DESK LINE COMES FIRST (W2.2). It answers "what will bare `claude` do" — the question the
     # operator actually asked, and the only one on this surface whose answer they act on by typing
@@ -10719,13 +11495,14 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
     # Chat formats every countdown the way its grid cells do, re-derived from the stamp; the board
     # keeps fmt_h on the sweep's countdown (the defaults), byte for byte.
     _wk_left = (lambda x: fmt_board_t(_until(x, "weekly_reset_at", "weekly_reset_h")))
-    fl = fleet_pace_line(rows) if narrow else fleet_pace_line(rows, fmt=fmt_board_t)
+    fl = fleet_pace_line(rows) if narrow else _once("fl", lambda: fleet_pace_line(rows,
+                                                                                  fmt=fmt_board_t))
     if fl:
         if narrow:
             out.extend(bc(ln, AMBER) for ln in _wrap_narrow(fl))
         else:
             out.append(fl)
-    pl = pace_line(rows) if narrow else pace_line(rows, left=_wk_left)
+    pl = pace_line(rows) if narrow else _once("pl", lambda: pace_line(rows, left=_wk_left))
     if pl:
         # S3: the weekly-drain block is now one row PER ACCOUNT, sorted by pp at risk. Still one
         # renderer (L3) — pace_line owns every word of it; this splits what it produced.
@@ -10745,7 +11522,9 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
         _alarm = [x for x in pl.split("\n") if "⚠" in x]
         for _pln in _alarm:
             out.extend(_wrap_narrow(_demark(_pln)) if narrow else [_pln.strip()])
-        if not narrow:
+        # Under 12 cells (the floor forms) the drain line goes too, as in the dense variant: there
+        # `next3 37%` is wider than a row, so every figure would leave its account (2026-10-22).
+        if not narrow and not dense and not (pane and pane < 12):
             _rg = {r["acct"] for _s, r in rank_g}
             dl = _drain_line(rows, _rg, pick_g)
             # The pane keeps the decision and its figures, and gives up the basis first: past 4
@@ -10777,7 +11556,15 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
               else "Fable window: open, end date **unknown**" if not win.get("end")
               else f"Fable window: open through {win.get('end')}")
         line = (f"{wl} · " if wl else "") + _read_time_line(cfg, cached)
-        if not pane or (not tight and (not wl or _disp_w(_demark(line)) <= pane)):
+        if dense:
+            # DENSE: the Fable window's verdict only when it is news, and so is the read CLOCK
+            # (2026-10-22). The band states the board's age itself (its `⚠ stale` head, from 5
+            # minutes), so a quota read just before the board was written needs no row; one
+            # already that old when written does, since the band cannot see it.
+            age = _quota_age_s(cfg) if cached else 0
+            out += ([wl.split(" — ")[0]] if wl else []) + (
+                [_clock_row(cfg, cached, pane)] if age is None or age >= _board_stale_s() else [])
+        elif not pane or (not tight and (not wl or _disp_w(_demark(line)) <= pane)):
             out.append(line)
         elif not tight:
             # A footer that wraps puts the read time on a line of its own, never as a continuation
@@ -10787,7 +11574,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
             # NARROW (2026-10-22), once the refresh command cannot sit whole on one row: the Fable
             # window keeps its verdict (the clause before ` — `; `claude-accounts` has the rest)
             # and the read time its clock.
-            out += ([wl.split(" — ")[0]] if wl else []) + [_read_time_line(cfg, cached, brief=True)]
+            out += ([wl.split(" — ")[0]] if wl else []) + [_clock_row(cfg, cached, pane)]
     if narrow:
         # D8 / C11: CLOCK times only — a relative age would rot inside the shared file.
         if quota_ts is None:
@@ -10799,9 +11586,21 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
                       BOARD_LABEL))
     if pane:
         # Every row the grid did not lay out is chat markdown: wrap it to the pane and colour it.
-        out = [x for i, ln in enumerate(out)
-               for x in ([ln] if i in pre else _pane_prose(
-                   ln, pane, cont=ln[:len(ln) - len(ln.lstrip())] or "  "))]
+        # `values` (2026-10-22): how many rows run through the last account row, for a reader that
+        # must choose what a height cap cuts (mods/accounts-readout keeps these above the fold).
+        # `lanes` (2026-10-22): the display cells of each lane row, which lead a dense layout, so
+        # the band can set its one-row stale head at the end of one instead of on a row of its own.
+        res, last = _PaneLines(), max(pre, default=-1)
+        res.costly = bool(dense and (getattr(blk, "costly", False) or lanes_costly))
+        for i, ln in enumerate(out):
+            rows_ = [ln] if i in pre else _pane_prose(
+                ln, pane, cont=ln[:len(ln) - len(ln.lstrip())] or "  ")
+            res.extend(rows_)
+            if dense and i < n_lanes:
+                res.lanes = (res.lanes or []) + [_disp_w(r) for r in rows_]
+            if i == last:
+                res.values = len(res)
+        return res
     return out
 
 
@@ -12302,15 +13101,22 @@ def main():
                                          for p in load_providers()])
                  if "--no-agents" not in args and not narrow else [])
 
-        def _pane_at(w):
-            return readout_lines(rows, cfg, win, cached, pane=w) + [
-                x for ln in provs for x in _pane_prose(ln, w, cont="  ")]
+        memo = {}
+
+        def _pane_at(w, dense=False, terse=False):
+            out = readout_lines(rows, cfg, win, cached, pane=w, dense=dense, terse=terse,
+                                memo=memo)
+            out.extend(x for ln in provs for x in _pane_prose(ln, w, cont="  "))   # in place:
+            return out                                                     # keeps `values`
+
+        def _dense_at(w, terse=False):
+            return _pane_at(w, dense=True, terse=terse)
 
         def _pane(cols):
-            return _pane_at(pane_width(cols))
+            return _pane_at(pane_width(cols), dense="--dense" in args)
         if "--ladder" in args:
             # The width ladder the accounts-readout mod draws from, on stdout (tests, a look).
-            print(json.dumps(pane_ladder(_pane_at)))
+            print(json.dumps(pane_ladder(_pane_at, _dense_at)))
             return
         if "--pane" in args:
             # The hook-drawn presentation on stdout, for a test or a look at another width:
@@ -12348,6 +13154,8 @@ def main():
                 os.makedirs(os.path.dirname(lp), exist_ok=True)
                 tmp = f"{lp}.{os.getpid()}"
                 with open(tmp, "w") as f:
+                    # The FULL family only: the transcript has no height cap and pickVariant draws
+                    # nothing else; the dense family cost ~40% more CPU per call for no reader.
                     json.dump(pane_ladder(_pane_at), f)
                 os.replace(tmp, lp)
             except Exception:       # noqa: BLE001 — same contract as the pane file below

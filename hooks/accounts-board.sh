@@ -65,22 +65,54 @@ PRODUCER="$LABEL (launchd)"
 # and `launchctl list | grep` shows a PID, which reads as healthy. The three states need three
 # different actions, so the message names which one it is. Runs only off the fresh path, and
 # `launchctl list <label>` + one `ps` fit easily inside the hook's 5s budget.
+producer_read() {  # → PS_STATE (unloaded|running|idle0|failing), PS_PID, PS_ET, PS_RC
+  local info
+  PS_PID=""; PS_ET=""; PS_RC=""
+  info="$(launchctl list "$LABEL" 2>/dev/null)" || { PS_STATE=unloaded; return; }
+  PS_PID="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*"PID" = \([0-9][0-9]*\);.*/\1/p')"
+  if [ -n "$PS_PID" ]; then
+    PS_ET="$(ps -o etime= -p "$PS_PID" 2>/dev/null | tr -d ' ')"
+    PS_STATE=running; return
+  fi
+  PS_RC="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*"LastExitStatus" = \(-\{0,1\}[0-9][0-9]*\);.*/\1/p')"
+  if [ "$PS_RC" = "0" ]; then PS_STATE=idle0; else PS_STATE=failing; fi
+}
 producer_state() {
-  local info pid et rc
-  info="$(launchctl list "$LABEL" 2>/dev/null)" \
-    || { printf 'is NOT LOADED, so nothing refreshes this board.\n  Install: launchctl bootstrap gui/%s ~/Library/LaunchAgents/%s.plist (source: launchd/staged/)' "$UID" "$LABEL"; return; }
-  pid="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*"PID" = \([0-9][0-9]*\);.*/\1/p')"
-  if [ -n "$pid" ]; then
-    et="$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')"
-    printf 'is RUNNING but its current tick (pid %s) is %s old, where a healthy one takes seconds:\n  starved or wedged. Restart it: launchctl kickstart -k gui/%s/%s' "$pid" "${et:-?}" "$UID" "$LABEL"
-    return
-  fi
-  rc="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*"LastExitStatus" = \(-\{0,1\}[0-9][0-9]*\);.*/\1/p')"
-  if [ "$rc" = "0" ]; then
-    printf 'is loaded and idle, and its last tick exited 0 without refreshing the board.\n  Read the board= field: tail ~/.claude/logs/accounts-keepwarm.out.log'
-  else
-    printf 'is loaded and idle, last exit %s, so its ticks are failing.\n  Read: tail ~/.claude/logs/accounts-keepwarm.err.log' "${rc:-unknown}"
-  fi
+  producer_read
+  case "$PS_STATE" in
+    unloaded) printf 'is NOT LOADED, so nothing refreshes this board.\n  Install: launchctl bootstrap gui/%s ~/Library/LaunchAgents/%s.plist (source: launchd/staged/)' "$UID" "$LABEL" ;;
+    running) printf 'is RUNNING but its current tick (pid %s) is %s old, where a healthy one takes seconds:\n  starved or wedged. Restart it: launchctl kickstart -k gui/%s/%s' "$PS_PID" "${PS_ET:-?}" "$UID" "$LABEL" ;;
+    idle0) printf 'is loaded and idle, and its last tick exited 0 without refreshing the board.\n  Read the board= field: tail ~/.claude/logs/accounts-keepwarm.out.log' ;;
+    *) printf 'is loaded and idle, last exit %s, so its ticks are failing.\n  Read: tail ~/.claude/logs/accounts-keepwarm.err.log' "${PS_RC:-unknown}" ;;
+  esac
+}
+
+# THE SAME DIAGNOSIS ABOVE THE BAND (2026-10-22): paragraphs Claude Code wraps itself. fit() wraps
+# at the width the pane had when this hook ran, with a two-space hanging indent, and Claude Code
+# re-wraps those rows again when the pane narrows later, so the indents landed unevenly
+# (`  (launchd) is` beside `and idle, and its last`) and `com.claude.accounts-keepwarm` broke
+# mid-token inside the sentence at 30 columns and under (docs/research/accounts-narrow-2026-10-22/).
+# So each line here is one unwrapped paragraph led by FIT_RAW (fit passes it through as it is), the
+# sentence names the producer in words a narrow row holds, and the one long token, the command to
+# run, sits alone on the last line, where any split it must take falls on the command, not the
+# sentence. The static path above keeps producer_state's words byte for byte.
+FIT_RAW=$'\x1f'
+producer_note() {
+  local say act cmd
+  producer_read
+  case "$PS_STATE" in
+    unloaded) say="is NOT LOADED, so nothing refreshes this board."
+              act="Install it (source: launchd/staged/):"
+              cmd="launchctl bootstrap gui/$UID ~/Library/LaunchAgents/$LABEL.plist" ;;
+    running) say="is RUNNING but its current tick (pid $PS_PID) is ${PS_ET:-?} old, where a healthy one takes seconds: starved or wedged."
+             act="Restart it:"; cmd="launchctl kickstart -k gui/$UID/$LABEL" ;;
+    idle0) say="is loaded and idle, and its last tick exited 0 without refreshing the board."
+           act="Read the board= field:"; cmd="tail ~/.claude/logs/accounts-keepwarm.out.log" ;;
+    *) say="is loaded and idle, last exit ${PS_RC:-unknown}, so its ticks are failing."
+       act="Read its error log:"; cmd="tail ~/.claude/logs/accounts-keepwarm.err.log" ;;
+  esac
+  printf '%saccounts board is stale: its producer, the keepwarm launchd job, %s %s\n%s%s' \
+    "$FIT_RAW" "$say" "$act" "$FIT_RAW" "$cmd"
 }
 
 # ── NARROW PANES (2026-10-18) ─────────────────────────────────────────────────────────────────
@@ -156,9 +188,9 @@ fit() {  # <message> → the message fitted to $COLS, or unchanged when the widt
   while IFS= read -r line || [ -n "$line" ]; do
     n=$(( n + 1 ))
     if [ "$n" -eq 1 ]; then
-      first="$(printf '%s' "$line" | sed $'s/\033\\[[0-9;]*m//g')"
+      first="$(printf '%s' "${line#"$FIT_RAW"}" | sed $'s/\033\\[[0-9;]*m//g')"
     fi
-    case "$line" in *$'\033'*) out="$out$line"$'\n'; continue ;; esac
+    case "$line" in *$'\033'*|"$FIT_RAW"*) out="$out$line"$'\n'; continue ;; esac
     if [ "${#line}" -le "$use" ]; then out="$out$line"$'\n'; continue; fi
     ind="${line%%[! ]*}"; cur="$ind"
     set -f
@@ -180,7 +212,9 @@ EOF
 }
 
 emit() {  # <message> → the ONE sanctioned channel, top-level, never nested, never additionalContext
-  jq -nc --arg m "$(fit "${DL_BANNER:-}${SH_FLEET:-}$1")" '{systemMessage:$m}' 2>/dev/null || true
+  local m
+  m="$(fit "${DL_BANNER:-}${SH_FLEET:-}$1")"
+  jq -nc --arg m "${m//"$FIT_RAW"/}" '{systemMessage:$m}' 2>/dev/null || true
   exit 0
 }
 
@@ -315,25 +349,25 @@ if [ "$age" -ge "$HARD_S" ]; then
   For the live table, run: claude-accounts"
 fi
 
-if [ "$age" -ge "$STALE_S" ]; then
-  emit "⚠ STALE by $(fmt_age "$age") — the numbers below are last-known, not current.
-  Producer $PRODUCER $(producer_state)
-  Live table: claude-accounts
-
-$body"
-fi
-
 # ── THE BAND (2026-10-21, docs/research/accounts-board-band-2026-10-21/) ──────────────────────
-# Everything above is static text, hard-wrapped at the width the pane had at startup, and Claude
+# Everything here is static text, hard-wrapped at the width the pane had at startup, and Claude
 # Code has no render component for a SessionStart message, so a pane widened later keeps a ~45-cell
 # board. mods/accounts-readout draws the board instead, as a band above the prompt that re-lays out
 # at every width change and goes away at the first prompt. HANDSHAKE, measured in a pty: the mod's
 # `classic.SessionStart` hook runs ABOVE the settings hooks (chain: managed, modules, settings), so
 # it stamps `<sid>.board-band.req` with this session's id BEFORE this hook runs, and after it returns
-# reads the snapshot this hook leaves. Only on the FRESH path (a stale or unreadable board keeps its
-# static, labelled text above), only when the ladder was written in the board's own producer pass,
-# and only once the snapshot is in place does the grid leave the systemMessage: never both, never
-# neither. No stamp (no mod, CC_MODS=off, `claude -p`) and every byte above is today's.
+# reads the snapshot this hook leaves. Only on the fresh and STALE paths (a hard, empty or
+# unreadable board keeps its static, labelled text above), only when the ladder was written in the
+# board's own producer pass, and only once the snapshot is in place does the grid leave the
+# systemMessage: never both, never neither. No stamp (no mod, CC_MODS=off, `claude -p`) and every
+# byte below is today's.
+#
+# A STALE BOARD GOES TO THE BAND TOO (2026-10-22). It used to take the static path, and Claude Code
+# re-wrapped that grid at a narrow pane: columns scattered across rows, `28d 13h` split in two,
+# `claude-accounts --re|adout` cut mid-word (docs/research/accounts-narrow-2026-10-22/, P3). The
+# band labels it itself: the mod reads the age from the snapshot's mtime (`cp -p` keeps the board's)
+# and draws its `⚠ STALE` head, re-evaluated while it waits. What the band cannot know is WHY the
+# producer is behind, so that diagnosis stays here as static prose, wrapped at words.
 band_handoff() {
   local sid stem dir req lad snap now qm lm
   [ "${CC_BOARD_BAND:-on}" = off ] && return 1
@@ -356,9 +390,19 @@ band_handoff() {
 }
 if band_handoff; then
   band_msg="${DL_BANNER:-}${SH_FLEET:-}"     # the banner and the fleet line stay static text
+  [ "$age" -ge "$STALE_S" ] && band_msg="${band_msg}$(producer_note)
+"
   [ -n "$band_msg" ] || exit 0
   DL_BANNER=""; SH_FLEET=""
   emit "${band_msg%$'\n'}"
+fi
+
+if [ "$age" -ge "$STALE_S" ]; then
+  emit "⚠ STALE by $(fmt_age "$age") — the numbers below are last-known, not current.
+  Producer $PRODUCER $(producer_state)
+  Live table: claude-accounts
+
+$body"
 fi
 
 emit "$body"

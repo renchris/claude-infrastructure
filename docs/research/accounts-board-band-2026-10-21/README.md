@@ -51,12 +51,23 @@ checks after the start; band: `green: true`, all five checks).
    the snapshot succeeded. A stale, hard, empty, unreadable or missing board keeps its labelled static
    text: an unlabelled stale board never reaches the band. The one residual: the hook omitted the grid
    and the mod then fails to parse a file the producer wrote with `json.dump`; nothing is drawn.
+   CORRECTED (2026-10-22): a STALE board (at or past `CC_BOARD_STALE_S`, under `CC_BOARD_HARD_S`)
+   now goes to the band like a fresh one. On the static path Claude Code re-wrapped its grid at a
+   27-column pane (columns scattered, `28d 13h` split, `claude-accounts --re|adout` cut mid-word;
+   docs/research/accounts-narrow-2026-10-22/, P3). It is never unlabelled: the mod reads the age
+   from the snapshot's mtime (`cp -p` keeps the board's) and draws its own `⚠ STALE` head (finding
+   5). The systemMessage keeps only what the band cannot know, the producer's launchd diagnosis
+   (`accounts board is stale: its producer … is RUNNING but …`). A hard, empty, unreadable or
+   missing board keeps its static text as before; `tests/accounts-board.bats` 29d.
 4. **A band never scrolls away, so it needs no survive-one-split budget** (the 2026-10-19 study,
    finding 4, applied only to transcript copies). It draws the widest layout whose widest line fits
    `e.props.bodyColumns` (the band's cells, less the engine's `[-]` mark). CORRECTED (2026-10-22): the
    guard below the narrowest layout was `truncate-end`, which cut every countdown in a 27-column band
    to `…`; the ladder now reaches 12 cells and rows below it WRAP whole words
-   (docs/research/accounts-narrow-2026-10-22/).
+   (docs/research/accounts-narrow-2026-10-22/). CORRECTED (2026-10-22): the floor is 7 cells, not 12
+   (`PANE_MIN = 7` in `bin/claude-accounts`; a 12-column pane's band gets 7), so inside every
+   measured pane the mod finds a layout that fits and Ink's wrap never acts. The band also picks by
+   height now (`pickFit` reads `maxRows`) between the full family and a row-sparing dense one.
 5. **A band can sit for hours before the first prompt, so it applies the hook's staleness bands
    itself**: the board alone while fresh, the hook's `⚠ STALE by …` lines past `CC_BOARD_STALE_S`, and
    the numbers withheld past `CC_BOARD_HARD_S`, with the age read from the snapshot's mtime (the board's)

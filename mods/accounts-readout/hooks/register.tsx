@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement, RenderInput } from 'claude-code'
 
 import type { BoardBand, Ladder } from '../types'
-import { bandHead, isLadder, isReadoutCommand, pickFit, pickVariant, spans } from './ladder'
+import { bandLayout, isLadder, isReadoutCommand, pickVariant, spans } from './ladder'
 
 // THE /accounts READOUT, RE-LAID OUT ON RESIZE (2026-10-19). `claude-accounts --readout` used to
 // reach the pane only as a PostToolUse systemMessage: static text, which Claude Code re-wraps when
@@ -79,13 +79,15 @@ const seconds = (v: string | undefined, fallback: number) =>
 const drawBand = async ($: EngineInterface, e: RenderInput<'AbovePrompt'>, b: BoardBand) => {
   const { Box, Text } = $.ui.resolve(e)
   const ageS = Math.max(0, Math.floor(((await $.clock.now()) - b.mtimeMs) / 1000))
-  const { head, grid } = bandHead(ageS, b.staleS, b.hardS)
-  const variant = grid ? pickFit(b.ladder, e.props.bodyColumns) : undefined
+  // The band's height cap (maxRows) picks the layout as much as its width: the dense family where
+  // the full one would push accounts below the fold, and the short head where the hook's long one
+  // would (bandLayout). Head lines arrive pre-wrapped to the band, so Ink never breaks a word.
+  const { head, variant } = bandLayout(b.ladder, e.props.bodyColumns, e.props.maxRows, ageS, b.staleS, b.hardS)
   return (
     <Box flexDirection="column">
-      {head.map((line, i) => <Text key={`h${i}`}>{line === '' ? ' ' : line}</Text>)}
+      {head.map((line, i) => <Text key={`h${i}`} wrap="wrap">{line === '' ? ' ' : line}</Text>)}
       {/* WRAP, NEVER TRUNCATE (2026-10-22). truncate-end cut every countdown in a 27-column band to
-          an ellipsis (operator screenshot). The ladder now reaches PANE_MIN (12 cells), so inside it
+          an ellipsis (operator screenshot). The ladder now reaches PANE_MIN (7 cells), so inside it
           pickFit always finds a layout that fits and this never acts; below it, or on a ladder an
           older producer wrote (35 cells and up), Ink wraps at whole words and nothing is hidden. */}
       {(variant?.lines ?? []).map((line, i) => (

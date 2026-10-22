@@ -2105,7 +2105,8 @@ for cols in range(30, 161):
     assert "```" not in txt and "**" not in txt and "`" not in txt, (cols, txt)
     assert "\x1b[" in "".join(out), cols                     # coloured, like the board
     lines = txt.splitlines()
-    hdr = [l for l in lines if l[3:].startswith("account")]
+    # the grid header says `acct` when its name column (as wide as the names that fit) is narrow
+    hdr = [l for l in lines if re.match(r"(account|acct)\b", l[3:])]
     if hdr:                                                   # one row per account
         assert hdr[0].count("used") == 2 and hdr[0].count("resets") == 2, (cols, hdr)
     else:                                                     # two or three rows a meter each
@@ -2113,7 +2114,8 @@ for cols in range(30, 161):
         # bar) is not a 5-hour row
         assert sum(bool(re.search(r"(^|\s)5h\s+(\S*\d%|—)", l)) for l in lines) == 3 \
             and sum(bool(re.search(r"(^|\s)wk\s+(\S*\d%|—)", l)) for l in lines) == 3, (cols, txt)
-    assert "next-quat" in txt and "dead1" in txt, (cols, txt) # a name stays recognisable
+    # every name WHOLE, never behind an ellipsis (2026-10-22: the grid clipped `next-quat… ←`)
+    assert "next-quaternary" in txt and "dead1" in txt and "…" not in txt, (cols, txt)
     if cols >= 60:
         assert hdr, (cols, txt)
 print("OK")'

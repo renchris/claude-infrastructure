@@ -1,5 +1,19 @@
-/** One layout of the readout: what `readout_lines(pane=cells)` drew, and its widest line's cells. */
-export type Variant = { cells: number; width: number; lines: string[] }
+/** One layout of the readout: what `readout_lines(pane=cells)` drew, and its widest line's cells.
+ *  `dense` (2026-10-22) marks the row-sparing family (`readout_lines(dense=True)`): the picks and
+ *  every account's 5h/weekly use and reset, on as few rows as the width allows. Absent means not
+ *  dense, so a ladder from an older producer reads as one full family. `values` (2026-10-22): how
+ *  many lines run through the last account row, where that is fewer than all of them (the rest are
+ *  alerts and footers); absent means every line counts. `terse` (2026-10-22): a dense layout
+ *  without the labels that cost rows (the column form's `reset` key row, a spelled-out `← you`),
+ *  shipped right after the labelled one at the same `cells`, only where the two differ; the band
+ *  draws it only where the labelled one would not fit its height. `lanes` (2026-10-22, dense only):
+ *  the display cells of each lane row, the rows a dense layout opens with, so the band can set a
+ *  short stale tag at the end of one (or in the legend's blank lead under them) instead of spending
+ *  a row on it; absent means the band never merges into this layout. */
+export type Variant = {
+  cells: number; width: number; lines: string[]; dense?: boolean; values?: number; terse?: boolean
+  lanes?: number[]
+}
 
 /** The renderer's cell budget per pane width: `cells[columns - from]` (bin/claude-accounts pane_width). */
 export type Budget = { from: number; cells: number[] }
