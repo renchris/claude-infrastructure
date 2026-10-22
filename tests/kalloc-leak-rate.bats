@@ -68,3 +68,20 @@ calls() {
   [ "$status" -eq 0 ] || false
   [[ "$output" == *"verdict=reduced ratio=0.25"* ]]
 }
+
+# --span (plan KALLOC_TRIGGER_ELIMINATION W5): one side only, the per-call figure kalloc-slo.sh compares
+# across boots. 20 elem/s over the 85,500 s the rows span, 1,426 calls inside it: 1199.16 per call.
+@test "--span prints one side's per-call growth; a span under 90% of --window is insufficient" {
+  series 20 5
+  calls $((T0 - 86400)) $((T0 + 86400)) 60 > "$D/bash.log"
+  run "$S" --span $((T0 - 86400)) "$T0" --series "$D/series.tsv" --bash-log "$D/bash.log"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"per_call=1199.1"* ]] || false
+  run "$S" --span $((T0 - 43200)) "$T0" --series "$D/series.tsv" --bash-log "$D/bash.log"
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"verdict=insufficient"* ]] || false
+  run "$S" --span $((T0 - 43200)) "$T0" --window 43200 --series "$D/series.tsv" --bash-log "$D/bash.log"
+  [ "$status" -eq 0 ] || false
+  run "$S" --span "$T0"
+  [ "$status" -eq 2 ]
+}

@@ -9,7 +9,11 @@
 # span the zone fit covers. Method and history: docs/research/panic-2026-10-18-zone-map-shebang-leak.md.
 #
 # Usage: kalloc-leak-rate.sh --cutover EPOCH [--window SECS] [--series TSV] [--bash-log LOG]
+#        kalloc-leak-rate.sh --span LO HI [--window SECS] [--series TSV] [--bash-log LOG]
 #   --window   seconds each side of the cutover (default 86400)
+#   --span     one side only, rows in [LO, HI): prints its line, then `per_call=<elements per Bash
+#              call>`, exit 0; or `verdict=insufficient`, exit 1. --window is then the span the fit
+#              must cover 90% of. kalloc-slo.sh uses it to compare one boot against the last.
 #   --series   "<epoch> <bytes>" rows (default ~/.claude/logs/kalloc-zone-series.tsv)
 #   --bash-log current Bash-call log; LOG.<stamp>.gz siblings are read too
 #              (default ~/.claude/logs/bash-commands.log)
@@ -19,20 +23,26 @@
 # Exit: 0 a verdict was computed (any of the first three) · 1 insufficient · 2 usage or unreadable input
 set -uo pipefail
 
-CUT="" WIN=86400
+CUT="" WIN=86400 SPAN_LO="" SPAN_HI=""
 SERIES="$HOME/.claude/logs/kalloc-zone-series.tsv"
 BLOG="$HOME/.claude/logs/bash-commands.log"
 while [ $# -gt 0 ]; do
   case "$1" in
     --cutover) CUT="${2:-}"; shift 2 ;;
     --window) WIN="${2:-}"; shift 2 ;;
+    --span) [ $# -ge 3 ] || { echo "kalloc-leak-rate: --span needs LO HI" >&2; exit 2; }
+            SPAN_LO="$2"; SPAN_HI="$3"; shift 3 ;;
     --series) SERIES="${2:-}"; shift 2 ;;
     --bash-log) BLOG="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "kalloc-leak-rate: unknown argument $1" >&2; exit 2 ;;
   esac
 done
-case "$CUT" in ''|*[!0-9]*) echo "kalloc-leak-rate: --cutover EPOCH is required" >&2; exit 2 ;; esac
+if [ -n "$SPAN_LO$SPAN_HI" ]; then
+  case "$SPAN_LO:$SPAN_HI" in :*|*:|*[!0-9:]*) echo "kalloc-leak-rate: --span LO HI must be epochs" >&2; exit 2 ;; esac
+else
+  case "$CUT" in ''|*[!0-9]*) echo "kalloc-leak-rate: --cutover EPOCH is required" >&2; exit 2 ;; esac
+fi
 case "$WIN" in ''|*[!0-9]*|0) echo "kalloc-leak-rate: --window must be a positive integer" >&2; exit 2 ;; esac
 [ -r "$SERIES" ] || { echo "kalloc-leak-rate: series unreadable: $SERIES" >&2; exit 2; }
 
@@ -81,6 +91,12 @@ side() { # LABEL LO HI → prints the side's line; sets PER_CALL
   PER_CALL="$(awk -v b="$b" -v span="$span" -v c="$c" 'BEGIN { printf "%.6f", (c > 0) ? b*span/1024/c : 0 }')"
   if [ "$span" -lt $(( WIN * 9 / 10 )) ] || [ "$c" -eq 0 ]; then ok=0; fi
 }
+
+if [ -n "$SPAN_LO" ]; then
+  side span "$SPAN_LO" "$SPAN_HI"
+  [ "$ok" -eq 1 ] || { echo "verdict=insufficient"; exit 1; }
+  echo "per_call=$PER_CALL"; exit 0
+fi
 
 side before $(( CUT - WIN )) "$CUT"; PB="$PER_CALL"
 side after "$CUT" $(( CUT + WIN )); PA="$PER_CALL"
