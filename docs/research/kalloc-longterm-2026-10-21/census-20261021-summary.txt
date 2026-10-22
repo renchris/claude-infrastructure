@@ -1,0 +1,125 @@
+execs=2245716 script_execs=70195 per_hour=421170 unparsed=0 window_s=600
+
+TOP #! SCRIPTS
+  24025  /Users/chrisren/.cache/kalloc-longterm-ab/leaf.sh
+  12013  /Users/chrisren/.cache/kalloc-longterm-ab/parentC.sh
+   2097  /usr/bin/shasum
+   1912  /Users/chrisren/Development/claude-infrastructure/bin/cc-kqwait
+   1268  /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-exec-test
+    781  /Users/chrisren/Development/claude-infrastructure/bin/cc-settings-parity
+    460  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_installer_and_the_rep0/launchctl-stub
+    347  /Users/chrisren/Development/claude-infrastructure/bin/cc-qos-exec
+    283  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/52/stub/jq
+    258  /Users/chrisren/Development/claude-infrastructure/bin/claude-accounts
+    209  /Users/chrisren/.claude/autonomy/postland/wt-run-19481/tests/fixtures/hb-kitty-ps
+    205  /Users/chrisren/Development/claude-infrastructure/bin/cc-backlog
+    198  /Users/chrisren/Development/claude-infrastructure/bin/cc-in-kitty
+    183  /Users/chrisren/Development/.worktrees/tm-upstream-wt/.tools/sandboxed
+    180  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_a_policy_or_governance_va0/launchctl-stub
+    180  /private/tmp/r23z77fix.bt2/test_a_policy_or_governance_va0/launchctl-stub
+    168  /Users/chrisren/Development/.worktrees/rrp-t3-prep/bin/cc-backlog
+    168  /Users/chrisren/Development/.worktrees/wt-0c7198816eb7/scripts/unattended-path-lint.sh
+    168  /Users/chrisren/Development/.worktrees/accounts-board-band/scripts/unattended-path-lint.sh
+    137  /opt/homebrew/Caskroom/kitty/0.48.2/.homebrew-command-wrappers/kitty
+    123  /private/tmp/agentsync-rehearsal-v31-b/home/.local/share/uv/tools/agentsync/bin/agentsync
+    118  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_shell_report_fences_t0/launchctl-stub
+    116  /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-exec-file
+    114  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/39/stub/jq
+    114  /private/tmp/agentsync-rehearsal-v31-b/sb
+    110  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/39/stub/readlink
+    106  /Users/chrisren/.claude/bin/it2
+    102  /Users/chrisren/Development/claude-infrastructure/bin/cc-decide
+    100  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_report_only_says_copy_aga0/launchctl-stub
+    100  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_shell_report_says_ste0/launchctl-stub
+    100  /Users/chrisren/Development/.worktrees/wt-38c35d9e1bb3/hooks/accounts-board.sh
+     98  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/39/stub/python3
+     95  /private/tmp/agentsync-rehearsal-v31-b/run.sh
+     92  /private/tmp/agentsync-rehearsal-v31-d/sb
+     92  /private/tmp/agentsync-rehearsal-v31-b/home/src/agent-context-sync/scripts/install.sh
+     92  /Users/chrisren/Development/.worktrees/accounts-board-band/hooks/accounts-board.sh
+     92  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_installer_and_the_rep0/stubbin/scutil
+     91  /Users/chrisren/Development/claude-infrastructure/bin/cc-claude-bin
+     88  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/52/stub/git
+     85  /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-preprocess
+     82  /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats
+     80  /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-exec-suite
+     80  /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-format-cat
+     80  /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-gather-tests
+     80  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_shell_report_says_why0/launchctl-stub
+     80  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_shell_report_only_nam0/launchctl-stub
+     80  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_report_only_closes_the_cu0/launchctl-stub
+     79  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/52/stub/tr
+     75  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/52/stub/date
+     74  /Users/chrisren/Development/.worktrees/rrp-t3-prep/scripts/gate-manifest.sh
+     68  /Users/chrisren/Development/.worktrees/rrp-t3-prep/bin/cc-instruction-budget
+     67  /Users/chrisren/Development/agent-context-sync/.venv/bin/agentsync
+     61  /Users/chrisren/Development/claude-infrastructure/bin/cc-custody
+     60  /Users/chrisren/Development/claude-infrastructure/bin/cc-bats
+     60  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_report_of_a_stopped_c0/launchctl-stub
+     60  /private/tmp/r23z77fix.bt2/test_the_shell_report_counts_t0/launchctl-stub
+     59  /Users/chrisren/Development/.worktrees/rrp-t3-prep/bin/cc-decide
+     57  /private/tmp/agentsync-rehearsal-v31-e/home/.local/share/uv/tools/agentsync/bin/agentsync
+     57  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/39/stub/dirname
+     57  /Users/chrisren/Library/Python/3.11/bin/it2
+
+TOP (runner, script) PAIRS
+  24025  bash                     /Users/chrisren/.cache/kalloc-longterm-ab/leaf.sh
+  12012  bash                     /Users/chrisren/.cache/kalloc-longterm-ab/parentC.sh
+   2053  bash                     /usr/bin/shasum
+   1912  bash                     /Users/chrisren/Development/claude-infrastructure/bin/cc-kqwait
+   1268  bash                     /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-exec-test
+    781  bash                     /Users/chrisren/Development/claude-infrastructure/bin/cc-settings-parity
+    460  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_installer_and_the_rep0/launchctl-stub
+    333  bash                     /Users/chrisren/Development/claude-infrastructure/bin/cc-qos-exec
+    283  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/52/stub/jq
+    207  perl                     /Users/chrisren/Development/claude-infrastructure/bin/claude-accounts
+    203  gtimeout                 /Users/chrisren/.claude/autonomy/postland/wt-run-19481/tests/fixtures/hb-kitty-ps
+    180  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_a_policy_or_governance_va0/launchctl-stub
+    180  bash                     /private/tmp/r23z77fix.bt2/test_a_policy_or_governance_va0/launchctl-stub
+    168  bash                     /Users/chrisren/Development/.worktrees/wt-0c7198816eb7/scripts/unattended-path-lint.sh
+    168  bash                     /Users/chrisren/Development/.worktrees/accounts-board-band/scripts/unattended-path-lint.sh
+    139  bash                     /Users/chrisren/Development/claude-infrastructure/bin/cc-in-kitty
+    136  bash                     /Users/chrisren/Development/claude-infrastructure/bin/cc-backlog
+    134  Python                   /Users/chrisren/Development/.worktrees/tm-upstream-wt/.tools/sandboxed
+    118  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_shell_report_fences_t0/launchctl-stub
+    117  gtimeout                 /opt/homebrew/Caskroom/kitty/0.48.2/.homebrew-command-wrappers/kitty
+    116  bash                     /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-exec-file
+    114  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/39/stub/jq
+    112  bash                     /private/tmp/agentsync-rehearsal-v31-b/home/.local/share/uv/tools/agentsync/bin/agentsync
+    110  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/39/stub/readlink
+    107  bash                     /private/tmp/agentsync-rehearsal-v31-b/sb
+    102  gtimeout                 /Users/chrisren/Development/claude-infrastructure/bin/cc-decide
+    100  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_report_only_says_copy_aga0/launchctl-stub
+    100  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_shell_report_says_ste0/launchctl-stub
+    100  bash                     /Users/chrisren/Development/.worktrees/wt-38c35d9e1bb3/hooks/accounts-board.sh
+     98  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/39/stub/python3
+     94  bash                     /Users/chrisren/Development/.worktrees/rrp-t3-prep/bin/cc-backlog
+     92  bash                     /private/tmp/agentsync-rehearsal-v31-b/home/src/agent-context-sync/scripts/install.sh
+     92  bash                     /Users/chrisren/Development/.worktrees/accounts-board-band/hooks/accounts-board.sh
+     92  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_installer_and_the_rep0/stubbin/scutil
+     85  bash                     /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-preprocess
+     82  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/52/stub/git
+     80  bash                     /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-exec-suite
+     80  bash                     /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-format-cat
+     80  bash                     /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats-gather-tests
+     80  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_shell_report_says_why0/launchctl-stub
+     80  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_shell_report_only_nam0/launchctl-stub
+     80  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_report_only_closes_the_cu0/launchctl-stub
+     79  zsh                      /private/tmp/agentsync-rehearsal-v31-b/run.sh
+     79  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/52/stub/tr
+     75  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/52/stub/date
+     74  bash                     /Users/chrisren/Development/.worktrees/rrp-t3-prep/scripts/gate-manifest.sh
+     69  bash                     /private/tmp/agentsync-rehearsal-v31-d/sb
+     68  gtimeout                 /Users/chrisren/Development/.worktrees/rrp-t3-prep/bin/cc-instruction-budget
+     67  Python                   /Users/chrisren/Development/claude-infrastructure/bin/cc-claude-bin
+     67  gtimeout                 /Users/chrisren/.claude/bin/it2
+     60  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-680/test_the_report_of_a_stopped_c0/launchctl-stub
+     60  bash                     /private/tmp/r23z77fix.bt2/test_the_shell_report_counts_t0/launchctl-stub
+     59  gtimeout                 /Users/chrisren/Development/.worktrees/rrp-t3-prep/bin/cc-decide
+     59  zsh                      /Users/chrisren/Development/claude-infrastructure/bin/cc-in-kitty
+     57  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/39/stub/dirname
+     57  gtimeout                 /Users/chrisren/Library/Python/3.11/bin/it2
+     56  zsh                      /private/tmp/agentsync-rehearsal-v31-f/scripts/run.sh
+     56  bash                     /Users/chrisren/Development/.worktrees/rrp-t3-prep/scripts/unattended-path-lint.sh
+     56  bash                     /Users/chrisren/Development/.worktrees/wt-cc-000146-45877/scripts/unattended-path-lint.sh
+     55  bash                     /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/postland-run.Z7R1lI/bats-run-ZFOn8C/file/52/stub/cat

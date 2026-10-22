@@ -1,0 +1,80 @@
+#!/bin/bash
+# kalloc-exec-census.sh — count every #! script exec on this Mac for N seconds (default 600).
+# On macOS 15.8.1 each successful exec of a #! script keeps ~1 KiB in data.kalloc.1024 until reboot;
+# this names which scripts still trigger it, and who runs them, so the fix can target the top rows.
+# Read-only: it only records exec events (sudo eslogger) and writes under ~/.cache/kalloc-exec-census/.
+# Safe to re-run; each run gets its own directory.
+set -euo pipefail
+DUR="${1:-600}"
+OUT="$HOME/.cache/kalloc-exec-census/$(date +%Y%m%dT%H%M%S)"
+mkdir -p "$OUT"
+RAW="$OUT/exec.jsonl"
+
+echo "kalloc-exec-census: recording exec events for ${DUR}s -> $OUT"
+# No terminal (Claude Code's `!`): sudo cannot prompt, so ask through a macOS password dialog.
+SUDO=(sudo)
+if ! [ -t 0 ]; then
+  ASK="$OUT/askpass.sh"
+  printf '%s\n' '#!/bin/bash' \
+    "/usr/bin/osascript -e 'text returned of (display dialog \"kalloc census: your Mac password, for sudo eslogger (read-only, 10 min)\" default answer \"\" with hidden answer with title \"sudo\")'" > "$ASK"
+  chmod 700 "$ASK"
+  export SUDO_ASKPASS="$ASK"
+  SUDO=(sudo -A)
+fi
+"${SUDO[@]}" -v
+# eslogger records each exec's full environment (API keys, tokens): strip env before anything touches disk.
+umask 077
+"${SUDO[@]}" /usr/bin/eslogger exec 2> "$OUT/eslogger.err" | /usr/bin/python3 -u -c '
+import json, sys
+for l in sys.stdin:
+    try:
+        j = json.loads(l)
+    except ValueError:
+        continue
+    ex = (j.get("event") or {}).get("exec") or {}
+    ex.pop("env", None); ex.pop("env_count", None)
+    sys.stdout.write(json.dumps(j) + "\n")
+' > "$RAW" &
+ES=$!
+sleep "$DUR"
+"${SUDO[@]}" pkill -INT -f '^/usr/bin/eslogger exec$' || true
+wait "$ES" 2>/dev/null || true
+"${SUDO[@]}" chown "$(id -un)" "$RAW" "$OUT/eslogger.err" 2>/dev/null || true
+
+N=$(wc -l < "$RAW" | tr -d ' ')
+if [ "$N" -eq 0 ]; then
+  echo "verdict=no-events: eslogger wrote nothing. See $OUT/eslogger.err (the terminal app needs Full Disk Access)." >&2
+  exit 1
+fi
+
+/usr/bin/python3 - "$RAW" "$OUT" "$DUR" <<'PY'
+import json, sys, collections, os
+raw, out, dur = sys.argv[1], sys.argv[2], int(sys.argv[3])
+scripts, parents, total, bad = collections.Counter(), collections.Counter(), 0, 0
+for line in open(raw, errors="replace"):
+    try:
+        e = json.loads(line)
+    except ValueError:
+        bad += 1
+        continue
+    ex = (e.get("event") or {}).get("exec") or {}
+    total += 1
+    sc = ex.get("script")
+    if not sc:
+        continue
+    path = (sc.get("path") or (sc.get("executable") or {}).get("path") or "?")
+    parent = ((e.get("process") or {}).get("executable") or {}).get("path", "?")
+    scripts[path] += 1
+    parents[(os.path.basename(parent), path)] += 1
+n = sum(scripts.values())
+with open(os.path.join(out, "summary.txt"), "w") as f:
+    f.write(f"execs={total} script_execs={n} per_hour={n*3600//max(dur,1)} unparsed={bad} window_s={dur}\n\n")
+    f.write("TOP #! SCRIPTS\n")
+    for p, c in scripts.most_common(60):
+        f.write(f"{c:7d}  {p}\n")
+    f.write("\nTOP (runner, script) PAIRS\n")
+    for (par, p), c in parents.most_common(60):
+        f.write(f"{c:7d}  {par:<24} {p}\n")
+print(open(os.path.join(out, "summary.txt")).read()[:4000])
+print(f"verdict=ok script_execs={n} summary={os.path.join(out, 'summary.txt')}")
+PY
