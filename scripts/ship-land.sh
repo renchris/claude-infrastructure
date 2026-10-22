@@ -3939,6 +3939,42 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── SHASUM lint (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W1) ─────────────────────────
+  # /usr/bin/shasum is a `#!` perl script, so every call keeps ~1.1 KiB of kernel memory on macOS
+  # 15.8.1 — the same leak as the arm above, reached through a command instead of a hook entry.
+  # /sbin/sha256sum and /sbin/sha1sum print the same bytes as Mach-O. Diff-scoped and own-range: it
+  # judges only the in-scope files this land touches (not docs/, *.md or tests/), so a land is never
+  # convicted for a file it did not edit. gate_bounded: SHIP_LAND_SHASUM_LINT=/nonexistent disarms a
+  # broken detector.
+  SSL_LINT="${SHIP_LAND_SHASUM_LINT:-scripts/shasum-lint.sh}"
+  if [[ -x "$SSL_LINT" ]]; then
+    local ssl_own="" _sslf
+    local -a ssl_files=()
+    ssl_own="$(git diff --name-only "$range" -- . ':!docs' ':!*.md' ':!tests' ':!scripts/shasum-lint.sh' 2>/dev/null || true)"
+    while IFS= read -r _sslf; do
+      [[ -n "$_sslf" && -f "$_sslf" ]] && ssl_files+=(--file "$_sslf")
+    done <<< "$ssl_own"
+    if (( ${#ssl_files[@]} > 0 )); then
+      echo "→ gate: shasum lint (this land edits $(( ${#ssl_files[@]} / 2 )) in-scope file(s))" >&2
+      if ! selftest_ok "$SSL_LINT"; then
+        echo "✗ gate: shasum-lint --selftest FAILED — the detector no longer discriminates." >&2
+        echo "  Escape if it is the detector that is broken: SHIP_LAND_SHASUM_LINT=/nonexistent" >&2
+        gate_red shasum-selftest
+        return 1  # gate_bounded: SHIP_LAND_SHASUM_LINT=/nonexistent — escape for a broken detector
+      fi
+      local _sslrc=0
+      "$SSL_LINT" "${ssl_files[@]}" >&2 || _sslrc=$?
+      if (( _sslrc == 2 )); then arm_nonverdict "shasum-lint"; return 1; fi
+      if (( _sslrc != 0 )); then
+        echo "✗ gate: shasum RED — a file this land edits runs /usr/bin/shasum, a #! perl script." >&2
+        echo "  Use \"\$CC_SHA256\" / \"\$CC_SHA1\" (CC_SHA256=/sbin/sha256sum; [ -x \"\$CC_SHA256\" ] || CC_SHA256=sha256sum)," >&2
+        echo "  or source hooks/lib/shasum-direct.sh. Lines are named above." >&2
+        gate_red shasum
+        return 1  # gate_bounded: fires only on lands whose in-scope files call shasum
+      fi
+    fi
+  fi
+
   # ── always-loaded INSTRUCTION BUDGET ratchet (docs/plans/INSTRUCTION_BUDGET.md D7) ─────────────
   # The size half of the arm above, and the land-time arm of the one predicate the Write/Edit gate
   # (hooks/backup-before-write.sh) and the fleet auditor (bin/cc-instruction-budget) share. The
