@@ -31,11 +31,26 @@ if [ -n "${CC_TERM_KITTY:-}" ]; then
   exit 1
 fi
 
+# Homebrew's cask wrapper (/opt/homebrew/bin/kitty) is a #! script whose whole body is
+# `exec "<app binary>" "$@"`. Run that binary directly: every by-path #! exec keeps ~1.1 KiB of kernel
+# memory on macOS 15.8.1 (docs/research/kalloc-longterm-2026-10-21/REPORT.md §3 Phase 1). Anything that
+# is not such a wrapper (a test stub on PATH, a dev build) is returned unchanged.
+_kitty_unwrap() { # <path> -> the app binary a Homebrew wrapper execs, else <path>
+  local t="$1" l
+  if [ -L "$t" ]; then l="$(readlink "$t")"; case "$l" in /*) t="$l" ;; *) t="$(dirname "$t")/$l" ;; esac; fi
+  case "$t" in
+    */.homebrew-command-wrappers/*)
+      while IFS= read -r l; do
+        case "$l" in 'exec "'*) l="${l#exec \"}"; l="${l%%\"*}"; [ -x "$l" ] && { printf '%s' "$l"; return 0; } ;; esac
+      done < "$t" ;;
+  esac
+  printf '%s' "$1"
+}
 for c in "$(command -v kitty 2>/dev/null || true)" \
          /opt/homebrew/bin/kitty /usr/local/bin/kitty \
          /Applications/kitty.app/Contents/MacOS/kitty \
          "$HOME/Applications/kitty.app/Contents/MacOS/kitty"; do
-  [ -n "$c" ] && [ -x "$c" ] && { printf '%s\n' "$c"; exit 0; }
+  [ -n "$c" ] && [ -x "$c" ] && { printf '%s\n' "$(_kitty_unwrap "$c")"; exit 0; }
 done
 
 printf 'cc-kitty-bin: no kitty binary found (PATH=%s)\n' "$PATH" >&2

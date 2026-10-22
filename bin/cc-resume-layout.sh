@@ -123,10 +123,25 @@
 #   · A maybe row still gets no map line (plan § G), and a shell pane never does.
 set -uo pipefail
 
+# Homebrew's cask wrapper (/opt/homebrew/bin/kitty) is a #! script whose whole body is
+# `exec "<app binary>" "$@"`. Run that binary directly: every by-path #! exec keeps ~1.1 KiB of kernel
+# memory on macOS 15.8.1 (docs/research/kalloc-longterm-2026-10-21/REPORT.md §3 Phase 1). Anything that
+# is not such a wrapper (a test stub on PATH, a dev build) is returned unchanged.
+_kitty_unwrap() { # <path> -> the app binary a Homebrew wrapper execs, else <path>
+  local t="$1" l
+  if [ -L "$t" ]; then l="$(readlink "$t")"; case "$l" in /*) t="$l" ;; *) t="$(dirname "$t")/$l" ;; esac; fi
+  case "$t" in
+    */.homebrew-command-wrappers/*)
+      while IFS= read -r l; do
+        case "$l" in 'exec "'*) l="${l#exec \"}"; l="${l%%\"*}"; [ -x "$l" ] && { printf '%s' "$l"; return 0; } ;; esac
+      done < "$t" ;;
+  esac
+  printf '%s' "$1"
+}
 KITTY_BIN="${CC_TERM_KITTY:-}"
 if [ -z "$KITTY_BIN" ]; then
   for c in /opt/homebrew/bin/kitty /usr/local/bin/kitty "$(command -v kitty 2>/dev/null || true)"; do
-    [ -n "$c" ] && [ -x "$c" ] && { KITTY_BIN="$c"; break; }
+    [ -n "$c" ] && [ -x "$c" ] && { KITTY_BIN="$(_kitty_unwrap "$c")"; break; }
   done
 fi
 # ── PANE-SPAWN LOG (scripts/lib/pane-spawn-log.sh) ──────────────────────────────────────────────
