@@ -62,7 +62,13 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
   Same `exec "$CC_PANE_RUNNER"` root also sits at `scripts/handoff-fire.sh:1318` and
   `scripts/limit-recover/lr-lib.sh:1338`, and the `reso-resume-one` callers in `bin/cc-resume-layout.sh`
   and `scripts/boot-resume-launch.sh` run it by path: left to W4 (call sites), sized by T-0.
-### W2 agent-context-sync harness — routed
+### W2 agent-context-sync harness — scheduled in that repo (round 23, lane K, item A97, branch `b13/r23-k`)
+
+- Owner session agent-context-sync-16 (pane 16) confirmed 2026-10-22 17:33 CDT: compiled trampoline
+  stubs for `_write_exe`, `_exe` and test_launcher's helper (built in its own conftest, not cc-shim),
+  `/sbin/sha256sum` in install.sh with shasum as fallback, launchctl stub poll 0.05 → 0.5 s. Its subset
+  measured 5,309 → 141 `#!` execs. Land gate green at `e2efdadb`, queued on that repo's land lock; DONE
+  with before/after counts goes to this plan's lead.
 ### W3 infra test suites — DONE 2026-10-22 (session kte-w3; landed through `a3ff099a4`, lead-verified by content)
 
 Scope (frozen): tools/cc-shim + tests/cc-shim.bats, vendored bats-core 1.13.0 with "$BASH" internal
@@ -107,7 +113,7 @@ files converted, lint R4 wired into ship-land beside the HOOK SHEBANG arm.
   needs a named mechanism, which this wave did not establish. ship-land.bats' plain arm finished
   185/185 after the land. Landed through `40de48c0b`; `git log origin/main --grep 'cc_stub\|cc-shim\|R4'`.
 
-### W4 call sites and Mach-O entries — built 2026-10-22 (session kte-w4 + teammate macho)
+### W4 call sites and Mach-O entries — DONE 2026-10-22 (session kte-w4 + teammate macho; landed through `e2808f9c5`, lead-verified by content; `~/.claude/bin/it2` read back as Mach-O)
 
 Scope (frozen): cc-run.sh runner + python twin, resolve_bin's callers through it, lint R2 with a ratchet
 baseline wired into ship-land, call sites in census order incl. W1's session roots, Mach-O entries for
