@@ -4,8 +4,8 @@
 # redirected under BATS_TEST_TMPDIR so no real machine state is touched.
 #
 # Stubs the gate EXECS — the fake bats on PATH, the origin's git hooks, the env-var tools — go through
-# cc_stub (no kernel #! exec under cc-shim). The other #! writes are fixture-repo content the gate
-# shellchecks or commits, and stay files.
+# cc_stub (no kernel #! exec under cc-shim). The other #! writes are fixture-repo content that the
+# gate lints or commits, and stay files.
 
 load helpers/cc-stub
 
