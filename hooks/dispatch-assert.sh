@@ -162,7 +162,7 @@ TURN_TEXT="$(jq -r --arg t "$T19" \
 
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 find "$STATE_DIR" \( -name '*.pending' -o -name '*.fired' \) -mtime +7 -delete 2>/dev/null || true
-SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
+SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16)"
 [ -n "$SKEY" ] || abstain "no-skey"
 PENDING="$STATE_DIR/$SKEY.pending"
 FIREDLOG="$STATE_DIR/$SKEY.fired"

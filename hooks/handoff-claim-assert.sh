@@ -111,8 +111,8 @@ fi
 # ── Latch-set + hard cap. An unlatched Stop block is the infinite-loop anti-pattern. ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 find "$STATE_DIR" -name '*.fired' -mtime +7 -delete 2>/dev/null || true
-SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"; [ -n "$SKEY" ] || abstain "no-skey"
-HASH="$(printf '%s' "$MSG" | "$CC_SHA1" 2>/dev/null | cut -c1-16)";                   [ -n "$HASH" ] || abstain "no-hash"
+SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16)"; [ -n "$SKEY" ] || abstain "no-skey"
+HASH="$(printf '%s' "$MSG" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16)";                   [ -n "$HASH" ] || abstain "no-hash"
 FIRED="$STATE_DIR/$SKEY.fired"
 [ -f "$FIRED" ] && grep -qxF "$HASH" "$FIRED" 2>/dev/null && abstain "latched-already-fired"
 N="$(grep -c . "$FIRED" 2>/dev/null || echo 0)"; case "$N" in ''|*[!0-9]*) N=0 ;; esac

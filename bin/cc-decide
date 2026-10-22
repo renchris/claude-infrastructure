@@ -95,7 +95,7 @@ usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # mk_id <class> <sid> <what> → 12-hex content key (US-separated, collision-safe).
-mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | "$CC_SHA256" | cut -c1-12; }
+mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-12; }
 
 ensure_dir() { mkdir -p "$DECISIONS_DIR" 2>/dev/null || true; }
 

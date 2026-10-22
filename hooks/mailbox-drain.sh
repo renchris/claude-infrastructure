@@ -577,7 +577,7 @@ You lose nothing by standing it down: the goal blocks your stops, so you keep ta
     # (that degrade's nudge says the sid is missing, which is itself worth repeating). A changed goal
     # hashes to a new marker, so a NEW goal is told once too. A hash failure also keeps emitting.
     if [ "$_headless" != 1 ] && [ -n "$own_sid" ]; then
-      _gn_h="$(printf '%s' "$_goal_cond" | "$CC_SHA1" 2>/dev/null | cut -c1-12)"
+      _gn_h="$(printf '%s' "$_goal_cond" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-12)"
       case "$_gn_h" in ''|*[!0-9a-f]*) _gn_h="" ;; esac
       [ -n "$_gn_h" ] && _gn_mark="$_mdir/.goalnudge/$own_sid-$_gn_h"
     fi

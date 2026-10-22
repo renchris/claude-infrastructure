@@ -40,7 +40,7 @@ declare -a DIRS=(
   "next4:$HOME/.claude-quaternary"
   "default:$HOME/.claude"
 )
-svc() { printf 'Claude Code-credentials-%s' "$(printf '%s' "$1" | "$CC_SHA256" | cut -c1-8)"; }
+svc() { printf 'Claude Code-credentials-%s' "$(printf '%s' "$1" | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-8)"; }
 
 # Skip-if-previous-run-alive, --once only. Under load a batch can outlive the 5-min StartInterval
 # (one run wedged 2h43m on a D-state ps), and launchd would otherwise stack a second on top.

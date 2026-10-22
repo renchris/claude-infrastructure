@@ -1111,7 +1111,7 @@ cutoff_iso() {
 }
 
 # mk_id <project> <title> <source> → 12-hex event key (US-separated, collision-safe).
-mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | "$CC_SHA256" | cut -c1-12; }
+mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-12; }
 
 # mk_cond_id <project> <condition> → 12-hex CONDITION key (see CONDITION KEY in the header).
 #
@@ -1124,7 +1124,7 @@ mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | "$CC_SHA256" | cut -c1-12; }
 # byte, which no shell caller produces by accident. tests/cc-backlog-condition.bats pins the
 # non-collision against exactly the add that used to hit it.
 mk_cond_id() {
-  printf '%s\037%s\037%s\037%s' 'cc-backlog' 'condition-v1' "$1" "$2" | "$CC_SHA256" | cut -c1-12
+  printf '%s\037%s\037%s\037%s' 'cc-backlog' 'condition-v1' "$1" "$2" | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-12
 }
 
 # valid_condition <slug> → 0 when the slug can serve as a STABLE key, 1 otherwise.

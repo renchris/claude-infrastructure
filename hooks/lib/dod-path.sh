@@ -32,7 +32,7 @@
 # shellcheck shell=bash
 
 # The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script, so lib/shasum-direct.sh
-# resolves the Mach-O "$CC_SHA1" (byte-identical output).
+# resolves the Mach-O "${CC_SHA1:-/sbin/sha1sum}" (byte-identical output).
 # shellcheck source=shasum-direct.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || CC_SHA1=sha1sum
@@ -51,7 +51,7 @@ _dod_dir() { printf '%s' "${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"; }
 _DOD_M_CWD=""
 _dod_memo_hit() { [ -n "$_DOD_M_CWD" ] && [ "$_DOD_M_CWD" = "${1:-.}" ]; }
 _dod_sha16() { # $1=text → sets _DOD_SHA16 to the first 16 chars of its SHA-1 ("" when the hash fails)
-  _DOD_SHA16="$(printf '%s' "$1" | "$CC_SHA1" 2>/dev/null)"
+  _DOD_SHA16="$(printf '%s' "$1" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null)"
   _DOD_SHA16="${_DOD_SHA16:0:16}"
 }
 dod_prime() { # $1=cwd — derive this process's DoD facts once (see above). Always 0.
@@ -90,14 +90,14 @@ _dod_repo_key() { # $1=cwd → sha16 of the repo's identity URL, or nothing (loc
   u="$(git -C "${1:-.}" config --get cc.canonicalUrl 2>/dev/null || true)"
   [ -n "$u" ] || u="$(git -C "${1:-.}" config --get remote.origin.url 2>/dev/null || true)"
   [ -n "$u" ] || return 0
-  printf '%s' "$u" | "$CC_SHA1" 2>/dev/null | cut -c1-16 | tr -d '[:space:]'
+  printf '%s' "$u" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16 | tr -d '[:space:]'
 }
 
 _dod_legacy_file() { # $1=cwd → the pre-W3 path-hash file (the formula both copies carried)
   if _dod_memo_hit "${1:-.}"; then printf '%s' "$_DOD_M_LEGACY"; return 0; fi
   local top hash
   top="$(git -C "${1:-.}" rev-parse --show-toplevel 2>/dev/null || printf '%s' "${1:-.}")"
-  hash="$(printf '%s' "$top" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
+  hash="$(printf '%s' "$top" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16)"
   printf '%s/%s.md' "$(_dod_dir)" "${hash:-unknown}"
 }
 

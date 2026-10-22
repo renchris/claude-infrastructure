@@ -164,7 +164,7 @@ mech_groups() {
 # tell the groups apart at a glance; the digest is what makes them distinct.
 fold_slug() {
   local digest words
-  digest="$(printf '%s\037%s\037%s' "$1" "$2" "$3" | "$CC_SHA256" | cut -c1-8 | tr '0-9' 'ghijklmnop')"
+  digest="$(printf '%s\037%s\037%s' "$1" "$2" "$3" | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-8 | tr '0-9' 'ghijklmnop')"
   words="$(printf '%s' "$2" | tr -cd 'a-z ' | tr -s ' ' | cut -d' ' -f1-3 | tr ' ' '-')"
   words="${words%-}"; words="${words#-}"
   [ -n "$words" ] || words="consolidated"

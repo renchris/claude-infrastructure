@@ -191,7 +191,7 @@ echo "desk-arm-live: mode=$MODE  configs=${CFG_ROOTS[*]}"
 
 rc=0
 for cfg in "${CFG_ROOTS[@]}"; do
-  key="$(printf '%s|%s' "$cfg" "$CWD" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
+  key="$(printf '%s|%s' "$cfg" "$CWD" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16)"
   if [ "$DRY" = 1 ]; then
     echo "  [dry-run] would arm $MODE → $cfg/state/waiting-recycle/arm-$key"
     continue

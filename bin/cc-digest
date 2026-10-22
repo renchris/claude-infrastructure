@@ -171,7 +171,7 @@ emit() {
     for f in "$PAGES_DIR"/*.page; do
       [ -e "$f" ] || continue
       total=$((total + 1))
-      key="$(printf '%s' "$f" | "$CC_SHA256" | cut -c1-32)"
+      key="$(printf '%s' "$f" | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-32)"
       [ -f "$SEEN_DIR/$key" ] && surfaced=$((surfaced + 1))
     done
   fi
@@ -238,7 +238,7 @@ compute_counts() { # <digest_file>
   fi
   if [ -d "$PAGES_DIR" ]; then
     for f in "$PAGES_DIR"/*.page; do [ -e "$f" ] || continue
-      ptot=$((ptot + 1)); key="$(printf '%s' "$f" | "$CC_SHA256" | cut -c1-32)"
+      ptot=$((ptot + 1)); key="$(printf '%s' "$f" | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-32)"
       [ -f "$SEEN_DIR/$key" ] && psurf=$((psurf + 1)); done
   fi
   inert="$(grep -c '^ALARM:' "$dfile" 2>/dev/null)"; inert="${inert:-0}"

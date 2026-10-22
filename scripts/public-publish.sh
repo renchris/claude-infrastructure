@@ -146,7 +146,7 @@ grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$MAILMAP" > "$OUT/mailmap"
 # globbed local-only rows go to filter-repo as glob: path rules
 awk '$1=="path" && $2 ~ /[*?[]/ {print "glob:" $2}' "$CONF" > "$OUT/paths-glob.txt"
 cat "$OUT/paths-exact.txt" "$OUT/paths-glob.txt" > "$OUT/paths-remove.txt"
-RULESET="$( { cat "$OUT/replace-text.txt" "$OUT/mailmap" "$OUT/paths-remove.txt"; "$FILTER_REPO" --version; } | "$CC_SHA256" | cut -c1-12)"
+RULESET="$( { cat "$OUT/replace-text.txt" "$OUT/mailmap" "$OUT/paths-remove.txt"; "$FILTER_REPO" --version; } | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-12)"
 
 # ── 2. a main-only clone, then the projection ──────────────────────────────────────────────────
 SRC_TIP="$(git -C "$SRC" rev-parse --verify "$REF^{commit}" 2>/dev/null)" || die "no such ref in $SRC: $REF"

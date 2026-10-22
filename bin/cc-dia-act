@@ -62,7 +62,7 @@ say() { printf 'cc-dia-act: %s\n' "$*" >&2; }
 fail() { local rc=$1; shift; say "$*"; exit "$rc"; }
 usage() { sed -n '4,16p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 64; }
 
-src_sha() { "$CC_SHA256" "$SRC" | cut -c1-12; }
+src_sha() { "${CC_SHA256:-/sbin/sha256sum}" "$SRC" | cut -c1-12; }
 helper_path() {
   if [ -n "${CC_DIA_ACT_AX:-}" ]; then printf '%s' "$CC_DIA_ACT_AX"; return; fi
   printf '%s/%s/cc-dia-act-ax' "$CACHE_DIR" "$(src_sha)"

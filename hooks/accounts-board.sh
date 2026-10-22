@@ -214,7 +214,7 @@ dl_banner() {
   pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
   tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
   [ "$(oi_origin_class "$pane" "$cwd" "$tp")" = fired-peer ] && return 0
-  cur="$(date +%F) $("$CC_SHA1" < "$f" 2>/dev/null | cut -c1-16)"
+  cur="$(date +%F) $("${CC_SHA1:-/sbin/sha1sum}" < "$f" 2>/dev/null | cut -c1-16)"
   latch="${f%/*}/banner-latch"
   [ "$(cat "$latch" 2>/dev/null)" = "$cur" ] && return 0
   # The latch is spent only on PROOF that the banner reached the session (README §5 unit 5.4): this

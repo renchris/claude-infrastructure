@@ -201,7 +201,7 @@ _amlib="$_amd/lib/activation-marker.sh"
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$_amlib" 2>/dev/null || activation_settled() { [ -f "${1:?}.done" ]; }
 # sha16 hashes on every Stop; /usr/bin/shasum is a #! perl script, so lib/shasum-direct.sh resolves
-# the Mach-O "$CC_SHA1" (byte-identical output).
+# the Mach-O "${CC_SHA1:-/sbin/sha1sum}" (byte-identical output).
 # shellcheck source=lib/shasum-direct.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$_amd/lib/shasum-direct.sh" 2>/dev/null || . "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/shasum-direct.sh" 2>/dev/null || CC_SHA1=sha1sum
@@ -511,7 +511,7 @@ kv_first() {
 # sliced in the shell; `| cut -c1-16` was a second process start at each of six call sites.
 sha16() {
   local _h
-  _h="$("$CC_SHA1" 2>/dev/null)"
+  _h="$("${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null)"
   printf '%s' "${_h:0:16}"
 }
 # bn <path> [suffix] → basename(1)'s answer without the process start: trailing slashes dropped,

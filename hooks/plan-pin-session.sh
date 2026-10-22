@@ -34,10 +34,10 @@ mkdir -p "$PINS_DIR" 2>/dev/null || true
 SIDECAR="$PINS_DIR/$SESSION_ID.plan"
 
 # Strategy 1: SHA256 match against existing plan files.
-TARGET_SHA=$(printf '%s' "$PLAN_CONTENT" | "$CC_SHA256" | awk '{print $1}')
+TARGET_SHA=$(printf '%s' "$PLAN_CONTENT" | "${CC_SHA256:-/sbin/sha256sum}" | awk '{print $1}')
 for f in "$HOME"/.claude/plans/*.md; do
   [ -f "$f" ] || continue
-  H=$("$CC_SHA256" "$f" 2>/dev/null | awk '{print $1}')
+  H=$("${CC_SHA256:-/sbin/sha256sum}" "$f" 2>/dev/null | awk '{print $1}')
   if [[ "$H" == "$TARGET_SHA" ]]; then
     printf '%s\n' "$f" > "$SIDECAR"
     exit 0

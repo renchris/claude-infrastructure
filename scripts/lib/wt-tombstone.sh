@@ -37,7 +37,7 @@ wt__json_esc() { # <s> → JSON string body (no quotes); control chars dropped
   printf '%s' "${1:-}" | LC_ALL=C sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | LC_ALL=C tr -d '\000-\010\013-\037'
 }
 
-wt__sha1() { printf '%s' "$1" | "$CC_SHA1" | cut -c1-40; }
+wt__sha1() { printf '%s' "$1" | "${CC_SHA1:-/sbin/sha1sum}" | cut -c1-40; }
 
 wt__canon() { # <path> → physical absolute path if it exists, else the input unchanged
   if [ -d "$1" ]; then (cd -P -- "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; else printf '%s' "$1"; fi
@@ -187,17 +187,17 @@ wt__lockfile_cache() { # <tree> <rel-entry> → 0 + prints "name sha" when the d
     node_modules)
       if [ -f "$dir/pnpm-lock.yaml" ] && [ -f "$dir/node_modules/.pnpm/lock.yaml" ] \
          && cmp -s "$dir/pnpm-lock.yaml" "$dir/node_modules/.pnpm/lock.yaml"; then
-        printf 'pnpm-lock.yaml %s\n' "$("$CC_SHA256" "$dir/pnpm-lock.yaml" | cut -c1-64)"; return 0
+        printf 'pnpm-lock.yaml %s\n' "$("${CC_SHA256:-/sbin/sha256sum}" "$dir/pnpm-lock.yaml" | cut -c1-64)"; return 0
       fi
       if [ -f "$dir/package-lock.json" ] && command -v npm >/dev/null 2>&1 \
          && (cd "$dir" && wt__bounded npm ls --all); then
-        printf 'package-lock.json %s\n' "$("$CC_SHA256" "$dir/package-lock.json" | cut -c1-64)"; return 0
+        printf 'package-lock.json %s\n' "$("${CC_SHA256:-/sbin/sha256sum}" "$dir/package-lock.json" | cut -c1-64)"; return 0
       fi ;;
     .venv)
       # --check never writes: the venv and uv.lock keep their mtimes (asserted in tests/wt-tombstone.bats).
       if [ -f "$dir/uv.lock" ] && command -v uv >/dev/null 2>&1 \
          && (cd "$dir" && wt__bounded uv sync --check --locked --offline); then
-        printf 'uv.lock %s\n' "$("$CC_SHA256" "$dir/uv.lock" | cut -c1-64)"; return 0
+        printf 'uv.lock %s\n' "$("${CC_SHA256:-/sbin/sha256sum}" "$dir/uv.lock" | cut -c1-64)"; return 0
       fi ;;
   esac
   return 1

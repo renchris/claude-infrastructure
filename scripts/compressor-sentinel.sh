@@ -1887,7 +1887,7 @@ fi
 # and restarting onto a half-written script is a syntax error that burns launchd's throttle window.
 self_sha() { # <path> → sha256 of the on-disk bytes, or NOTHING when unreadable (⇒ abstain)
   [ -f "$1" ] && [ -r "$1" ] || return 0
-  "$CC_SHA256" "$1" 2>/dev/null | awk 'NR==1{print $1}'
+  "${CC_SHA256:-/sbin/sha256sum}" "$1" 2>/dev/null | awk 'NR==1{print $1}'
 }
 
 self_restart_verdict() { # <running_sha> <disk_sha> <prev_disk_sha> <frozen_db> <streak> <cliff 0|1>

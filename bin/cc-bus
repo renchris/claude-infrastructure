@@ -238,7 +238,7 @@ actor_id() {
     # earlier draft excused it with "no bus here to be inconsistent with"; that was simply
     # false, and check (0a) caught it. Key on the bus location: always available, stable for
     # as long as the bus is, and distinct per bus.
-    unit="$(printf '%s' "$BUS_DIR" | "$CC_SHA256" 2>/dev/null | cut -c1-8)"
+    unit="$(printf '%s' "$BUS_DIR" | "${CC_SHA256:-/sbin/sha256sum}" 2>/dev/null | cut -c1-8)"
     [ -n "$unit" ] || unit="$$"
   fi
   unit="$(sanitize_id_part "$unit" 40)"

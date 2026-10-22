@@ -3412,7 +3412,7 @@ hf_recycle_fenced() { # $1=subject session id → rc 0 DEFER (the reconciler own
 # kitty window id is a per-kitty-process counter that restarts at 1.
 hf_recycle_lock_dir() { # $1=pane → the lock dir path; rc 1 when no digest could be taken
   local sum
-  sum="$(printf '%s' "${CC_TERM_KITTY_TO:-iterm2}:${1:-}" | "$CC_SHA1" 2>/dev/null | cut -c1-40)"
+  sum="$(printf '%s' "${CC_TERM_KITTY_TO:-iterm2}:${1:-}" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-40)"
   [ -n "$sum" ] || return 1
   printf '%s/pane-%s.recycle' "${LR_LOCKS_DIR:-$HOME/.reso/limit-recover/locks}" "$sum"
 }
@@ -16235,7 +16235,7 @@ hf_inflight_key() { # $1=dir → echoes a stable filesystem-safe key, or nothing
   if [ ! -d "$head" ]; then return 0; fi
   head="$(cd "$head" 2>/dev/null && pwd -P)" || return 0
   if [ -z "$head" ]; then return 0; fi
-  printf '%s' "${head%/}$tail" | "$CC_SHA256" 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
+  printf '%s' "${head%/}$tail" | "${CC_SHA256:-/sbin/sha256sum}" 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
 }
 
 # TZ + locale PINNED ON BOTH SIDES. `ps -o lstart=` renders through LC_TIME and TZ independently, so
@@ -16279,7 +16279,7 @@ hf_inflight_live() { # $1=claim file → 0 live / 1 not
 hf_mission_digest() { # → echoes a digest, or nothing
   local p="${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}"
   if [ -z "$p" ] || [ ! -s "$p" ]; then return 0; fi
-  "$CC_SHA256" "$p" 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
+  "${CC_SHA256:-/sbin/sha256sum}" "$p" 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
 }
 
 hf_inflight_gate() { # $1=dir $2=mode(worktree|cwd) → 0 proceed (claim taken) · 1 REFUSE

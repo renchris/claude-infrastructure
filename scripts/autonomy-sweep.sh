@@ -203,7 +203,7 @@ mkdir -p "$SEEN_DIR" 2>/dev/null || true
 # report as drained rather than lost.
 # The two NEW marker kinds below (.bannered, .orphan-checked) have no legacy on disk, so they are
 # single literal keys only — a second spelling of a key nobody has ever written buys nothing.
-seen_key()  { printf '%s' "$1" | "$CC_SHA256" | cut -c1-32; }
+seen_key()  { printf '%s' "$1" | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-32; }
 seen_lit()  { printf '%s.seen' "$(basename "$1")"; }
 is_new()    { [ ! -f "$SEEN_DIR/$(seen_key "$1")" ] && [ ! -f "$SEEN_DIR/$(seen_lit "$1")" ]; }
 mark_seen() { : > "$SEEN_DIR/$(seen_key "$1")" 2>/dev/null || true

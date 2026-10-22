@@ -839,7 +839,7 @@ lrh_git_lock_take() { # $1=cwd → 0 held or lock unavailable (proceed) / 1 time
   if [[ -z "$common" ]]; then
     echo "lr-handoff: git lock unavailable (no common dir for $1) — proceeding unlocked" >&2; return 0
   fi
-  key="$(printf '%s' "$common" | "$CC_SHA1" 2>/dev/null | cut -d' ' -f1)" || key=""
+  key="$(printf '%s' "$common" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -d' ' -f1)" || key=""
   root="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks"
   if [[ -z "$key" ]] || ! mkdir -p "$root" 2>/dev/null; then
     echo "lr-handoff: git lock unavailable (cannot key or create $root) — proceeding unlocked" >&2; return 0

@@ -259,7 +259,7 @@ if [ "$TOOL" = "Edit" ]; then
     _pg_id="$(printf '%s' "$INPUT" | jq -r 'if (.session_id // "") == "" then "" else "\(.session_id)|\(.agent_id // "")" end' 2>/dev/null || true)"
     if [ -n "$_pg_id" ]; then
       _pg_dir="${CC_PLAN_GUARD_STATE_DIR:-$HOME/.claude/state/plan-guard}"
-      _pg_key="$(printf '%s|%s' "$_pg_id" "$FILE" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
+      _pg_key="$(printf '%s|%s' "$_pg_id" "$FILE" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16)"
       if [ -n "$_pg_key" ]; then
         mkdir -p "$_pg_dir" 2>/dev/null || true
         find "$_pg_dir" -type f -mtime +7 -delete 2>/dev/null || true

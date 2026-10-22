@@ -79,7 +79,7 @@ for f in "$DIR"/com.reso.*.plist; do
   n=$((n + 1))
   out="${out}UNSHIPPED $label program=${prog:-unknown}"$'\n'
   if [ "$PAGE" = 1 ]; then
-    sum="$("$CC_SHA256" "$f" 2>/dev/null | cut -c1-12)"
+    sum="$("${CC_SHA256:-/sbin/sha256sum}" "$f" 2>/dev/null | cut -c1-12)"
     # shellcheck source=/dev/null
     ( . "$REPO/scripts/limit-recover/lr-page-once.sh" && lr_page_once "la-provenance-$label-${sum:-x}" launchagent-provenance \
         "LaunchAgent $label runs ${prog:-an unknown program}, which no repository shipped (an agent-installed daemon?). Review it; nothing was unloaded." ) >/dev/null 2>&1

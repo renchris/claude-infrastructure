@@ -131,7 +131,7 @@ json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 # seen_key is VERBATIM autonomy-sweep.sh:89 (path in, 32 hex out). Copying it is deliberate: this is
 # a bin/ CLI and that is a scripts/ launchd job with no shared lib between them, so the parity is
 # asserted by test against the real sweep rather than by a shared symbol.
-seen_key()  { printf '%s' "$1" | "$CC_SHA256" | cut -c1-32; }
+seen_key()  { printf '%s' "$1" | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-32; }
 is_seen()   { [ -f "$SEEN_DIR/$(seen_key "$1")" ] || [ -f "$SEEN_DIR/$(basename "$1").seen" ]; }
 mark_seen() { # <record-path> — write BOTH conventions
   mkdir -p "$SEEN_DIR" 2>/dev/null || true

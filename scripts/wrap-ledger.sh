@@ -890,7 +890,7 @@ else
   if [ -z "$DOD_FILE" ]; then
     DOD_DIR="${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"
     TOP="$(git rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD")"
-    DHASH="$(printf '%s' "$TOP" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
+    DHASH="$(printf '%s' "$TOP" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16)"
     DOD_FILE="$DOD_DIR/${DHASH:-unknown}.md"
   fi
   _WL_DOD_SOURCES=""; [ -f "$DOD_FILE" ] && _WL_DOD_SOURCES="$DOD_FILE"

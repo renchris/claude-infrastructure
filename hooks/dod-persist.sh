@@ -107,7 +107,7 @@ if ! . "$_dplib" 2>/dev/null; then
     if [ -n "${WRAP_DOD_FILE:-}" ]; then printf '%s' "$WRAP_DOD_FILE"; return; fi
     dir="${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"
     top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$1")"
-    hash="$(printf '%s' "$top" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
+    hash="$(printf '%s' "$top" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16)"
     printf '%s/%s.md' "$dir" "${hash:-unknown}"
   }
   dod_read_files() { local f; f="$(dod_path_for "$1" read)"; [ -f "$f" ] && printf '%s\n' "$f"; return 0; }

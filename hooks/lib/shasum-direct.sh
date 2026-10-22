@@ -4,7 +4,7 @@
 # panicked this machine on 2026-10-18 (docs/research/panic-2026-10-18-zone-map-shebang-leak.md).
 # /sbin/sha256sum and /sbin/sha1sum are Mach-O and print byte-identical output (`<hex>  -` on stdin,
 # `<hex>  <path>` per file); Linux falls back to coreutils on PATH. Sourced by the libs on the
-# per-turn Stop path, which call "$CC_SHA256" / "$CC_SHA1". The file name is kept for its sourcers;
+# per-turn Stop path, which call "${CC_SHA256:-/sbin/sha256sum}" / "${CC_SHA1:-/sbin/sha1sum}". The file name is kept for its sourcers;
 # the `shasum` function it once defined is gone (scripts/shasum-lint.sh refuses new shasum calls).
 if [ -z "${_CC_SHA_DIRECT:-}" ]; then
   CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum

@@ -234,7 +234,7 @@ _mn_ruling_shadow() {
        fi
        return 0 ;;
   esac
-  sha=$( { printf '%s' "$INPUT" | jq -j '.prompt' | "$CC_SHA1" | cut -d' ' -f1; } 2>/dev/null ) || sha=""
+  sha=$( { printf '%s' "$INPUT" | jq -j '.prompt' | "${CC_SHA1:-/sbin/sha1sum}" | cut -d' ' -f1; } 2>/dev/null ) || sha=""
   dir="$HOME/.claude/state"
   mkdir -p "$dir" 2>/dev/null || true
   row=$(jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sid "$SID" --arg cwd "$CWD" \

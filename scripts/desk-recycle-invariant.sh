@@ -135,7 +135,7 @@ page() { # $1=verdict $2=message $3=remediation-command
   return 0
 }
 
-key_for() { printf '%s|%s' "$1" "$2" | "$CC_SHA1" 2>/dev/null | cut -c1-16; }
+key_for() { printf '%s|%s' "$1" "$2" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16; }
 
 # ── ground truth: the config dir + cwd the LIVE desk process is running under ──────────────────────
 # Read from the process's OWN environment, never inferred from a list this script maintains.
@@ -262,7 +262,7 @@ EOF
     "$JQ" -r '.disposition' "$1/idl.jsonl" 2>/dev/null | tail -1
     return $rc
   }
-  armkey() { printf '%s|%s' "$1" "$2" | "$CC_SHA1" | cut -c1-16; }
+  armkey() { printf '%s|%s' "$1" "$2" | "${CC_SHA1:-/sbin/sha1sum}" | cut -c1-16; }
 
   local U=U-DESK CWD=/desk/cwd
 

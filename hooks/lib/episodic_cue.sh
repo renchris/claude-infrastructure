@@ -150,7 +150,7 @@ episodic_cue_line() {
         fired:*)
           pat="${v#fired:}"
           [ -n "$nouns" ] || nouns="<topic>"
-          sha="$(printf '%s' "$p" | "$CC_SHA1" | cut -d' ' -f1)" || sha=""
+          sha="$(printf '%s' "$p" | "${CC_SHA1:-/sbin/sha1sum}" | cut -d' ' -f1)" || sha=""
           dir="$HOME/.claude/state"
           mkdir -p "$dir" || true
           row="$(jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sid "${SID:-?}" \

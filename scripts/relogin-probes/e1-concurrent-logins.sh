@@ -66,7 +66,7 @@ print("\t".join(fields))
 PY
 )" || { echo "e1: REFUSED — cannot resolve '$ACCT' in $ACCOUNTS_JSON" >&2; exit 2; }
 IFS=$'\t' read -r PRIMARY_DIR EMAIL KC_ACCT CLAUDE_BIN <<<"$IDENT"
-kc_svc() { printf 'Claude Code-credentials-%s' "$(printf '%s' "$1" | "$CC_SHA256" | cut -c1-8)"; }
+kc_svc() { printf 'Claude Code-credentials-%s' "$(printf '%s' "$1" | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-8)"; }
 kc_has() { /usr/bin/security find-generic-password -s "$1" -a "$KC_ACCT" >/dev/null 2>&1 \
            && echo present || echo absent; }   # metadata probe only — never reads the secret
 # The row key is `acct` — claude-accounts --json has never emitted `name`. Keying on the wrong

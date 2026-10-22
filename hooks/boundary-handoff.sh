@@ -685,7 +685,7 @@ fi
 
 # ── B-2: one-shot latch (hash(configdir|cwd)-HEADsha) + used_pct-delta re-arm ──
 cfg="$(jq -r '.config_dir // empty' "$tel" 2>/dev/null || true)"
-key="$(printf '%s|%s' "$cfg" "$cwd" | "$CC_SHA1" 2>/dev/null)"; key="${key:0:16}"   # was `| cut -c1-16`
+key="$(printf '%s|%s' "$cfg" "$cwd" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null)"; key="${key:0:16}"   # was `| cut -c1-16`
 latch="$LATCH_DIR/${key}-${head}"
 idle_rearm=0
 mkdir -p "$LATCH_DIR" 2>/dev/null || true

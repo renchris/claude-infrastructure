@@ -459,8 +459,8 @@ lrt_assert_lock() { # every custody phase runs under the admit's lock: present, 
   fi
 }
 lrt_size() { wc -c < "$1" | tr -d ' '; }
-lrt_sha() { "$CC_SHA256" "$@" | cut -d' ' -f1; }
-lrt_sha_cat() { cat "$@" | "$CC_SHA256" | cut -d' ' -f1; }
+lrt_sha() { "${CC_SHA256:-/sbin/sha256sum}" "$@" | cut -d' ' -f1; }
+lrt_sha_cat() { cat "$@" | "${CC_SHA256:-/sbin/sha256sum}" | cut -d' ' -f1; }
 # EVIDENCE, NEVER DELETED HERE. The target copy an unconfirm/abort disowns is moved into a directory
 # made fresh for this run, so the `mv` has nothing to overwrite. A tombstone left by an EARLIER cycle
 # at the renamed path is filed there too, so the link-then-unlink rename below always has a free name.
@@ -564,8 +564,8 @@ if [[ "$PHASE" == confirm ]]; then
     rsync -a "$FROM/tasks/$TASK_LIST/" "$TO/tasks/$TASK_LIST/"
     TASKS_COPIED=1
   fi
-  SHA_SRC=$("$CC_SHA256" "$SRC" | cut -d' ' -f1)
-  SHA_DST=$("$CC_SHA256" "$DST" | cut -d' ' -f1)
+  SHA_SRC=$("${CC_SHA256:-/sbin/sha256sum}" "$SRC" | cut -d' ' -f1)
+  SHA_DST=$("${CC_SHA256:-/sbin/sha256sum}" "$DST" | cut -d' ' -f1)
   if [[ "$SHA_SRC" != "$SHA_DST" ]]; then
     echo "lr-transplant: FATAL — sha mismatch after the confirm re-copy (src=$SHA_SRC dst=$SHA_DST); the source was NOT retired" >&2
     exit 2
@@ -714,7 +714,7 @@ if [[ "$PHASE" == fold-stub ]]; then
   # stub's bytes; appending again would duplicate the tail. Transcript lines carry unique uuids, so a
   # fresh stub never matches the tail it would be appended after.
   if [[ "$FS_SHA_R" == "$(lrt_sha "$FS_T")" && "$(lrt_size "$FS_R")" -ge "$FS_BYTES" ]] \
-     && [[ "$(tail -c "$FS_BYTES" "$FS_R" | "$CC_SHA256" | cut -d' ' -f1)" == "$(lrt_sha "$FS_STUB")" ]]; then
+     && [[ "$(tail -c "$FS_BYTES" "$FS_R" | "${CC_SHA256:-/sbin/sha256sum}" | cut -d' ' -f1)" == "$(lrt_sha "$FS_STUB")" ]]; then
     :
   elif [[ "$FS_SHA_R" == "$(lrt_sha "$FS_T")" ]]; then
     cat "$FS_STUB" >> "$FS_R"
@@ -1098,8 +1098,8 @@ if [[ -n "$TASK_LIST" && -d "$FROM/tasks/$TASK_LIST" ]]; then
   TASKS_COPIED=1
 fi
 
-SHA_SRC=$("$CC_SHA256" "$SRC" | cut -d' ' -f1)
-SHA_DST=$("$CC_SHA256" "$DST" | cut -d' ' -f1)
+SHA_SRC=$("${CC_SHA256:-/sbin/sha256sum}" "$SRC" | cut -d' ' -f1)
+SHA_DST=$("${CC_SHA256:-/sbin/sha256sum}" "$DST" | cut -d' ' -f1)
 if [[ "$SHA_SRC" != "$SHA_DST" ]]; then
   echo "lr-transplant: FATAL — sha mismatch after copy (src=$SHA_SRC dst=$SHA_DST)" >&2; exit 2
 fi

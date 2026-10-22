@@ -34,7 +34,7 @@
 # shellcheck shell=bash
 
 # The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script, so lib/shasum-direct.sh
-# resolves the Mach-O "$CC_SHA1" (byte-identical output).
+# resolves the Mach-O "${CC_SHA1:-/sbin/sha1sum}" (byte-identical output).
 # shellcheck source=shasum-direct.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || CC_SHA1=sha1sum
@@ -115,7 +115,7 @@ dl_capture_stop() {
   sdir="${DL_CAPTURE_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/deadline-capture}"
   mkdir -p "$sdir" "$dir/.state" 2>/dev/null || return 0
   find "$sdir" -type f -mtime +7 -delete 2>/dev/null || true
-  key="$(printf '%s' "$sid" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
+  key="$(printf '%s' "$sid" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16)"
   [ -n "$key" ] || return 0
   latch="$sdir/$key.blocked"; seen="$sdir/$key.seen"
 
@@ -123,7 +123,7 @@ dl_capture_stop() {
   for arm in a b; do
     snip="$(printf '%s' "$scan" | jq -r --arg k "$arm" '.[$k].snippet // empty' 2>/dev/null)"
     [ -n "$snip" ] || continue
-    q="$(printf '%s' "$snip" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
+    q="$(printf '%s' "$snip" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16)"
     grep -qxF "$q" "$seen" 2>/dev/null && continue
     printf '%s\n' "$q" >> "$seen" 2>/dev/null || true
     printf '%s' "$scan" | jq -c --arg k "$arm" --arg sid "$sid" --arg cwd "$cwd" \

@@ -35,7 +35,7 @@ print(ti.get("messageId") or ti.get("message-id") or "")
 [ -z "$mid" ] && exit 0
 
 # Idempotence: one extraction per messageId per day.
-key="$(printf '%s' "$mid" | "$CC_SHA256" | /usr/bin/cut -c1-16)"
+key="$(printf '%s' "$mid" | "${CC_SHA256:-/sbin/sha256sum}" | /usr/bin/cut -c1-16)"
 out="$HOME/Documents/mail-images/auto/$(/bin/date -u +%Y%m%d)-$key"
 if [ -f "$out/manifest.json" ]; then
   n=$(/usr/bin/python3 -c "import json;print(len(json.load(open('$out/manifest.json')).get('images',[])))" 2>/dev/null || echo 0)

@@ -329,7 +329,7 @@ _load_tracked() {
   else
     TRACKED_MODE="hash"
     TRACKED_SET="$(find "$REPO" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' \
-                     -exec "$CC_SHA1" {} + 2>/dev/null | awk '{print $1}')"
+                     -exec "${CC_SHA1:-/sbin/sha1sum}" {} + 2>/dev/null | awk '{print $1}')"
   fi
   return 0
 }
@@ -340,7 +340,7 @@ content_is_tracked() {  # $1 = absolute live file → 0 if its bytes are in a tr
   if [ "$TRACKED_MODE" = "git" ]; then
     h="$(git -C "$REPO" hash-object -- "$1" 2>/dev/null)" || return 1
   else
-    h="$("$CC_SHA1" < "$1" 2>/dev/null | awk '{print $1}')" || return 1
+    h="$("${CC_SHA1:-/sbin/sha1sum}" < "$1" 2>/dev/null | awk '{print $1}')" || return 1
   fi
   [ -n "$h" ] || return 1
   # -c AND NEVER -q, and the reason is measured on this exact line (2026-08-19). Under the

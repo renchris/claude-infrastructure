@@ -1717,7 +1717,7 @@ cmd_move() {
     ( umask 077
       jq -nc --arg b "$batch" --arg sid "$s" --arg pane "$p" --arg from "$ac" --arg to "$to" --arg by "${by:-?}" \
             --argjson ts "$now" --argjson exp "$(( now + until_s + 900 ))" \
-            --arg sha "$(printf '%s|%s|%s|%s' "$s" "$p" "$ac" "$to" | "$CC_SHA256" | cut -c1-16)" --arg origin "$CL_MOVE_ORIGIN" \
+            --arg sha "$(printf '%s|%s|%s|%s' "$s" "$p" "$ac" "$to" | "${CC_SHA256:-/sbin/sha256sum}" | cut -c1-16)" --arg origin "$CL_MOVE_ORIGIN" \
             '{kind:"cc-lr-move", batch:$b, sid:$sid, pane:$pane, from:$from, to:$to, requested_by:$by, ts:$ts, expires_epoch:$exp, plan_row_sha:$sha}
              + (if $origin != "" then {origin:$origin} else {} end)' > "$tmp" ) \
       && mv -f "$tmp" "$bdir/intent/$s.json" || cl_die "cannot write the intent for ${s:0:8}; the batch was not queued" 2

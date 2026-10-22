@@ -405,7 +405,7 @@ RSS_PAGE_MB="${CC_WR_RSS_PAGE_MB:-1500}"                  # process RSS ≥ this
 # the bats suite) is byte-identical.
 key_cwd() {
   [ -n "${_WR_KC_KEY:-}" ] && [ "$1" = "${_WR_KC_ARG:-}" ] && { printf '%s' "$_WR_KC_KEY"; return; }
-  printf '%s|%s' "$CFG" "$1" | "$CC_SHA1" 2>/dev/null | cut -c1-16
+  printf '%s|%s' "$CFG" "$1" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16
 }
 # ROLE-KEYED identity (2026-07-26). The desk's identity is a ROLE FILE, not a directory — but these six
 # sentinels were keyed on (cfg,cwd), so they only resolved because desk-invariant happens to respawn with
@@ -422,7 +422,7 @@ key_cwd() {
 # New writes go role-keyed, so state migrates forward as it is touched (no migration script, no flag day).
 key_role() {
   [ -n "${_WR_KR_KEY:-}" ] && { printf '%s' "$_WR_KR_KEY"; return; }
-  printf '%s|role:%s' "$CFG" "$DESK_ROLE" | "$CC_SHA1" 2>/dev/null | cut -c1-16
+  printf '%s|role:%s' "$CFG" "$DESK_ROLE" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16
 }
 sentinel_for() { # <prefix> <cwd> → path to USE (role-keyed for a role-holder, else legacy cwd-keyed)
   local pfx="$1" cwd="$2" rp cp
@@ -435,7 +435,7 @@ sentinel_for() { # <prefix> <cwd> → path to USE (role-keyed for a role-holder,
 }
 # Account-neutral key: the cwd ALONE. No $CFG, deliberately — $CFG is the thing the router picks,
 # and a key containing it is what made the operator's opt-out a function of routing (fc54aeebec4a).
-key_shared()        { printf '%s' "$1" | "$CC_SHA1" 2>/dev/null | cut -c1-16; }
+key_shared()        { printf '%s' "$1" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16; }
 shared_disarm_for() { printf '%s/disarm-%s' "$SHARED_DIR" "$(key_shared "$1")"; }
 shared_rearm_for()  { printf '%s/rearm-%s'  "$SHARED_DIR" "$(key_shared "$1")"; }   # tombstone: `arm` from any account
 # 0 when <tombstone> is at least as new as <marker>, i.e. the marker was lifted from another account.
@@ -796,7 +796,7 @@ _wr_key16() {
     *[!0-9a-f]*) ;;
     ????????????????) [ "$m" = "$k"$'\n'"$in"$'\n'"$k" ] && { _WR_K16="$k"; return 0; } ;;
   esac
-  _WR_K16="$(printf '%s' "$in" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
+  _WR_K16="$(printf '%s' "$in" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-16)"
   case "$_WR_K16" in *[!0-9a-f]*|'') return 0 ;; ????????????????) ;; *) return 0 ;; esac
   [ -d "$STATE_DIR" ] || return 0
   [ -d "$STATE_DIR/keymemo" ] || mkdir "$STATE_DIR/keymemo" 2>/dev/null

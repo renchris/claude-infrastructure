@@ -68,7 +68,7 @@ account_dir() {  # <account> → its config dir, or die
 }
 
 sha256_16() {  # <file> → first 16 hex of its sha256
-  "$CC_SHA256" "$1" | cut -c1-16
+  "${CC_SHA256:-/sbin/sha256sum}" "$1" | cut -c1-16
 }
 
 global_variant() {  # the machine's variant: the registry's `global` line, default slim (install.sh agrees)

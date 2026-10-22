@@ -100,7 +100,7 @@ config_hash() {
     out="$out$(cat "$f" 2>/dev/null)"
   done
   [ "$found" = 1 ] || return 1
-  printf '%s' "$out" | "$CC_SHA256" 2>/dev/null | awk '{print $1}'
+  printf '%s' "$out" | "${CC_SHA256:-/sbin/sha256sum}" 2>/dev/null | awk '{print $1}'
 }
 
 # ── live kitty instances ─────────────────────────────────────────────────────────────────────────

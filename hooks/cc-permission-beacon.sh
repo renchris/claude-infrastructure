@@ -192,7 +192,7 @@ CANON='if (.tool_name // "") == "" then empty else {n:.tool_name, i:(.tool_input
 sig_of() { # $1 = a canonical line (possibly empty) → 16 hex chars, or nothing at all
   local canon="$1" h
   [[ -z "$canon" ]] && return 0
-  h="$(printf '%s' "$canon" | "$CC_SHA256" 2>/dev/null)" || return 0
+  h="$(printf '%s' "$canon" | "${CC_SHA256:-/sbin/sha256sum}" 2>/dev/null)" || return 0
   h="${h%% *}"
   [[ "$h" =~ ^[0-9a-f]{64}$ ]] || return 0        # a truncated/failed digest is NOT a signature
   printf '%s' "${h:0:16}"

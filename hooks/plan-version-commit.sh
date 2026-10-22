@@ -38,7 +38,7 @@ esac
 BASENAME=$(basename "$FILE")
 PLAN_NAME="${BASENAME%.md}"
 LINES=$(wc -l < "$FILE" | tr -d ' ')
-HASH=$("$CC_SHA256" "$FILE" | awk '{print $1}')
+HASH=$("${CC_SHA256:-/sbin/sha256sum}" "$FILE" | awk '{print $1}')
 SIZE=$(wc -c < "$FILE" | tr -d ' ')
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Session identity comes from the stdin JSON, never from the environment: CLAUDE_SESSION_ID is

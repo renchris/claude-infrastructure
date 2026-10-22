@@ -680,7 +680,7 @@ lr_reaped() { # $1=outcome → one resume-reaped row; never fails
 lr_wt_glock() { # $1=repo → the per-repo git lock dir, keyed on the common dir as the add below keys it
   local gcd
   gcd="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
-  printf '%s\n' "${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/git-$(printf '%s' "$gcd" | "$CC_SHA1" | cut -c1-40)"
+  printf '%s\n' "${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/git-$(printf '%s' "$gcd" | "${CC_SHA1:-/sbin/sha1sum}" | cut -c1-40)"
 }
 lr_restore_sid() { # → rc 0 iff a tombstone names $SID and cc-wt-restore brought $WT back
   local canon row repo gl="" rc=0
@@ -720,7 +720,7 @@ if [[ ! -d "$WT" ]]; then
     # The add is serialised on one lock per repository (keyed on the common dir), so two launchers
     # recreating two worktrees of one repo cannot race on .git/worktrees either.
     _lr_gcd="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)" || { lr_reaped exit-1; exit 1; }
-    _lr_glock="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/git-$(printf '%s' "$_lr_gcd" | "$CC_SHA1" | cut -c1-40)"
+    _lr_glock="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/git-$(printf '%s' "$_lr_gcd" | "${CC_SHA1:-/sbin/sha1sum}" | cut -c1-40)"
     if ! lr_git_lock "$_lr_glock"; then
       echo "✗ lr-fire-resume: git lock $_lr_glock still held after ${LR_GIT_LOCK_WAIT_S:-30}s (holder: $(cat "$_lr_glock/holder" 2>/dev/null || echo none))" >&2
       lr_reaped exit-2; exit 2

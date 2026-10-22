@@ -36,7 +36,7 @@
 # shellcheck shell=bash
 
 # The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script, so lib/shasum-direct.sh
-# resolves the Mach-O "$CC_SHA256" (byte-identical output).
+# resolves the Mach-O "${CC_SHA256:-/sbin/sha256sum}" (byte-identical output).
 # shellcheck source=shasum-direct.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || CC_SHA256=sha256sum
@@ -78,7 +78,7 @@ _fired_cwd_key() { # $1=cwd → echoes a stable filesystem-safe key, or nothing
   # normalisation fired_stamp_tenancy applies before comparing.
   r="$(cd "$d" 2>/dev/null && pwd -P)" || return 0
   [ -n "$r" ] || return 0
-  printf '%s' "$r" | "$CC_SHA256" 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
+  printf '%s' "$r" | "${CC_SHA256:-/sbin/sha256sum}" 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
 }
 
 write_fired_cwd_index() { # $1=fired-dir $2=pane $3=cwd → best-effort, always 0

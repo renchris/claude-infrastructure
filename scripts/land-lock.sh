@@ -56,7 +56,7 @@ if [[ -n "${LOCK_KEY}" ]]; then
 else
   LOCK_KEY="${REPO_ROOT}"
 fi
-HASH="$(printf '%s' "${LOCK_KEY}" | "$CC_SHA1" | cut -c1-12)"
+HASH="$(printf '%s' "${LOCK_KEY}" | "${CC_SHA1:-/sbin/sha1sum}" | cut -c1-12)"
 LOCK_PARENT="${LAND_LOCK_DIR:-/tmp/land-lock-${HASH}}"
 LOCK="${LOCK_PARENT}/lock.d"
 REAP_LOCK="${LOCK_PARENT}/reap.d"   # serializes REAPERS only — never the lock itself

@@ -60,7 +60,7 @@ esac
 
 [ -x "$CIV" ] || { printf '0042: %s not found — nothing written\n' "$CIV" >&2; exit 1; }
 [ -f "$SLIM" ] || { printf '0042: %s not deployed (install.sh copies CLAUDE.global.slim.md) — nothing written\n' "$SLIM" >&2; exit 1; }
-got="$("$CC_SHA256" "$SLIM" | cut -d' ' -f1)"
+got="$("${CC_SHA256:-/sbin/sha256sum}" "$SLIM" | cut -d' ' -f1)"
 [ "$got" = "$PIN" ] || {
   printf '0042: REFUSED — %s is sha256 %s, not the gated file %s. An ungated variant does not ship under the F1 verdict; re-gate it first.\n' "$SLIM" "$got" "$PIN" >&2
   exit 1
