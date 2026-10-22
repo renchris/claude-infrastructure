@@ -176,12 +176,14 @@ twice() {
   [ "$(shf_calls o2e cat)" -ge 1 ]
   [ "$(shf_calls n2e cat)" -eq $(( $(shf_calls o2e cat) - 1 )) ]
   [ "$(shf_calls n2e jq)" -eq $(( $(shf_calls o2e jq) - 2 )) ]
-  [ "$(shf_calls n2e shasum)" -eq $(( $(shf_calls o2e shasum) - 2 )) ]
+  # The hasher is now /sbin/sha1sum by absolute path (not a #! exec), which this PATH-stub census
+  # cannot see; the `cut` that pairs with every hash still proves the memo hit skips it.
+  [ "$(shf_calls n2e shasum)" -eq 0 ]
   [ "$(shf_calls n2e cut)" -le $(( $(shf_calls o2e cut) - 2 )) ]
   [ "$(shf_total n1e)" -lt "$(shf_total o1e)" ]
   twice f "$(payload)"
   echo "# builder poll: $(shf_census o2f)-> $(shf_census n2f)" >&3
-  [ "$(shf_calls n2f shasum)" -eq $(( $(shf_calls o2f shasum) - 1 )) ]
+  [ "$(shf_calls n2f shasum)" -eq 0 ]
   [ "$(shf_total n2f)" -le $(( $(shf_total o2f) - 5 )) ]
 }
 
