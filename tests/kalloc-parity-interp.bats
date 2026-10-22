@@ -33,7 +33,7 @@ setup() {
   [ "$status" -eq 126 ] || [ "$status" -eq 127 ]          # the by-path exec really is dead
   run bash "$REPO/migrations/0041-bash-output-max-chars.sh" --dry-run
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"DRY RUN"* ]]
+  [[ "$output" == *"DRY RUN"* ]] || false
   [[ "$output" != *"REFUSED"* ]]
 }
 
