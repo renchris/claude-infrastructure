@@ -2,6 +2,12 @@
 # deploy-live.sh — green-stamp-gated advance of the live layer (+ the nightly postland-inertness
 # guard). Fully isolated: a bare "origin" + a "shared" clone under BATS_TEST_TMPDIR, a fixture
 # stamps dir, and an install.sh stub that records its invocation. No real checkout is touched.
+#
+# Stubs the subject execs by path go through cc_stub (no kernel #! exec under cc-shim). Left plain on
+# purpose: the parity assert (deploy-live runs it as /bin/bash "$PARITY_ASSERT"), the launchd-plist
+# fakes (the plist names its interpreter) and the host-*.bats fixtures (data, committed to the clone).
+
+load helpers/cc-stub
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -20,8 +26,7 @@ setup() {
   git -C "$SHARED" branch -M main 2>/dev/null || true
   git -C "$SHARED" push -q -u origin main
   mkdir -p "$STAMPS"
-  printf '#!/bin/bash\necho ran >> "%s"\n' "$INSTALL_LOG" > "$SHARED/install.sh"
-  chmod +x "$SHARED/install.sh"
+  cc_stub "$SHARED" install.sh "$(printf '#!/bin/bash\necho ran >> "%s"\n' "$INSTALL_LOG")"
 }
 
 commit_push() { # <name> — commit in the shared clone (caller pushes when it wants origin ahead)
@@ -227,7 +232,7 @@ advance_origin() { # <name...>
 # trunk" verdict; it is reviewed, not tested.
 
 fail_install() { # <stderr text> — an install.sh stub that records its run, says <text>, exits 1
-  cat > "$SHARED/install.sh" <<STUB
+  cc_stub "$SHARED" install.sh - <<STUB
 #!/bin/bash
 echo ran >> "$INSTALL_LOG"
 cat >&2 <<'MSG'
@@ -235,7 +240,6 @@ $1
 MSG
 exit 1
 STUB
-  chmod +x "$SHARED/install.sh"
 }
 
 @test "a behind-trunk install.sh refusal is STRUCTURAL and never prescribes the by-hand re-run" {
@@ -316,9 +320,8 @@ STUB
 @test "install.sh chatter on stderr with rc 0 stays a clean success" {
   # NON-REGRESSION guard (green pre- and post-fix, by design — see the block above): the new capture
   # reads stderr, and it must not turn a warning-and-succeed install into a failure.
-  printf '#!/bin/bash\necho ran >> "%s"\necho "  ⚠ installing from a linked worktree" >&2\nexit 0\n' \
-    "$INSTALL_LOG" > "$SHARED/install.sh"
-  chmod +x "$SHARED/install.sh"
+  cc_stub "$SHARED" install.sh \
+    "$(printf '#!/bin/bash\necho ran >> "%s"\necho "  ⚠ installing from a linked worktree" >&2\nexit 0\n' "$INSTALL_LOG")"
   advance_origin b
   stamp origin/main
   run dl
@@ -483,8 +486,7 @@ nightly() { # runs the nightly with every other check stubbed green
 pv_stub() { # <name> <body…> → an executable stand-in for postland-verify.sh, path on stdout
   local n="$1"; shift
   mkdir -p "$BATS_TEST_TMPDIR/pv"
-  { printf '#!/bin/bash\n'; printf '%s\n' "$@"; } > "$BATS_TEST_TMPDIR/pv/$n"
-  chmod +x "$BATS_TEST_TMPDIR/pv/$n"
+  cc_stub "$BATS_TEST_TMPDIR/pv" "$n" "$(printf '#!/bin/bash\n'; printf '%s\n' "$@")"
   printf '%s' "$BATS_TEST_TMPDIR/pv/$n"
 }
 
@@ -690,7 +692,7 @@ auto_setup() {
   export CC_BACKLOG_LOG="$BATS_TEST_TMPDIR/backlog.spy"
   export CC_FLIP_CTL="$BATS_TEST_TMPDIR/flip.ctl"     # steers tests/host-flip.bats (see the SPY)
   SPY="$BATS_TEST_TMPDIR/bats-spy"; BLSPY="$BATS_TEST_TMPDIR/backlog-spy"
-  cat > "$SPY" <<'SPY'
+  cc_stub "${SPY%/*}" "${SPY##*/}" - <<'SPY'
 #!/bin/bash
 printf '%s\n' "$1" >> "$CC_SPY_LOG"
 case "$1" in
@@ -725,8 +727,7 @@ case "$1" in
 esac
 SPY
   # shellcheck disable=SC2016  # $* / $CC_BACKLOG_LOG belong to the SPY being written, not to us
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$CC_BACKLOG_LOG"\n' > "$BLSPY"
-  chmod +x "$SPY" "$BLSPY"
+  cc_stub "${BLSPY%/*}" "${BLSPY##*/}" "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$CC_BACKLOG_LOG"\n')"
 }
 
 dla() { # deploy-live --auto with every side channel spied
@@ -2200,7 +2201,7 @@ offbox_stamp() { # <rev> [scope] — write an off-box GREEN for that rev's TREE
   advance_origin b c
   offbox_stamp origin/main
   local stub="$BATS_TEST_TMPDIR/hang-pull.sh"
-  printf '#!/bin/bash\nsleep 30\n' > "$stub"; chmod +x "$stub"
+  cc_stub "${stub%/*}" "${stub##*/}" "$(printf '#!/bin/bash\nsleep 30\n')"
   want="$(git -C "$SHARED" rev-parse origin/main)"
   local t0 t1
   t0="$(date +%s)"
@@ -2720,13 +2721,13 @@ r7_ancestral_green() { # the live layer ABOVE the only green — widening the sc
 r7_stub_grep() { # <die|pass> — a grep that witnesses itself, then dies ONLY on the probe's call
   R7_STUBS="$BATS_TEST_TMPDIR/stubs"; R7_WIT="$BATS_TEST_TMPDIR/grep.witness"
   mkdir -p "$R7_STUBS"; rm -f "$R7_WIT"
-  { printf '#!/bin/bash\n'
+  cc_stub "$R7_STUBS" grep "$(
+    printf '#!/bin/bash\n'
     printf 'case " $* " in *" -lE "*) printf x >> "%s"' "$R7_WIT"
     [ "$1" = die ] && printf '; kill -TERM $$'
     printf ' ;; esac\n'
     printf 'exec /usr/bin/grep "$@"\n'
-  } > "$R7_STUBS/grep"
-  chmod +x "$R7_STUBS/grep"
+  )"
   R7_PATH="$R7_STUBS:/usr/bin:/bin"
 }
 r7_probe_fired() { [ -s "${R7_WIT:-/nonexistent}" ]; }
@@ -2914,7 +2915,7 @@ r7_probe_fired() { [ -s "${R7_WIT:-/nonexistent}" ]; }
   # memory: addon-failure-exceeds-its-blast-radius. A side-car that kills the deploy run is worse
   # than the silence it replaces, so the escalation is proven to fail no wider than itself.
   r7_setup; r7_famine
-  printf '#!/bin/bash\nexit 9\n' > "$BLSPY"; chmod +x "$BLSPY"
+  cc_stub "${BLSPY%/*}" "${BLSPY##*/}" "$(printf '#!/bin/bash\nexit 9\n')"
   before="$(git -C "$SHARED" rev-parse HEAD)"
   run dlr; run dlr; run dlr
   [ "$status" -eq 1 ] || false                        # the refusal's own exit code, unchanged
