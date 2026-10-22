@@ -259,7 +259,7 @@ print("OK")'
   # names ~/.claude/scripts/..., which 35-auth-timeseries-activate.sh symlinks. If these two ever
   # disagree the job fails silently every tick.
   wrapper="$(plutil -extract ProgramArguments.2 raw -o - "$PLIST")"
-  target="$(printf '%s' "$wrapper" | sed -n 's/.*exec "\([^"]*\)".*/\1/p')"
+  target="$(printf '%s' "$wrapper" | sed -n 's/.*exec [^"]*"\([^"]*\)".*/\1/p')"   # past `/usr/bin/env bash`
   [ -n "$target" ] || { echo "no exec target in wrapper: $wrapper"; false; }
   base="$(basename "$target")"
   grep -q "$base" "$REPO/docs/activation/pending-activation/35-auth-timeseries-activate.sh" || {

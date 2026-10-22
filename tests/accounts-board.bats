@@ -693,14 +693,15 @@ PLIST_KW="launchd/staged/com.claude.accounts-keepwarm.plist"
   short="${cmd/ 240 / 1 }"                         # the real command, bound shrunk to 1s
   [ "$short" != "$cmd" ] || { echo "the 240s bound moved — mutation did not apply: $cmd"; false; }
   mkdir -p "$HOME/.claude/bin"
-  # A stand-in that never reaches Python: exactly the stall the in-process alarm cannot see.
-  printf '#!/bin/bash\nexec /bin/sleep 20\n' > "$HOME/.claude/bin/claude-accounts"
+  # A stand-in that stalls before arming any alarm of its own: exactly the stall the in-process alarm
+  # cannot see. Python, because the plist runs it as `/usr/bin/env python3 claude-accounts`.
+  printf '#!/usr/bin/env python3\nimport time\ntime.sleep(20)\n' > "$HOME/.claude/bin/claude-accounts"
   chmod +x "$HOME/.claude/bin/claude-accounts"
   s=$SECONDS; run /bin/bash -c "$short"; el=$(( SECONDS - s ))
   [ "$status" -eq 142 ] || { echo "not killed by SIGALRM: rc=$status $output"; false; }
   [ "$el" -lt 10 ] || { echo "took ${el}s — the bound did not fire"; false; }
   # Positive control: a tick that finishes inside the bound is untouched and its rc passes through.
-  printf '#!/bin/bash\necho "args:$*"\n' > "$HOME/.claude/bin/claude-accounts"
+  printf '#!/usr/bin/env python3\nimport sys\nprint("args:" + " ".join(sys.argv[1:]))\n' > "$HOME/.claude/bin/claude-accounts"
   run /bin/bash -c "$cmd"
   [ "$status" -eq 0 ] && [[ "$output" == "args:--keepwarm --max-age 90" ]] \
     || { echo "a healthy tick was disturbed: rc=$status $output"; false; }

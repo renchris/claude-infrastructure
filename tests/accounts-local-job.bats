@@ -25,7 +25,8 @@ key() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST"; }
   cmd="$(key ProgramArguments:2)"
   short="${cmd/ 120 / 1 }"                         # the real command, bound shrunk to 1 s
   [ "$short" != "$cmd" ] || { echo "the 120 s bound moved — mutation did not apply: $cmd"; false; }
-  printf '#!/bin/bash\nexec /bin/sleep 30\n' > "$HOME/.claude/bin/claude-accounts"
+  # Python, because the plist runs it as `/usr/bin/env python3 claude-accounts`.
+  printf '#!/usr/bin/env python3\nimport time\ntime.sleep(30)\n' > "$HOME/.claude/bin/claude-accounts"
   chmod +x "$HOME/.claude/bin/claude-accounts"
   s=$SECONDS; run /bin/bash -c "$short"; el=$(( SECONDS - s ))
   [ "$status" -eq 142 ] || { echo "not killed by SIGALRM: rc=$status $output"; false; }
@@ -35,7 +36,7 @@ key() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST"; }
 @test "a tick that finishes inside the bound runs exactly claude-accounts --local-refresh" {
   [ "$(key ProgramArguments:0)" = "/bin/bash" ]
   [ "$(key ProgramArguments:1)" = "-c" ]
-  printf '#!/bin/bash\necho "args:$*"\n' > "$HOME/.claude/bin/claude-accounts"
+  printf '#!/usr/bin/env python3\nimport sys\nprint("args:" + " ".join(sys.argv[1:]))\n' > "$HOME/.claude/bin/claude-accounts"
   chmod +x "$HOME/.claude/bin/claude-accounts"
   run /bin/bash -c "$(key ProgramArguments:2)"
   [ "$status" -eq 0 ] || { echo "rc=$status $output"; false; }
