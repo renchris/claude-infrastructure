@@ -33,7 +33,25 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
 
 ## Waves
 
-### W0+W1 measure and point fixes — open
+### W0+W1 measure and point fixes — built 2026-10-22 (session kte-w01)
+
+- **Census tool** `scripts/kalloc-exec-census.sh` (`1615ea04c`, `tests/kalloc-exec-census.bats`): one
+  bounded `sudo -A gtimeout -s INT`, filtered in the stream to script execs and an allow-list of fields;
+  the bats test feeds secrets through a stubbed eslogger and proves none reach disk. The 26 GB file of
+  2026-10-21 was already gone when this ran (its dirs are 0700).
+- **T-1: PASS.** L − B = +0.020 ± 0.017 per exec (95% CI −0.012..+0.053), 12 interleaved pairs of 3000,
+  shebang-parsing trampoline, +2.2 ms per call (`e40c43b41`, `measure.md` § T-1). W3 and W4 are unblocked.
+- **Point fixes:** cc-await-ping → `env bash cc-kqwait` (`db5828bfe`); cc-in-kitty via `/bin/sh`
+  (`bdd199890`); kitty resolvers unwrap Homebrew's cask wrapper (`96d43d707`); it2-kitty runner and the
+  lr-fire-resume `cc-close-attrib` root through their interpreter (`07ad2628e`); cc-settings-parity through
+  python3 in all 26 migrations that call it and in c10-batch, not only the three lines the REPORT named
+  (`1ab1a938a`); shasum → `/sbin/sha{256,1}sum` (teammate sha, plus `31730cb2a`); launchd plists, the plist
+  lint arm and the installed-plist migration (teammate ld).
+- **Not built, and why:** `~/.zshrc:504,508,705-706` (operator dotfile); the `technical-analysis` and
+  `reso-management-app` project hooks (other repos); T-0 (needs the operator's clean-lineage window).
+  Same `exec "$CC_PANE_RUNNER"` root also sits at `scripts/handoff-fire.sh:1318` and
+  `scripts/limit-recover/lr-lib.sh:1338`, and the `reso-resume-one` callers in `bin/cc-resume-layout.sh`
+  and `scripts/boot-resume-launch.sh` run it by path: left to W4 (call sites), sized by T-0.
 ### W2 agent-context-sync harness — routed
 ### W3 infra test suites — waiting on T-1
 ### W4 call sites — waiting on W3
