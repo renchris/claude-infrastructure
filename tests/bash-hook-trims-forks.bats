@@ -28,12 +28,14 @@ setup_file() {
   # (the only path that reaches memory-index-drain's and bash-output-offload's inner dirname).
   STUB_BSD="$BATS_FILE_TMPDIR/stub-bsd"
   cp -R "$STUB" "$STUB_BSD"
-  local real_rl
+  # Under cc-shim the links resolve their bodies beside their own dir, so the copy needs its own.
+  local real_rl body
+  body="$(cc_stub_dir "$STUB")"
+  if [ "$body" != "$STUB" ]; then cp -R "$body/." "$(cc_stub_dir "$STUB_BSD")/"; fi
   real_rl="$(command -v readlink)"
   # shellcheck disable=SC2016  # $SHF_FORK_LOG and $1/$@ belong to the generated wrapper
-  printf '#!/bin/bash\nprintf %%s\\\\n readlink >> "$SHF_FORK_LOG"\n[ "$1" = -f ] && exit 1\nexec %s "$@"\n' \
-    "'$real_rl'" > "$STUB_BSD/readlink"
-  chmod +x "$STUB_BSD/readlink"
+  cc_stub "$STUB_BSD" readlink \
+    "$(printf '#!/bin/bash\nprintf %%s\\\\n readlink >> "$SHF_FORK_LOG"\n[ "$1" = -f ] && exit 1\nexec %s "$@"\n' "'$real_rl'")"
   export STUB STUB_BSD
 }
 
@@ -385,6 +387,7 @@ PY
 }
 
 @test "both per-call python hooks run under -S" {
+  # shellcheck disable=SC2016  # a literal $_CORE in the pattern
   grep -q '^exec python3 -S "\$_CORE"$' "$REPO/hooks/smart-bash-allowlist.sh"
   grep -q 'python3 -S -c '\''$' "$REPO/hooks/bash-output-offload.sh"
 }

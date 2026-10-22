@@ -17,10 +17,16 @@
 # Trunk just before the Stop-hook fork work (docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md, Wave 4).
 SHF_BASE=e1fbd8a5a5b3c3835109c9a7d2a2a0f1caf0bac5
 
+# shellcheck disable=SC1091  # resolved at run time; the ship gate runs shellcheck without -x
+source "${BASH_SOURCE[0]%/*}/helpers/cc-stub.bash"
+
+# The wrappers are cc_stub batch stubs: with $CC_SHIM set, each name is a link to cc-shim and its body
+# sits in .<stub>-real, so a counted call costs no kernel `#!` exec (cc-stub.bash). The count comes
+# from the body's log line, so it is the same either way.
 shf_build_stubs() { # <dir>
-  local stub="$1" d f name
+  local stub="$1" d f name body
+  body="$(cc_stub_dir "$stub")" || return 1
   local IFS=:
-  mkdir -p "$stub"
   # First occurrence wins, exactly as PATH lookup resolves it.
   for d in $PATH; do
     [ -d "$d" ] || continue
@@ -28,13 +34,13 @@ shf_build_stubs() { # <dir>
       name="${f##*/}"
       [ -x "$f" ] && [ ! -d "$f" ] || continue
       case "$name" in *\'*|'') continue ;; esac
-      [ -e "$stub/$name" ] && continue
+      [ -e "$body/$name" ] && continue
       # shellcheck disable=SC2016  # $SHF_FORK_LOG and $@ belong to the generated wrapper
       printf '#!/bin/bash\nprintf %%s\\\\n %s >> "$SHF_FORK_LOG"\nexec %s "$@"\n' \
-        "'$name'" "'$f'" > "$stub/$name"
+        "'$name'" "'$f'" > "$body/$name"
     done
   done
-  chmod +x "$stub"/*
+  cc_stub_finish "$stub"
 }
 
 # _shf_real_dir <tree> <repo> <rel dir> — make <tree>/<rel dir> a REAL directory whose entries are
