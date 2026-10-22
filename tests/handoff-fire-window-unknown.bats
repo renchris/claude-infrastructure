@@ -65,6 +65,9 @@ mk_worktree() {
   FIRE_CLEAN_WT="$BATS_TEST_TMPDIR/wt"; FIRE_CLEAN_BRANCH="fire/test"
   git -C "$REPO" worktree add -q -b "$FIRE_CLEAN_BRANCH" "$FIRE_CLEAN_WT"
   export FIRE_CLEAN_POOL="" FIRE_CLEAN_DONE=0 SPAWNED_PANE="" FIRE_LIVE_PANE=""
+  # fire_cleanup tombstones a cold tree before removing it, and KEEPS it when no library resolves; the
+  # extracted function has no HF_DIR and $HOME is a fixture, so name this checkout's library.
+  export CC_FIRE_TOMBSTONE_LIB="$REPO_SRC/scripts/lib/wt-tombstone.sh"
 }
 
 @test "fire_cleanup: on an UNKNOWN spawn (rc 13) the worktree and branch are KEPT" {
