@@ -539,7 +539,7 @@ tests/postland-shell-files.bats	8
 tests/postland-verify-bisect-bound.bats	16
 tests/postland-verify-identity.bats	1
 tests/postland-verify-passfloor.bats	7
-tests/postland-verify.bats	32
+tests/postland-verify.bats	13
 tests/pre-session-validate.bats	2
 tests/public-hygiene.bats	4
 tests/push-send.bats	1
