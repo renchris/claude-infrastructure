@@ -37,7 +37,7 @@
 # runner exec'd from a NON-login, NON-interactive shell would silently produce agents with no PATH
 # and no addressable pane identity — alive and unreachable, which is worse than dead.
 #
-#   bin/it2-kitty launches:  <shell> -l -i -c 'exec "$CC_PANE_RUNNER"'
+#   bin/it2-kitty launches:  <shell> -l -i -c 'exec /bin/bash "$CC_PANE_RUNNER"'
 #
 # `-l` reads .zprofile, `-i` reads .zshrc, and both run BEFORE this file, so everything they export is
 # inherited here. Measured on kitty 0.48.2 / zsh, pane 331: ITERM_SESSION_ID=w0t0p0:331 (the NEW

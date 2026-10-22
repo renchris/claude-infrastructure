@@ -1734,10 +1734,12 @@ expect -c '
   # place, so the spawned pty, the process group and every pattern below are unchanged by it.
   set wrap $env(LR_WRAP)
   # Identity tokens (validated to a strict charset in bash above), empty for an ordinary session.
+  # `bash $wrap`, never `$wrap` by path: the wrapper is a #! script, and every by-path #! exec keeps
+  # ~1.1 KiB of kernel memory on macOS 15.8.1 (docs/research/kalloc-longterm-2026-10-21/REPORT.md).
   set xargs [expr {[info exists env(LR_EXTRA_ARGS)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ARGS)] : {}}]
   set xenv  [expr {[info exists env(LR_EXTRA_ENV)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ENV)] : {}}]
   if {$wrap ne ""} {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs {*}$aprompt
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg bash $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs {*}$aprompt
   } else {
     spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs {*}$aprompt
   }

@@ -1312,7 +1312,7 @@ case "$verb" in
       launch_args+=(--env "CC_PANE_CMD=$CC_PANE_CMD"
                     --env "CC_PANE_CMD_INTERACTIVE=${CC_PANE_CMD_INTERACTIVE:-0}"
                     --env "CC_PANE_RUNNER=$RUNNER"
-                    -- "${SHELL:-/bin/zsh}" -l -i -c 'exec "$CC_PANE_RUNNER"')
+                    -- "${SHELL:-/bin/zsh}" -l -i -c 'exec /bin/bash "$CC_PANE_RUNNER"')
     elif [ -n "${CC_PANE_CMD:-}" ]; then
       err "runner '$RUNNER' is missing or not executable — CC_PANE_CMD cannot be delivered as argv"
     fi
@@ -1328,7 +1328,7 @@ case "$verb" in
         # bake a path into an argv that then has to survive kitty's own quoting.
         # shellcheck disable=SC2016
         launch_args+=(--env "CC_PANE_CMD_DIR=$CMD_DIR" --env "CC_PANE_RUNNER=$RUNNER"
-                      -- "${SHELL:-/bin/zsh}" -l -i -c 'exec "$CC_PANE_RUNNER"')
+                      -- "${SHELL:-/bin/zsh}" -l -i -c 'exec /bin/bash "$CC_PANE_RUNNER"')
       else
         # An unusable state dir must not silently become a TYPED spawn — that is the defect. Say so
         # and fall through to the legacy shell, which is at least the behaviour that was measured.

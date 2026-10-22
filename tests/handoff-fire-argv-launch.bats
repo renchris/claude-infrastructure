@@ -217,7 +217,7 @@ SH
   [ "$status" -eq 0 ]
   grep -q -- '--env CC_PANE_CMD=cd /x && nocorrect claude4' "$KLOG" || false
   grep -q -- '--env CC_PANE_CMD_INTERACTIVE=1' "$KLOG" || false
-  grep -q -- 'exec "$CC_PANE_RUNNER"' "$KLOG" || false
+  grep -q -- 'exec /bin/bash "$CC_PANE_RUNNER"' "$KLOG" || false
   # No `.armed`: nothing further will be delivered to this pane, and a stale marker would swallow the
   # next legitimate run/send into a file nobody reads.
   [ ! -f "$CC_PANE_CMD_DIR/42.armed" ]
