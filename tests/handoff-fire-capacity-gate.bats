@@ -368,8 +368,10 @@ EOF
 _setup_gate_off() {
   local blk
   blk="$(awk '/setup\(\)[[:space:]]*\{/{p=1} p{print} p&&/^\}/{exit}' "$1")"
-  printf '%s\n' "$blk" | grep -q 'export CC_FIRE_CAPACITY_GATE=off' || return 1
-  printf '%s\n' "$blk" | grep -q 'export CC_FIRE_HEADROOM_GATE=off'  || return 1
+  # Either term may sit anywhere in a multi-name `export A=off B=off` line (handoff-kernel-identity
+  # and handoff-selfclose-intent write it that way; the literal `export NAME=off` grep read them unpinned).
+  printf '%s\n' "$blk" | grep -qE 'export ([A-Za-z_][A-Za-z0-9_]*=[^ ]* )*CC_FIRE_CAPACITY_GATE=off' || return 1
+  printf '%s\n' "$blk" | grep -qE 'export ([A-Za-z_][A-Za-z0-9_]*=[^ ]* )*CC_FIRE_HEADROOM_GATE=off'  || return 1
   return 0
 }
 
