@@ -165,19 +165,21 @@ fleet() { # one shared file linked from three dirs, plus one forked real copy
   cmp -s "$HOME/.claude/settings.json" "$F/after.json"
 }
 
-@test "shasum-direct: same digests as /usr/bin/shasum, run by perl, no #! exec" {
-  [ -x /usr/bin/perl ] && [ -r /usr/bin/shasum ] || skip "no perl shasum on this platform" || false
-  IFS= read -r l < /usr/bin/shasum
-  [[ "$l" == '#!/usr/bin/perl'* ]] || skip "/usr/bin/shasum is not the perl script here"
-  run /bin/bash -c '. "$1/hooks/lib/shasum-direct.sh"; type -t shasum
-                    printf abc | shasum; printf abc | shasum -a 256' _ "$REPO"
+@test "shasum-direct: same digests as /usr/bin/shasum, from the Mach-O sha1sum/sha256sum, no #! exec" {
+  [ -x /sbin/sha256sum ] && [ -x /sbin/sha1sum ] || skip "no /sbin/sha*sum on this platform"
+  [ "$(head -c 2 /sbin/sha256sum)" != '#!' ]
+  run /bin/bash -c '. "$1/hooks/lib/shasum-direct.sh"; type -t shasum || echo none
+                    printf "%s\n%s\n" "$CC_SHA1" "$CC_SHA256"
+                    printf abc | "$CC_SHA1"; printf abc | "$CC_SHA256"' _ "$REPO"
   [ "$status" -eq 0 ]
-  [ "${lines[0]}" = "function" ]
-  [ "${lines[1]}" = "$(printf abc | /usr/bin/shasum)" ]
-  [ "${lines[2]}" = "$(printf abc | /usr/bin/shasum -a 256)" ]
-  run /bin/bash -c '. "$1/hooks/lib/shasum-direct.sh"; set -x; printf abc | shasum >/dev/null' _ "$REPO"
-  [[ "$output" == *"/usr/bin/perl /usr/bin/shasum"* ]] || false
+  [ "${lines[0]}" = "none" ]
+  [ "${lines[1]}" = /sbin/sha1sum ]
+  [ "${lines[2]}" = /sbin/sha256sum ]
+  if [ -x /usr/bin/shasum ]; then
+    [ "${lines[3]}" = "$(printf abc | /usr/bin/shasum)" ]
+    [ "${lines[4]}" = "$(printf abc | /usr/bin/shasum -a 256)" ]
+  fi
   # the Stop-path libs pull it in
-  run /bin/bash -c '. "$1/hooks/lib/continue-sentinel.sh"; type -t shasum' _ "$REPO"
-  [ "$output" = "function" ]
+  run /bin/bash -c '. "$1/hooks/lib/continue-sentinel.sh"; printf "%s\n" "$CC_SHA1"' _ "$REPO"
+  [ "$output" = /sbin/sha1sum ]
 }
