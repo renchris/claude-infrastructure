@@ -93,6 +93,8 @@
 #          refuses a window whose env.KITTY_PID differs or is absent; exit 1, like any refusal there)
 
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); these are Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 TIMEOUT_S="${IT2_KITTY_TIMEOUT_S:-15}"
 
@@ -168,8 +170,6 @@ if [[ -n "${CC_TERM_KITTY:-}" ]]; then
   KITTY_BIN="$CC_TERM_KITTY"
   [[ -x "$KITTY_BIN" ]] || { err "CC_TERM_KITTY=$KITTY_BIN is not executable — refusing to silently use a different kitty"; exit 5; }
 else
-  _resolve_kitty() {
-    local c
   # Homebrew's cask wrapper (/opt/homebrew/bin/kitty) is a #! script whose whole body is
   # `exec "<app binary>" "$@"`. Run that binary directly: every by-path #! exec keeps ~1.1 KiB of kernel
   # memory on macOS 15.8.1 (docs/research/kalloc-longterm-2026-10-21/REPORT.md §3 Phase 1). Anything that
@@ -185,6 +185,8 @@ else
     esac
     printf '%s' "$1"
   }
+  _resolve_kitty() {
+    local c
     for c in "$(command -v kitty 2>/dev/null || true)" \
              /opt/homebrew/bin/kitty /usr/local/bin/kitty \
              /Applications/kitty.app/Contents/MacOS/kitty \
@@ -252,7 +254,7 @@ _pane_keys_row() { # $1=rc $2=pane $3=text
   command -v jq >/dev/null 2>&1 || return 0
   mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
   local sha="" caller="${CC_SPAWN_CHAIN:-}"
-  if command -v shasum >/dev/null 2>&1; then sha="$(printf '%s' "$3" | shasum -a 256 2>/dev/null)"
+  if command -v "$CC_SHA256" >/dev/null 2>&1; then sha="$(printf '%s' "$3" | "$CC_SHA256" 2>/dev/null)"
   elif command -v openssl >/dev/null 2>&1; then sha="$(printf '%s' "$3" | openssl dgst -sha256 -r 2>/dev/null)"; fi
   sha="${sha%% *}"
   [ -n "$caller" ] || caller="$(ps -o command= -p "$PPID" 2>/dev/null | cut -c1-160)"

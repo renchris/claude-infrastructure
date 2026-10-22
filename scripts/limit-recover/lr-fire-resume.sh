@@ -37,6 +37,8 @@
 # LR_LAUNCH_GUARD=off (no launch lock, no holder re-check), CC_RESUME_TEAMMATE_GUARD=off|checked
 # (skip the team-blind member test: the caller already read the closed argv), LR_TEAM_PS_SNAPSHOT.
 set -euo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); these are Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 ACCT="${1:?account}"; WT="${2:?worktree}"; SID="${3:?session-id}"; shift 3
 BR="" MODEL="" EFFORT="" PROMPT="" REPO="${LR_REPO:-$HOME/Development/reso-management-app}"
@@ -678,7 +680,7 @@ lr_reaped() { # $1=outcome → one resume-reaped row; never fails
 lr_wt_glock() { # $1=repo → the per-repo git lock dir, keyed on the common dir as the add below keys it
   local gcd
   gcd="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
-  printf '%s\n' "${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/git-$(printf '%s' "$gcd" | shasum | cut -c1-40)"
+  printf '%s\n' "${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/git-$(printf '%s' "$gcd" | "$CC_SHA1" | cut -c1-40)"
 }
 lr_restore_sid() { # → rc 0 iff a tombstone names $SID and cc-wt-restore brought $WT back
   local canon row repo gl="" rc=0
@@ -718,7 +720,7 @@ if [[ ! -d "$WT" ]]; then
     # The add is serialised on one lock per repository (keyed on the common dir), so two launchers
     # recreating two worktrees of one repo cannot race on .git/worktrees either.
     _lr_gcd="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)" || { lr_reaped exit-1; exit 1; }
-    _lr_glock="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/git-$(printf '%s' "$_lr_gcd" | shasum | cut -c1-40)"
+    _lr_glock="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/git-$(printf '%s' "$_lr_gcd" | "$CC_SHA1" | cut -c1-40)"
     if ! lr_git_lock "$_lr_glock"; then
       echo "✗ lr-fire-resume: git lock $_lr_glock still held after ${LR_GIT_LOCK_WAIT_S:-30}s (holder: $(cat "$_lr_glock/holder" 2>/dev/null || echo none))" >&2
       lr_reaped exit-2; exit 2
@@ -1732,10 +1734,10 @@ expect -c '
   # The two branches differ ONLY by the cc-close-attrib prefix (see the LR_WRAP block in the bash
   # above for why an empty prefix cannot simply be interpolated). The wrapper execs the binary in
   # place, so the spawned pty, the process group and every pattern below are unchanged by it.
-  set wrap $env(LR_WRAP)
-  # Identity tokens (validated to a strict charset in bash above), empty for an ordinary session.
   # `bash $wrap`, never `$wrap` by path: the wrapper is a #! script, and every by-path #! exec keeps
   # ~1.1 KiB of kernel memory on macOS 15.8.1 (docs/research/kalloc-longterm-2026-10-21/REPORT.md).
+  set wrap $env(LR_WRAP)
+  # Identity tokens (validated to a strict charset in bash above), empty for an ordinary session.
   set xargs [expr {[info exists env(LR_EXTRA_ARGS)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ARGS)] : {}}]
   set xenv  [expr {[info exists env(LR_EXTRA_ENV)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ENV)] : {}}]
   if {$wrap ne ""} {
