@@ -490,7 +490,8 @@ fi'
   # grepping only for the call would no longer pin that a selftest happens at all.
   grep -q 'selftest_ok "$PERMGATE_LINT"' "$REPO/scripts/ship-land.sh" \
     || { echo "the gate runs the lint without its --selftest — an unverified detector's clean verdict means nothing"; false; }
-  grep -q -- '"$lint" --selftest' "$REPO/scripts/ship-land.sh" \
+  # `"${run[@]}"` is "$lint" through its interpreter (scripts/lib/cc-run.sh, plan KALLOC W4).
+  grep -qE -- '"(\$lint|\$\{run\[@\]\})" --selftest' "$REPO/scripts/ship-land.sh" \
     || { echo "selftest_ok no longer runs --selftest at all — the helper stopped being a selftest"; false; }
   # Keyed on the VARIABLE NAME, not the assignment spelling — this read `CC_PERMGATE_OWN=` until the
   # P2 own-scope work routed all thirteen arms through own_run(), which passes the name as an
