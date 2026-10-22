@@ -65,7 +65,7 @@ setup() {
   [ "$(jq -c '.permissions.deny' "$S")" = '["Bash(git push --force:*)","Bash(git push -f:*)"]' ]
   [ "$(jq -c '.permissions.allow, .env' "$S" | tr -d '\n')" = '["Bash(git add:*)"]{"A":"1"}' ]
   for a in next secondary tertiary quaternary; do [ -L "$HOME/.claude-$a/settings.json" ]; done
-  ls "$HOME/.claude/backups/" | grep -q '^git-push-ask-0075-'
+  compgen -G "$HOME/.claude/backups/git-push-ask-0075-*" >/dev/null
 }
 
 @test "a second run is a no-op" {
