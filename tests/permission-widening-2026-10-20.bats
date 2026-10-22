@@ -90,7 +90,7 @@ sba() {  # <command> [cwd] → ALLOW | DEFER  (smart-bash-allowlist; the hook ju
 }
 
 @test "rm -r: a RELATIVE target resolves against every dir its statement may run in" {
-  [ "$(vb "cd $S && rm -rf sub")" = "PASS" ]                           # && replaces the cwd
+  [ "$(vb "cd $S && rm -rf sub")" = "PASS" ] || false                  # && replaces the cwd
   [ "$(vb "cd $S; rm -rf sub")" = "ASK" ]                              # the cd may have failed → $P/sub
   [ "$(vb 'cd /etc && rm -rf sub')" = "ASK" ]
   [ "$(vb 'cd "$X" && rm -rf sub')" = "ASK" ]                          # undecidable cd
@@ -109,7 +109,7 @@ sba() {  # <command> [cwd] → ALLOW | DEFER  (smart-bash-allowlist; the hook ju
 
 @test "reset --hard: PERMITS in a scratch repo even when dirty; the same in a project still ASKS" {
   [ "$(vb "git -C $S/repo reset --hard HEAD~1")" = "PASS" ]
-  [ "$(vb "cd $S/repo && git reset --hard HEAD")" = "PASS" ]
+  [ "$(vb "cd $S/repo && git reset --hard HEAD")" = "PASS" ] || false
   printf 'y\n' > "$P/g"; git -C "$P" add g
   [ "$(vb "cd $S/repo; git reset --hard HEAD")" = "ASK" ]             # may run in $P, which is dirty
   [ "$(vb "git -C $P reset --hard HEAD")" = "ASK" ]                    # staged change in a project
@@ -138,7 +138,7 @@ sba() {  # <command> [cwd] → ALLOW | DEFER  (smart-bash-allowlist; the hook ju
   git -C "$P" remote add up https://github.com/someone-else/pw-bats.git
   git -C "$P" remote add loc "$S/bare.git"
   [ "$(vb "git -C $P push origin HEAD:main")" = "PASS" ]
-  [ "$(vb "cd $P && git push -q origin HEAD:main 2>&1 | tail -3")" = "PASS" ]
+  [ "$(vb "cd $P && git push -q origin HEAD:main 2>&1 | tail -3")" = "PASS" ] || false
   [ "$(vb "git -C $P push loc main")" = "PASS" ]
   [ "$(vb "git -C $P push up HEAD:main")" = "ASK" ]
   [ "$(vb "git -C $P push")" = "ASK" ]                                 # bare: every remote must be own
@@ -147,7 +147,7 @@ sba() {  # <command> [cwd] → ALLOW | DEFER  (smart-bash-allowlist; the hook ju
   [ "$(vb "git -C $P push \$R HEAD:main")" = "ASK" ]
   [ "$(vb 'git commit -m "then git push origin main"')" = "PASS" ]   # a mention
   # a $( ) elsewhere in the command does not make the cd undecidable; a cd INSIDE a subshell does
-  [ "$(vb "cd $P && sha=\$(git rev-parse HEAD) && git push -q origin HEAD:main")" = "PASS" ]
+  [ "$(vb "cd $P && sha=\$(git rev-parse HEAD) && git push -q origin HEAD:main")" = "PASS" ] || false
   [ "$(vb "(cd /tmp && git push origin HEAD:main)")" = "ASK" ]
   CC_VB_PUSH_OWNERS=nobody run vb "git -C $P push origin HEAD:main"
   [ "$output" = "ASK" ]
@@ -166,7 +166,7 @@ sba() {  # <command> [cwd] → ALLOW | DEFER  (smart-bash-allowlist; the hook ju
 @test "writes: a redirect, tee, cp, mv, touch into the project or scratch ALLOW; elsewhere DEFER" {
   [ "$(sba $'cat > notes.md <<\'EOF\'\nx\nEOF')" = "ALLOW" ]
   [ "$(sba "echo hi >> $S/log.txt 2>&1")" = "ALLOW" ]
-  [ "$(sba "cp src/a $S/b && mv $S/b $S/c && touch $S/d")" = "ALLOW" ]
+  [ "$(sba "cp src/a $S/b && mv $S/b $S/c && touch $S/d")" = "ALLOW" ] || false
   [ "$(sba "printf x | tee -a $S/t")" = "ALLOW" ]
   [ "$(sba 'echo x > /etc/hosts')" = "DEFER" ]
   [ "$(sba 'echo x > ~/.zshrc')" = "DEFER" ]
@@ -180,14 +180,14 @@ sba() {  # <command> [cwd] → ALLOW | DEFER  (smart-bash-allowlist; the hook ju
 }
 
 @test "rm in a compound: a resolved scratch target or a mktemp dir ALLOWS; reserved or unresolved DEFERS" {
-  [ "$(sba "T=\$(mktemp -d $S/t.XXXX) && echo hi > \$T/f && rm -rf \"\$T\"")" = "ALLOW" ]
-  [ "$(sba "D=$S/sub; ls \$D && rm -rf \"\$D\"")" = "ALLOW" ]
+  [ "$(sba "T=\$(mktemp -d $S/t.XXXX) && echo hi > \$T/f && rm -rf \"\$T\"")" = "ALLOW" ] || false
+  [ "$(sba "D=$S/sub; ls \$D && rm -rf \"\$D\"")" = "ALLOW" ] || false
   # A relative target must be scratch under EVERY dir the command may run in, the hook's own cwd
   # included; $P sits under $BATS_TEST_TMPDIR, which is scratch only when $TMPDIR is under
   # /private/tmp (the default /var/folders is not), so judge from $S to keep this line deterministic.
-  [ "$(sba "cd $S && rm -rf sub && echo done" "$S")" = "ALLOW" ]
+  [ "$(sba "cd $S && rm -rf sub && echo done" "$S")" = "ALLOW" ] || false
   [ "$(sba 'D=/tmp/cc-pw-bats; ls $D && rm -rf "$D"')" = "DEFER" ]
-  [ "$(sba "D=$S/a; D=/etc; ls && rm -rf \"\$D\"")" = "DEFER" ]       # bound twice
+  [ "$(sba "D=$S/a; D=/etc; ls && rm -rf \"\$D\"")" = "DEFER" ] || false       # bound twice
   [ "$(sba 'ls && rm -rf "$UNSET"')" = "DEFER" ]
   /usr/bin/python3 -c 'import os,socket,sys; d,b=os.path.split(os.path.abspath(sys.argv[1])); os.chdir(d); socket.socket(socket.AF_UNIX).bind(b)' "$S/sub/l.sock"
   [ "$(sba "D=$S/sub; ls && rm -rf \"\$D\"")" = "DEFER" ]           # a live listener below it
@@ -196,11 +196,11 @@ sba() {  # <command> [cwd] → ALLOW | DEFER  (smart-bash-allowlist; the hook ju
 }
 
 @test "writes: a variable target resolves from this command's own binding; archives are scoped" {
-  [ "$(sba "D=$S/o; mkdir -p \$D && echo x > \"\$D/f\"")" = "ALLOW" ]
-  [ "$(sba "T=\$(mktemp -d) && cp src/a \"\$T/\" && echo y >> \$T/log")" = "ALLOW" ]
+  [ "$(sba "D=$S/o; mkdir -p \$D && echo x > \"\$D/f\"")" = "ALLOW" ] || false
+  [ "$(sba "T=\$(mktemp -d) && cp src/a \"\$T/\" && echo y >> \$T/log")" = "ALLOW" ] || false
   [ "$(sba 'D=/etc; echo x > "$D/f"')" = "DEFER" ]
   [ "$(sba 'echo x > "$UNBOUND/f"')" = "DEFER" ]
-  [ "$(sba "tar -czf $S/a.tgz src && tar -xzf $S/a.tgz -C $S/u && unzip -q $S/a.zip -d $S/z")" = "ALLOW" ]
+  [ "$(sba "tar -czf $S/a.tgz src && tar -xzf $S/a.tgz -C $S/u && unzip -q $S/a.zip -d $S/z")" = "ALLOW" ] || false
   [ "$(sba 'tar -xzf a.tgz -C /etc')" = "DEFER" ]
   [ "$(sba "tar -xf $S/a.tar --to-command=sh")" = "DEFER" ]
   mkdir -p "$HOME/Development/exists"
@@ -210,7 +210,7 @@ sba() {  # <command> [cwd] → ALLOW | DEFER  (smart-bash-allowlist; the hook ju
 }
 
 @test "writes: a relative target follows the cd; a cd it cannot read makes it DEFER" {
-  [ "$(sba "cd $S && echo x > hosts")" = "ALLOW" ]
+  [ "$(sba "cd $S && echo x > hosts")" = "ALLOW" ] || false
   [ "$(sba 'cd /etc && echo x > hosts')" = "DEFER" ]
   [ "$(sba 'cd "$D" && echo x > f')" = "DEFER" ]
 }
@@ -243,7 +243,7 @@ sba() {  # <command> [cwd] → ALLOW | DEFER  (smart-bash-allowlist; the hook ju
   [ "$(sba 'timeout 30 git status')" = "ALLOW" ]
   [ "$(sba 'timeout 30 python3 x.py')" = "DEFER" ]
   [ "$(sba 'while read -r l; do echo "$l"; done < f')" = "ALLOW" ]
-  [ "$(sba "T=\$(mktemp -d $S/t.XXXX) && echo \$T")" = "ALLOW" ]
+  [ "$(sba "T=\$(mktemp -d $S/t.XXXX) && echo \$T")" = "ALLOW" ] || false
   [ "$(sba 'for i in 1 2; do [ $i = 2 ] && break; continue; done')" = "ALLOW" ]
 }
 
