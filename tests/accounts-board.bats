@@ -21,6 +21,11 @@
 # 21-29s-hook-killed-by-its-own-timeout defect W0 had just removed. A negative assertion is
 # worthless without a positive control that the fixture COULD have seen the call, so test 12 is
 # that control and it is not optional.
+#
+# PATH stubs go through cc_stub (no kernel #! exec under cc-shim). Test 27's claude-accounts stays a
+# plain file: the plist runs it through its own interpreter.
+
+load helpers/cc-stub
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -178,7 +183,7 @@ jqv() { jq -r "$1" < "$D/out.json"; }   # <filter> → its value, for `run`
 # none of these reads the live box.
 stub_launchd() {  # <running|unloaded|idle0|idle14>
   mkdir -p "$D/bin"
-  cat > "$D/bin/launchctl" <<EOF
+  cc_stub "$D/bin" launchctl - <<EOF
 #!/bin/bash
 case "$1" in
   running) printf '{\n\t"LastExitStatus" = 14;\n\t"PID" = 4242;\n};\n' ;;
@@ -187,8 +192,7 @@ case "$1" in
   *)       echo 'Could not find service' >&2; exit 113 ;;
 esac
 EOF
-  printf '#!/bin/bash\necho " 03:40:12"\n' > "$D/bin/ps"
-  chmod +x "$D/bin/launchctl" "$D/bin/ps"
+  cc_stub "$D/bin" ps "$(printf '#!/bin/bash\necho " 03:40:12"\n')"
   export PATH="$D/bin:$PATH"
 }
 
@@ -252,9 +256,11 @@ EOF
 plant_witness() {
   export WITNESS="$D/witness"; rm -f "$WITNESS"
   mkdir -p "$D/shim" "$HOME/.claude/bin"
-  printf '#!/bin/sh\necho "$@" >> "%s"\n' "$WITNESS" > "$D/shim/claude-accounts"
-  cp "$D/shim/claude-accounts" "$HOME/.claude/bin/claude-accounts"
-  chmod +x "$D/shim/claude-accounts" "$HOME/.claude/bin/claude-accounts"
+  local body
+  body="$(printf '#!/bin/sh\necho "$@" >> "%s"\n' "$WITNESS")"
+  # Both written by cc_stub, never cp'd: under cc-shim a copy of the link would copy the Mach-O.
+  cc_stub "$D/shim" claude-accounts "$body"
+  cc_stub "$HOME/.claude/bin" claude-accounts "$body"
 }
 
 @test "12 POSITIVE CONTROL: the witness fixture CAN detect a claude-accounts call" {
