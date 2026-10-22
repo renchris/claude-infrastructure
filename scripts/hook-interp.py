@@ -23,6 +23,10 @@ Usage:
   hook-interp.py lint    <settings.json> [--root DIR] [--hermetic]   exit 1 on any bare `#!` command
   hook-interp.py list    <settings.json> [--root DIR] [--hermetic]   TSV: verdict, where, command
   hook-interp.py bare    <command>                                   the command with its prefix stripped
+  hook-interp.py lint-plist <job.plist>... --root DIR                 exit 1 on a launchd job that execs a
+                                                                     tracked `#!` script by path
+  hook-interp.py lint-args --root DIR < args                         the same, for one job's arguments,
+                                                                     one per stdin line
   hook-interp.py --selftest
 
 --root DIR maps `~/.claude/<rel>` (and `$HOME/.claude/<rel>`, `<HOME>/.claude/<rel>`) onto DIR/<rel>
@@ -30,12 +34,16 @@ when the HOME copy is absent; --hermetic resolves ONLY through --root (the land 
 verdict never depends on the live layer). Exit: 0 clean · 1 findings or refusal · 2 usage/unreadable.
 """
 
+import html
 import json
 import os
+import plistlib
 import re
+import shlex
 import shutil
 import sys
 import tempfile
+from xml.parsers.expat import ExpatError
 
 KNOWN = (
     "/bin/bash",
@@ -223,6 +231,182 @@ def run(mode, path, roots, hermetic):
     return 1 if findings else 0
 
 
+# ── launchd jobs ──────────────────────────────────────────────────────────────────────────────────
+# A launchd job leaks the same element every time it execs a `#!` main by path, at its StartInterval
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md §3 Phase 1, "Launchd jobs"). Two shapes reach a
+# script: ProgramArguments[0] is the script itself, or a shell's `-c` string runs it as a command
+# word. Only paths that map into THIS checkout are judged (~/.claude/<rel>, the checkout's own
+# ~/Development/claude-infrastructure/<rel>, or a bare name on ~/.claude/bin): another repo's script
+# is not this tree's to classify, and a system binary is Mach-O.
+PLIST_REPO_RE = re.compile(
+    r"^(?:~|\$HOME|\$\{HOME\}|/Users/[^/]+)/(?:\.claude|Development/claude-infrastructure)/"
+)
+SHELLS = ("bash", "sh", "zsh")
+# Words that run their operand rather than being the program: the operand is the command word. Each
+# maps to the flags of its own that take a value, so `taskpolicy -c utility x.sh` judges x.sh.
+WRAPPERS = {
+    "exec": ("-a",),
+    "nohup": (),
+    "command": (),
+    "env": ("-u", "-P", "-S"),
+    "taskpolicy": ("-c", "-d", "-g", "-t", "-l", "-p"),
+    "nice": ("-n",),
+    "timeout": ("-k", "-s"),
+    "gtimeout": ("-k", "-s"),
+    "perl": (
+        "-e",
+        "-E",
+    ),  # the `alarm shift; exec @ARGV` relay: perl -e CODE SECS prog args
+}
+CMD_START = (";", "&&", "||", "|", "&", "(", ")", "{", "}", ";;", "|&", "\n")
+KEYWORDS = ("if", "then", "else", "elif", "do", "while", "until", "!")
+ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
+OPERAND_RE = re.compile(r"^\d+(\.\d+)?[smhd]?$")
+
+
+def plist_target(word, roots):
+    """The in-checkout file a plist word names, or None when it is not this tree's to judge."""
+    m = PLIST_REPO_RE.match(word)
+    if m:
+        rel = word[m.end() :]
+    elif word and "/" not in word and not word.startswith("$"):
+        rel = "bin/" + word  # a bare name: every job puts ~/.claude/bin first on PATH
+    else:
+        return None
+    for r in roots:
+        p = os.path.join(r, rel)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def shell_words(s):
+    lex = shlex.shlex(s, posix=True, punctuation_chars=";&|()<>")
+    lex.whitespace_split = True
+    lex.commenters = ""
+    try:
+        return list(lex)
+    except ValueError:
+        return (
+            s.split()
+        )  # an unbalanced quote: judge the words anyway rather than go blind
+
+
+def command_words(s):
+    """Each simple command's program word in a `-c` string, past assignments and wrappers.
+    A `NAME=value` seen earlier in the string is substituted into a `$NAME` command word, so
+    `D=…/x.sh; exec "$D"` is judged as x.sh."""
+    words = shell_words(s)
+    env = {}
+    out = []
+    i, start = 0, True
+    while i < len(words):
+        w = words[i]
+        if w in CMD_START:
+            start = True
+            i += 1
+            continue
+        if not start:
+            i += 1
+            continue
+        if w in KEYWORDS:
+            i += 1
+            continue
+        m = ASSIGN_RE.match(w)
+        if m:
+            env[m.group(1)] = m.group(2)
+            i += 1
+            continue
+        base = os.path.basename(w)
+        if base in WRAPPERS:
+            valued = WRAPPERS[base]
+            i += 1
+            while i < len(words):
+                a = words[i]
+                if a in valued:
+                    i += 2
+                elif a.startswith("-") or OPERAND_RE.match(a) or ASSIGN_RE.match(a):
+                    i += 1
+                else:
+                    break
+            continue
+        v = re.match(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$", w)
+        out.append(env.get(v.group(1), w) if v else w)
+        start = False
+        i += 1
+    return out
+
+
+def plist_args(path):
+    """ProgramArguments (or [Program]) of a job, read by plistlib, else out of the raw XML."""
+    try:
+        with open(path, "rb") as f:
+            doc = plistlib.load(f)
+        if isinstance(doc.get("ProgramArguments"), list):
+            return [str(a) for a in doc["ProgramArguments"]]
+        if isinstance(doc.get("Program"), str):
+            return [doc["Program"]]
+        return []
+    except (OSError, ValueError, ExpatError):
+        pass  # a template plistlib cannot parse; the raw-XML read below still sees its arguments
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = re.sub(r"<!--.*?-->", "", f.read(), flags=re.S)
+    except OSError:
+        return None
+    m = re.search(r"<key>ProgramArguments</key>\s*<array>(.*?)</array>", text, re.S)
+    if m:
+        return [
+            html.unescape(a)
+            for a in re.findall(r"<string>(.*?)</string>", m.group(1), re.S)
+        ]
+    m = re.search(r"<key>Program</key>\s*<string>(.*?)</string>", text, re.S)
+    return [html.unescape(m.group(1))] if m else []
+
+
+def plist_findings(args, roots):
+    """→ [(where, word, interpreter)] for every in-checkout `#!` script the job execs by path."""
+    found = []
+
+    def judge(where, word):
+        t = plist_target(word, roots)
+        sb = shebang(t) if t else None
+        if sb:
+            found.append((where, word, sb))
+
+    if not args:
+        return found
+    judge("ProgramArguments[0]", args[0])
+    if os.path.basename(args[0]) in SHELLS:
+        for i in range(1, len(args) - 1):
+            if re.match(r"^-[a-z]*c[a-z]*$", args[i]):
+                for w in command_words(args[i + 1]):
+                    judge("ProgramArguments[%d] -c" % (i + 1), w)
+                break
+    return found
+
+
+def lint_plists(paths, roots):
+    findings, rc = 0, 0
+    for path in paths:
+        args = plist_args(path)
+        if args is None:
+            print("hook-interp: cannot read %s" % path, file=sys.stderr)
+            rc = 2
+            continue
+        for where, word, sb in plist_findings(args, roots):
+            findings += 1
+            print(
+                "%s: %s execs %s by path — run it as `%s %s`"
+                % (path, where, json.dumps(word), sb, word)
+            )
+    print(
+        "hook-interp lint-plist: verdict=%s n=%d checked=%d"
+        % ("RED" if findings else "clean", findings, len(paths))
+    )
+    return rc or (1 if findings else 0)
+
+
 def selftest():
     d = tempfile.mkdtemp(prefix="hook-interp-st.")
     try:
@@ -271,9 +455,48 @@ def selftest():
                     "selftest FAIL: cmd_bare(%r) = %r" % (cmd, cmd_bare(cmd)),
                     file=sys.stderr,
                 )
+        # launchd ProgramArguments → how many by-path `#!` execs the job has.
+        perl = "exec /usr/bin/perl -e 'alarm shift; exec @ARGV' 240 "
+        jobs = [
+            (["/bin/bash", "-c", 'exec "$HOME/.claude/hooks/b.sh" --x'], 1),
+            (["/bin/bash", "-c", 'exec /bin/bash "$HOME/.claude/hooks/b.sh"'], 0),
+            (
+                [
+                    "/bin/zsh",
+                    "-lc",
+                    "if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility"
+                    " ~/.claude/hooks/e.sh; fi; exec ~/.claude/hooks/e.sh",
+                ],
+                2,
+            ),
+            (["/bin/bash", "-c", perl + '"$HOME/.claude/bin/tool" --k'], 1),
+            (
+                [
+                    "/bin/bash",
+                    "-c",
+                    perl + '/usr/bin/env bash "$HOME/.claude/bin/tool"',
+                ],
+                0,
+            ),
+            (["/bin/bash", "-c", 'D="$HOME/.claude/hooks/b.sh"; exec "$D"'], 1),
+            (["/bin/bash", "-c", "PATH=/usr/bin tool --x 2>&1 | head -5"], 1),
+            (["/bin/bash", "-c", "a; /bin/bash ~/.claude/hooks/b.sh; rc=$?; tool"], 1),
+            (["/Users/x/.claude/hooks/p.py", "run"], 1),
+            (["/bin/bash", "/Users/x/.claude/hooks/b.sh"], 0),
+            (["/bin/bash", "-c", "exec ~/.claude/hooks/gone.sh"], 0),
+        ]
+        for args, want in jobs:
+            got = len(plist_findings(args, [d]))
+            if got != want:
+                bad += 1
+                print(
+                    "selftest FAIL: plist %r → %d finding(s), want %d"
+                    % (args, got, want),
+                    file=sys.stderr,
+                )
         print(
             "hook-interp selftest: %s (%d cases)"
-            % ("FAIL" if bad else "ok", len(cases) + 4)
+            % ("FAIL" if bad else "ok", len(cases) + 4 + len(jobs))
         )
         return 1 if bad else 0
     finally:
@@ -286,6 +509,30 @@ def main(argv):
     if len(argv) >= 2 and argv[0] == "bare":
         print(cmd_bare(argv[1]))
         return 0
+    if argv[:2] == ["lint-args", "--root"] and len(argv) == 3:
+        # One argument per stdin line: a LOADED job's arguments as `launchctl print` lists them, so a
+        # migration can tell whether the running job still has the by-path form its plist dropped.
+        args = [a for a in sys.stdin.read().split("\n") if a]
+        found = plist_findings(args, [os.path.abspath(argv[2])])
+        for where, word, sb in found:
+            print("%s execs %s by path (%s)" % (where, json.dumps(word), sb))
+        return 1 if found else 0
+    if argv[:1] == ["lint-plist"]:
+        paths, roots, i = [], [], 1
+        while i < len(argv):
+            if argv[i] == "--root" and i + 1 < len(argv):
+                roots.append(os.path.abspath(argv[i + 1]))
+                i += 2
+            else:
+                paths.append(argv[i])
+                i += 1
+        if not paths or not roots:
+            print(
+                "hook-interp: lint-plist needs <job.plist>... --root DIR",
+                file=sys.stderr,
+            )
+            return 2
+        return lint_plists(paths, roots)
     if len(argv) < 2 or argv[0] not in ("rewrite", "lint", "list"):
         print(
             __doc__.split("Usage:", 1)[1].split("--root DIR maps", 1)[0],

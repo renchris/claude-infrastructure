@@ -3909,12 +3909,14 @@ run_gate() {  # $1=range → 0 green / 1 red
   # per run on macOS 15.7.9; ~100 such commands drove data.kalloc.1024 to its ~20 GiB ceiling and
   # panicked the kernel on 2026-10-18. The template is what install.sh seeds and every settings
   # migration is written against, so a bare entry there spreads. Diff-scoped: arms only when the land
-  # touches the template, a hook script (its shebang decides the prefix) or the lint itself.
+  # touches the template, a hook script (its shebang decides the prefix), a launchd job plist (the same
+  # leak on a timer, kalloc-longterm-2026-10-21 REPORT §3 Phase 1) or the lint itself.
   # gate_bounded: SHIP_LAND_HOOK_SHEBANG_LINT=/nonexistent disarms a broken detector.
   HSB_LINT="${SHIP_LAND_HOOK_SHEBANG_LINT:-scripts/hook-shebang-lint.sh}"
   if [[ -x "$HSB_LINT" ]]; then
     local hsb_own=""
     hsb_own="$(git diff --name-only "$range" -- 'settings-templates/*.json' 'hooks/*' 'statusline.sh' \
+                 'launchd/*.plist' 'launchd/staged/*.plist' \
                  'scripts/hook-interp.py' 'scripts/hook-shebang-lint.sh' 2>/dev/null || true)"
     if [[ -n "$hsb_own" ]]; then
       echo "→ gate: hook-shebang lint (this land edits $(printf '%s\n' "$hsb_own" | grep -c .) template/hook file(s))" >&2
@@ -3928,7 +3930,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       "$HSB_LINT" >&2 || _hsrc=$?
       if (( _hsrc == 2 )); then arm_nonverdict "hook-shebang-lint"; return 1; fi
       if (( _hsrc != 0 )); then
-        echo "✗ gate: hook-shebang RED — a template hook or statusLine execs a #! script by bare path." >&2
+        echo "✗ gate: hook-shebang RED — a template hook, statusLine or launchd job execs a #! script by bare path." >&2
         echo "  Prefix the script's own interpreter (/bin/bash ~/.claude/hooks/x.sh); fix with:" >&2
         echo "  python3 scripts/hook-interp.py rewrite settings-templates/settings.example.json --root . --hermetic" >&2
         gate_red hook-shebang
