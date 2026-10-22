@@ -50,7 +50,7 @@ setup() {
 @test "no env value except the three allow-listed keys reaches disk" {
   run /bin/bash "$REPO/scripts/kalloc-exec-census.sh" 5 < /dev/null
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict=ok script_execs=2 "* ]]
+  [[ "$output" == *"verdict=ok script_execs=2 "* ]] || false
   out="$(ls -d "$HOME/.cache/kalloc-exec-census/"*/)"
   # The secret appears in env, args[3], signing_id and a multi-line env value: none may be written.
   run grep -rlF "$SECRET" "$out"
@@ -78,9 +78,9 @@ setup() {
   [ "$output" = 0 ]
   # The stub ends at once, so the window is ~0 s, not the requested 5: per_hour uses the real one.
   run head -1 "$out/summary.txt"
-  [[ "$output" == *"window_s=0 requested_s=5"* ]] || [[ "$output" == *"window_s=1 requested_s=5"* ]]
+  [[ "$output" == *"window_s=0 requested_s=5"* ]] || [[ "$output" == *"window_s=1 requested_s=5"* ]] || false
   run grep -F "$HOME/bin/leaf.sh" "$out/summary.txt"
-  [[ "${lines[0]}" == *"      2  "* ]]
+  [[ "${lines[0]}" == *"      2  "* ]] || false
   grep -qF '/r/tests/x.bats' "$out/summary.txt"
 }
 
@@ -107,5 +107,5 @@ for l in open(sys.argv[1]):
     ex = (j.get("event") or {}).get("exec") or {}
     ex.pop("env", None); ex.pop("env_count", None)
     print(json.dumps(j))' "$STREAM"
-  [[ "$output" == *"$SECRET"* ]]
+  [[ "$output" == *"$SECRET"* ]] || false
 }
