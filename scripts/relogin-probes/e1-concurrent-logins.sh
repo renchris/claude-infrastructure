@@ -20,6 +20,8 @@
 # Env     CC_PROBE_ACCOUNTS_JSON · CC_PROBE_ACCOUNTS_BIN · CC_PROBE_ARTIFACT_DIR
 # Exit    0 verdict recorded · 1 error · 2 REFUSED (no CONFIRM, or a precondition failed)
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 usage() { awk 'NR>1 && /^#/{sub(/^# ?/,"");print;next} NR>1{exit}' "$0"; }
 ACCOUNTS_JSON="${CC_PROBE_ACCOUNTS_JSON:-$HOME/.claude/accounts.json}"
 ACCOUNTS_BIN="${CC_PROBE_ACCOUNTS_BIN:-claude-accounts}"
@@ -64,7 +66,7 @@ print("\t".join(fields))
 PY
 )" || { echo "e1: REFUSED — cannot resolve '$ACCT' in $ACCOUNTS_JSON" >&2; exit 2; }
 IFS=$'\t' read -r PRIMARY_DIR EMAIL KC_ACCT CLAUDE_BIN <<<"$IDENT"
-kc_svc() { printf 'Claude Code-credentials-%s' "$(printf '%s' "$1" | shasum -a 256 | cut -c1-8)"; }
+kc_svc() { printf 'Claude Code-credentials-%s' "$(printf '%s' "$1" | "$CC_SHA256" | cut -c1-8)"; }
 kc_has() { /usr/bin/security find-generic-password -s "$1" -a "$KC_ACCT" >/dev/null 2>&1 \
            && echo present || echo absent; }   # metadata probe only — never reads the secret
 # The row key is `acct` — claude-accounts --json has never emitted `name`. Keying on the wrong

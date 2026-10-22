@@ -63,6 +63,8 @@
 #   · CC_HANDOFF_JOIN_DEADLINE_S (default 900) · CC_TEARDOWN_DIR · CC_CLOSE_ATTRIB_LOG · CC_IT2_BIN
 #   BSD+GNU portable, no eval, fail-loud.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
 ALARM_DIR="${CC_ANNOUNCE_ALARM_DIR:-$HOME/.claude/cc-announce-alarms}"
@@ -201,7 +203,7 @@ mkdir -p "$SEEN_DIR" 2>/dev/null || true
 # report as drained rather than lost.
 # The two NEW marker kinds below (.bannered, .orphan-checked) have no legacy on disk, so they are
 # single literal keys only — a second spelling of a key nobody has ever written buys nothing.
-seen_key()  { printf '%s' "$1" | shasum -a 256 | cut -c1-32; }
+seen_key()  { printf '%s' "$1" | "$CC_SHA256" | cut -c1-32; }
 seen_lit()  { printf '%s.seen' "$(basename "$1")"; }
 is_new()    { [ ! -f "$SEEN_DIR/$(seen_key "$1")" ] && [ ! -f "$SEEN_DIR/$(seen_lit "$1")" ]; }
 mark_seen() { : > "$SEEN_DIR/$(seen_key "$1")" 2>/dev/null || true

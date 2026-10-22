@@ -33,10 +33,11 @@
 # Seams: DL_DIR · DL_BIN · DL_PERSONAL_ROOT · DL_CAPTURE_STATE_DIR · CC_PANE_ID · CC_FIRED_DIR
 # shellcheck shell=bash
 
-# The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script (lib/shasum-direct.sh).
+# The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script, so lib/shasum-direct.sh
+# resolves the Mach-O "$CC_SHA1" (byte-identical output).
 # shellcheck source=shasum-direct.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
-. "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || true
+. "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || CC_SHA1=sha1sum
 
 # Cheap prefilter so the common Stop spawns no Python. A superset of what capture-scan accepts.
 _DLC_PRE='[0-9]{4}-[0-9]{2}-[0-9]{2}|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? [0-9]{1,2}|it'"'"'?s time|bring (this|it) up|revisit|come back to|park(ed)? (this|it)'
@@ -114,7 +115,7 @@ dl_capture_stop() {
   sdir="${DL_CAPTURE_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/deadline-capture}"
   mkdir -p "$sdir" "$dir/.state" 2>/dev/null || return 0
   find "$sdir" -type f -mtime +7 -delete 2>/dev/null || true
-  key="$(printf '%s' "$sid" | shasum 2>/dev/null | cut -c1-16)"
+  key="$(printf '%s' "$sid" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
   [ -n "$key" ] || return 0
   latch="$sdir/$key.blocked"; seen="$sdir/$key.seen"
 
@@ -122,7 +123,7 @@ dl_capture_stop() {
   for arm in a b; do
     snip="$(printf '%s' "$scan" | jq -r --arg k "$arm" '.[$k].snippet // empty' 2>/dev/null)"
     [ -n "$snip" ] || continue
-    q="$(printf '%s' "$snip" | shasum 2>/dev/null | cut -c1-16)"
+    q="$(printf '%s' "$snip" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
     grep -qxF "$q" "$seen" 2>/dev/null && continue
     printf '%s\n' "$q" >> "$seen" 2>/dev/null || true
     printf '%s' "$scan" | jq -c --arg k "$arm" --arg sid "$sid" --arg cwd "$cwd" \

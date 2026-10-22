@@ -86,6 +86,8 @@
 #         CC_SENTINEL_KILL (on — rides ACT=stop, opt-out) · CC_SENTINEL_KILL_PCT (60) ·
 #         CC_SENTINEL_KILL_MIN_HOLD_S (30) · CC_SENTINEL_RELINQUISH_GRACE_S (30)
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 INTERVAL="${CC_SENTINEL_INTERVAL:-10}"
 TRIP_SEG_PCT="${CC_SENTINEL_TRIP_SEG_PCT:-15}"
@@ -1885,7 +1887,7 @@ fi
 # and restarting onto a half-written script is a syntax error that burns launchd's throttle window.
 self_sha() { # <path> → sha256 of the on-disk bytes, or NOTHING when unreadable (⇒ abstain)
   [ -f "$1" ] && [ -r "$1" ] || return 0
-  /usr/bin/shasum -a 256 "$1" 2>/dev/null | awk 'NR==1{print $1}'
+  "$CC_SHA256" "$1" 2>/dev/null | awk 'NR==1{print $1}'
 }
 
 self_restart_verdict() { # <running_sha> <disk_sha> <prev_disk_sha> <frozen_db> <streak> <cliff 0|1>

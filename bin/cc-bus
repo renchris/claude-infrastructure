@@ -100,6 +100,8 @@
 #
 # bash 3.2-safe (macOS /bin/bash): no associative arrays, no mapfile, no ${x,,}.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 VERSION=1
 
@@ -236,7 +238,7 @@ actor_id() {
     # earlier draft excused it with "no bus here to be inconsistent with"; that was simply
     # false, and check (0a) caught it. Key on the bus location: always available, stable for
     # as long as the bus is, and distinct per bus.
-    unit="$(printf '%s' "$BUS_DIR" | shasum -a 256 2>/dev/null | cut -c1-8)"
+    unit="$(printf '%s' "$BUS_DIR" | "$CC_SHA256" 2>/dev/null | cut -c1-8)"
     [ -n "$unit" ] || unit="$$"
   fi
   unit="$(sanitize_id_part "$unit" 40)"

@@ -84,6 +84,8 @@
 # BSD+GNU portable, no eval, fail-loud. Exit 0 ok · 2 usage/schema-refusal · 3 unknown id
 # (and, for recheck, a packet that is not open) · 4 recheck refused inside a research program.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 DECISIONS_DIR="${CC_DECISIONS_DIR:-$HOME/.claude/autonomy/decisions}"
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
@@ -93,7 +95,7 @@ usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # mk_id <class> <sid> <what> → 12-hex content key (US-separated, collision-safe).
-mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | shasum -a 256 | cut -c1-12; }
+mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | "$CC_SHA256" | cut -c1-12; }
 
 ensure_dir() { mkdir -p "$DECISIONS_DIR" 2>/dev/null || true; }
 

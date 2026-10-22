@@ -36,6 +36,8 @@
 #       failed · 2 bad args / precondition / published commit unreadable · 3 refused: non-fast-forward
 #       without --rebaseline, or push target not confirmed.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$SELF_DIR/.." && pwd)"
@@ -144,7 +146,7 @@ grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$MAILMAP" > "$OUT/mailmap"
 # globbed local-only rows go to filter-repo as glob: path rules
 awk '$1=="path" && $2 ~ /[*?[]/ {print "glob:" $2}' "$CONF" > "$OUT/paths-glob.txt"
 cat "$OUT/paths-exact.txt" "$OUT/paths-glob.txt" > "$OUT/paths-remove.txt"
-RULESET="$( { cat "$OUT/replace-text.txt" "$OUT/mailmap" "$OUT/paths-remove.txt"; "$FILTER_REPO" --version; } | shasum -a 256 | cut -c1-12)"
+RULESET="$( { cat "$OUT/replace-text.txt" "$OUT/mailmap" "$OUT/paths-remove.txt"; "$FILTER_REPO" --version; } | "$CC_SHA256" | cut -c1-12)"
 
 # ── 2. a main-only clone, then the projection ──────────────────────────────────────────────────
 SRC_TIP="$(git -C "$SRC" rev-parse --verify "$REF^{commit}" 2>/dev/null)" || die "no such ref in $SRC: $REF"

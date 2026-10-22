@@ -42,6 +42,8 @@
 # runtime-derived allowance (see EFF_TARGET), so the ~10% change of meaning does not decide
 # anything the code asserts.
 set -euo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 # Per-hook timing stamps (hooks/lib/hook-timing.sh; README §5 Wave 7, A9-F9): two builtin file
 # writes, no fork — session-beat's detached worker folds them into ~/.claude/logs/hook-timing.jsonl.
 # [ -f ] first: under `set -e`, bash 3.2 EXITS the hook when `.` cannot find its file, even
@@ -232,7 +234,7 @@ _mn_ruling_shadow() {
        fi
        return 0 ;;
   esac
-  sha=$( { printf '%s' "$INPUT" | jq -j '.prompt' | shasum -a 1 | cut -d' ' -f1; } 2>/dev/null ) || sha=""
+  sha=$( { printf '%s' "$INPUT" | jq -j '.prompt' | "$CC_SHA1" | cut -d' ' -f1; } 2>/dev/null ) || sha=""
   dir="$HOME/.claude/state"
   mkdir -p "$dir" 2>/dev/null || true
   row=$(jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sid "$SID" --arg cwd "$CWD" \

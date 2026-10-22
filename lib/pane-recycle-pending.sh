@@ -17,7 +17,7 @@
 #
 # FAILS SAFE, which here means KEEP THE SHELL. Closing a pane mid-recycle strands the relaunch with no
 # prompt to land in, and that is unrecoverable; keeping a shell that should have closed costs one husk.
-# So: no pane id, no shasum, a lock dir whose holder is missing or unparseable (the recycler mkdirs
+# So: no pane id, no sha1sum, a lock dir whose holder is missing or unparseable (the recycler mkdirs
 # the dir and writes the holder a moment later), or a holder pid that exists but whose start time
 # cannot be read — all read as PENDING. Only a holder that is provably dead (pid gone, or pid reused:
 # lstart differs) is not. That is deliberately STRICTER than handoff-fire's own reading, which treats
@@ -27,12 +27,15 @@
 cc_pane_recycle_pending() { # $1=pane id → rc 0 = a recycle may be pending (keep the shell), 1 = provably none
   local _id="${1:-}" _locks _lo _key _sum _dir _raw _pid _hl _cur
   [ -n "$_id" ] || return 0
-  command -v shasum >/dev/null 2>&1 || return 0
+  # /sbin/sha1sum, never shasum: /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on
+  # macOS 15.8.1). Same bytes, so the key still matches handoff-fire's. Linux: coreutils.
+  local _sha1=/sbin/sha1sum; [ -x "$_sha1" ] || _sha1=sha1sum
+  command -v "$_sha1" >/dev/null 2>&1 || return 0
   _locks="${LR_LOCKS_DIR:-${HOME:-}/.reso/limit-recover/locks}"
   _lo="${KITTY_LISTEN_ON:-}"
   for _key in iterm2 "${CC_TERM_KITTY_TO:-}" "$_lo" "${_lo#unix:}"; do
     [ -n "$_key" ] || continue
-    _sum="$(printf '%s' "$_key:$_id" | shasum -a 1 2>/dev/null | cut -c1-40)"
+    _sum="$(printf '%s' "$_key:$_id" | "$_sha1" 2>/dev/null | cut -c1-40)"
     [ -n "$_sum" ] || return 0
     _dir="$_locks/pane-$_sum.recycle"
     [ -d "$_dir" ] || continue

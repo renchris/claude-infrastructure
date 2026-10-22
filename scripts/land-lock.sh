@@ -40,6 +40,8 @@
 # `pipefail` load-bearing; NO `set -e` (the EXIT trap must fire with the child's real
 # code, not an -e abort).
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"   # telemetry: which checkout/worktree landed
 # LOCK KEY — the SHARED git dir, so every worktree of one repo collides on ONE mutex.
@@ -54,7 +56,7 @@ if [[ -n "${LOCK_KEY}" ]]; then
 else
   LOCK_KEY="${REPO_ROOT}"
 fi
-HASH="$(printf '%s' "${LOCK_KEY}" | shasum | cut -c1-12)"
+HASH="$(printf '%s' "${LOCK_KEY}" | "$CC_SHA1" | cut -c1-12)"
 LOCK_PARENT="${LAND_LOCK_DIR:-/tmp/land-lock-${HASH}}"
 LOCK="${LOCK_PARENT}/lock.d"
 REAP_LOCK="${LOCK_PARENT}/reap.d"   # serializes REAPERS only — never the lock itself

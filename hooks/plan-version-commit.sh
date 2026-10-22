@@ -9,6 +9,8 @@
 #   Zero race conditions — separate .git, no main repo interference.
 
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 # === JQ CHECK ===
 command -v jq &>/dev/null || exit 0
@@ -36,7 +38,7 @@ esac
 BASENAME=$(basename "$FILE")
 PLAN_NAME="${BASENAME%.md}"
 LINES=$(wc -l < "$FILE" | tr -d ' ')
-HASH=$(shasum -a 256 "$FILE" | awk '{print $1}')
+HASH=$("$CC_SHA256" "$FILE" | awk '{print $1}')
 SIZE=$(wc -c < "$FILE" | tr -d ' ')
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Session identity comes from the stdin JSON, never from the environment: CLAUDE_SESSION_ID is

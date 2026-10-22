@@ -173,6 +173,8 @@
 # test must never become the script's exit code and suppress a legitimate abstain-log. -u/pipefail are
 # on for hygiene; every path ends `exit 0`.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 # ── `--why <topic>` REFERENCE TIER (backlog 1031594b6327; docs/plans/STOPHOOK_MESSAGE_TIERING.md §3) ──
 # Dispatched HERE — before stdin is read and before any IDL/latch/state write — because this arm is run
@@ -403,7 +405,7 @@ RSS_PAGE_MB="${CC_WR_RSS_PAGE_MB:-1500}"                  # process RSS ≥ this
 # the bats suite) is byte-identical.
 key_cwd() {
   [ -n "${_WR_KC_KEY:-}" ] && [ "$1" = "${_WR_KC_ARG:-}" ] && { printf '%s' "$_WR_KC_KEY"; return; }
-  printf '%s|%s' "$CFG" "$1" | shasum 2>/dev/null | cut -c1-16
+  printf '%s|%s' "$CFG" "$1" | "$CC_SHA1" 2>/dev/null | cut -c1-16
 }
 # ROLE-KEYED identity (2026-07-26). The desk's identity is a ROLE FILE, not a directory — but these six
 # sentinels were keyed on (cfg,cwd), so they only resolved because desk-invariant happens to respawn with
@@ -420,7 +422,7 @@ key_cwd() {
 # New writes go role-keyed, so state migrates forward as it is touched (no migration script, no flag day).
 key_role() {
   [ -n "${_WR_KR_KEY:-}" ] && { printf '%s' "$_WR_KR_KEY"; return; }
-  printf '%s|role:%s' "$CFG" "$DESK_ROLE" | shasum 2>/dev/null | cut -c1-16
+  printf '%s|role:%s' "$CFG" "$DESK_ROLE" | "$CC_SHA1" 2>/dev/null | cut -c1-16
 }
 sentinel_for() { # <prefix> <cwd> → path to USE (role-keyed for a role-holder, else legacy cwd-keyed)
   local pfx="$1" cwd="$2" rp cp
@@ -433,7 +435,7 @@ sentinel_for() { # <prefix> <cwd> → path to USE (role-keyed for a role-holder,
 }
 # Account-neutral key: the cwd ALONE. No $CFG, deliberately — $CFG is the thing the router picks,
 # and a key containing it is what made the operator's opt-out a function of routing (fc54aeebec4a).
-key_shared()        { printf '%s' "$1" | shasum 2>/dev/null | cut -c1-16; }
+key_shared()        { printf '%s' "$1" | "$CC_SHA1" 2>/dev/null | cut -c1-16; }
 shared_disarm_for() { printf '%s/disarm-%s' "$SHARED_DIR" "$(key_shared "$1")"; }
 shared_rearm_for()  { printf '%s/rearm-%s'  "$SHARED_DIR" "$(key_shared "$1")"; }   # tombstone: `arm` from any account
 # 0 when <tombstone> is at least as new as <marker>, i.e. the marker was lifted from another account.
@@ -778,8 +780,9 @@ fi
 # because the two below depend on it.
 [ -f "$COORD/cc-roles/$DESK_ROLE" ] && \
   _WR_ROLE_V="$(head -1 "$COORD/cc-roles/$DESK_ROLE" 2>/dev/null | tr -d '[:space:]')"
-# _wr_key16 <string> — sets _WR_K16 to what `printf '%s' <string> | shasum | cut -c1-16` prints.
-# The key is a pure function of the string and shasum is a perl start, paid on every poll, so it is
+# _wr_key16 <string> — sets _WR_K16 to what `printf '%s' <string> | sha1sum | cut -c1-16` prints
+# (the same bytes the old `| shasum` printed). The key is a pure function of the string and the hash
+# is a process start, paid on every poll, so it is
 # memoized in $STATE_DIR/keymemo/. The memo NAME is a fork-free sanitised copy of the string, which
 # two strings can share, so the file carries the string itself between two copies of the key: a
 # different string, or a torn write, reads as a miss. A miss computes exactly as before, and writes a
@@ -793,7 +796,7 @@ _wr_key16() {
     *[!0-9a-f]*) ;;
     ????????????????) [ "$m" = "$k"$'\n'"$in"$'\n'"$k" ] && { _WR_K16="$k"; return 0; } ;;
   esac
-  _WR_K16="$(printf '%s' "$in" | shasum 2>/dev/null | cut -c1-16)"
+  _WR_K16="$(printf '%s' "$in" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
   case "$_WR_K16" in *[!0-9a-f]*|'') return 0 ;; ????????????????) ;; *) return 0 ;; esac
   [ -d "$STATE_DIR" ] || return 0
   [ -d "$STATE_DIR/keymemo" ] || mkdir "$STATE_DIR/keymemo" 2>/dev/null

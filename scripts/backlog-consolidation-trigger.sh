@@ -62,6 +62,8 @@
 #   1  --assert only: a cluster crosses the threshold
 #   2  COULD NOT MEASURE — bad usage, or THE ENGINE IS ABSENT (no jq)
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
 BACKLOG_BIN="${CC_BACKLOG_BIN:-$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")/bin/cc-backlog}"
@@ -162,7 +164,7 @@ mech_groups() {
 # tell the groups apart at a glance; the digest is what makes them distinct.
 fold_slug() {
   local digest words
-  digest="$(printf '%s\037%s\037%s' "$1" "$2" "$3" | shasum -a 256 | cut -c1-8 | tr '0-9' 'ghijklmnop')"
+  digest="$(printf '%s\037%s\037%s' "$1" "$2" "$3" | "$CC_SHA256" | cut -c1-8 | tr '0-9' 'ghijklmnop')"
   words="$(printf '%s' "$2" | tr -cd 'a-z ' | tr -s ' ' | cut -d' ' -f1-3 | tr ' ' '-')"
   words="${words%-}"; words="${words#-}"
   [ -n "$words" ] || words="consolidated"

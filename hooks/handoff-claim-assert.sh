@@ -19,6 +19,8 @@
 # — all abstain. cc-cannot is itself three-valued and fails to UNRESOLVED, so ignorance never
 # reaches this hook as a verdict.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 # ── `--why` REFERENCE TIER — dispatched BEFORE stdin is read. A `cat` above this blocks forever on
 #    a tty, which is how a pointer becomes "a deletion wearing a pointer's clothes". ──
@@ -27,7 +29,7 @@ if [ "${1:-}" = "--why" ]; then
   [ -f "$_wt" ] || { _wtt="$0"; [ -L "$_wtt" ] && _wtt="$(readlink "$_wtt")"
     _wt="$(cd "$(dirname "$_wtt")" 2>/dev/null && pwd)/lib/why-tier.sh"; }
   [ -f "$_wt" ] || _wt="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/why-tier.sh"
-  # shellcheck disable=SC1091
+  # shellcheck disable=SC1090,SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
   if [ -f "$_wt" ] && . "$_wt" 2>/dev/null; then why_tier_main "handoff-claim" "${2:-}"; exit $?; fi
   printf 'handoff-claim-assert: FATAL — the --why tier is missing (%s). Cure: bash ~/Development/claude-infrastructure/install.sh\n' "$_wt" >&2
   exit 2
@@ -109,8 +111,8 @@ fi
 # ── Latch-set + hard cap. An unlatched Stop block is the infinite-loop anti-pattern. ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 find "$STATE_DIR" -name '*.fired' -mtime +7 -delete 2>/dev/null || true
-SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null | cut -c1-16)"; [ -n "$SKEY" ] || abstain "no-skey"
-HASH="$(printf '%s' "$MSG" | shasum 2>/dev/null | cut -c1-16)";                   [ -n "$HASH" ] || abstain "no-hash"
+SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"; [ -n "$SKEY" ] || abstain "no-skey"
+HASH="$(printf '%s' "$MSG" | "$CC_SHA1" 2>/dev/null | cut -c1-16)";                   [ -n "$HASH" ] || abstain "no-hash"
 FIRED="$STATE_DIR/$SKEY.fired"
 [ -f "$FIRED" ] && grep -qxF "$HASH" "$FIRED" 2>/dev/null && abstain "latched-already-fired"
 N="$(grep -c . "$FIRED" 2>/dev/null || echo 0)"; case "$N" in ''|*[!0-9]*) N=0 ;; esac

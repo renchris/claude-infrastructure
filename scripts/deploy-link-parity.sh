@@ -106,6 +106,8 @@
 # CC_LINKPARITY_CONFIG / CC_LINKPARITY_BINDIR / CC_LINKPARITY_PENDING / CC_LINKPARITY_MANIFEST /
 # CC_LINKPARITY_TRUNK (fully hermetic — no case reads the real ~/.claude or the real checkout).
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 ALL=false
 QUIET=false
@@ -314,7 +316,7 @@ sweep_orphans() {
 #   · a real checkout → `git hash-object` the live file and look the blob up in `git ls-files -s`.
 #     ONE git call for the whole set, and the comparison is git's own content identity, so a copy
 #     under a different name (it2 ← bin/it2-wrapper) matches exactly.
-#   · no git (the hermetic fixtures) → shasum both sides. Never mix the two: a git blob hash carries
+#   · no git (the hermetic fixtures) → sha1sum both sides. Never mix the two: a git blob hash carries
 #     a header and can never equal a bare content digest, so a mixed comparison would report every
 #     legitimate copy as a STRAY — a false RED on the one case this leg exists to NOT convict.
 TRACKED_SET=""
@@ -327,7 +329,7 @@ _load_tracked() {
   else
     TRACKED_MODE="hash"
     TRACKED_SET="$(find "$REPO" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' \
-                     -exec shasum -a 1 {} + 2>/dev/null | awk '{print $1}')"
+                     -exec "$CC_SHA1" {} + 2>/dev/null | awk '{print $1}')"
   fi
   return 0
 }
@@ -338,7 +340,7 @@ content_is_tracked() {  # $1 = absolute live file → 0 if its bytes are in a tr
   if [ "$TRACKED_MODE" = "git" ]; then
     h="$(git -C "$REPO" hash-object -- "$1" 2>/dev/null)" || return 1
   else
-    h="$(shasum -a 1 < "$1" 2>/dev/null | awk '{print $1}')" || return 1
+    h="$("$CC_SHA1" < "$1" 2>/dev/null | awk '{print $1}')" || return 1
   fi
   [ -n "$h" ] || return 1
   # -c AND NEVER -q, and the reason is measured on this exact line (2026-08-19). Under the

@@ -73,11 +73,12 @@ printf '%s' "$INPUT" | jq -e '.hook_event_name == "PostCompact"' >/dev/null 2>&1
 
 # The summary is streamed to the sha tool, never held in a shell variable: `$(...)` on a 22 KB value
 # is affordable, but the same code meeting a 2 MB summary would not be, and the size of this field
-# is not ours to bound. `shasum -a 256` (BSD) then `sha256sum` (GNU); a box with neither records
+# is not ours to bound. `/sbin/sha256sum` (Mach-O; never /usr/bin/shasum, a #! perl script that
+# leaks kernel memory per exec on macOS 15.8.1) then `sha256sum` (GNU); a box with neither records
 # `sha:"-"` rather than a fabricated digest.
 SUM="-"
-if command -v shasum >/dev/null 2>&1; then
-  SUM="$(printf '%s' "$INPUT" | jq -j '.compact_summary // ""' 2>/dev/null | shasum -a 256 2>/dev/null | cut -c1-16)"
+if [ -x /sbin/sha256sum ]; then
+  SUM="$(printf '%s' "$INPUT" | jq -j '.compact_summary // ""' 2>/dev/null | /sbin/sha256sum 2>/dev/null | cut -c1-16)"
 elif command -v sha256sum >/dev/null 2>&1; then
   SUM="$(printf '%s' "$INPUT" | jq -j '.compact_summary // ""' 2>/dev/null | sha256sum 2>/dev/null | cut -c1-16)"
 fi

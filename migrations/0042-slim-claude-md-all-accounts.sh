@@ -40,6 +40,8 @@
 #        bash migrations/0042-slim-claude-md-all-accounts.sh --confirm all-accounts
 # bash 3.2-safe.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 PIN=d446c60e80a67db1e664473daf0218f83d6151cdf229c7220395d47793901a9e
 SRC="$HOME/.claude"
@@ -58,7 +60,7 @@ esac
 
 [ -x "$CIV" ] || { printf '0042: %s not found — nothing written\n' "$CIV" >&2; exit 1; }
 [ -f "$SLIM" ] || { printf '0042: %s not deployed (install.sh copies CLAUDE.global.slim.md) — nothing written\n' "$SLIM" >&2; exit 1; }
-got="$({ shasum -a 256 "$SLIM" 2>/dev/null || sha256sum "$SLIM"; } | cut -d' ' -f1)"
+got="$("$CC_SHA256" "$SLIM" | cut -d' ' -f1)"
 [ "$got" = "$PIN" ] || {
   printf '0042: REFUSED — %s is sha256 %s, not the gated file %s. An ungated variant does not ship under the F1 verdict; re-gate it first.\n' "$SLIM" "$got" "$PIN" >&2
   exit 1

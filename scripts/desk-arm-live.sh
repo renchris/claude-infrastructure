@@ -56,6 +56,8 @@
 #   OVERRIDES discovery entirely) · CC_ARM_BRIEF (brief template) · CC_ARM_HOOK (installed hook used to
 #   resolve the default cwd) · CC_ARM_ROLES_DIR + CC_ARM_DESK_ROLE (live-desk config detection)
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 
@@ -189,7 +191,7 @@ echo "desk-arm-live: mode=$MODE  configs=${CFG_ROOTS[*]}"
 
 rc=0
 for cfg in "${CFG_ROOTS[@]}"; do
-  key="$(printf '%s|%s' "$cfg" "$CWD" | shasum 2>/dev/null | cut -c1-16)"
+  key="$(printf '%s|%s' "$cfg" "$CWD" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
   if [ "$DRY" = 1 ]; then
     echo "  [dry-run] would arm $MODE → $cfg/state/waiting-recycle/arm-$key"
     continue

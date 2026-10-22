@@ -31,14 +31,15 @@
 #     mapping lives in oi_origin_class below and ONLY there.
 #
 # Env seams: CC_FIRED_DIR · CC_SELFCLOSE_TENANCY (=0 ⇒ tenancy answers `unknown`, R8 kill switch).
-# Dependencies: jq + shasum only. No caller globals — _oi_now is self-contained (handoff-fire's
+# Dependencies: jq + sha256sum only. No caller globals — _oi_now is self-contained (handoff-fire's
 # _iso_now stays its own; the two emit the identical format).
 # shellcheck shell=bash
 
-# The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script (lib/shasum-direct.sh).
+# The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script, so lib/shasum-direct.sh
+# resolves the Mach-O "$CC_SHA256" (byte-identical output).
 # shellcheck source=shasum-direct.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
-. "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || true
+. "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || CC_SHA256=sha256sum
 _oi_now() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true; }
 
 oi_fired_dir() { printf '%s' "${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"; }
@@ -77,7 +78,7 @@ _fired_cwd_key() { # $1=cwd → echoes a stable filesystem-safe key, or nothing
   # normalisation fired_stamp_tenancy applies before comparing.
   r="$(cd "$d" 2>/dev/null && pwd -P)" || return 0
   [ -n "$r" ] || return 0
-  printf '%s' "$r" | shasum -a 256 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
+  printf '%s' "$r" | "$CC_SHA256" 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
 }
 
 write_fired_cwd_index() { # $1=fired-dir $2=pane $3=cwd → best-effort, always 0

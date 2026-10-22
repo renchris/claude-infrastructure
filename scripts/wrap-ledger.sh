@@ -205,6 +205,8 @@
 #                    WRAP_CACHE · WRAP_CACHE_DIR · WRAP_CACHE_WAIT_MS · WRAP_CACHE_WAIT_TRIES ·
 #                    WRAP_CACHE_LOCK_STALE_S · WRAP_CACHE_HOLDER_MAX_S
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 # This script's directory, by parameter expansion. It was a dirname(1) substitution at eleven call sites:
 # up to eleven process starts per ledger, in a script the Stop hooks run at every turn end, where
@@ -888,7 +890,7 @@ else
   if [ -z "$DOD_FILE" ]; then
     DOD_DIR="${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"
     TOP="$(git rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD")"
-    DHASH="$(printf '%s' "$TOP" | shasum 2>/dev/null | cut -c1-16)"
+    DHASH="$(printf '%s' "$TOP" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
     DOD_FILE="$DOD_DIR/${DHASH:-unknown}.md"
   fi
   _WL_DOD_SOURCES=""; [ -f "$DOD_FILE" ] && _WL_DOD_SOURCES="$DOD_FILE"

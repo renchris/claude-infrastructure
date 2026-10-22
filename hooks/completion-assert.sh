@@ -104,6 +104,8 @@
 #   added, and `verdict` is its own cap class for the reason the latch block gives) ·
 #   PEER_OWNED_LIB / CC_REGISTRY_DIR (LIVE-PEER-OWNED attribution — see the block at that term)
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 # ── `--why <topic>` REFERENCE TIER (backlog 1031594b6327; docs/plans/STOPHOOK_MESSAGE_TIERING.md §3) ──
 # Dispatched HERE — before stdin is read and before any IDL/latch/state write — because this arm is run
@@ -230,8 +232,8 @@ then
       _ca_ov="$(/usr/bin/env python3 "$_ca_op" --transcript "$TP" --since "$_ca_oep" 2>/dev/null)"; _ca_orc=$?
       if [ "$_ca_orc" -eq 1 ] && [ -n "$_ca_ov" ]; then
         mkdir -p "$STATE_DIR" 2>/dev/null || true
-        _ca_okey="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null)"; _ca_okey="${_ca_okey:0:16}"
-        _ca_ohash="$(printf 'outbound|%s' "${_ca_oep:-whole}" | shasum 2>/dev/null)"; _ca_ohash="${_ca_ohash:0:16}"
+        _ca_okey="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | "$CC_SHA1" 2>/dev/null)"; _ca_okey="${_ca_okey:0:16}"
+        _ca_ohash="$(printf 'outbound|%s' "${_ca_oep:-whole}" | "$CC_SHA1" 2>/dev/null)"; _ca_ohash="${_ca_ohash:0:16}"
         # Latched or capped FALLS THROUGH, never `abstain`: abstain exits the hook, and a second
         # Stop in the same turn must still meet every arm below.
         _ca_ofire=1
@@ -402,8 +404,8 @@ if [ "${CC_RESEARCH_RELAY_CHECK:-1}" != 0 ] && ! _ca_no_route "$SID"; then
     [ "$_ca_rrc" -eq 3 ] && abstain "relay-turn-relayed"
     if [ "$_ca_rrc" -eq 1 ] && [ -n "$_ca_rreason" ]; then
       mkdir -p "$STATE_DIR" 2>/dev/null || true
-      _ca_rkey="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null)"; _ca_rkey="${_ca_rkey:0:16}"   # sliced here; was `| cut -c1-16`
-      _ca_rhash="$(printf '%s' "$MSG" | shasum 2>/dev/null)"; _ca_rhash="${_ca_rhash:0:16}"   # sliced here; was `| cut -c1-16`
+      _ca_rkey="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | "$CC_SHA1" 2>/dev/null)"; _ca_rkey="${_ca_rkey:0:16}"   # sliced here; was `| cut -c1-16`
+      _ca_rhash="$(printf '%s' "$MSG" | "$CC_SHA1" 2>/dev/null)"; _ca_rhash="${_ca_rhash:0:16}"   # sliced here; was `| cut -c1-16`
       [ -n "$_ca_rkey" ] && [ -n "$_ca_rhash" ] || abstain "relay-no-hash"
       _ca_rfired="$STATE_DIR/$_ca_rkey.fired"
       if [ -f "$_ca_rfired" ] && awk -v h="$_ca_rhash" '$1 == h { hit = 1 } END { exit(hit ? 0 : 1) }' "$_ca_rfired" 2>/dev/null
@@ -1656,9 +1658,9 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 # GC stale per-session .fired latch-sets — SKEY embeds SID, so each is per-session and otherwise
 # never reaped (mirrors memory-nudge.sh:26). A live session recreates its own on the next fire.
 find "$STATE_DIR" -name '*.fired' -mtime +7 -delete 2>/dev/null || true
-SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null)"; SKEY="${SKEY:0:16}"   # sliced here; was `| cut -c1-16`
+SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | "$CC_SHA1" 2>/dev/null)"; SKEY="${SKEY:0:16}"   # sliced here; was `| cut -c1-16`
 [ -n "$SKEY" ] || abstain "no-skey"
-HASH="$(printf '%s' "$MSG" | shasum 2>/dev/null)"; HASH="${HASH:0:16}"   # sliced here; was `| cut -c1-16`
+HASH="$(printf '%s' "$MSG" | "$CC_SHA1" 2>/dev/null)"; HASH="${HASH:0:16}"   # sliced here; was `| cut -c1-16`
 [ -n "$HASH" ] || abstain "no-hash"
 FIRED="$STATE_DIR/$SKEY.fired"
 # THE STARVATION this splits (item 3b464e94b3ff, 2026-08-17). ONE counter served every arm, so a

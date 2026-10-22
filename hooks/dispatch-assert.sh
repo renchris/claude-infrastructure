@@ -48,6 +48,8 @@
 #   DISPATCH_ASSERT_MAX_TOTAL · DISPATCH_ASSERT_DISABLE · CC_BACKLOG_FILE · CC_REGISTRY_DIR ·
 #   CC_DECISIONS_DIR
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 STATE_DIR="${DISPATCH_ASSERT_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/dispatch-assert}"
 IDL="${DISPATCH_ASSERT_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
@@ -160,7 +162,7 @@ TURN_TEXT="$(jq -r --arg t "$T19" \
 
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 find "$STATE_DIR" \( -name '*.pending' -o -name '*.fired' \) -mtime +7 -delete 2>/dev/null || true
-SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null | cut -c1-16)"
+SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
 [ -n "$SKEY" ] || abstain "no-skey"
 PENDING="$STATE_DIR/$SKEY.pending"
 FIREDLOG="$STATE_DIR/$SKEY.fired"

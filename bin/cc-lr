@@ -62,6 +62,8 @@
 #
 # rc 0 ok · 1 nothing matched · 2 REFUSED (and nothing was created) · 3 usage
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 # ── the store ──────────────────────────────────────────────────────────────────────────────────
 # `${LR_STATE_DIR:-…}` is the spelling lr-fleet.sh:69, lr-fire-resume.sh:244, lr-lib.sh:511 and
@@ -1715,7 +1717,7 @@ cmd_move() {
     ( umask 077
       jq -nc --arg b "$batch" --arg sid "$s" --arg pane "$p" --arg from "$ac" --arg to "$to" --arg by "${by:-?}" \
             --argjson ts "$now" --argjson exp "$(( now + until_s + 900 ))" \
-            --arg sha "$(printf '%s|%s|%s|%s' "$s" "$p" "$ac" "$to" | shasum -a 256 | cut -c1-16)" --arg origin "$CL_MOVE_ORIGIN" \
+            --arg sha "$(printf '%s|%s|%s|%s' "$s" "$p" "$ac" "$to" | "$CC_SHA256" | cut -c1-16)" --arg origin "$CL_MOVE_ORIGIN" \
             '{kind:"cc-lr-move", batch:$b, sid:$sid, pane:$pane, from:$from, to:$to, requested_by:$by, ts:$ts, expires_epoch:$exp, plan_row_sha:$sha}
              + (if $origin != "" then {origin:$origin} else {} end)' > "$tmp" ) \
       && mv -f "$tmp" "$bdir/intent/$s.json" || cl_die "cannot write the intent for ${s:0:8}; the batch was not queued" 2

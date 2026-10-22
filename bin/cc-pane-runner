@@ -350,8 +350,10 @@ _pane_exit_record() { # $1=command $2=rc $3=claude_started → writes the record
   local _id="${KITTY_WINDOW_ID:-}" _sha="" _t
   [ -n "$_PANE_EXIT_DIR" ] || return 0
   case "$2" in ''|*[!0-9]*) return 0 ;; esac
-  if command -v shasum >/dev/null 2>&1; then
-    _sha="$(printf '%s' "$1" | shasum -a 256 2>/dev/null | cut -d' ' -f1)"
+  # /sbin/sha256sum, never shasum: /usr/bin/shasum is a #! perl script (a kernel-memory leak per
+  # exec on macOS 15.8.1). Same bytes; Linux takes the coreutils branch.
+  if [ -x /sbin/sha256sum ]; then
+    _sha="$(printf '%s' "$1" | /sbin/sha256sum 2>/dev/null | cut -d' ' -f1)"
   elif command -v sha256sum >/dev/null 2>&1; then
     _sha="$(printf '%s' "$1" | sha256sum 2>/dev/null | cut -d' ' -f1)"
   fi

@@ -10,6 +10,8 @@
 # Scope: get-mail-message / get-mail-message-mime ONLY. A LIST read returns many
 # messages and must not trigger N extractions.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 LOG="${CC_MAIL_IMAGES_LOG:-$HOME/.claude/autonomy/mail-images-auto.log}"
 [ "${CC_MAIL_IMAGES_AUTO:-1}" = "0" ] && exit 0      # kill switch
@@ -33,7 +35,7 @@ print(ti.get("messageId") or ti.get("message-id") or "")
 [ -z "$mid" ] && exit 0
 
 # Idempotence: one extraction per messageId per day.
-key="$(printf '%s' "$mid" | /usr/bin/shasum -a 256 | /usr/bin/cut -c1-16)"
+key="$(printf '%s' "$mid" | "$CC_SHA256" | /usr/bin/cut -c1-16)"
 out="$HOME/Documents/mail-images/auto/$(/bin/date -u +%Y%m%d)-$key"
 if [ -f "$out/manifest.json" ]; then
   n=$(/usr/bin/python3 -c "import json;print(len(json.load(open('$out/manifest.json')).get('images',[])))" 2>/dev/null || echo 0)

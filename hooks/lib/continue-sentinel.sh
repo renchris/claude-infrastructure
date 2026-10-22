@@ -13,10 +13,11 @@
 #
 # Pure function definitions only — no side effects on source (safe under `set -u`).
 
-# The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script (lib/shasum-direct.sh).
+# The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script, so lib/shasum-direct.sh
+# resolves the Mach-O "$CC_SHA1" (byte-identical output).
 # shellcheck source=shasum-direct.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
-. "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || true
+. "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || CC_SHA1=sha1sum
 
 # Directory holding every continue sentinel for the active config dir.
 continue_state_dir() {
@@ -27,6 +28,6 @@ continue_state_dir() {
 # MUST stay byte-for-byte identical to what session-continue.sh's `set` writes.
 continue_sentinel_for() {
   local h
-  h=$(printf '%s|%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "$1" | shasum 2>/dev/null | cut -c1-16)
+  h=$(printf '%s|%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "$1" | "$CC_SHA1" 2>/dev/null | cut -c1-16)
   printf '%s/continue-%s' "$(continue_state_dir)" "$h"
 }

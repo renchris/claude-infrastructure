@@ -69,6 +69,8 @@
 # Seams (tests only): CC_KITTY_CONF_DIR · CC_KITTY_RELOAD_STAMP · CC_KITTY_RELOAD_PS (absolute,
 # launchd-safe per unattended-path-lint) · CC_KITTY_RELOAD_KILL.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 # --would: report the verdict this call WOULD reach and signal NOTHING, write NO stamp. It exists
 # because deploy-live runs with --dry-run (and --offline, which implies it) from the operator
@@ -98,7 +100,7 @@ config_hash() {
     out="$out$(cat "$f" 2>/dev/null)"
   done
   [ "$found" = 1 ] || return 1
-  printf '%s' "$out" | /usr/bin/shasum -a 256 2>/dev/null | awk '{print $1}'
+  printf '%s' "$out" | "$CC_SHA256" 2>/dev/null | awk '{print $1}'
 }
 
 # ── live kitty instances ─────────────────────────────────────────────────────────────────────────

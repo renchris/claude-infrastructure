@@ -405,6 +405,9 @@
 # _cc_route_check auto-creates a fresh cc-<ts> worktree; inside an existing worktree or any
 # non-reso dir it launches in place).
 set -euo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); these are Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 # The recycle rows' clock and the re-run line (pane-lifecycle fixes item 4b/4d, 2026-10-01). A detached
 # __recycle watcher keeps the parent's clock (exported at its detach), so its outcome rows time the
 # whole recycle; every other invocation starts a fresh one. HF_INVOKED_ARGS is the argv, shell-quoted,
@@ -3409,7 +3412,7 @@ hf_recycle_fenced() { # $1=subject session id → rc 0 DEFER (the reconciler own
 # kitty window id is a per-kitty-process counter that restarts at 1.
 hf_recycle_lock_dir() { # $1=pane → the lock dir path; rc 1 when no digest could be taken
   local sum
-  sum="$(printf '%s' "${CC_TERM_KITTY_TO:-iterm2}:${1:-}" | shasum -a 1 2>/dev/null | cut -c1-40)"
+  sum="$(printf '%s' "${CC_TERM_KITTY_TO:-iterm2}:${1:-}" | "$CC_SHA1" 2>/dev/null | cut -c1-40)"
   [ -n "$sum" ] || return 1
   printf '%s/pane-%s.recycle' "${LR_LOCKS_DIR:-$HOME/.reso/limit-recover/locks}" "$sum"
 }
@@ -16232,7 +16235,7 @@ hf_inflight_key() { # $1=dir → echoes a stable filesystem-safe key, or nothing
   if [ ! -d "$head" ]; then return 0; fi
   head="$(cd "$head" 2>/dev/null && pwd -P)" || return 0
   if [ -z "$head" ]; then return 0; fi
-  printf '%s' "${head%/}$tail" | shasum -a 256 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
+  printf '%s' "${head%/}$tail" | "$CC_SHA256" 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
 }
 
 # TZ + locale PINNED ON BOTH SIDES. `ps -o lstart=` renders through LC_TIME and TZ independently, so
@@ -16276,7 +16279,7 @@ hf_inflight_live() { # $1=claim file → 0 live / 1 not
 hf_mission_digest() { # → echoes a digest, or nothing
   local p="${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}"
   if [ -z "$p" ] || [ ! -s "$p" ]; then return 0; fi
-  shasum -a 256 "$p" 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
+  "$CC_SHA256" "$p" 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
 }
 
 hf_inflight_gate() { # $1=dir $2=mode(worktree|cwd) → 0 proceed (claim taken) · 1 REFUSE

@@ -28,6 +28,8 @@
 # Env seams (tests): WRAP_DOD_FILE · WRAP_DOD_DIR — SHARED with wrap-ledger, so a test that points
 # both at one file proves the producer↔consumer contract end-to-end.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 # ── PHASE TIMING + CHECKPOINT (docs/research/startup-hooks-2026-10-18/README.md §2 #17) ──────────
 # The harness cancels this SessionStart hook at 5 s and discards ALL of its output: 18 cancels in two
@@ -105,7 +107,7 @@ if ! . "$_dplib" 2>/dev/null; then
     if [ -n "${WRAP_DOD_FILE:-}" ]; then printf '%s' "$WRAP_DOD_FILE"; return; fi
     dir="${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"
     top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$1")"
-    hash="$(printf '%s' "$top" | shasum 2>/dev/null | cut -c1-16)"
+    hash="$(printf '%s' "$top" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
     printf '%s/%s.md' "$dir" "${hash:-unknown}"
   }
   dod_read_files() { local f; f="$(dod_path_for "$1" read)"; [ -f "$f" ] && printf '%s\n' "$f"; return 0; }

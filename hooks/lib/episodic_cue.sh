@@ -28,6 +28,9 @@
 #   - Nothing here writes stdout except the cue line, and every failure is swallowed.
 # Portable to /bin/bash 3.2. `^` in jq's Oniguruma is start-of-LINE, so start-of-string is \A.
 
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
+
 # Deref this file's own path (the live layer links it per file) so idl-log.sh resolves beside the
 # REAL file, in the checkout, even when only this file is linked (X1; hooks/memory-nudge.sh:120-134).
 # Sets _EC_LIB_DIR. A path that is not itself a symlink needs no deref (a sibling resolves the same
@@ -147,7 +150,7 @@ episodic_cue_line() {
         fired:*)
           pat="${v#fired:}"
           [ -n "$nouns" ] || nouns="<topic>"
-          sha="$(printf '%s' "$p" | shasum -a 1 | cut -d' ' -f1)" || sha=""
+          sha="$(printf '%s' "$p" | "$CC_SHA1" | cut -d' ' -f1)" || sha=""
           dir="$HOME/.claude/state"
           mkdir -p "$dir" || true
           row="$(jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sid "${SID:-?}" \

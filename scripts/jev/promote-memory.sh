@@ -34,6 +34,8 @@
 # Consent is expressed on the command line (--yes), so it lands in shell history rather than in a
 # prompt a non-TTY channel cannot deliver.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 _resolve_self() {
   local p="$1" d
@@ -367,7 +369,7 @@ if [ "$PLANONLY" -eq 1 ]; then printf '%s\n' "$TOTAL"; exit 0; fi
 # --corpus-sha prints the identity of the population as it stands RIGHT NOW, spending nothing, so
 # the scheduler can compare it against what the last completed pass recorded.
 if [ "$SHAONLY" -eq 1 ]; then
-  printf '%s\n' "$( { sort "$ORPH"; printf -- '--\n'; sort "$ANCH"; } | shasum -a 256 2>/dev/null | cut -c1-16)"
+  printf '%s\n' "$( { sort "$ORPH"; printf -- '--\n'; sort "$ANCH"; } | "$CC_SHA256" 2>/dev/null | cut -c1-16)"
   exit 0
 fi
 
@@ -421,7 +423,7 @@ MOCKED=false; jev_is_mock && MOCKED=true
 # The unattended scheduler uses it to answer "is there anything new to judge?" — without that it
 # would re-run a COMPLETED 133-call pass on every 1800s tick, ~6,384 calls/day over rows it already
 # has. Orphans AND anchors, because a change in either makes the contest a different contest.
-CORPUS_SHA="$( { sort "$ORPH"; printf -- '--\n'; sort "$ANCH"; } | shasum -a 256 2>/dev/null | cut -c1-16)"
+CORPUS_SHA="$( { sort "$ORPH"; printf -- '--\n'; sort "$ANCH"; } | "$CC_SHA256" 2>/dev/null | cut -c1-16)"
 [ -n "$CORPUS_SHA" ] || CORPUS_SHA="unknown"
 _meta_row() { jq -nc --arg id meta --arg r meta --argjson o "$N_ORPH" --arg sd "$SEED" \
                   --argjson pl "$TOTAL" --argjson a "$N_ANCH" --argjson m "$MOCKED" \

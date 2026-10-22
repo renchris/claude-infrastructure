@@ -71,6 +71,8 @@
 # envs the record WRITERS were built for). BSD+GNU portable, no eval, fail-loud.
 # Exit: 0 ok · 2 usage · 5 no such record.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 HANDOFF_ALARM_DIR="${CC_HANDOFF_ALARM_DIR:-$HOME/.claude/handoff-alarms}"
 ANNOUNCE_DIR="${CC_ANNOUNCE_ALARM_DIR:-$HOME/.claude/cc-announce-alarms}"
@@ -129,7 +131,7 @@ json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 # seen_key is VERBATIM autonomy-sweep.sh:89 (path in, 32 hex out). Copying it is deliberate: this is
 # a bin/ CLI and that is a scripts/ launchd job with no shared lib between them, so the parity is
 # asserted by test against the real sweep rather than by a shared symbol.
-seen_key()  { printf '%s' "$1" | shasum -a 256 | cut -c1-32; }
+seen_key()  { printf '%s' "$1" | "$CC_SHA256" | cut -c1-32; }
 is_seen()   { [ -f "$SEEN_DIR/$(seen_key "$1")" ] || [ -f "$SEEN_DIR/$(basename "$1").seen" ]; }
 mark_seen() { # <record-path> — write BOTH conventions
   mkdir -p "$SEEN_DIR" 2>/dev/null || true

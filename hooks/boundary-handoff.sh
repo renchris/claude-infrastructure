@@ -126,6 +126,8 @@
 # Residual (operator/C10, live settings.json): ~/.claude also keeps a redundant obj-1 copy at the old
 # hardcoded repo-abs path — harmless (both exit 0 + latched), removable at the operator's discretion.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 # ── `--why <topic>` REFERENCE TIER (backlog 1031594b6327; docs/plans/STOPHOOK_MESSAGE_TIERING.md §3) ──
 # Dispatched HERE — before stdin is read and before any IDL/latch/state write — because this arm is run
@@ -683,7 +685,7 @@ fi
 
 # ── B-2: one-shot latch (hash(configdir|cwd)-HEADsha) + used_pct-delta re-arm ──
 cfg="$(jq -r '.config_dir // empty' "$tel" 2>/dev/null || true)"
-key="$(printf '%s|%s' "$cfg" "$cwd" | shasum 2>/dev/null)"; key="${key:0:16}"   # was `| cut -c1-16`
+key="$(printf '%s|%s' "$cfg" "$cwd" | "$CC_SHA1" 2>/dev/null)"; key="${key:0:16}"   # was `| cut -c1-16`
 latch="$LATCH_DIR/${key}-${head}"
 idle_rearm=0
 mkdir -p "$LATCH_DIR" 2>/dev/null || true

@@ -35,6 +35,8 @@
 # <account> is an accounts.json name (next, next2, next3, next4) or a ~/.claude-* dir basename.
 # Exit: 0 ok · 1 the change did not take (read back) · 2 usage error or refused.
 set -euo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 SRC="$HOME/.claude"
 REG="$SRC/instruction-variants"
@@ -66,7 +68,7 @@ account_dir() {  # <account> → its config dir, or die
 }
 
 sha256_16() {  # <file> → first 16 hex of its sha256
-  { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; } | cut -c1-16
+  "$CC_SHA256" "$1" | cut -c1-16
 }
 
 global_variant() {  # the machine's variant: the registry's `global` line, default slim (install.sh agrees)

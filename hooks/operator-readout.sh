@@ -200,10 +200,11 @@ _amlib="$_amd/lib/activation-marker.sh"
 # shellcheck source=lib/activation-marker.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$_amlib" 2>/dev/null || activation_settled() { [ -f "${1:?}.done" ]; }
-# sha16 hashes on every Stop; /usr/bin/shasum is a #! perl script, run here without the #! exec.
+# sha16 hashes on every Stop; /usr/bin/shasum is a #! perl script, so lib/shasum-direct.sh resolves
+# the Mach-O "$CC_SHA1" (byte-identical output).
 # shellcheck source=lib/shasum-direct.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
-. "$_amd/lib/shasum-direct.sh" 2>/dev/null || . "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/shasum-direct.sh" 2>/dev/null || true
+. "$_amd/lib/shasum-direct.sh" 2>/dev/null || . "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/shasum-direct.sh" 2>/dev/null || CC_SHA1=sha1sum
 # The shared renderer (lib/cc-say.sh, lr-wake 2026-10-18 RC8): rows are fitted to 52 cells by its
 # cc_say_fit/cc_say_cut. Same tiers as above — the checkout's own lib/ first (a brand-new lib has no
 # ~/.claude/lib link until install.sh runs). Fails OPEN: without it rows print unfitted, as before.
@@ -506,11 +507,11 @@ kv_first() {
   done <<< "$1"
   return 1
 }
-# sha16 (stdin) → the first 16 hex digits of its SHA-1, empty when shasum is missing. The digest is
+# sha16 (stdin) → the first 16 hex digits of its SHA-1, empty when sha1sum is missing. The digest is
 # sliced in the shell; `| cut -c1-16` was a second process start at each of six call sites.
 sha16() {
   local _h
-  _h="$(shasum 2>/dev/null)"
+  _h="$("$CC_SHA1" 2>/dev/null)"
   printf '%s' "${_h:0:16}"
 }
 # bn <path> [suffix] → basename(1)'s answer without the process start: trailing slashes dropped,

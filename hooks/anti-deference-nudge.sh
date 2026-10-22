@@ -53,6 +53,8 @@
 #
 # Env seams (tests): ANTIDEF_STATE_DIR · ANTIDEF_IDL · ANTIDEF_MAX · WRAP_LEDGER_BIN (ledger path)
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 STATE_DIR="${ANTIDEF_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/anti-deference}"
 IDL="${ANTIDEF_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
@@ -589,9 +591,9 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 # GC stale per-session .fired latch-sets — SKEY embeds SID, so each is per-session and otherwise
 # never reaped (mirrors memory-nudge.sh:26). A live session recreates its own on the next fire.
 find "$STATE_DIR" -name '*.fired' -mtime +7 -delete 2>/dev/null || true
-SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null | cut -c1-16)"
+SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
 [ -n "$SKEY" ] || abstain "no-skey"
-HASH="$(printf '%s' "$MSG" | shasum 2>/dev/null | cut -c1-16)"
+HASH="$(printf '%s' "$MSG" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
 [ -n "$HASH" ] || abstain "no-hash"
 FIRED="$STATE_DIR/$SKEY.fired"     # newline-separated set of already-fired message hashes
 

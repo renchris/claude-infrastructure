@@ -14,6 +14,8 @@
 # Non-blocking: always exits 0 on error paths. Never blocks the agent.
 
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 command -v jq >/dev/null || exit 0
 
@@ -32,10 +34,10 @@ mkdir -p "$PINS_DIR" 2>/dev/null || true
 SIDECAR="$PINS_DIR/$SESSION_ID.plan"
 
 # Strategy 1: SHA256 match against existing plan files.
-TARGET_SHA=$(printf '%s' "$PLAN_CONTENT" | shasum -a 256 | awk '{print $1}')
+TARGET_SHA=$(printf '%s' "$PLAN_CONTENT" | "$CC_SHA256" | awk '{print $1}')
 for f in "$HOME"/.claude/plans/*.md; do
   [ -f "$f" ] || continue
-  H=$(shasum -a 256 "$f" 2>/dev/null | awk '{print $1}')
+  H=$("$CC_SHA256" "$f" 2>/dev/null | awk '{print $1}')
   if [[ "$H" == "$TARGET_SHA" ]]; then
     printf '%s\n' "$f" > "$SIDECAR"
     exit 0

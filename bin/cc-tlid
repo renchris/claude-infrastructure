@@ -44,6 +44,8 @@
 #
 # Env overrides (tests): CC_TASKS_INDEX.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 EXPLAIN=0
 [ "${1:-}" = "--explain" ] && EXPLAIN=1
@@ -60,8 +62,8 @@ sanitize() {
 
 # Short, stable digest of an absolute path — the collision tiebreaker.
 hash8() {
-    if command -v shasum >/dev/null 2>&1; then
-        printf '%s' "$1" | shasum -a 256 2>/dev/null | cut -c1-8
+    if command -v "$CC_SHA256" >/dev/null 2>&1; then
+        printf '%s' "$1" | "$CC_SHA256" 2>/dev/null | cut -c1-8
     else
         printf '%s' "$1" | cksum 2>/dev/null | awk '{printf "%08x", $1}' | cut -c1-8
     fi

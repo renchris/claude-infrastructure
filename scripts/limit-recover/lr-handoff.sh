@@ -105,6 +105,8 @@
 # A held draft is not refused when the caller set LRH_CARRY_DRAFT=1 on an --in-place move (the move
 # worker, after proving the box stale): the recycle carries it unsent into the successor instead.
 set -euo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 # ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
 # Four spawn sites below (kitty split / iTerm2 split / kitty os-window / iTerm2 window), each on a
@@ -837,7 +839,7 @@ lrh_git_lock_take() { # $1=cwd → 0 held or lock unavailable (proceed) / 1 time
   if [[ -z "$common" ]]; then
     echo "lr-handoff: git lock unavailable (no common dir for $1) — proceeding unlocked" >&2; return 0
   fi
-  key="$(printf '%s' "$common" | shasum -a 1 2>/dev/null | cut -d' ' -f1)" || key=""
+  key="$(printf '%s' "$common" | "$CC_SHA1" 2>/dev/null | cut -d' ' -f1)" || key=""
   root="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks"
   if [[ -z "$key" ]] || ! mkdir -p "$root" 2>/dev/null; then
     echo "lr-handoff: git lock unavailable (cannot key or create $root) — proceeding unlocked" >&2; return 0

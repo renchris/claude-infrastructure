@@ -58,6 +58,8 @@
 #   DRI_ROLES_DIR · DRI_ROLE · DRI_IDL · DRI_PAGES_DIR · DRI_NOTIFY · DRI_PUSH · DRI_PS ·
 #   DRI_PGREP · DRI_HOME · DRI_STATE_SUBDIR · DRI_PAGE_DEDUP_S
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 # Bound the OS-notification fork (machine-wide iTerm2/AppleEvent wedge, 2026-07-26). This one
 # targets NotificationCenter rather than iTerm2, so it is not the root cause — but it is an
@@ -133,7 +135,7 @@ page() { # $1=verdict $2=message $3=remediation-command
   return 0
 }
 
-key_for() { printf '%s|%s' "$1" "$2" | shasum 2>/dev/null | cut -c1-16; }
+key_for() { printf '%s|%s' "$1" "$2" | "$CC_SHA1" 2>/dev/null | cut -c1-16; }
 
 # ── ground truth: the config dir + cwd the LIVE desk process is running under ──────────────────────
 # Read from the process's OWN environment, never inferred from a list this script maintains.
@@ -260,7 +262,7 @@ EOF
     "$JQ" -r '.disposition' "$1/idl.jsonl" 2>/dev/null | tail -1
     return $rc
   }
-  armkey() { printf '%s|%s' "$1" "$2" | shasum | cut -c1-16; }
+  armkey() { printf '%s|%s' "$1" "$2" | "$CC_SHA1" | cut -c1-16; }
 
   local U=U-DESK CWD=/desk/cwd
 

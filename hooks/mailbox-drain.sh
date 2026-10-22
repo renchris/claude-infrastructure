@@ -61,6 +61,9 @@ if [ "$MODE" = prompt ]; then
   if [ -f "$_ht_l" ] && . "$_ht_l" 2>/dev/null; then ht_begin mailbox-drain; fi
 fi
 
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
+
 case "$0" in */*) _scd="${0%/*}" ;; *) _scd=. ;; esac   # dirname without the exec
 _scd="$(cd "$_scd" 2>/dev/null && pwd)"
 _lib="$_scd/lib/mailbox-pending.sh"
@@ -574,7 +577,7 @@ You lose nothing by standing it down: the goal blocks your stops, so you keep ta
     # (that degrade's nudge says the sid is missing, which is itself worth repeating). A changed goal
     # hashes to a new marker, so a NEW goal is told once too. A hash failure also keeps emitting.
     if [ "$_headless" != 1 ] && [ -n "$own_sid" ]; then
-      _gn_h="$(printf '%s' "$_goal_cond" | shasum 2>/dev/null | cut -c1-12)"
+      _gn_h="$(printf '%s' "$_goal_cond" | "$CC_SHA1" 2>/dev/null | cut -c1-12)"
       case "$_gn_h" in ''|*[!0-9a-f]*) _gn_h="" ;; esac
       [ -n "$_gn_h" ] && _gn_mark="$_mdir/.goalnudge/$own_sid-$_gn_h"
     fi

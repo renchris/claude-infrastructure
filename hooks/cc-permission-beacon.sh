@@ -46,6 +46,8 @@
 
 [[ "${CC_PERMISSION_BEACON_DISABLED:-0}" == "1" ]] && exit 0
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 MODE="${1:-}"
 DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"
@@ -190,7 +192,7 @@ CANON='if (.tool_name // "") == "" then empty else {n:.tool_name, i:(.tool_input
 sig_of() { # $1 = a canonical line (possibly empty) → 16 hex chars, or nothing at all
   local canon="$1" h
   [[ -z "$canon" ]] && return 0
-  h="$(printf '%s' "$canon" | shasum -a 256 2>/dev/null)" || return 0
+  h="$(printf '%s' "$canon" | "$CC_SHA256" 2>/dev/null)" || return 0
   h="${h%% *}"
   [[ "$h" =~ ^[0-9a-f]{64}$ ]] || return 0        # a truncated/failed digest is NOT a signature
   printf '%s' "${h:0:16}"
@@ -242,7 +244,7 @@ archive() { # $1 = the CLAIMED beacon, already moved aside so no second clear ca
   _bi="$(printf '%s' "$INPUT" | jq -r '[(.hook_event_name // ""), (.tool_name // ""), (.tool_use_id // "")] | join("\u001f")' 2>/dev/null || true)"
   IFS=$'\x1f' read -r by ct cid <<<"$_bi" || true
 
-  # The two signatures. Costs two jq + two shasum forks, but ONLY on a real resolution — the `mv`
+  # The two signatures. Costs two jq + two sha256sum forks, but ONLY on a real resolution — the `mv`
   # claim above has already failed and exited for every PostToolUse with nothing pending, so the hot
   # path never reaches here. Measured traffic: ~3.8k resolutions in five weeks.
   local sig_b sig_c
@@ -403,7 +405,7 @@ case "$MODE" in
     # FORK-FREE HOT PATH, PRESERVED. `clear` runs on every PostToolUse fleet-wide, so the ordering
     # below is load-bearing: this builtin `[[ -f ]]` sits exactly where the old `mv … || exit 0`
     # sat and exits before any fork when nothing is pending. A beacon exists only while a prompt is
-    # genuinely on screen (~3.8k resolutions in five weeks), so the jq/shasum work is paid on that
+    # genuinely on screen (~3.8k resolutions in five weeks), so the jq/sha256sum work is paid on that
     # rare path and never on ordinary tool traffic. It is NOT a replacement for the atomic claim:
     # the `mv` below is still the arbiter between two racing clears.
     #

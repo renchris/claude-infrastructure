@@ -24,7 +24,7 @@
 # SIGTERM/SIGINT keep their default (die): callers run `cc-kqwait … & wait $!` so their traps fire.
 #
 # THE HOT PATH FORKS NOTHING. The C source is embedded below, so a cache key derived from it would
-# mean hashing it on every call (shasum + uname, plus their subshells). Instead the binary carries
+# mean hashing it on every call (sha256sum + uname, plus their subshells). Instead the binary carries
 # its own source's SHA-256 (compiled in) and this wrapper hands it the source via the environment;
 # the binary re-hashes it in-process (microseconds) and, on a mismatch, re-execs this wrapper with
 # CC_KQWAIT_REBUILD=1 to take the slow path. So a warm call is: bash, then one exec of
@@ -270,9 +270,11 @@ _cc_bin() { # $1=name → absolute path, stock floor first, then PATH
   command -v "$n" 2>/dev/null && return 0
   return 1
 }
-SHASUM=$(_cc_bin shasum) || unavailable no-shasum
+# sha256sum, not shasum: /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on
+# macOS 15.8.1); /sbin/sha256sum is Mach-O with byte-identical output, and coreutils' on Linux.
+SHA256=$(_cc_bin sha256sum) || unavailable no-sha256sum
 UNAME=$(_cc_bin uname)   || unavailable no-uname
-_kq_hash=$(printf '%s' "$CC_KQWAIT_SRC" | "$SHASUM" -a 256); _kq_hash=${_kq_hash%% *}
+_kq_hash=$(printf '%s' "$CC_KQWAIT_SRC" | "$SHA256"); _kq_hash=${_kq_hash%% *}
 case "$_kq_hash" in *[!0-9a-f]*|'') unavailable degenerate-key ;; esac
 [ "${#_kq_hash}" -eq 64 ] || unavailable degenerate-key
 _kq_arch=$("$UNAME" -m); [ -n "$_kq_arch" ] || unavailable no-arch

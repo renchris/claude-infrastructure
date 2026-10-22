@@ -25,6 +25,8 @@
 # exit 0 = every com.reso.* agent shipped · 1 = unshipped agent(s) · 2 = no verdict (bad usage, dir
 # unreadable, no plist reader)
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
@@ -77,7 +79,7 @@ for f in "$DIR"/com.reso.*.plist; do
   n=$((n + 1))
   out="${out}UNSHIPPED $label program=${prog:-unknown}"$'\n'
   if [ "$PAGE" = 1 ]; then
-    sum="$(shasum -a 256 "$f" 2>/dev/null | cut -c1-12)"
+    sum="$("$CC_SHA256" "$f" 2>/dev/null | cut -c1-12)"
     # shellcheck source=/dev/null
     ( . "$REPO/scripts/limit-recover/lr-page-once.sh" && lr_page_once "la-provenance-$label-${sum:-x}" launchagent-provenance \
         "LaunchAgent $label runs ${prog:-an unknown program}, which no repository shipped (an agent-installed daemon?). Review it; nothing was unloaded." ) >/dev/null 2>&1

@@ -26,6 +26,8 @@
 # A positional path still wins, so an investigation can still sample to its own scratch file
 # without polluting the durable series.
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 ONCE=0
 [ "${1:-}" = "--once" ] && { ONCE=1; shift; }
 OUT="${1:-${AUTH_TS_OUT:-$HOME/.claude/logs/auth-timeseries.jsonl}}"; INT="${2:-60}"; DUR="${3:-21600}"
@@ -38,7 +40,7 @@ declare -a DIRS=(
   "next4:$HOME/.claude-quaternary"
   "default:$HOME/.claude"
 )
-svc() { printf 'Claude Code-credentials-%s' "$(printf '%s' "$1" | shasum -a 256 | cut -c1-8)"; }
+svc() { printf 'Claude Code-credentials-%s' "$(printf '%s' "$1" | "$CC_SHA256" | cut -c1-8)"; }
 
 # Skip-if-previous-run-alive, --once only. Under load a batch can outlive the 5-min StartInterval
 # (one run wedged 2h43m on a D-state ps), and launchd would otherwise stack a second on top.

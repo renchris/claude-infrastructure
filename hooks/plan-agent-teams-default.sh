@@ -82,6 +82,8 @@
 # failure abstains silently.
 
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
 command -v jq &>/dev/null || exit 0
 
@@ -140,7 +142,7 @@ _locus_source_branch() {
   fi
   [ -f "${tp:-/nonexistent}" ] || return 0
 
-  skey="$(printf '%s|%s|%s' "$CFG" "${sid:-?}" "${cwd:-?}" | shasum 2>/dev/null | cut -c1-16)"
+  skey="$(printf '%s|%s|%s' "$CFG" "${sid:-?}" "${cwd:-?}" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
   [ -n "$skey" ] || return 0
   mkdir -p "$LOCUS_STATE_DIR" 2>/dev/null || true
   find "$LOCUS_STATE_DIR" \( -name '*.slices' -o -name '*.fired' \) -mtime +7 -delete 2>/dev/null || true
@@ -245,7 +247,7 @@ fi
 # Evidence: docs/research/sonnet55-utilization-2026-09-28/notes/harness-hazards-a.md §1b item 3.
 _pd_sid="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
 if [ -n "$_pd_sid" ]; then
-  _pd_key="$(printf '%s|%s|%s' "$CFG" "$_pd_sid" "$FILE" | shasum 2>/dev/null | cut -c1-16)"
+  _pd_key="$(printf '%s|%s|%s' "$CFG" "$_pd_sid" "$FILE" | "$CC_SHA1" 2>/dev/null | cut -c1-16)"
   if [ -n "$_pd_key" ]; then
     mkdir -p "$LOCUS_STATE_DIR" 2>/dev/null || true
     find "$LOCUS_STATE_DIR" -name '*.plandef' -mtime +7 -delete 2>/dev/null || true

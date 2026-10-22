@@ -118,8 +118,10 @@ if [ -n "${CC_SUP_SHA_BIN+set}" ]; then
   SUP_SHA_BIN="$CC_SUP_SHA_BIN"
 else
   SUP_SHA_BIN=""
-  for _c in "$(command -v shasum 2>/dev/null || true)" "$(command -v sha256sum 2>/dev/null || true)" \
-            /usr/bin/shasum /usr/bin/sha256sum /opt/homebrew/bin/sha256sum /usr/local/bin/sha256sum; do
+  # /sbin/sha256sum first and never shasum: /usr/bin/shasum is a #! perl script (a kernel-memory
+  # leak per exec on macOS 15.8.1); the Mach-O tool prints the same bytes.
+  for _c in /sbin/sha256sum "$(command -v sha256sum 2>/dev/null || true)" \
+            /usr/bin/sha256sum /opt/homebrew/bin/sha256sum /usr/local/bin/sha256sum; do
     [ -n "$_c" ] && [ -x "$_c" ] && { SUP_SHA_BIN="$_c"; break; }
   done
 fi

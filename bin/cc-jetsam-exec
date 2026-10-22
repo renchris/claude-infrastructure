@@ -195,7 +195,7 @@ __attribute__((section("__DATA,__interpose"))) = {
 CSRC
 
 # ── build (cached, keyed on the source's own hash + arch) ─────────────────────────────────────
-# Resolved ABSOLUTELY, and the key is then ASSERTED. A bare `shasum`/`uname` that does not resolve
+# Resolved ABSOLUTELY, and the key is then ASSERTED. A bare `sha256sum`/`uname` that does not resolve
 # leaves the key EMPTY, and an empty key is not a narrow cache dir — it is a SHARED one, so two
 # different versions of the embedded source would silently reuse each other's helper forever. That
 # is this repo's own recurring class (scripts/unattended-path-lint.sh; the empty-selector rule), and
@@ -206,10 +206,12 @@ _cc_bin() { # $1=name → absolute path, stock floor first, then PATH
   command -v "$n" 2>/dev/null && return 0
   return 1
 }
-SHASUM=$(_cc_bin shasum) || die "no shasum on PATH or the stock floor — cannot key the helper cache"
+# sha256sum, not shasum: /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS
+# 15.8.1); /sbin/sha256sum is Mach-O with byte-identical output, and coreutils' on Linux.
+SHA256=$(_cc_bin sha256sum) || die "no sha256sum on PATH or the stock floor — cannot key the helper cache"
 CUT=$(_cc_bin cut)       || die "no cut on PATH or the stock floor — cannot key the helper cache"
 UNAME=$(_cc_bin uname)   || die "no uname on PATH or the stock floor — cannot key the helper cache"
-SRC_HASH=$(printf '%s' "$CC_JETSAM_SRC" | "$SHASUM" -a 256 | "$CUT" -c1-16)
+SRC_HASH=$(printf '%s' "$CC_JETSAM_SRC" | "$SHA256" | "$CUT" -c1-16)
 ARCH=$("$UNAME" -m)
 case "$SRC_HASH" in [0-9a-f][0-9a-f]*) : ;; *) die "helper cache key is degenerate ('$SRC_HASH') — refusing to share a cache directory across source versions" ;; esac
 [ -n "$ARCH" ] || die "could not read the architecture — refusing an arch-blind helper cache"

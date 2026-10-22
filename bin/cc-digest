@@ -28,6 +28,8 @@
 #   Push: CC_PUSH_SEND_BIN · CC_ANNOUNCE_BIN · CC_DIGEST_ROLE (default desk).
 # BSD+GNU portable, no eval, fail-loud. Exit 0 (emit) · 2 (usage) · 5 (push: a requested delivery leg FAILED).
 set -uo pipefail
+# /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
 LAND_LOG="${CC_LAND_LOG:-$HOME/.claude/land.log}"
 DECISIONS_DIR="${CC_DECISIONS_DIR:-$HOME/.claude/autonomy/decisions}"
@@ -169,7 +171,7 @@ emit() {
     for f in "$PAGES_DIR"/*.page; do
       [ -e "$f" ] || continue
       total=$((total + 1))
-      key="$(printf '%s' "$f" | shasum -a 256 | cut -c1-32)"
+      key="$(printf '%s' "$f" | "$CC_SHA256" | cut -c1-32)"
       [ -f "$SEEN_DIR/$key" ] && surfaced=$((surfaced + 1))
     done
   fi
@@ -236,7 +238,7 @@ compute_counts() { # <digest_file>
   fi
   if [ -d "$PAGES_DIR" ]; then
     for f in "$PAGES_DIR"/*.page; do [ -e "$f" ] || continue
-      ptot=$((ptot + 1)); key="$(printf '%s' "$f" | shasum -a 256 | cut -c1-32)"
+      ptot=$((ptot + 1)); key="$(printf '%s' "$f" | "$CC_SHA256" | cut -c1-32)"
       [ -f "$SEEN_DIR/$key" ] && psurf=$((psurf + 1)); done
   fi
   inert="$(grep -c '^ALARM:' "$dfile" 2>/dev/null)"; inert="${inert:-0}"
