@@ -20,11 +20,11 @@
 # parent's code: power then means the item's change, not A1's band fix, F16).
 # The long-lived part runs in Python (load_lib.py drive): the reaper TERMs orphaned bash at 10 min.
 #
-# Two open operator packets bound the defaults; nothing adds load until the operator rules:
-#   4eee30ac4de4 — may the harness add top-up load? Default: neither. --bg-topup / --df-topup refuse
-#                  unless LR_HARNESS_TOPUP names them (bg | df | bg,df).
-#   75bb72581c54 — test windows in the main terminal? Default: the main kitty. --kitty private is not
-#                  built and refuses.
+# Two operator packets bound the defaults; both fired their defaults at the 2026-10-22 17:00Z deadline:
+#   4eee30ac4de4 — may the harness add top-up load? Ruled: neither. --bg-topup / --df-topup refuse
+#                  unless LR_HARNESS_TOPUP names them (bg | df | bg,df), which needs a new operator yes.
+#   75bb72581c54 — test windows in the main terminal? Ruled: the main kitty, focus thefts counted and
+#                  handed back (load_lib.py sample). --kitty private is not built and refuses.
 # A run below the premise floor (load1/core < 15) is NO-VERDICT, never a wait.
 #
 # Exit (run, wait): 0 PASS · 1 FAIL · 2 usage · 3 NO-VERDICT (retry later) · 4 SIGNAL-DEAD · 5 PASS with
@@ -109,12 +109,12 @@ case "$cmd" in
     [ -n "$MATRIX" ] && [ -f "$MATRIX" ] || die "run: --matrix FILE"
     case "$KITTY" in
       main) ;;
-      private) die "--kitty private is not built: packet 75bb72581c54 is undecided and its default is the main kitty" ;;
+      private) die "--kitty private is not built: packet 75bb72581c54 ruled the main kitty (2026-10-22)" ;;
       *) die "--kitty $KITTY (main)" ;;
     esac
     allow=",${LR_HARNESS_TOPUP:-},"
-    [ "$BG" = 0 ] || case "$allow" in *,bg,*) ;; *) die "--bg-topup refused: packet 4eee30ac4de4 (may the harness add load?) is undecided, default neither; set LR_HARNESS_TOPUP=bg once the operator allows it" ;; esac
-    [ "$DF" = 0 ] || case "$allow" in *,df,*) ;; *) die "--df-topup refused: packet 4eee30ac4de4 is undecided, default neither; set LR_HARNESS_TOPUP=df once the operator allows it" ;; esac
+    [ "$BG" = 0 ] || case "$allow" in *,bg,*) ;; *) die "--bg-topup refused: packet 4eee30ac4de4 (may the harness add load?) ruled neither (2026-10-22); set LR_HARNESS_TOPUP=bg once the operator allows it" ;; esac
+    [ "$DF" = 0 ] || case "$allow" in *,df,*) ;; *) die "--df-topup refused: packet 4eee30ac4de4 ruled neither (2026-10-22); set LR_HARNESS_TOPUP=df once the operator allows it" ;; esac
     case "$BG" in *[!0-9]*) die "--bg-topup N" ;; esac; [ "$BG" -le 200 ] || die "--bg-topup caps at 200"
     case "$DF" in *[!0-9]*) die "--df-topup N" ;; esac; [ "$DF" -le 16 ] || die "--df-topup caps at 16"
     [ -e "$H/OFF" ] && nv "off: $H/OFF exists"
