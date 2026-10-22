@@ -29,6 +29,7 @@ setup() {
   export D="$BATS_TEST_TMPDIR"
   export HOME="$D/home"; mkdir -p "$HOME"
   export CC_ACCOUNTS_BOARD="$D/board.txt"
+  export CC_PANE_DIR="$D/pane"     # the band's stamp + snapshot dir; absent unless a case makes it
   command -v jq >/dev/null 2>&1 || skip "jq not installed"
 }
 
