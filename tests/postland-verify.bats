@@ -178,6 +178,10 @@
 # fixes them (0 for kill-switch/abstain/lock-skip/green); a RED run's exit code is
 # unspecified by the contract, so it is deliberately NOT asserted.
 
+# Stubs the SUT execs go through cc_stub (no kernel #! exec under cc-shim). A #! file committed into
+# the fixture repo ($R/foo.sh, innocuous.sh, the prelint, add_stateful_test's helpers) stays plain.
+load helpers/cc-stub
+
 setup() {
   # Project labels in this suite are FIXTURES, not projects — and `cc-backlog add` now WARNS on an
   # explicit --project outside the dispatch set (df2b6a40a5dc), which bats folds into $output. Off
@@ -225,8 +229,7 @@ setup() {
   mkdir -p "$HOME" "$CC_PAGES_DIR" "$STUB" "$REC"
   local s
   for s in cc-backlog osascript cc-notify; do
-    printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/%s.argv"\nexit 0\n' "$REC" "$s" > "$STUB/$s"
-    chmod +x "$STUB/$s"
+    cc_stub "$STUB" "$s" "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/%s.argv"\nexit 0\n' "$REC" "$s")"
   done
   # cc-backlog ALONE also ECHOES AN ID, because the real one does and a caller now READS it.
   # `add` returns the item id on stdout — on the idempotent path too (bin/cc-backlog cmd_add) — and
@@ -237,9 +240,8 @@ setup() {
   # 12-hex-shaped literal — tests assert the SHAPE of the argv pair, never the value, and the
   # real-binary case below is what pins identity. Everything else discards this stdout, so no
   # existing assertion moves.
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/cc-backlog.argv"\ncase "$1" in add) echo stubbedid00 ;; esac\nexit 0\n' \
-    "$REC" > "$STUB/cc-backlog"
-  chmod +x "$STUB/cc-backlog"
+  cc_stub "$STUB" cc-backlog "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/cc-backlog.argv"\ncase "$1" in add) echo stubbedid00 ;; esac\nexit 0\n' \
+    "$REC")"
   export PATH="$STUB:$PATH"
 
   ORIGIN="$BATS_TEST_TMPDIR/origin.git"
@@ -307,9 +309,7 @@ norm() { NORM="$1"; while [ "${NORM#*//}" != "$NORM" ]; do NORM="${NORM%%//*}/${
 # peer `pkill -9 -f bats-core/bats` this clause exists for: a plan promising N results, fewer
 # emitted, ZERO `not ok`, exit 137 (128+SIGKILL). Stubbing the PRODUCER, not the symptom.
 stub_bats() {   # $1 = name, $2 = body after the --version guard; echoes the stub's path
-  printf '#!/bin/bash\n[ "$1" = "--version" ] && { echo "Bats 1.13.0"; exit 0; }\n%s\n' "$2" \
-    > "$STUB/bats-$1"
-  chmod +x "$STUB/bats-$1"
+  cc_stub "$STUB" "bats-$1" "$(printf '#!/bin/bash\n[ "$1" = "--version" ] && { echo "Bats 1.13.0"; exit 0; }\n%s\n' "$2")"
   printf '%s' "$STUB/bats-$1"
 }
 
@@ -665,7 +665,7 @@ second_window() { run bash "$SUT" --run-if-needed; }
 # the-states-under-test). The stub emulates exactly the one behaviour under test — lstart renders
 # per-locale — and defers everything else to the real binary.
 stub_locale_ps() { # <mode: skew|blind> — install a $PATH `ps` that emulates the C33 hazard
-  cat > "$STUB/ps" <<PS
+  cc_stub "$STUB" ps - <<PS
 #!/bin/bash
 q=
 for a in "\$@"; do [ "\$a" = "lstart=" ] && q=1; done
@@ -676,7 +676,6 @@ case "$1" in
      else                              printf 'Tue 11 Aug 15:20:07 2026    \n'; fi ;;
 esac
 PS
-  chmod +x "$STUB/ps"
 }
 
 @test "C33: a LIVE holder recorded under a DIFFERENT LC_TIME is honoured — no second verifier" {
@@ -1220,8 +1219,8 @@ PS
   fake="$BATS_TEST_TMPDIR/bats-cut"
   # NOTE: must answer --version — env_fingerprint() parses it into the stamp's JSON, and a
   # fake that echoes TAP there corrupts the stamp (cost one red test to learn).
-  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 1\n' > "$fake"
-  chmod +x "$fake"                                                 # rc=1 with ZERO output
+  # rc=1 with ZERO output
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 1\n')"
   tree="$(origin_tree)"
   run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
   s="$CC_POSTLAND_DIR/stamps/$tree.json"
@@ -1243,8 +1242,7 @@ PS
 
 @test "C13 control: a run with a REAL not-ok still stamps RED (the cut path must not swallow it)" {
   fake="$BATS_TEST_TMPDIR/bats-red"
-  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\necho "# (in test file tests/ok.bats, line 2)"\nexit 1\n' > "$fake"
-  chmod +x "$fake"
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\necho "# (in test file tests/ok.bats, line 2)"\nexit 1\n')"
   tree="$(origin_tree)"
   # TWO WINDOWS (C29), unlike its C13b sibling above. The difference is the `# (in test file …)`
   # diagnostic this fake emits: it makes the not-ok ATTRIBUTABLE, so classify_failures runs the
@@ -1334,8 +1332,7 @@ exit 1'
 @test "C13h: a SIGNAL-KILLED run (rc 137, ZERO not-ok) names the signal — still cut, never red" {
   fake="$BATS_TEST_TMPDIR/bats-sigkill"
   # rc 137 = 128+9: what bash reports when SIGKILL reaps the corpus (a peer, the OOM killer — not us).
-  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 137\n' > "$fake"
-  chmod +x "$fake"
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 137\n')"
   tree="$(origin_tree)"
   run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
   s="$CC_POSTLAND_DIR/stamps/$tree.json"
@@ -1349,8 +1346,7 @@ exit 1'
 # vacuous pass the old fixed message already was.
 @test "C13h control: rc 1 with ZERO not-ok names the plain rc — it must NOT invent a signal" {
   fake="$BATS_TEST_TMPDIR/bats-rc1"
-  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 1\n' > "$fake"
-  chmod +x "$fake"
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 1\n')"
   tree="$(origin_tree)"
   run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"; [ "$output" = "cut" ]
@@ -1389,8 +1385,7 @@ exit 1'
   # and this fixture's lifetime is also the BOUND on a leak. If the corpus shape ever lets
   # classify_hang map a suspect, confirm_hang re-runs this same fake under FILE_TO (300s); an
   # orphaned grandchild would hold the outer bats TAP fd for exactly as long as the sleep.
-  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\nsleep 30\n' > "$fake"
-  chmod +x "$fake"
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\nsleep 30\n')"
   tree="$(origin_tree)"
   run env CC_POSTLAND_BATS="$fake" POSTLAND_STALL_S=3 POSTLAND_STALL_POLL_S=1 \
       bash "$SUT" --run-if-needed
@@ -1506,8 +1501,8 @@ printf '1..1\nok 1 p\n'")"
 # once, and nothing in the suite would have caught its return.
 @test "C13b: a not-ok with NO file diagnostic stays RED and carries the test NAME" {
   fake="$BATS_TEST_TMPDIR/bats-nodiag"
-  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\nexit 1\n' > "$fake"
-  chmod +x "$fake"                                    # a NAMED failure, with nothing to attribute it to
+  # a NAMED failure, with nothing to attribute it to
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\nexit 1\n')"
   tree="$(origin_tree)"
   run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
   s="$CC_POSTLAND_DIR/stamps/$tree.json"
@@ -1639,8 +1634,8 @@ printf '1..1\nok 1 p\n'")"
 # and the durable record rots anyway. Pin the name into the DURABLE artifact.
 @test "C13d: the DURABLE backlog title carries the test NAME, not just the sentinel" {
   fake="$BATS_TEST_TMPDIR/bats-nodiag"
-  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\nexit 1\n' > "$fake"
-  chmod +x "$fake"                                    # a NAMED failure, with nothing to attribute it to
+  # a NAMED failure, with nothing to attribute it to
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\nexit 1\n')"
   run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
   [ -f "$REC/cc-backlog.argv" ]                       # the RED path did reach the backlog
   # The bare sentinel is what shipped before and is NOT enough: the name must ride along, in the
@@ -1704,7 +1699,7 @@ printf '1..1\nok 1 p\n'")"
 # would let a FAILING[0]-only implementation pass by luck.
 multi_red_bats() {  # → $BATS_TEST_TMPDIR/bats-multi: 3 attributed failures; retries convict too
   local f="$BATS_TEST_TMPDIR/bats-multi"
-  cat > "$f" <<'STUB'
+  cc_stub "${f%/*}" "${f##*/}" - <<'STUB'
 #!/bin/bash
 [ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }
 # The retry ladder re-runs ONE test (`-f <regex> <file>`). It must PLAN >0 and exit 1, or the
@@ -1719,7 +1714,7 @@ echo "not ok 3 charlie"
 echo "# (in test file tests/it2-kitty.bats, line 5)"
 exit 1
 STUB
-  chmod +x "$f"; printf '%s' "$f"
+  printf '%s' "$f"
 }
 
 @test "C13e: EVERY failing suite is filed, not just the one that sorts first" {
@@ -1827,7 +1822,7 @@ STUB
 # (tests/postland-verify-bisect-bound.bats), because the probe's cwd IS the bisect cell.
 bisectable_multi_red_bats() {   # green until BAD appears, then the 3-file attributed TAP
   local f="$BATS_TEST_TMPDIR/bats-bisectable"
-  cat > "$f" <<'STUB'
+  cc_stub "${f%/*}" "${f##*/}" - <<'STUB'
 #!/bin/bash
 [ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }
 # The floor and every interior probe answer from the TREE, not from a counter: this is what makes
@@ -1845,7 +1840,7 @@ echo "not ok 3 charlie"
 echo "# (in test file tests/it2-kitty.bats, line 5)"
 exit 1
 STUB
-  chmod +x "$f"; printf '%s' "$f"
+  printf '%s' "$f"
 }
 
 @test "C13i: a NON-PRIMARY failing entry names the TARGET sha, not the primary's bisected culprit" {
@@ -2023,7 +2018,7 @@ STUB
 # real signal (a genuine SIGKILL) and the real bound (a genuine timeout(1) expiry) are NOT
 # stubbed, and the first test is a positive control against the REAL producer.
 stub_bats_mode() {   # $1 = mode; writes $BATS_TEST_TMPDIR/stub-bats and exports the seam
-  cat > "$BATS_TEST_TMPDIR/stub-bats" <<'STUB'
+  cc_stub "$BATS_TEST_TMPDIR" stub-bats - <<'STUB'
 #!/bin/bash
 case "$1" in --version) echo "Bats 0.0.0-stub"; exit 0 ;; --count) echo 1; exit 0 ;; esac
 case "${PV_STUB_MODE:-}" in
@@ -2054,7 +2049,6 @@ case "${PV_STUB_MODE:-}" in
 esac
 exit 0
 STUB
-  chmod +x "$BATS_TEST_TMPDIR/stub-bats"
   export CC_POSTLAND_BATS="$BATS_TEST_TMPDIR/stub-bats" PV_STUB_MODE="$1"
 }
 hung_pages_n() { find "$CC_PAGES_DIR" -name 'postland-hung-*.page' 2>/dev/null | wc -l | tr -d ' '; }
@@ -2415,10 +2409,8 @@ sleep 300")"
 @test "C17: the suite run is really bounded, with the configured seconds" {
   # a RECORDING timeout(1) — proves the bound is actually applied and carries
   # POSTLAND_SUITE_TIMEOUT_S, rather than trusting that a 124 came from somewhere.
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/timeout.argv"\nexec %s "$@"\n' \
-    "$REC" "$(command -v timeout || command -v gtimeout || echo /opt/homebrew/bin/timeout)" \
-    > "$STUB/rec-timeout"
-  chmod +x "$STUB/rec-timeout"
+  cc_stub "$STUB" rec-timeout "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/timeout.argv"\nexec %s "$@"\n' \
+    "$REC" "$(command -v timeout || command -v gtimeout || echo /opt/homebrew/bin/timeout)")"
   CC_POSTLAND_TIMEOUT_BIN="$STUB/rec-timeout" POSTLAND_SUITE_TIMEOUT_S=77 run bash "$SUT" --run-if-needed
   [ "$status" -eq 0 ]
   [ -f "$REC/timeout.argv" ]                        # C17: the bound was applied at all...
@@ -2513,9 +2505,8 @@ sleep 300")"
 # invoked with — the contract is "landed FROM the revert worktree, on the revert's own branch" —
 # and then really pushes, so "trunk healed" is observed end-to-end rather than mocked away.
 ship_stub() {
-  printf '#!/bin/bash\n{ echo "cwd=$PWD"; echo "branch=$(git rev-parse --abbrev-ref HEAD)"; echo "subject=$(git log -1 --format=%%s)"; echo "allow_outer_timeout=${SHIP_ALLOW_OUTER_TIMEOUT:-}"; } >> "%s/ship.argv"\ngit push -q origin HEAD:main\n' \
-    "$REC" > "$STUB/ship-land"
-  chmod +x "$STUB/ship-land"
+  cc_stub "$STUB" ship-land "$(printf '#!/bin/bash\n{ echo "cwd=$PWD"; echo "branch=$(git rev-parse --abbrev-ref HEAD)"; echo "subject=$(git log -1 --format=%%s)"; echo "allow_outer_timeout=${SHIP_ALLOW_OUTER_TIMEOUT:-}"; } >> "%s/ship.argv"\ngit push -q origin HEAD:main\n' \
+    "$REC")"
   export CC_POSTLAND_SHIP_BIN="$STUB/ship-land"
 }
 # A green baseline FIRST: last-green is the bisect floor, and with no floor there is no bisected
@@ -2557,9 +2548,8 @@ ship_field() { sed -n "s/^$1=//p" "$REC/ship.argv" | head -1; }
 # real one — live marker 47a5350498ee, step=land, revert df989882dc02 — and it is the arm whose
 # `do:` line must go on working while the rc-90 arm's is corrected (C27 below).
 ship_stub_fail() {
-  printf '#!/bin/bash\n{ echo "cwd=$PWD"; echo "branch=$(git rev-parse --abbrev-ref HEAD)"; } >> "%s/ship.argv"\nexit 6\n' \
-    "$REC" > "$STUB/ship-land"
-  chmod +x "$STUB/ship-land"
+  cc_stub "$STUB" ship-land "$(printf '#!/bin/bash\n{ echo "cwd=$PWD"; echo "branch=$(git rev-parse --abbrev-ref HEAD)"; } >> "%s/ship.argv"\nexit 6\n' \
+    "$REC")"
   export CC_POSTLAND_SHIP_BIN="$STUB/ship-land"
 }
 # <c12> <fixed-string> → prints 1 if the page's `do:` line contains it, 0 if not. A COUNT, so the
@@ -2842,15 +2832,13 @@ page_line() { # <c12> <fixed-string> → 1-based line number of its FIRST occurr
 # exactly there.
 orphan_culprit_bats() {   # <culprit> → echoes the wrapper's path
   local real; real="$(command -v bats)"
-  { printf '#!/bin/bash\n'
+  cc_stub "$STUB" bats-orphan "$(printf '#!/bin/bash\n'
     printf 'if [ ! -e "%s" ]; then\n' "$REC/orphaned"
     printf '  tw="$(git -C "%s" commit-tree "%s^{tree}" -p "%s~1" -m "re-landed by the land lane")"\n' "$R" "$1" "$1"
     printf '  git -C "%s" push -qf origin "$tw:main"\n' "$R"
     printf '  printf "%%s" "$tw" > "%s"\n' "$REC/orphaned"
     printf 'fi\n'
-    printf 'exec "%s" "$@"\n' "$real"
-  } > "$STUB/bats-orphan"
-  chmod +x "$STUB/bats-orphan"
+    printf 'exec "%s" "$@"\n' "$real")"
   printf '%s' "$STUB/bats-orphan"
 }
 # Everything under auto_revert reverts FROM origin/main, and nothing checked the culprit was
@@ -4024,12 +4012,10 @@ exit 0"; }
 # verbatim — an approximation mangled by the fixture would test a shape the defect never saw.
 c30_shape_is_not_a_verdict() {   # $1 = the TAP line to plant, verbatim
   fake="$BATS_TEST_TMPDIR/bats-c30"
-  { printf '#!/bin/bash\n[ "$1" = "--version" ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\n'
+  cc_stub "${fake%/*}" "${fake##*/}" "$(printf '#!/bin/bash\n[ "$1" = "--version" ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\n'
     printf 'cat <<%sTAPEOF%s\n' "'" "'"
     printf '%s\n' "$1"
-    printf 'TAPEOF\nexit 1\n'
-  } > "$fake"
-  chmod +x "$fake"
+    printf 'TAPEOF\nexit 1\n')"
   tree="$(origin_tree)"
   run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
   s="$CC_POSTLAND_DIR/stamps/$tree.json"
