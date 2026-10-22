@@ -78,7 +78,9 @@ setup() {
   [ "$output" = 0 ]
   # The stub ends at once, so the window is ~0 s, not the requested 5: per_hour uses the real one.
   run head -1 "$out/summary.txt"
-  [[ "$output" == *"window_s=0 requested_s=5"* ]] || [[ "$output" == *"window_s=1 requested_s=5"* ]] || false
+  # 0-1 s idle; at load ~450/core (2026-10-22) the stub's startup alone took longer, so any real
+  # window under the requested 5 s proves the point.
+  [[ "$output" =~ window_s=[0-4]\ requested_s=5 ]] || false
   run grep -F "$HOME/bin/leaf.sh" "$out/summary.txt"
   [[ "${lines[0]}" == *"      2  "* ]] || false
   grep -qF '/r/tests/x.bats' "$out/summary.txt"
@@ -95,6 +97,48 @@ setup() {
   run /bin/bash "$REPO/scripts/kalloc-exec-census.sh" 10m < /dev/null
   [ "$status" -eq 2 ]
   [ ! -d "$HOME/.cache/kalloc-exec-census" ]
+}
+
+# Plan KALLOC_TRIGGER_ELIMINATION W5: rank the sources, draft lint rows only for paths NEWLY above N.
+# The stub ends at once, so the real window is 0-4 s even under load and a rate is count x 600 / w
+# (w >= 1): N=1000 puts 20 execs above it (>= 3000) and 1 below it (<= 600) at any of those windows.
+@test "ranks every script by rate and drafts lint rows only for paths newly above N" {
+  {
+    for _ in $(seq 20); do ev "$HOME/bin/hot.sh" /bin/zsh; done
+    for _ in $(seq 15); do ev "$HOME/bin/known.sh" /bin/bash; done
+    ev "$HOME/bin/cold.sh" /bin/bash
+  } > "$STREAM"
+  prev="$HOME/.cache/kalloc-exec-census/20000101T000000"
+  mkdir -p "$prev"
+  printf 'rank\tscript\texecs\tper_10min\tshare_pct\tclass\ttop_caller\n1\t%s\t9\t4000.0\t100.0\ttest\tbash\n' \
+    "$HOME/bin/known.sh" > "$prev/ranking.tsv"
+  before="$(cksum < "$prev/ranking.tsv")"
+  export KALLOC_CENSUS_LINT_N=1000
+  run /bin/bash "$REPO/scripts/kalloc-exec-census.sh" 5 < /dev/null
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"verdict=ok script_execs=36 "*"new_above_n=1 "* ]] || false
+  for out in "$HOME/.cache/kalloc-exec-census/"*/; do [ "$out" = "$prev/" ] || break; done
+  run cut -f1-3,6,7 "$out/ranking.tsv"
+  [ "${lines[1]}" = "1	$HOME/bin/hot.sh	20	test	zsh" ] || false
+  [ "${lines[2]}" = "2	$HOME/bin/known.sh	15	test	bash" ] || false
+  [ "${lines[3]}" = "3	$HOME/bin/cold.sh	1	test	bash" ] || false
+  run grep -c '^DRAFT' "$out/lint-drafts.txt"
+  [ "$output" = 1 ] || false
+  run grep '^DRAFT' "$out/lint-drafts.txt"
+  [[ "$output" == "DRAFT	$HOME/bin/hot.sh	"*"/10min	class=test	caller=zsh	fix: "* ]] || false
+  grep -qF "NEW ABOVE 1000 PER 10 MIN: 1" "$out/summary.txt"
+  # Drafts only: the previous census is untouched and nothing new sits beside the two run dirs.
+  [ "$(cksum < "$prev/ranking.tsv")" = "$before" ] || false
+  [ "$(find "$HOME/.cache/kalloc-exec-census" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 2 ]
+}
+
+@test "with no previous census every path above N is drafted, and the header says so" {
+  run /bin/bash "$REPO/scripts/kalloc-exec-census.sh" 5 < /dev/null
+  [ "$status" -eq 0 ] || false
+  out="$(ls -d "$HOME/.cache/kalloc-exec-census/"*/)"
+  grep -q 'no previous census had (first census here)' "$out/lint-drafts.txt"
+  run grep -c "^DRAFT	$HOME/bin/leaf.sh	" "$out/lint-drafts.txt"
+  [ "$output" = 1 ]
 }
 
 @test "RED-proof: the old tool's filter writes the secret" {
