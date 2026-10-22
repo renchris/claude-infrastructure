@@ -52,7 +52,7 @@ install_run() { run bash "$FX/install.sh"; }
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | grep -c '^CLI session list')" -eq 1 ] || { echo "$output"; false; }
 
-  # shellcheck through the shim → .bin-real/shellcheck → cc-qos-exec → the real shellcheck, no loop.
+  # ShellCheck through the shim → .bin-real/shellcheck → cc-qos-exec → the real shellcheck, no loop.
   # The first shellcheck on the ambient PATH may itself be a qos-shim link (the operator's own
   # ~/.claude/bin), which cc-qos-exec rightly skips: find the first one that is not.
   local sc="" c
