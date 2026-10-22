@@ -82,7 +82,7 @@ tp_log() { cat "$BATS_TEST_TMPDIR/tp.log" 2>/dev/null; }
 # on PATH and is neither this file nor a cc-qos-exec link, so pre-fix the walk exec'd it and cc-shim's
 # hop guard ended the loop at 126. A REAL cc-shim, because a stub would not reproduce the loop.
 @test "cc-shim layout: the bin/ trampoline link is skipped, the real tool runs demoted, no loop" {
-  [ -n "${CC_SHIM:-}" ] && [ -x "$CC_SHIM" ] || skip "no compiled cc-shim (CC_SHIM unset)"
+  [ -n "${CC_SHIM:-}" ] && [ -x "$CC_SHIM" ] || skip "no compiled cc-shim (CC_SHIM unset)" || false
   for cfg in "$HOME/.claude" "$BATS_TEST_TMPDIR/cfg2"; do
     mkdir -p "$cfg/bin" "$cfg/.bin-real" "$cfg/libexec"
     ln -s "$CC_SHIM" "$cfg/libexec/cc-shim"
