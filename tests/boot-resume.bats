@@ -20,6 +20,17 @@
 #      every time, nothing surfaced).
 #   5. ABSTENTION-LOGGED: every run writes ONE {fired|abstained|failed} IDL record (B-3).
 
+load helpers/cc-stub
+
+# cc_stub_self PATH [BODY] — cc_stub at PATH (BODY on stdin when absent), with `self=<PATH>` put after
+# the #! line. Under the shim "$0" is the body's own .<D>-real path, so these stubs key their logs and
+# control files (.log, .fail, .rc …) on "$self", the path the cases read and write.
+cc_stub_self() {
+  local p="$1" body
+  if [ $# -ge 2 ]; then body="$2"; else IFS= read -r -d '' body || true; fi
+  cc_stub "${p%/*}" "${p##*/}" "${body%%$'\n'*}"$'\n'"self=$(printf '%q' "$p")"$'\n'"${body#*$'\n'}"
+}
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   SCRIPT="$REPO/scripts/boot-resume.sh"
@@ -34,25 +45,23 @@ setup() {
   # stub cc-notify: one call-marker per invocation in .calls (the boot-delta message is MULTI-LINE,
   # so counting .log lines would over-count a single call) + the full args in .log for content greps.
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/stub-notify"
-  cat > "$CC_NOTIFY_BIN" <<'SH'
+  cc_stub_self "$CC_NOTIFY_BIN" <<'SH'
 #!/bin/bash
 # A restore note (--mailbox-only, W3 P4) is not a page: it gets its own log, so the page counts and
 # the page greps stay about pages.
-case " $* " in *" --mailbox-only "*) printf '%s\n' "$*" >> "$0.notes"; [ -f "$0.notes-fail" ] && exit 3; exit 0 ;; esac
-echo "NOTIFY_CALL" >> "$0.calls"
-printf '%s\n' "$*" >> "$0.log"
+case " $* " in *" --mailbox-only "*) printf '%s\n' "$*" >> "$self.notes"; [ -f "$self.notes-fail" ] && exit 3; exit 0 ;; esac
+echo "NOTIFY_CALL" >> "$self.calls"
+printf '%s\n' "$*" >> "$self.log"
 SH
-  chmod +x "$CC_NOTIFY_BIN"
   # W3 P4: restore v2 reads each prompt back from the transcript for up to 90 s and falls back to
   # cc-wake. No wait in a test, and a stub in place of the real cc-wake (a file .rc sets its exit).
   export CC_RESTORE_CONFIRM_S=0 CC_RESTORE_PASTE_SETTLE_S=0
   export CC_WAKE_BIN="$BATS_TEST_TMPDIR/stub-wake"
-  cat > "$CC_WAKE_BIN" <<'SH'
+  cc_stub_self "$CC_WAKE_BIN" <<'SH'
 #!/bin/bash
-printf '%s\n' "$*" >> "$0.log"
-exit "$(cat "$0.rc" 2>/dev/null || echo 1)"
+printf '%s\n' "$*" >> "$self.log"
+exit "$(cat "$self.rc" 2>/dev/null || echo 1)"
 SH
-  chmod +x "$CC_WAKE_BIN"
   unset CC_RESTORE_NUDGE
   # The verified paste has a real entry point since W3 P5 (handoff-fire.sh paste-verified). No case
   # here may reach it: the seam names a path that does not exist unless a case installs a stub.
@@ -67,32 +76,30 @@ SH
   # reaches the REPO's own bin/cc-backlog from $(dirname $0)/../bin, so an unstubbed run would file
   # real rows into the operator's live ~/.claude/autonomy/backlog.jsonl from a test.
   export CC_BACKLOG_BIN="$BATS_TEST_TMPDIR/stub-backlog"
-  cat > "$CC_BACKLOG_BIN" <<'SH'
+  cc_stub_self "$CC_BACKLOG_BIN" <<'SH'
 #!/bin/bash
-printf '%s\n' "$*" >> "$0.log"
-[ -f "$0.fail" ] && exit 1
-cat "$0.out" 2>/dev/null || echo "beef1234cafe"
+printf '%s\n' "$*" >> "$self.log"
+[ -f "$self.fail" ] && exit 1
+cat "$self.out" 2>/dev/null || echo "beef1234cafe"
 SH
-  chmod +x "$CC_BACKLOG_BIN"
 
   # stub the resume launcher: log "<acct> <cwd> <sid> <branch>" per LAUNCH, exit 0. The ownership
   # probe (--check-only) logs to .checks instead, and exits 5 for any sid listed in .held.
   export CC_RESUME_LAUNCH_BIN="$BATS_TEST_TMPDIR/stub-launch"
-  cat > "$CC_RESUME_LAUNCH_BIN" <<'SH'
+  cc_stub_self "$CC_RESUME_LAUNCH_BIN" <<'SH'
 #!/bin/bash
 if [ "$1" = --check-only ]; then
-  shift; printf '%s\n' "$*" >> "$0.checks"
-  grep -qx "$3" "$0.held" 2>/dev/null && { echo "boot-resume-launch: $3 already has 1 live holder(s) - stub" >&2; exit 5; }
-  grep -qx "$3" "$0.member" 2>/dev/null && { echo "boot-resume-launch: NOT LAUNCHING $3 - an Agent Teams member (stub)" >&2; exit 7; }
+  shift; printf '%s\n' "$*" >> "$self.checks"
+  grep -qx "$3" "$self.held" 2>/dev/null && { echo "boot-resume-launch: $3 already has 1 live holder(s) - stub" >&2; exit 5; }
+  grep -qx "$3" "$self.member" 2>/dev/null && { echo "boot-resume-launch: NOT LAUNCHING $3 - an Agent Teams member (stub)" >&2; exit 7; }
   exit 0
 fi
-printf '%s\n' "$*" >> "$0.log"
-grep -qx "$3" "$0.indet" 2>/dev/null && exit 6   # an indeterminate kitty launch (review item 2)
-grep -qx "$3" "$0.held" 2>/dev/null && exit 5
-grep -qx "$3" "$0.member-at-launch" 2>/dev/null && exit 7   # passed --check-only, refused at launch
+printf '%s\n' "$*" >> "$self.log"
+grep -qx "$3" "$self.indet" 2>/dev/null && exit 6   # an indeterminate kitty launch (review item 2)
+grep -qx "$3" "$self.held" 2>/dev/null && exit 5
+grep -qx "$3" "$self.member-at-launch" 2>/dev/null && exit 7   # passed --check-only, refused at launch
 exit 0
 SH
-  chmod +x "$CC_RESUME_LAUNCH_BIN"
 
   # Every new resolution must be redirected, or a test reads the operator's real reboot roster and
   # tombstones, or drives the real kitty through the real layout. The layout is ABSENT by default,
@@ -102,7 +109,7 @@ SH
   mkdir -p "$CC_BOOT_RESUME_ROSTER_DIR" "$CC_SHUTDOWN_TOMB_DIR"
   export CC_RESUME_LAYOUT_BIN="$BATS_TEST_TMPDIR/no-layout"
   export CC_OPEN_BIN="$BATS_TEST_TMPDIR/stub-open"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\n' > "$CC_OPEN_BIN"; chmod +x "$CC_OPEN_BIN"
+  cc_stub_self "$CC_OPEN_BIN" "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$self.log"\n')"
   export CC_BOOT_RESUME_KITTY_POLL=0
   # Step 0, the heartbeat (W3 P3a-i): a fixture HOME and a stub for every reader it has, so no case
   # reads the live registry or asks the live kitty for its tree. The stub cc-sessions prints
@@ -112,21 +119,22 @@ SH
   export CC_HEARTBEAT_DIR="$BATS_TEST_TMPDIR/heartbeat"
   export CC_HB_NOW=1784800000      # the tick's clock, pinned to the fixed boot: prune is age-based
   export CC_HB_SESSIONS_BIN="$BATS_TEST_TMPDIR/stub-sessions"
-  cat > "$CC_HB_SESSIONS_BIN" <<'SH'
+  cc_stub_self "$CC_HB_SESSIONS_BIN" <<'SH'
 #!/bin/bash
-echo call >> "$0.calls"
-[ -f "$0.sweep" ] && rm -f "$CC_REGISTRY_DIR"/*.json
-cat "$0.json" 2>/dev/null || echo '[]'
+echo call >> "$self.calls"
+[ -f "$self.sweep" ] && rm -f "$CC_REGISTRY_DIR"/*.json
+cat "$self.json" 2>/dev/null || echo '[]'
 SH
-  chmod +x "$CC_HB_SESSIONS_BIN"
   export CC_HB_KITTEN_BIN="$BATS_TEST_TMPDIR/stub-kitten"
-  printf '#!/bin/bash\necho "[]"\n' > "$CC_HB_KITTEN_BIN"; chmod +x "$CC_HB_KITTEN_BIN"
+  cc_stub "$BATS_TEST_TMPDIR" stub-kitten "$(printf '#!/bin/bash\necho "[]"\n')"
   export CC_HB_PS_BIN="$BATS_TEST_DIRNAME/fixtures/hb-kitty-ps" CC_HB_LSOF_BIN=/usr/bin/true
   export CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/stub-ksock"
-  printf '#!/bin/bash\necho unix:/tmp/kitty-test\n' > "$CC_KITTY_SOCKET_BIN"; chmod +x "$CC_KITTY_SOCKET_BIN"
+  cc_stub "$BATS_TEST_TMPDIR" stub-ksock "$(printf '#!/bin/bash\necho unix:/tmp/kitty-test\n')"
   # classifier stub: append a verdict per row — the sid's line in .verdicts, else INTERRUPTED — and
   # log its argv. A test that wants it to fail writes .fail.
   export CC_RESUME_CLASSIFY_BIN="$BATS_TEST_TMPDIR/stub-classify"
+  # A plain #! file, not cc_stub: boot-resume greps this file's TEXT for --owner (boot-resume.sh, the
+  # CL_ARGS block), and under the shim the path is a link to the Mach-O, which has no such text.
   cat > "$CC_RESUME_CLASSIFY_BIN" <<'SH'
 #!/bin/bash
 # Like the real classifier this stub takes --owner (boot-resume passes it only to one that does).
@@ -147,10 +155,10 @@ SH
   # rather than re-testing lr-select's policy (which owns its own 21 cases in lr-select.bats).
   # A test that wants consolidation writes the winner TSV to .winners.
   export CC_RESUME_SELECT_BIN="$BATS_TEST_TMPDIR/stub-select"
-  cat > "$CC_RESUME_SELECT_BIN" <<'SH'
+  cc_stub_self "$CC_RESUME_SELECT_BIN" <<'SH'
 #!/bin/bash
-printf '%s\n' "$*" >> "$0.log"
-if [ -f "$0.winners" ]; then cat "$0.winners"; exit 0; fi
+printf '%s\n' "$*" >> "$self.log"
+if [ -f "$self.winners" ]; then cat "$self.winners"; exit 0; fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --candidate) a="${2%%:*}"; rest="${2#*:}"; s="${rest%%:*}"; c="${rest#*:}"
@@ -159,60 +167,54 @@ while [ $# -gt 0 ]; do
   esac
 done
 SH
-  chmod +x "$CC_RESUME_SELECT_BIN"
 
   # stub keepalive: log the call, exit 0 (never start the real infinite loop in a test).
   export CC_KEEPALIVE_BIN="$BATS_TEST_TMPDIR/stub-keepalive"
-  cat > "$CC_KEEPALIVE_BIN" <<'SH'
+  cc_stub_self "$CC_KEEPALIVE_BIN" <<'SH'
 #!/bin/bash
-printf 'started\n' >> "$0.log"
-printf '%s\n' "${CC_KEEPALIVE_MARKERS-<unset>}" >> "$0.markers"
+printf 'started\n' >> "$self.log"
+printf '%s\n' "${CC_KEEPALIVE_MARKERS-<unset>}" >> "$self.markers"
 SH
-  chmod +x "$CC_KEEPALIVE_BIN"
 
   # stub launchctl: report two loaded com.claude jobs (one up, one down) deterministically.
   export CC_LAUNCHCTL_BIN="$BATS_TEST_TMPDIR/stub-launchctl"
-  cat > "$CC_LAUNCHCTL_BIN" <<'SH'
+  cc_stub "$BATS_TEST_TMPDIR" stub-launchctl - <<'SH'
 #!/bin/bash
 # mimic `launchctl list`: PID<TAB>Status<TAB>Label
 printf '%s\t%s\t%s\n' 4321 0 com.claude.dispatcher
 printf '%s\t%s\t%s\n' - 0 com.claude.discovery
 SH
-  chmod +x "$CC_LAUNCHCTL_BIN"
 
   # stub transcript_mtime: default = "recent" (just before the fixed test boottime) so a registry
   # ghost passes the recency filter; a per-sid override file marks a session as OLD cruft.
   export MTIME_STUB_DIR="$BATS_TEST_TMPDIR/mtimes"; mkdir -p "$MTIME_STUB_DIR"
   export CC_TRANSCRIPT_MTIME_BIN="$BATS_TEST_TMPDIR/stub-mtime"
-  cat > "$CC_TRANSCRIPT_MTIME_BIN" <<'SH'
+  cc_stub "$BATS_TEST_TMPDIR" stub-mtime - <<'SH'
 #!/bin/bash
 # args: <account> <sid> <cwd>
 if [ -f "$MTIME_STUB_DIR/$2" ]; then cat "$MTIME_STUB_DIR/$2"; else echo 1784799900; fi
 SH
-  chmod +x "$CC_TRANSCRIPT_MTIME_BIN"
 
   # Restore v2 (W3 P3a-ii): the start gate reads load through sysctl, so a stub answers it — the
   # first lines of .loads in turn, then the last one; load 0.50 on 8 cores by default — or a case
   # would wait on the box's real load. The recycle log and teardown markers are fixtures too.
   export CC_SYSCTL_BIN="$BATS_TEST_TMPDIR/stub-sysctl"
-  cat > "$CC_SYSCTL_BIN" <<'SH'
+  cc_stub_self "$CC_SYSCTL_BIN" <<'SH'
 #!/bin/bash
 case "$*" in
-  *vm.loadavg*) n=$(cat "$0.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$0.n"
-                l="$(sed -n "$((n + 1))p" "$0.loads" 2>/dev/null)"; [ -n "$l" ] || l="$(tail -n 1 "$0.loads" 2>/dev/null)"
+  *vm.loadavg*) n=$(cat "$self.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$self.n"
+                l="$(sed -n "$((n + 1))p" "$self.loads" 2>/dev/null)"; [ -n "$l" ] || l="$(tail -n 1 "$self.loads" 2>/dev/null)"
                 echo "{ ${l:-0.50} 0.40 0.30 }" ;;
   *hw.ncpu*) echo 8 ;;
   *) exit 1 ;;
 esac
 SH
-  chmod +x "$CC_SYSCTL_BIN"
   export CC_HANDOFF_LOG="$BATS_TEST_TMPDIR/handoffs.jsonl" CC_TEARDOWN_DIR="$BATS_TEST_TMPDIR/teardown"
   # 2026-10-21 (reboot-resume R3, R8): the mail carry works on a fixture mailbox through the real
   # library, and cc-restore-rebind is a stub that logs its argv (the real one claims live roles).
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mailbox"
   export CC_RESTORE_REBIND_BIN="$BATS_TEST_TMPDIR/stub-rebind"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\necho "cc-restore-rebind: verdict=NOOP"\n' > "$CC_RESTORE_REBIND_BIN"
-  chmod +x "$CC_RESTORE_REBIND_BIN"
+  cc_stub_self "$CC_RESTORE_REBIND_BIN" "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$self.log"\necho "cc-restore-rebind: verdict=NOOP"\n')"
 }
 
 # reg_entry <sid> <startedAt_ms> <account-config-basename> [cwd] [name]
@@ -243,11 +245,10 @@ marker() { cat "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch" 2>/dev/null || echo "
 @test "boottime parses the sec field (not usec) from real sysctl format" {
   unset CC_BOOTTIME_OVERRIDE
   export CC_SYSCTL_BIN="$BATS_TEST_TMPDIR/stub-sysctl"
-  cat > "$CC_SYSCTL_BIN" <<'SH'
+  cc_stub "$BATS_TEST_TMPDIR" stub-sysctl - <<'SH'
 #!/bin/bash
 echo "{ sec = 1783830779, usec = 963957 } Sat Jul 11 21:32:59 2026"
 SH
-  chmod +x "$CC_SYSCTL_BIN"
   run bash "$SCRIPT" --print-boottime
   [ "$status" -eq 0 ]
   [ "$output" = "1783830779" ]        # the sec field — NOT 963957 (usec)
@@ -567,15 +568,14 @@ tomb() { # <sid> <endedAt> [hostShutdown] [cwd]
 }
 stub_layout() { # <summary line>; a file .rc3=N makes the first N calls exit 3 (no live kitty)
   export CC_RESUME_LAYOUT_BIN="$BATS_TEST_TMPDIR/stub-layout"
-  cat > "$CC_RESUME_LAYOUT_BIN" <<'SH'
+  cc_stub_self "$CC_RESUME_LAYOUT_BIN" <<'SH'
 #!/bin/bash
-printf '%s\n' "$*" >> "$0.log"; cat >> "$0.rows"
-printf '%s\n' "${CC_ADMIT_LOAD_TERM:-on}" >> "$0.loadterm"
-n=$(cat "$0.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$0.n"
-[ -f "$0.rc3" ] && [ "$n" -lt "$(cat "$0.rc3")" ] && exit 3
-cat "$0.sum"
+printf '%s\n' "$*" >> "$self.log"; cat >> "$self.rows"
+printf '%s\n' "${CC_ADMIT_LOAD_TERM:-on}" >> "$self.loadterm"
+n=$(cat "$self.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$self.n"
+[ -f "$self.rc3" ] && [ "$n" -lt "$(cat "$self.rc3")" ] && exit 3
+cat "$self.sum"
 SH
-  chmod +x "$CC_RESUME_LAYOUT_BIN"
   printf '%s\n' "$1" > "$CC_RESUME_LAYOUT_BIN.sum"
 }
 SUM_OK2='cc-resume-layout: verdict=ok launched=2 shed=0 failed=0 windows=1 fullscreen_ok=1 fullscreen_failed=0'
@@ -1067,12 +1067,11 @@ cc-resume-layout: verdict=ok launched=1 shed=1 failed=0 windows=1 fullscreen_ok=
 @test "v2 headroom: a row on an account at its weekly limit is restored, noted, listed, and never gets a prompt" {
   v2_fleet
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/stub-accounts"
-  cat > "$CC_ACCOUNTS_BIN" <<'SH'
+  cc_stub_self "$CC_ACCOUNTS_BIN" <<'SH'
 #!/bin/bash
-printf '%s\n' "$*" >> "$0.log"
+printf '%s\n' "$*" >> "$self.log"
 echo '{"rows":[{"acct":"next","weekly_pct":100},{"acct":"next3","weekly_pct":20}]}'
 SH
-  chmod +x "$CC_ACCOUNTS_BIN"
   stub_layout "$SUM_OK2"
   run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
   [ "$status" -eq 0 ]
@@ -1138,22 +1137,21 @@ col10() { row_of "$CC_RESUME_LAYOUT_BIN.rows" "$1" | cut -f10; }
 stub_layout_answering() { # <summary> <sids that answer...>
   stub_layout "$1"; shift
   printf '%s\n' "$@" > "$CC_RESUME_LAYOUT_BIN.answer"
-  cat > "$CC_RESUME_LAYOUT_BIN" <<'SH'
+  cc_stub_self "$CC_RESUME_LAYOUT_BIN" <<'SH'
 #!/bin/bash
-printf '%s\n' "$*" >> "$0.log"
-[ -f "$0.notes-seen" ] || cp "$CC_NOTIFY_BIN.notes" "$0.notes-seen" 2>/dev/null
+printf '%s\n' "$*" >> "$self.log"
+[ -f "$self.notes-seen" ] || cp "$CC_NOTIFY_BIN.notes" "$self.notes-seen" 2>/dev/null
 while IFS= read -r row; do
   [ -n "$row" ] || continue
-  printf '%s\n' "$row" >> "$0.rows"
+  printf '%s\n' "$row" >> "$self.rows"
   sid="$(printf '%s' "$row" | cut -f2)"; pf="$(printf '%s' "$row" | cut -f10)"
-  grep -qx "$sid" "$0.answer" 2>/dev/null && [ -s "$pf" ] || continue
+  grep -qx "$sid" "$self.answer" 2>/dev/null && [ -s "$pf" ] || continue
   d="$HOME/.claude-next/projects/-x-$sid"; mkdir -p "$d"
   jq -cn --arg t "$(cat "$pf")" '{type:"user",message:{content:$t}}' >> "$d/$sid.jsonl"
-  [ -f "$0.noreply" ] || echo '{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"ok"}]}}' >> "$d/$sid.jsonl"
+  [ -f "$self.noreply" ] || echo '{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"ok"}]}}' >> "$d/$sid.jsonl"
 done
-cat "$0.sum"
+cat "$self.sum"
 SH
-  chmod +x "$CC_RESUME_LAYOUT_BIN"
 }
 
 @test "P4 v2: no keepalive; one note per row, written before the layout runs; a prompt only for rows with open work" {
@@ -1235,16 +1233,15 @@ SH
   mkdir -p "$CC_REGISTRY_DIR"
   printf '{"paneUUID":"77","session_id":"e2","pid":1}' > "$CC_REGISTRY_DIR/77.json"
   export CC_RESTORE_PASTE_CMD="$BATS_TEST_TMPDIR/stub-paste"
-  cat > "$CC_RESTORE_PASTE_CMD" <<'SH'
+  cc_stub_self "$CC_RESTORE_PASTE_CMD" <<'SH'
 #!/bin/bash
-printf '%s\n' "$*" >> "$0.log"
-[ -f "$CC_WAKE_BIN.log" ] && echo wake-ran-first >> "$0.log"
-[ -f "$0.submit" ] || exit 0
+printf '%s\n' "$*" >> "$self.log"
+[ -f "$CC_WAKE_BIN.log" ] && echo wake-ran-first >> "$self.log"
+[ -f "$self.submit" ] || exit 0
 d="$HOME/.claude-next/projects/-x-e2"; mkdir -p "$d"
 jq -cn --arg t "$(cat "$2")" '{type:"user",message:{content:$t}}' >> "$d/e2.jsonl"
 echo '{"type":"assistant","message":{"model":"claude-opus-5-5","content":[]}}' >> "$d/e2.jsonl"
 SH
-  chmod +x "$CC_RESTORE_PASTE_CMD"
   run /bin/bash "$SCRIPT" --event "$EV" --kind crash
   [ "$status" -eq 0 ]
   grep -qx -- "77 $(evdir)/prompts/e2.txt" "$CC_RESTORE_PASTE_CMD.log"
@@ -1310,15 +1307,14 @@ handled_boot() {
   echo UUID-1 > "$CC_BOOT_RESUME_STATE_DIR/last-boot-uuid"
   # ps stub: `-o comm= -p <pid>` answers kitty for a pid listed in .alive; `-axo pid=,args=` prints .table
   export CC_BOOT_RESUME_PS_BIN="$BATS_TEST_TMPDIR/stub-ps"
-  cat > "$CC_BOOT_RESUME_PS_BIN" <<'SH'
+  cc_stub_self "$CC_BOOT_RESUME_PS_BIN" <<'SH'
 #!/bin/bash
 case " $* " in
-  *" -axo "*) cat "$0.table" 2>/dev/null ;;
-  *" -p "*)   for p; do :; done; grep -qx "$p" "$0.alive" 2>/dev/null && echo /Applications/kitty.app/Contents/MacOS/kitty ;;
+  *" -axo "*) cat "$self.table" 2>/dev/null ;;
+  *" -p "*)   for p; do :; done; grep -qx "$p" "$self.alive" 2>/dev/null && echo /Applications/kitty.app/Contents/MacOS/kitty ;;
 esac
 exit 0
 SH
-  chmod +x "$CC_BOOT_RESUME_PS_BIN"
   export CC_RESTORE_BIN=/fixture/bin/cc-restore
   mkdir -p "$CC_ROLES_DIR"; echo DESK-UUID > "$CC_ROLES_DIR/desk"
 }
@@ -1384,7 +1380,7 @@ deaf_fixture() { # <queued rows> <sample: peer|nopeer|broken>
   echo "$KP /Applications/kitty.app/Contents/MacOS/kitty" > "$CC_BOOT_RESUME_PS_BIN.table"
   echo "$KP" > "$CC_BOOT_RESUME_PS_BIN.alive"
   KSOCK="$BATS_TEST_TMPDIR/kitty-$KP"
-  printf '#!/bin/bash\necho "unix:%s/kitty-1"\necho "unix:%s"\n' "$BATS_TEST_TMPDIR" "$KSOCK" > "$CC_KITTY_SOCKET_BIN"; chmod +x "$CC_KITTY_SOCKET_BIN"
+  cc_stub "${CC_KITTY_SOCKET_BIN%/*}" "${CC_KITTY_SOCKET_BIN##*/}" "$(printf '#!/bin/bash\necho "unix:%s/kitty-1"\necho "unix:%s"\n' "$BATS_TEST_TMPDIR" "$KSOCK")"
   export CC_HF_NETSTAT_FILE="$BATS_TEST_TMPDIR/netstat.txt"
   { echo "Active LOCAL (UNIX) domain sockets"
     echo "a0 stream 0 0 9b64 0 0 0 0 0 8192 8192 $KP 0 00000 2 b56a 8000 0 1 0 000000 $KSOCK"
@@ -1396,7 +1392,7 @@ deaf_fixture() { # <queued rows> <sample: peer|nopeer|broken>
     nopeer) body='echo "    1 Thread_1   DispatchQueue_1: com.apple.main-thread"; echo "    1 Thread_8856: KittyChildMon"' ;;
     *)      body='exit 1' ;;
   esac
-  printf '#!/bin/bash\necho "$*" >> "$0.log"\n%s\n' "$body" > "$CC_KQ_SAMPLE_BIN"; chmod +x "$CC_KQ_SAMPLE_BIN"
+  cc_stub_self "$CC_KQ_SAMPLE_BIN" "$(printf '#!/bin/bash\necho "$*" >> "$self.log"\n%s\n' "$body")"
 }
 
 @test "P5 deaf page: a full queue AND no KittyPeerMon thread pages once, with handoff-fire's own row and the one command" {
@@ -1440,8 +1436,7 @@ deaf_fixture() { # <queued rows> <sample: peer|nopeer|broken>
 @test "P5 deaf page: at any load it says restart anyway, because the restore never waits for load" {
   deaf_fixture 128 nopeer
   export CC_SYSCTL_BIN="$BATS_TEST_TMPDIR/stub-sysctl"
-  printf '#!/bin/bash\ncase "$*" in *hw.ncpu*) echo 2 ;; *vm.loadavg*) echo "{ 40.00 30.00 20.00 }" ;; esac\n' > "$CC_SYSCTL_BIN"
-  chmod +x "$CC_SYSCTL_BIN"
+  cc_stub "$BATS_TEST_TMPDIR" stub-sysctl "$(printf '#!/bin/bash\ncase "$*" in *hw.ncpu*) echo 2 ;; *vm.loadavg*) echo "{ 40.00 30.00 20.00 }" ;; esac\n')"
   run /bin/bash "$SCRIPT"
   [ "$status" -eq 0 ]
   grep -q 'Load per core is 20.00: restart anyway. The restore does not wait for load to fall' "$CC_NOTIFY_BIN.log"
@@ -1480,13 +1475,13 @@ deaf_fixture() { # <queued rows> <sample: peer|nopeer|broken>
 # ── the reboot prep's unsent drafts (2026-10-13; scripts/lib/reboot-drafts.sh) ─────────────────────
 # alarm-reboot-prep.sh saved a pane's unsent prompt-box text beside its roster. Restore v2 types it
 # into the pane the layout's map line names for that session, never submits it, and deletes it. The
-# stub kitty renders pane N's box from $0.d/N.box and records every send-text.
+# stub kitty renders pane N's box from $self.d/N.box and records every send-text.
 drafts_kitty() {
   export CC_TERM_KITTY="$BATS_TEST_TMPDIR/stub-kitty" CC_CARRY_SETTLE_S=0 CC_RESTORE_DRAFT_WAIT=60 CC_RESTORE_DRAFT_POLL=0
   mkdir -p "$CC_TERM_KITTY.d"
-  cat > "$CC_TERM_KITTY" <<'SH'
+  cc_stub_self "$CC_TERM_KITTY" <<'SH'
 #!/bin/bash
-printf '%s\n' "$*" >> "$0.log"
+printf '%s\n' "$*" >> "$self.log"
 shift 3; cmd="$1"; shift
 id=""; file=""
 while [ $# -gt 0 ]; do
@@ -1494,12 +1489,11 @@ while [ $# -gt 0 ]; do
 done
 case "$cmd" in
   ls) printf '[{"tabs":[{"windows":[{"id":%s}]}]}]\n' "$id" ;;
-  get-text) [ -f "$0.d/$id.box" ] || exit 1
-    printf ' output above\n────────────────────────────────────────\n❯ %s\n────────────────────────────────────────\n  ? for shortcuts\n' "$(cat "$0.d/$id.box")" ;;
-  send-text) [ -n "$file" ] || exit 0; cat "$file" >> "$0.d/$id.box"; cat "$file" >> "$0.d/$id.typed" ;;
+  get-text) [ -f "$self.d/$id.box" ] || exit 1
+    printf ' output above\n────────────────────────────────────────\n❯ %s\n────────────────────────────────────────\n  ? for shortcuts\n' "$(cat "$self.d/$id.box")" ;;
+  send-text) [ -n "$file" ] || exit 0; cat "$file" >> "$self.d/$id.box"; cat "$file" >> "$self.d/$id.typed" ;;
 esac
 SH
-  chmod +x "$CC_TERM_KITTY"
 }
 saved_draft() { # <roster tag> <sid> <text>
   local d="$CC_BOOT_RESUME_ROSTER_DIR/reboot-$1.drafts/$2"
@@ -1738,8 +1732,7 @@ cc-resume-layout: verdict=ok launched=2 shed=0 failed=0 windows=1 fullscreen_ok=
 @test "R7: the confirm phase ends on the wall clock however slow each check is, and asks a confirmed session once" {
   v2_fleet
   export CC_RESTORE_CONFIRM_S=3 CC_RESTORE_CONFIRM_POLL=0 CC_RESTORE_CONFIRM_CMD="$BATS_TEST_TMPDIR/stub-confirm"
-  printf '#!/bin/bash\necho "$1" >> "$0.calls"\nwc -l < "$CC_HB_SESSIONS_BIN.calls" >> "$0.ticks" 2>/dev/null\n[ "$1" = e2 ] && { echo "user=1 assistant=1"; exit 0; }\nsleep 1; echo "user=0 assistant=0"; exit 2\n' > "$CC_RESTORE_CONFIRM_CMD"
-  chmod +x "$CC_RESTORE_CONFIRM_CMD"
+  cc_stub_self "$CC_RESTORE_CONFIRM_CMD" "$(printf '#!/bin/bash\necho "$1" >> "$self.calls"\nwc -l < "$CC_HB_SESSIONS_BIN.calls" >> "$self.ticks" 2>/dev/null\n[ "$1" = e2 ] && { echo "user=1 assistant=1"; exit 0; }\nsleep 1; echo "user=0 assistant=0"; exit 2\n')"
   stub_layout "$SUM_OK2"
   run /bin/bash "$SCRIPT" --event "$EV" --kind crash
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -1778,8 +1771,7 @@ cc-resume-layout: verdict=ok launched=2 shed=0 failed=0 windows=1 fullscreen_ok=
 
 @test "R22: the first round of a reboot keeps templateMigrator's durations with the boot's event; an event never asks" {
   export CC_LOG_BIN="$BATS_TEST_TMPDIR/stub-log"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.calls"\necho "2026-10-21 14:46:59 templateMigrator: noise"\necho "2026-10-21 14:47:07 templateMigrator: MigrateFilesStepDuration=1527.03"\necho "2026-10-21 14:47:07 templateMigrator: TotalDuration=1534.31"\necho "2026-10-21 14:47:07 templateMigrator: ** Migration completed successfully **"\n' > "$CC_LOG_BIN"
-  chmod +x "$CC_LOG_BIN"
+  cc_stub_self "$CC_LOG_BIN" "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$self.calls"\necho "2026-10-21 14:46:59 templateMigrator: noise"\necho "2026-10-21 14:47:07 templateMigrator: MigrateFilesStepDuration=1527.03"\necho "2026-10-21 14:47:07 templateMigrator: TotalDuration=1534.31"\necho "2026-10-21 14:47:07 templateMigrator: ** Migration completed successfully **"\n')"
   v2_reboot
   hbeat UUID-PREV 4001 1784799900 "[$(prow h1 30 HB-ONE)]"
   stub_layout "$SUM_OK2"
@@ -1798,7 +1790,7 @@ cc-resume-layout: verdict=ok launched=2 shed=0 failed=0 windows=1 fullscreen_ok=
 
 @test "R5: only the routine tick of an already-handled boot re-runs itself under taskpolicy -c utility; a restore runs at normal priority" {
   export CC_TASKPOLICY_BIN="$BATS_TEST_TMPDIR/stub-taskpolicy"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\nshift 2\nexec "$@"\n' > "$CC_TASKPOLICY_BIN"; chmod +x "$CC_TASKPOLICY_BIN"
+  cc_stub_self "$CC_TASKPOLICY_BIN" "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$self.log"\nshift 2\nexec "$@"\n')"
   mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; echo 1784800000 > "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch"
   run bash "$SCRIPT"
   [ "$status" -eq 0 ]
