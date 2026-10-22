@@ -704,3 +704,112 @@ PLIST_KW="launchd/staged/com.claude.accounts-keepwarm.plist"
   [ "$status" -eq 0 ] && [[ "$output" == "args:--keepwarm --max-age 90" ]] \
     || { echo "a healthy tick was disturbed: rc=$status $output"; false; }
 }
+
+# ── the band: mods/accounts-readout draws the fresh board above the prompt (2026-10-21) ────────
+# docs/research/accounts-board-band-2026-10-21/. The mod's `classic.SessionStart` hook stamps
+# `<sid>.board-band.req` before the settings hooks run (measured in a pty); this hook then hands it a
+# snapshot of `<board>.ladder.json` and leaves the grid out. Every other case must be byte-identical
+# to the hook with the band block cut out at source (the control below), which is the hook as it was.
+BSID="0c1d2e3f-band-sid"
+band_setup() {  # a fresh board, its ladder in the same producer pass, and the mod's stamp
+  export CC_PANE_DIR="$D/pane"; mkdir -p "$CC_PANE_DIR"
+  mk_board
+  printf '{"v":1,"written_ms":1,"gutter":5,"budget":{"from":20,"cells":[44]},"variants":[{"cells":35,"width":35,"lines":["LADDERTOK"]}]}\n' \
+    > "$CC_ACCOUNTS_BOARD.ladder.json"
+  touch -r "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD.ladder.json"
+  printf '%s' "$BSID" > "$CC_PANE_DIR/$BSID.board-band.req"
+}
+band_emit() {  # <hook> [source] → stdout in $D/out.json
+  printf '{"source":"%s","hook_event_name":"SessionStart","session_id":"%s"}' "${2:-startup}" "$BSID" \
+    | "$1" > "$D/out.json" 2> "$D/err.txt"
+}
+band_control() {  # the subject with its band block deleted: the pre-band hook, from the same bytes
+  awk '/^if band_handoff; then$/{skip=1} skip&&/^fi$/{skip=0; next} !skip' "$HOOK" > "$D/control.sh"
+  chmod +x "$D/control.sh"
+  ! diff -q "$HOOK" "$D/control.sh" >/dev/null || { echo "control cut did not apply — the band block moved"; return 1; }
+}
+same_as_control() {  # [source] → the subject's bytes equal the control's, and no snapshot was left
+  band_control || return 1
+  band_emit "$D/control.sh" "${1:-startup}"; cp "$D/out.json" "$D/want.json"
+  band_emit "$HOOK" "${1:-startup}"
+  cmp -s "$D/want.json" "$D/out.json" || { echo "differs from the pre-band hook:"; diff "$D/want.json" "$D/out.json"; return 1; }
+  [ ! -e "$CC_PANE_DIR/$BSID.board-band.json" ] || { echo "a snapshot was left on a static-board path"; return 1; }
+}
+
+@test "28 band: the mod's stamp + a same-pass ladder ⇒ no grid in the systemMessage, the snapshot for the mod" {
+  band_setup
+  band_emit "$HOOK"
+  [ ! -s "$D/out.json" ] || { echo "printed with nothing but the grid to print: $(cat "$D/out.json")"; false; }
+  cmp -s "$CC_ACCOUNTS_BOARD.ladder.json" "$CC_PANE_DIR/$BSID.board-band.json" \
+    || { echo "snapshot is not the ladder"; ls -la "$CC_PANE_DIR"; false; }
+  [ "$(stat -f %m "$CC_PANE_DIR/$BSID.board-band.json")" = "$(stat -f %m "$CC_ACCOUNTS_BOARD")" ] \
+    || { echo "snapshot lost the board's mtime (the mod labels its age from it)"; false; }
+  # the control (pre-band hook) prints the grid on the same inputs, so this case is not vacuous
+  band_control; band_emit "$D/control.sh"
+  [[ "$(jqv '.systemMessage')" == *"$BOARDTOK"* ]] || { echo "control did not print the grid"; false; }
+}
+
+@test "28b band: the startup-health line stays in the systemMessage, alone" {
+  band_setup
+  export CC_STARTUP_HEALTH_DIR="$D/sh"; mkdir -p "$CC_STARTUP_HEALTH_DIR"
+  printf 'FLEETLINETOK\n' > "$CC_STARTUP_HEALTH_DIR/fleet-line.txt"; touch "$CC_STARTUP_HEALTH_DIR/fleet.stamp"
+  band_emit "$HOOK"
+  [ "$(jqv '.systemMessage')" = "FLEETLINETOK" ] || { echo "got: $(cat "$D/out.json")"; false; }
+}
+
+@test "29 band absent: no stamp ⇒ byte-identical to the pre-band hook (CC_MODS=off, claude -p, unconverged)" {
+  band_setup; rm -f "$CC_PANE_DIR/$BSID.board-band.req"
+  same_as_control
+  [[ "$(jqv '.systemMessage')" == *"$BOARDTOK"* ]]
+}
+
+@test "29b band: a stamp naming another session, or a leftover one, changes nothing" {
+  band_setup; printf 'other-sid' > "$CC_PANE_DIR/$BSID.board-band.req"
+  same_as_control
+  band_setup; touch -t 202001010000 "$CC_PANE_DIR/$BSID.board-band.req"
+  same_as_control
+}
+
+@test "29c band: a missing ladder, or one from another producer pass, keeps the static grid" {
+  band_setup; rm -f "$CC_ACCOUNTS_BOARD.ladder.json"
+  same_as_control
+  band_setup; touch -t 202001010000 "$CC_ACCOUNTS_BOARD.ladder.json"
+  same_as_control
+}
+
+@test "29d band: a STALE or HARD board keeps its labelled static text — never an unlabelled band" {
+  band_setup; age_board 900; touch -r "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD.ladder.json"
+  same_as_control
+  [[ "$(jqv '.systemMessage')" == *"STALE"* ]]
+  band_setup; age_board 7200; touch -r "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD.ladder.json"
+  same_as_control
+}
+
+@test "29e band: CC_BOARD_BAND=off and a compact start leave the hook as it was" {
+  band_setup
+  export CC_BOARD_BAND=off; same_as_control; unset CC_BOARD_BAND
+  band_setup
+  same_as_control compact
+  [ ! -s "$D/out.json" ]
+}
+
+@test "19d --keepwarm writes the band's ladder beside the board, in the board's own pass" {
+  export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg
+  export CC_ACCOUNTS_BOARD="$D/produced.txt"; rm -f "$CC_ACCOUNTS_BOARD"*
+  run bash -c "cd '$REPO' && $(declare -f render_narrow); NARROW_FIXTURE='$NARROW_FIXTURE' \
+    render_narrow --keepwarm"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  L="$CC_ACCOUNTS_BOARD.ladder.json"
+  [ -s "$L" ] || { ls -la "$D"; false; }
+  [ "$(stat -f %m "$L")" = "$(stat -f %m "$CC_ACCOUNTS_BOARD")" ] || { echo "ladder mtime is not the board's"; false; }
+  # the mod's own acceptance test (isLadder), and more than one layout to choose between
+  [ "$(jq -r '.v == 1 and (.written_ms > 0) and (.budget.cells | length > 0) and (.variants | length > 1)' \
+        "$L")" = true ] \
+    || { echo "not a ladder the mod accepts: $(head -c 300 "$L")"; false; }
+  # the end-to-end handshake over a REAL producer pass: the hook hands this ladder to the mod
+  export CC_PANE_DIR="$D/pane"; mkdir -p "$CC_PANE_DIR"
+  printf '%s' "$BSID" > "$CC_PANE_DIR/$BSID.board-band.req"
+  band_emit "$HOOK"
+  [ ! -s "$D/out.json" ] && cmp -s "$L" "$CC_PANE_DIR/$BSID.board-band.json" \
+    || { echo "hook did not hand the produced ladder over: $(cat "$D/out.json")"; false; }
+}

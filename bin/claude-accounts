@@ -8360,7 +8360,7 @@ BOARD_WLOCK_WAIT_S = 5.0
 
 
 def write_board(cfg, lines, sig=None, keep_mtime=False, rendered_from_ts=None, producer=None,
-                variants=None):
+                variants=None, ladder=None):
     """Atomically publish the rendered board. Returns the path, or None on failure.
 
     os.replace, never a truncate-then-write: the reader is a SessionStart hook that may fire at
@@ -8378,6 +8378,9 @@ def write_board(cfg, lines, sig=None, keep_mtime=False, rendered_from_ts=None, p
     `variants` ({width: lines}, _board_variants) are written beside it as `<board>.w<width>`, each
     atomically and with the board's own mtime: the hook accepts a variant only when its mtime
     matches the board's, so its age label stays true of whichever one it prints.
+
+    `ladder` (_board_ladder) goes beside it as `<board>.ladder.json`, the same way: atomic, board
+    mtime. hooks/accounts-board.sh hands it to mods/accounts-readout only when that mtime matches.
     """
     path = board_path(cfg)
     tmp = f"{path}.{os.getpid()}.tmp"
@@ -8407,6 +8410,12 @@ def write_board(cfg, lines, sig=None, keep_mtime=False, rendered_from_ts=None, p
                 f.write("\n".join(vl) + "\n")
             os.utime(vtmp, ns=(bst.st_atime_ns, bst.st_mtime_ns))
             os.replace(vtmp, f"{path}.w{n}")
+        if ladder is not None:
+            ltmp = f"{path}.ladder.json.{os.getpid()}.tmp"
+            with open(ltmp, "w") as f:
+                json.dump(ladder, f, ensure_ascii=False)
+            os.utime(ltmp, ns=(bst.st_atime_ns, bst.st_mtime_ns))
+            os.replace(ltmp, path + ".ladder.json")
         _write_json_atomic(path + ".meta.json", {"sig": sig, "rendered_from_ts": rendered_from_ts,
                                                  "producer": producer, "at": time.time()})
         return path
@@ -8465,6 +8474,26 @@ def _board_variants(cfg, rows, wj, cached, quota_ts=None):
     return out
 
 
+# THE BOARD'S WIDTH LADDER (2026-10-21). The variants above are static text too: a pane that
+# started at ~50 columns and was widened to ~115 kept its ~45-cell board (operator screenshot).
+# Claude Code has no render component for a SessionStart hook message, so mods/accounts-readout
+# draws the board as a band above the prompt instead and re-lays it out at every width change; this
+# is what it draws from, `pane_ladder` over the same rows (one renderer, no new layout logic).
+# docs/research/accounts-board-band-2026-10-21/. ~2 s of a keepwarm tick at load ~130, measured.
+def _board_ladder(cfg, rows, wj, cached, quota_ts=None):
+    """pane_ladder over a COPY of the rows (as _board_variants), or None: a missing ladder costs
+    the band (the hook then prints its static board), never the board."""
+    try:
+        rows = json.loads(json.dumps(rows))
+        refresh_login_countdown(rows)
+        apply_assignments(rows, cfg)
+        apply_burn(rows, cfg)
+        win = win_from_json(wj)
+        return pane_ladder(lambda n: readout_lines(rows, cfg, win, cached, quota_ts=quota_ts, pane=n))
+    except Exception:   # noqa: BLE001
+        return None
+
+
 LOCAL_K_RENDER_MIN_S = 60
 LOCAL_K_RENDER_MAX_LOAD_PER_CPU = 10.0
 
@@ -8491,7 +8520,9 @@ def _local_board(cfg, state):
     if write_board(cfg, lines, sig=sig, keep_mtime=True, rendered_from_ts=c.get("ts"),
                    producer="local",
                    variants=_board_variants(cfg, c["rows"], c.get("window") or {}, True,
-                                            quota_ts=c.get("ts"))) is None:
+                                            quota_ts=c.get("ts")),
+                   ladder=_board_ladder(cfg, c["rows"], c.get("window") or {}, True,
+                                        quota_ts=c.get("ts"))) is None:
         return None
     if not auth_diff:
         state["last_k_render"] = time.time()
@@ -11571,7 +11602,9 @@ def main():
                             sig=_board_sig(_src), rendered_from_ts=(_c or {}).get("ts"),
                             producer="keepwarm",
                             variants=_board_variants(cfg, _src, wj, was_cached,
-                                                     quota_ts=(_c or {}).get("ts")))
+                                                     quota_ts=(_c or {}).get("ts")),
+                            ladder=_board_ladder(cfg, _src, wj, was_cached,
+                                                 quota_ts=(_c or {}).get("ts")))
         age = _quota_age_s(cfg)
         print(f"keepwarm: {'served-cache' if was_cached else 'swept'} rows={len(rows)} "
               f"reset_pending={','.join(pending) or '-'} "

@@ -321,4 +321,42 @@ if [ "$age" -ge "$STALE_S" ]; then
 $body"
 fi
 
+# ── THE BAND (2026-10-21, docs/research/accounts-board-band-2026-10-21/) ──────────────────────
+# Everything above is static text, hard-wrapped at the width the pane had at startup, and Claude
+# Code has no render component for a SessionStart message, so a pane widened later keeps a ~45-cell
+# board. mods/accounts-readout draws the board instead, as a band above the prompt that re-lays out
+# at every width change and goes away at the first prompt. HANDSHAKE, measured in a pty: the mod's
+# `classic.SessionStart` hook runs ABOVE the settings hooks (chain: managed, modules, settings), so
+# it stamps `<sid>.board-band.req` with this session's id BEFORE this hook runs, and after it returns
+# reads the snapshot this hook leaves. Only on the FRESH path (a stale or unreadable board keeps its
+# static, labelled text above), only when the ladder was written in the board's own producer pass,
+# and only once the snapshot is in place does the grid leave the systemMessage: never both, never
+# neither. No stamp (no mod, CC_MODS=off, `claude -p`) and every byte above is today's.
+band_handoff() {
+  local sid stem dir req lad snap now qm lm
+  [ "${CC_BOARD_BAND:-on}" = off ] && return 1
+  sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
+  stem="$(printf '%s' "$sid" | tr -cd 'A-Za-z0-9_-')"
+  [ -n "$stem" ] || return 1
+  dir="${CC_PANE_DIR:-/tmp/claude-accounts-pane}"
+  req="$dir/$stem.board-band.req"
+  [ "$(cat "$req" 2>/dev/null)" = "$sid" ] || return 1
+  now="$(date +%s)"
+  qm="$(stat -f %m "$req" 2>/dev/null || stat -c %Y "$req" 2>/dev/null || echo 0)"
+  [ $(( now - qm )) -le "${CC_BOARD_BAND_REQ_S:-30}" ] || return 1     # a leftover, not this start's
+  lad="$BOARD.ladder.json"
+  [ -s "$lad" ] || return 1
+  lm="$(stat -f %m "$lad" 2>/dev/null || stat -c %Y "$lad" 2>/dev/null || echo 0)"
+  [ $(( mtime - lm )) -le 60 ] && [ $(( lm - mtime )) -le 60 ] || return 1
+  snap="$dir/$stem.board-band.json"
+  cp -p "$lad" "$snap.$$" 2>/dev/null && mv -f "$snap.$$" "$snap" 2>/dev/null \
+    || { rm -f "$snap.$$" 2>/dev/null; return 1; }
+}
+if band_handoff; then
+  band_msg="${DL_BANNER:-}${SH_FLEET:-}"     # the banner and the fleet line stay static text
+  [ -n "$band_msg" ] || exit 0
+  DL_BANNER=""; SH_FLEET=""
+  emit "${band_msg%$'\n'}"
+fi
+
 emit "$body"
