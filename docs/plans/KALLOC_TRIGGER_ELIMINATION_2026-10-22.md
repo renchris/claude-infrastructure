@@ -195,3 +195,21 @@ baseline wired into ship-land, call sites in census order incl. W1's session roo
 - **First live read (2026-10-22 08:13Z):** abstain, boot 11.7 h old; trailing slope 0.95 GiB/day,
   previous boot 40.5 elements per Bash call. Unless W2-W4 land first, it breaches and files the census
   row once this boot passes ~22 h.
+
+## Measurements after W1, W3, W4, W5 (W2 not yet landed)
+
+- **Census 2026-10-22 17:55-18:05 CDT** (`~/.cache/kalloc-exec-census/20261022T175520/`, 604 s): 875
+  `#!` execs = 5,215/h, against 32,530/h in the 2026-10-21 baseline hour (−84%). No agent-context-sync
+  stub in the top rows, so this window carries no W2-class load; the like-for-like figure (baseline
+  without its ~53% agent-context-sync share, ~15,300/h) is about −66%.
+- **Zone over the same window:** `data.kalloc.1024` +876 elements in 835 s (series row 17:52:15 →
+  direct `zprint` 18:06:10) ≈ **0.09 GiB/day**, i.e. ~0.7 elements per counted `#!` exec, so the census
+  explains the zone and no second source shows (REPORT §6 Q5). 15-min zone slopes before it: 0.33,
+  0.28, 0.01 GiB/day; trailing 3 h 0.70, 24-12 h ago 1.06 (heavier land and test load earlier).
+- **One window is not the verdict** (shares swing 3-8x between windows): the W5 SLO's trailing-24 h
+  slope (`scripts/kalloc-slo.sh`) is. Target ≤ 0.30 GiB/day; this window reads at the REPORT's ~0.1.
+- **Residue named by the census:** test harnesses running worktree `bin/` scripts by path (`cc-backlog`
+  106, `cc-premise` 54, postland `shim/jq` 72; the three `lint-drafts.txt` rows, all class=test, from
+  the `kte-w01` worktree's own suite runs and postland temp trees); `/usr/bin/shasum` 30, 26 from
+  `kte-w01` (unverified whether these are W1's byte-identity fixture, which runs shasum on purpose),
+  1 from `tm-upstream-wt`. Neither is attributed further; the next census after W2 lands re-ranks.
