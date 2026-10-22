@@ -1,0 +1,60 @@
+
+ ▐▛███▛█   Claude Code v2.1.293
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /private/tmp/abb-probe/work · /rc
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+➤ desk (bare claude) → next2                                                                    [-]
+   room in both its 5-hour and weekly limits; weekly resets in 99d+
+➤ general → next · ➤ fable → none
+
+                       5-hour ───────────────  weekly ──────────────────────────────────
+   account       live   used resets             used          fable  resets               login
+   next-quatern…   12   88%* 1h 11m Thu 01:23   46%* ▆▆▆▆▁▁▁▁  18%*    99d+ Jan 04 18:00  99d+
+➤  next2            1    82% 2h 29m Thu 02:41    48% ▆▆▆▆▁▁▁▁   21%    99d+ Jan 03 18:00  99d+
+   next3            0   100%    44m Thu 00:56    40% ▆▆▆▁▁▁▁▁   10%    99d+ Jan 02 18:00  99d+
+➤ᵍ next             2     0% 3h 37m Thu 03:49    22% ▆▆▁▁▁▁▁▁    0%    99d+ Jan 06 18:00  99d+
+
+✖ next3 is out of 5-hour quota, confirmed by Anthropic's server (102% used); resets in 44m
+▲ next-quaternary-extremely-long-account-name-for-width-testing — 5h at 88%, at/over the 85%
+  routing cutoff; resets in 1h 11m
+△ next2 — 5h at 82%; resets in 2h 29m
+▲ next3 — 5h at 102%, at/over the 85% routing cutoff; resets in 44m
+↻ next-quaternary-extremely-long-account-name-for-width-testing — last-known; not polled this
+  sweep, excluded from routing
+
+Not enough recent readings to forecast unused weekly quota:
+  next-quaternary-extremely-long-account-name-for-width-testing, next2, next3, next
+Fable window: unknown — frontier_access in model-config.yaml did not parse, so the Fable lane
+  is refused · Quota read at 00:04, 7 minutes ago · claude-accounts --readout --fresh reads it
+  again now
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "refactor <filepath>"
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker · restart with CLAUDE_C…
+  ⏵⏵ auto mode on (shift+tab to cycle)

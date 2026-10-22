@@ -1,0 +1,2 @@
+1792644589454 mod classic.SessionStart BEFORE next source=startup sid=f696fc84-2834-4b23-81b8-7279d4750686 surfaces=["terminal"]
+1792644589742 mod classic.SessionStart AFTER next result={}

@@ -1,0 +1,60 @@
+     ➤ general → next · ➤ fable → none
+
+                       5-hour ─────
+     weekly ──────
+        account         used resets
+     used  resets
+        next-quatern…   88%* 1h 11m
+     46%*    99d+
+     ➤  next2            82% 2h 29m
+     48%    99d+
+        next3           100%    44m
+     40%    99d+
+     ➤ᵍ next              0% 3h 37m
+     22%    99d+
+
+     ✖ next3 is out of 5-hour quota,
+     confirmed by
+       Anthropic's server (102% used);
+     resets in
+       44m
+     ▲ next-quaternary-extremely-long-ac
+     count-name
+       -for-width-testing — 5h at 88%,
+     at/over the
+       85% routing cutoff; resets in 1h
+     11m
+     △ next2 — 5h at 82%; resets in 2h
+     29m
+     ▲ next3 — 5h at 102%, at/over the
+     85% routing
+       cutoff; resets in 44m
+     ↻ next-quaternary-extremely-long-ac
+     count-name
+       -for-width-testing — last-known;
+     not polled
+       this sweep, excluded from routing
+
+     Not enough recent readings to
+     forecast unused
+       weekly quota:
+       next-quaternary-extremely-long-ac
+     count-name
+       -for-width-testing, next2, next3,
+      next
+     Fable window: unknown —
+     frontier_access in
+       model-config.yaml did not parse,
+     so the
+       Fable lane is refused · Quota
+     read at
+       00:04, 8 minutes ago ·
+       claude-accounts --readout --fresh
+      reads it
+       again now
+
+────────────────────────────────────────
+❯ Try "create a util logging.py that..."
+────────────────────────────────────────
+  ⚠ Transcript saving is off — inheri…
+  ⏵⏵ auto mode on (shift+tab to cycle)

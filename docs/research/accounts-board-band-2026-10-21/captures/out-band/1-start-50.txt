@@ -1,0 +1,60 @@
+u
+ ▐▛███▛█   Claude Code v2.1.293
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /private/tmp/abb-probe/work
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+➤ desk (bare claude) → next2                  [-]
+   room in both its 5-hour and weekly limits;
+   weekly resets in 99d+
+➤ general → next · ➤ fable → none
+
+                  5-hour ─────  weekly ──────
+   account         used resets   used  resets
+   next-quatern…   88%* 1h 11m   46%*    99d+
+➤  next2            82% 2h 29m    48%    99d+
+   next3           100%    44m    40%    99d+
+➤ᵍ next              0% 3h 37m    22%    99d+
+
+✖ next3 is out of 5-hour quota, confirmed by
+  Anthropic's server (102% used); resets in
+  44m
+▲ next-quaternary-extremely-long-account-name
+  -for-width-testing — 5h at 88%, at/over the
+  85% routing cutoff; resets in 1h 11m
+△ next2 — 5h at 82%; resets in 2h 29m
+▲ next3 — 5h at 102%, at/over the 85% routing
+  cutoff; resets in 44m
+↻ next-quaternary-extremely-long-account-name
+  -for-width-testing — last-known; not polled
+↓ 12 more
+
+──────────────────────────────────────────────────
+❯ Try "refactor <filepath>"
+──────────────────────────────────────────────────
+  ⚠ Transcript saving is off — inherited CLAUDE…
+  ⏵⏵ auto mode on (shift+tab to cycle)
