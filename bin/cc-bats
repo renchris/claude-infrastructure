@@ -372,6 +372,10 @@ resolve_real_bats() {
   for d in "$@"; do
     [ -n "$d" ] || continue
     cand="$d/bats"
+    # A bin/<name> link to the compiled cc-shim trampoline is never the real bats: it runs whatever
+    # .bin-real/<name> holds, which can be this file (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4).
+    if [ "$cand" -ef "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/libexec/cc-shim" ] \
+       || [ "$cand" -ef "${HOME:-}/.claude/libexec/cc-shim" ]; then continue; fi
     if [ -x "$cand" ] && [ ! -d "$cand" ]; then
       # _acceptable folds in the unresolvable check: an empty phys ⇒ SKIP. Treating unresolvable as
       # "different from me" is exactly how the guard inverted into an exec loop.
