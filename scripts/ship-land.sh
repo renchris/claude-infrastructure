@@ -3904,6 +3904,55 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── TEST STUB ratchet, rule R4 (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W3) ──────────
+  # An inline `#!` stub a test execs by name keeps ~1.1 KiB of kernel memory per call on macOS 15.8.1;
+  # test harnesses were 81% of this Mac's `#!` execs. cc_stub (tests/helpers/cc-stub.bash) links a stub
+  # to cc-shim instead. Ratchet: a tests/ file this land touches may not hold more inline stub writes
+  # than config/test-stub-baseline.tsv grants it (a new file: 0). Raising a count IN the baseline is the
+  # loosening the ratchet exists to stop, so it is refused too unless SHIP_LAND_TEST_STUB_RAISE_OK=1.
+  # gate_bounded: SHIP_LAND_TEST_STUB_LINT=/nonexistent disarms a broken detector.
+  TSL_LINT="${SHIP_LAND_TEST_STUB_LINT:-scripts/test-stub-lint.sh}"
+  if [[ -x "$TSL_LINT" ]]; then
+    local tsl_own="" _tslf
+    local -a tsl_files=()
+    tsl_own="$(git diff --name-only --diff-filter=d "$range" -- 'tests/*' 2>/dev/null || true)"
+    while IFS= read -r _tslf; do
+      [[ -n "$_tslf" && -f "$_tslf" ]] && tsl_files+=("$_tslf")
+    done <<< "$tsl_own"
+    if (( ${#tsl_files[@]} > 0 )) || ! git diff --quiet "$range" -- config/test-stub-baseline.tsv 2>/dev/null; then
+      echo "→ gate: test-stub ratchet R4 (this land edits ${#tsl_files[@]} tests/ file(s))" >&2
+      if ! selftest_ok "$TSL_LINT"; then
+        echo "✗ gate: test-stub-lint --selftest FAILED — the detector no longer discriminates." >&2
+        echo "  Escape if it is the detector that is broken: SHIP_LAND_TEST_STUB_LINT=/nonexistent" >&2
+        gate_red test-stub-selftest
+        return 1  # gate_bounded: SHIP_LAND_TEST_STUB_LINT=/nonexistent — escape for a broken detector
+      fi
+      local _tslrc=0
+      if (( ${#tsl_files[@]} > 0 )); then "$TSL_LINT" --files "${tsl_files[@]}" >&2 || _tslrc=$?; fi
+      if (( _tslrc == 2 )); then arm_nonverdict "test-stub-lint"; return 1; fi
+      if (( _tslrc != 0 )); then
+        echo "✗ gate: test-stub RED — a test file this land edits writes more inline #! stubs than its baseline." >&2
+        echo "  Write them with cc_stub DIR NAME BODY (tests/helpers/cc-stub.bash). Files and lines are named above." >&2
+        gate_red test-stub
+        return 1  # gate_bounded: fires only on lands that add inline #! stubs to tests/
+      fi
+      local _tsl_raised=""
+      # A baseline the range base does not hold yet (the land that creates it) has nothing to raise.
+      git cat-file -e "${range%%..*}:config/test-stub-baseline.tsv" 2>/dev/null &&
+      _tsl_raised="$(awk -F'\t' 'NR==FNR { if ($0 !~ /^#/) old[$1]=$2; next }
+                                 $0 !~ /^#/ && ($2+0) > (old[$1]+0) { print "  " $1 ": " (old[$1]+0) " → " $2 }' \
+                       <(git show "${range%%..*}:config/test-stub-baseline.tsv" 2>/dev/null) \
+                       config/test-stub-baseline.tsv 2>/dev/null || true)"
+      if [[ -n "$_tsl_raised" && "${SHIP_LAND_TEST_STUB_RAISE_OK:-0}" != 1 ]]; then
+        echo "✗ gate: test-stub RED — this land RAISES baseline counts in config/test-stub-baseline.tsv:" >&2
+        printf '%s\n' "$_tsl_raised" >&2
+        echo "  Convert the new stubs to cc_stub instead; a deliberate raise needs SHIP_LAND_TEST_STUB_RAISE_OK=1." >&2
+        gate_red test-stub-raise
+        return 1  # gate_bounded: SHIP_LAND_TEST_STUB_RAISE_OK=1 — the operator's override for a deliberate raise
+      fi
+    fi
+  fi
+
   # ── HOOK SHEBANG lint (docs/research/panic-2026-10-18-zone-map-shebang-leak.md improvement 1) ──
   # A hook command or statusLine that runs a `#!` script by bare path leaks one 1 KiB kernel element
   # per run on macOS 15.7.9; ~100 such commands drove data.kalloc.1024 to its ~20 GiB ceiling and
