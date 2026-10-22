@@ -2,6 +2,12 @@
 # ship-land.sh — the fail-closed landing pipeline. Scratch bare "origin" + working clone
 # in BATS_TEST_TMPDIR. NEVER pushes to a real origin. land-lock/land.log/decisions all
 # redirected under BATS_TEST_TMPDIR so no real machine state is touched.
+#
+# Stubs the gate EXECS — the fake bats on PATH, the origin's git hooks, the env-var tools — go through
+# cc_stub (no kernel #! exec under cc-shim). The other #! writes are fixture-repo content the gate
+# shellchecks or commits, and stay files.
+
+load helpers/cc-stub
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -570,8 +576,7 @@ herm_tool() {   # writes a tool whose embedded selftest names a constant scratch
 
 @test "push non-ff: rejected push → exit 7, loud" {
   # server-side hook rejects the main update (simulated non-fast-forward)
-  printf '#!/bin/sh\n[ "$1" = "refs/heads/main" ] && { echo "simulated non-ff" >&2; exit 1; }\nexit 0\n' > "$ORIGIN/hooks/update"
-  chmod +x "$ORIGIN/hooks/update"
+  cc_stub "$ORIGIN/hooks" update "$(printf '#!/bin/sh\n[ "$1" = "refs/heads/main" ] && { echo "simulated non-ff" >&2; exit 1; }\nexit 0\n')"
 
   on_branch_with feat/nonff f3.txt hello
 
@@ -586,8 +591,7 @@ herm_tool() {   # writes a tool whose embedded selftest names a constant scratch
   # T-P9-7: ship-land auto-retries (bounded by SHIP_LAND_VERIFY_RETRIES=2) and, on exhaustion, leaves a
   # CLEAN committed tree (never a wedged rebase) with the ship/backup-* ref intact for manual recovery.
   base_sha="$(git -C "$ORIGIN" rev-parse main)"
-  printf '#!/bin/sh\ngit update-ref refs/heads/main %s\n' "$base_sha" > "$ORIGIN/hooks/post-update"
-  chmod +x "$ORIGIN/hooks/post-update"
+  cc_stub "$ORIGIN/hooks" post-update "$(printf '#!/bin/sh\ngit update-ref refs/heads/main %s\n' "$base_sha")"
 
   on_branch_with feat/dropme dropped.txt payload
 
@@ -927,7 +931,7 @@ EOF
   # stranding on the old manual exit-8 recovery. (base_sha + $ORIGIN expand at write time; \$marker is
   # literal for the hook's runtime.)
   base_sha="$(git -C "$ORIGIN" rev-parse main)"
-  cat > "$ORIGIN/hooks/post-update" <<EOF
+  cc_stub "$ORIGIN/hooks" post-update - <<EOF
 #!/bin/sh
 marker="$ORIGIN/dropped-once"
 if [ ! -f "\$marker" ]; then
@@ -935,7 +939,6 @@ if [ ! -f "\$marker" ]; then
   git update-ref refs/heads/main $base_sha
 fi
 EOF
-  chmod +x "$ORIGIN/hooks/post-update"
 
   on_branch_with feat/heal heal.txt payload
 
@@ -951,8 +954,7 @@ EOF
 @test "T-P9-7 kill-switch: SHIP_LAND_VERIFY_RETRIES=0 → single-shot exit 8, no auto-retry" {
   # =0 restores the pre-T-P9-7 behavior: one push, one verify, no retry. Persistent drop → immediate exit 8.
   base_sha="$(git -C "$ORIGIN" rev-parse main)"
-  printf '#!/bin/sh\ngit update-ref refs/heads/main %s\n' "$base_sha" > "$ORIGIN/hooks/post-update"
-  chmod +x "$ORIGIN/hooks/post-update"
+  cc_stub "$ORIGIN/hooks" post-update "$(printf '#!/bin/sh\ngit update-ref refs/heads/main %s\n' "$base_sha")"
 
   on_branch_with feat/noretry nr.txt payload
 
@@ -979,7 +981,7 @@ EOF
   sib_sha="$(git -C "$ORIGIN" rev-parse sibling)"
   git checkout -q main
 
-  cat > "$ORIGIN/hooks/post-update" <<EOF
+  cc_stub "$ORIGIN/hooks" post-update - <<EOF
 #!/bin/sh
 marker="$ORIGIN/reset-once"
 if [ ! -f "\$marker" ]; then
@@ -987,7 +989,6 @@ if [ ! -f "\$marker" ]; then
   git update-ref refs/heads/main $sib_sha
 fi
 EOF
-  chmod +x "$ORIGIN/hooks/post-update"
 
   git checkout -q -b feat/conflict main
   printf 'ours\n' > base.txt                              # same line as the sibling → guaranteed conflict
@@ -1039,7 +1040,7 @@ scope_fixture() {   # seed tests/{a,b}.bats onto trunk + shim bats + default to 
   # red and must stay one; `red` = a named failure, the positive control that must NOT be softened.
   export KILL_MODE="$BATS_TEST_TMPDIR/kill-mode"
   : > "$KILL_MODE"
-  cat > "$SHIMDIR/bats" <<EOF
+  cc_stub "$SHIMDIR" bats - <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_ARGV"
 case "\$(cat "$KILL_MODE" 2>/dev/null)" in
@@ -1081,7 +1082,6 @@ if [ -n "\$f" ] && [ "\${_last:-}" = "\$f" ]; then
 fi
 exit 0
 EOF
-  chmod +x "$SHIMDIR/bats"
   export PATH="$SHIMDIR:$PATH"
   export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"   # absent ⇒ hardcoded full
   mkdir -p tests
@@ -1611,7 +1611,7 @@ cut_fixture() {   # shim `bats` that can produce EITHER a cut (rc!=0, zero outpu
   SHIMDIR="$BATS_TEST_TMPDIR/shims-cut"; mkdir -p "$SHIMDIR"
   export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv-cut"
   export CUT_MODE="$BATS_TEST_TMPDIR/cut-mode"
-  cat > "$SHIMDIR/bats" <<EOF
+  cc_stub "$SHIMDIR" bats - <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_ARGV"
 case "\$(cat "$CUT_MODE" 2>/dev/null)" in
@@ -1667,7 +1667,6 @@ if [ ! -f "$BATS_TEST_TMPDIR/cut-done" ]; then
 fi
 echo "1..1"; echo "ok 1 green on the re-run"; exit 0
 EOF
-  chmod +x "$SHIMDIR/bats"
   export PATH="$SHIMDIR:$PATH"
   export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"
   mkdir -p tests
@@ -2485,12 +2484,11 @@ STUB
 herm_fixture() {   # shim bats (argv = "did bats run at all"), install the REAL ratchet, seed trunk
   SHIMDIR="$BATS_TEST_TMPDIR/shims"; mkdir -p "$SHIMDIR"
   export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv"; : > "$BATS_ARGV"
-  cat > "$SHIMDIR/bats" <<EOF
+  cc_stub "$SHIMDIR" bats - <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_ARGV"
 exit 0
 EOF
-  chmod +x "$SHIMDIR/bats"
   export PATH="$SHIMDIR:$PATH"
   export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"   # absent ⇒ hardcoded full
   export CC_HERM_ALLOWLIST=""                                          # nothing grandfathered here
@@ -2585,12 +2583,11 @@ add_suite() {   # $1=branch $2=suite basename $3=setup() body
 dead_fixture() {   # shim bats (argv = "did bats run at all"), install the REAL analyzer, seed trunk
   SHIMDIR="$BATS_TEST_TMPDIR/shims-dead"; mkdir -p "$SHIMDIR"
   export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv-dead"; : > "$BATS_ARGV"
-  cat > "$SHIMDIR/bats" <<EOF
+  cc_stub "$SHIMDIR" bats - <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_ARGV"
 exit 0
 EOF
-  chmod +x "$SHIMDIR/bats"
   export PATH="$SHIMDIR:$PATH"
   export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"   # absent ⇒ hardcoded full
   mkdir -p scripts tests
@@ -2813,7 +2810,7 @@ persuite_fixture() {  # seed tests/{a,b}.bats + a shim whose behaviour is keyed 
   # Shapes are byte-wise what real bats emits: `sig` = executing, then killed (plan + ok lines,
   # then 137 — the live 2026-07-26 signature, ZERO `not ok`); `red` = a NAMED failure, the positive
   # control that must never be softened; `sig-once` = cut on the first run only. Default: green.
-  cat > "$SHIMDIR/bats" <<EOF
+  cc_stub "$SHIMDIR" bats - <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_ARGV"
 # THE SUITE IS THE LAST ARG, NEVER \$1. The confirming third observation invokes bats as
@@ -2842,7 +2839,6 @@ case "\$(cat "$MODE_DIR/\$b" 2>/dev/null)" in
 esac
 echo "1..1"; echo "ok 1 fine"; exit 0
 EOF
-  chmod +x "$SHIMDIR/bats"
   export PATH="$SHIMDIR:$PATH"
   export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"
   mkdir -p tests
@@ -3623,7 +3619,7 @@ _dup_ids() { # <store> → the distinct ids of the filed `needs` rows, one per l
   git add -A && git commit -q -m "feat: bad9b"
 
   stub="$BATS_TEST_TMPDIR/cc-backlog-stub"
-  cat > "$stub" <<'STUB'
+  cc_stub "${stub%/*}" "${stub##*/}" - <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
   add|needs) echo "raceid00beef" ;;
@@ -3631,7 +3627,6 @@ case "${1:-}" in
   *)         exit 0 ;;
 esac
 STUB
-  chmod +x "$stub"
 
   run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_BIN="$stub" bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
@@ -3652,7 +3647,7 @@ STUB
   git add -A && git commit -q -m "feat: bad10"
 
   stub="$BATS_TEST_TMPDIR/cc-backlog-stub"
-  cat > "$stub" <<'STUB'
+  cc_stub "${stub%/*}" "${stub##*/}" - <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
   needs)   echo "stubid00beef" ;;
@@ -3660,7 +3655,6 @@ case "${1:-}" in
   *)       exit 0 ;;
 esac
 STUB
-  chmod +x "$stub"
 
   run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_BIN="$stub" bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
@@ -3734,7 +3728,7 @@ STUB
   git add -A && git -c user.email=tester@example.com -c user.name=tester commit -q -m "feat: bad-norun"
 
   stub="$BATS_TEST_TMPDIR/cc-backlog-norun"
-  cat > "$stub" <<'STUB'
+  cc_stub "${stub%/*}" "${stub##*/}" - <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
   needs) echo "stubidnorun01" ;;
@@ -3744,7 +3738,6 @@ case "${1:-}" in
   *) exit 0 ;;
 esac
 STUB
-  chmod +x "$stub"
 
   run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_BIN="$stub" bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
@@ -3919,8 +3912,7 @@ STUB
 }
 
 @test "P0 exit 7 attests: a sibling beat us to the push, and the ledger says which land lost" {
-  printf '#!/bin/sh\n[ "$1" = "refs/heads/main" ] && { echo "simulated non-ff" >&2; exit 1; }\nexit 0\n' > "$ORIGIN/hooks/update"
-  chmod +x "$ORIGIN/hooks/update"
+  cc_stub "$ORIGIN/hooks" update "$(printf '#!/bin/sh\n[ "$1" = "refs/heads/main" ] && { echo "simulated non-ff" >&2; exit 1; }\nexit 0\n')"
   on_branch_with feat/p0-nonff p0n.txt hello
 
   run bash "$SHIPLAND" --trunk main
@@ -4151,8 +4143,7 @@ fatal: unable to access 'https://github.com/x/y.git/': The requested URL returne
   # tests already use; what is new is that the OUTPUT must now name the cause. Note those two tests
   # are titled "non-ff" but have always simulated a hook DECLINE — under the old single message the
   # suite could not tell the two apart, which is the defect in miniature.
-  printf '#!/bin/sh\n[ "$1" = "refs/heads/main" ] && { echo "E5a FAIL: unattributable author over this range" >&2; exit 1; }\nexit 0\n' > "$ORIGIN/hooks/update"
-  chmod +x "$ORIGIN/hooks/update"
+  cc_stub "$ORIGIN/hooks" update "$(printf '#!/bin/sh\n[ "$1" = "refs/heads/main" ] && { echo "E5a FAIL: unattributable author over this range" >&2; exit 1; }\nexit 0\n')"
   on_branch_with feat/hook-refused hr.txt hello
 
   run bash "$SHIPLAND" --trunk main
