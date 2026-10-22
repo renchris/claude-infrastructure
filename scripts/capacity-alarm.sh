@@ -276,7 +276,9 @@
 #          launchd tick) · CC_CAP_CONVOY_GAUGE (the gauge script) · CC_CAP_CONVOY_TIMEOUT_S (45) ·
 #        CC_CAP_ATTRIB_LATEST (the daemon's attrib-latest.json; default beside CC_CAP_ATTRIB_LOG) ·
 #        CC_CAP_ATTRIB_FRESH_S (default 15) · CC_CAP_LATEST_PY (its reader; default /usr/bin/python3) ·
-#        CC_CAP_LOAD_RUNG_MODE_FILE (rung 7's switch; default ~/.claude/autonomy/capacity-alarm-load-rung.mode)
+#        CC_CAP_LOAD_RUNG_MODE_FILE (rung 7's switch; default ~/.claude/autonomy/capacity-alarm-load-rung.mode) ·
+#        CC_CAP_KALLOC_SLO (auto | on | off — the hourly kalloc-slo.sh tick; auto = launchd tick only) ·
+#        CC_CAP_KALLOC_SLO_SCRIPT (the SLO script) · CC_CAP_KALLOC_SLO_TIMEOUT_S (120)
 #
 # bash 3.2 safe. Ships to launchd ⇒ tested under /bin/bash.
 
@@ -2389,6 +2391,11 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "  swapfiles on disk:      ${SWAPFILES:-SKIPPED (dir unreadable, or 0 counted while the kernel reports swap)}${SWAPFILES:+   (warn >=${SWAPFILE_WARN} / alarm >=${SWAPFILE_ALARM} · ${SWAPFILE_PREFIX}* · chronic)}"
   echo "  kalloc.1024 zone:       ${KALLOC_GB:-SKIPPED}${KALLOC_GB:+ GB}   (${KALLOC_SRC} · warn >=${KALLOC_WARN_GB} / alarm >=${KALLOC_ALARM_GB} · chronic · up ${UPTIME_DAYS:-?} d)"
   [ -n "$ZONE_LINE" ] && echo "                          ${ZONE_LINE} · tier ${ZONE_TIER} of 3"
+  # The leak-rate SLO (kalloc-slo.sh, ticked below hourly): its last stored verdict, never recomputed here.
+  _slo_line="$(sed -n 's/^line=//p' "$ZONE_DIR/kalloc-slo.state" 2>/dev/null | tail -1)"
+  _slo_at="$(sed -n 's/^at=//p' "$ZONE_DIR/kalloc-slo.state" 2>/dev/null | tail -1)"
+  case "$_slo_at" in ''|*[!0-9]*) _slo_line="" ;; esac
+  echo "  kalloc #! leak SLO:     ${_slo_line:-not evaluated yet (kalloc-slo.sh runs hourly on the launchd tick)}${_slo_line:+ · $(( (NOW_EPOCH - _slo_at) / 60 )) min ago}"
   echo "  VERDICT:                ${VERDICT}"
   echo "  CHRONIC (rung 8):       ${CHRONIC_VERDICT}   (reported beside the verdict, never folded into it — D5)"
   if [ "$CHRONIC_VERDICT" = WARN ] || [ "$CHRONIC_VERDICT" = ALARM ]; then
@@ -2413,6 +2420,14 @@ fi
 # of the group is still there 5 s later. A missing gauge or a missing perl means no tick.
 # `auto` runs it only on this job's own launchd tick, so a hand-run or a test of this file can never
 # read the live daemons, write the live flag or page the desk. Kill switch: CC_CAP_CONVOY=off.
+group_bounded() { # <seconds> <cmd...> — own process group; TERM the group, KILL 5 s later; rc 124 when cut
+  /usr/bin/perl -MPOSIX=WNOHANG -e 'my $t = shift; my $p = fork; exit 1 unless defined $p;
+    if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }
+    $SIG{ALRM} = sub { kill "TERM", -$p; kill "TERM", $p;
+      for (1 .. 50) { waitpid($p, WNOHANG); last unless kill 0, -$p; select(undef, undef, undef, 0.1) }
+      kill "KILL", -$p; kill "KILL", $p; exit 124 };
+    alarm $t; waitpid($p, 0); exit($? >> 8)' "$@"
+}
 convoy_gauge_tick() {
   local g
   case "${CC_CAP_CONVOY:-auto}" in
@@ -2424,14 +2439,33 @@ convoy_gauge_tick() {
   [ -x /usr/bin/perl ] || return 0
   g="${CC_CAP_CONVOY_GAUGE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/convoy-gauge.sh}"
   [ -f "$g" ] || return 0
-  /usr/bin/perl -MPOSIX=WNOHANG -e 'my $t = shift; my $p = fork; exit 1 unless defined $p;
-    if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }
-    $SIG{ALRM} = sub { kill "TERM", -$p; kill "TERM", $p;
-      for (1 .. 50) { waitpid($p, WNOHANG); last unless kill 0, -$p; select(undef, undef, undef, 0.1) }
-      kill "KILL", -$p; kill "KILL", $p; exit 124 };
-    alarm $t; waitpid($p, 0); exit($? >> 8)' "${CC_CAP_CONVOY_TIMEOUT_S:-45}" /bin/bash "$g" \
-    </dev/null >/dev/null 2>&1
+  group_bounded "${CC_CAP_CONVOY_TIMEOUT_S:-45}" /bin/bash "$g" </dev/null >/dev/null 2>&1
   return 0
 }
+
+# ── kalloc #! leak SLO: one damped tick, same fail-soft shape as the convoy gauge ─────────────────
+# scripts/kalloc-slo.sh (plan KALLOC_TRIGGER_ELIMINATION W5, REPORT §3 Phase 5) judges the zone's
+# RATE against the 0.30 GiB/day target and files one deduped operator row carrying the census command
+# on a breach. It damps itself to once an hour, so this costs one state-file read on the other 59
+# ticks. It runs after the zone state above is final, its output goes to its own state file and log
+# (the report line above reads them), and it never touches the zone page, the tiers or the reboot
+# advisory. `auto` = this job's own launchd tick only, so a hand-run or a test never files a row.
+# Kill switch: CC_CAP_KALLOC_SLO=off (also off with CC_CAP_KALLOC=off).
+kalloc_slo_tick() {
+  local g
+  case "${CC_CAP_KALLOC_SLO:-auto}" in
+    off) return 0 ;;
+    on)  : ;;
+    *)   [ "${XPC_SERVICE_NAME:-}" = "com.claude.capacity-alarm" ] || return 0 ;;
+  esac
+  [ "${CC_CAP_KALLOC:-on}" != "off" ] && [ "$APPEND" = 1 ] && [ -n "$BOOT_EPOCH" ] || return 0
+  [ -x /usr/bin/perl ] || return 0
+  g="${CC_CAP_KALLOC_SLO_SCRIPT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/kalloc-slo.sh}"
+  [ -f "$g" ] || return 0
+  group_bounded "${CC_CAP_KALLOC_SLO_TIMEOUT_S:-120}" /bin/bash "$g" --now "$NOW_EPOCH" --boot "$BOOT_EPOCH" \
+    --series "$ZONE_SERIES" --state "$ZONE_DIR/kalloc-slo.state" </dev/null >/dev/null 2>&1
+  return 0
+}
+kalloc_slo_tick || true
 convoy_gauge_tick || true
 exit "$RC"

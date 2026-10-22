@@ -285,3 +285,24 @@ nlines() { if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
   run "$REPO/hooks/operator-readout.sh" --render --cwd "$D"
   [[ "$output" != *"data.kalloc.1024"* ]]
 }
+
+# Plan KALLOC_TRIGGER_ELIMINATION W5: the leak-rate SLO rides this job's tick; its logic is
+# tests/kalloc-slo.bats. Here: who calls it, with what, the kill switch, and the report line.
+@test "the SLO tick runs kalloc-slo.sh on the launchd tick only, with this boot and series; the report shows its stored line" {
+  seed_series 19 1; mk_zprint 19
+  # shellcheck disable=SC2016  # the stub's own $*
+  printf '#!/bin/bash\necho "$*" >> "%s"\n' "$D/slo.calls" > "$D/bin/slo"
+  export CC_CAP_KALLOC_SLO_SCRIPT="$D/bin/slo"
+  run env -u CC_CAP_KALLOC_SLO -u XPC_SERVICE_NAME /bin/bash "$A" --quiet
+  [ ! -e "$D/slo.calls" ] || false                           # auto: a hand run never ticks it
+  run env -u CC_CAP_KALLOC_SLO XPC_SERVICE_NAME=com.claude.capacity-alarm /bin/bash "$A" --quiet
+  run cat "$D/slo.calls"
+  [[ "$output" == "--now "*" --boot $BOOT --series $SERIES --state $Z/kalloc-slo.state" ]] || false
+  run env CC_CAP_KALLOC_SLO=off XPC_SERVICE_NAME=com.claude.capacity-alarm /bin/bash "$A" --quiet
+  [ "$(nlines "$D/slo.calls")" = 1 ] || false                # the kill switch holds on the launchd tick
+  run /bin/bash "$A" --no-append
+  [[ "$output" == *"kalloc #! leak SLO:     not evaluated yet"* ]] || false
+  printf 'at=%s\nline=verdict=ok · fixture\n' "$NOW" > "$Z/kalloc-slo.state"
+  run /bin/bash "$A" --no-append
+  [[ "$output" == *"kalloc #! leak SLO:     verdict=ok · fixture · "*" min ago"* ]]
+}
