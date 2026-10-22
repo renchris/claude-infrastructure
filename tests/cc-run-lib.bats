@@ -109,7 +109,7 @@ argv_of() { in_bashes 'cc_argv "$1"; printf "[%s]" "${CC_ARGV[@]}"; echo' _ "$1"
 @test "cc_run under set -euo pipefail: no args, empty-string args, a failing program, a '#!'-only file" {
   mk env 755 '#!/usr/bin/env bash\necho "n=$# [${1-unset}]"\n'
   mk fail 755 '#!/bin/sh\nexit 3\n'
-  printf '#!' >"$R/stub-noeol"; chmod 755 "$R/stub-noeol"
+  printf '%s' '#!' >"$R/stub-noeol"; chmod 755 "$R/stub-noeol"   # data: read by cc_argv, never exec'd
   run in_bashes 'set -euo pipefail; cc_run "$1"; cc_run "$1" ""; rc=0; cc_run "$2" || rc=$?; echo "rc=$rc"; cc_argv "$3"; echo "[${CC_ARGV[*]}]"' \
     _ "$R/env" "$R/fail" "$R/stub-noeol"
   [ "${lines[0]}" = "n=0 [unset]" ]
