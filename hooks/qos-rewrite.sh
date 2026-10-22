@@ -184,8 +184,12 @@ if [ -n "$CC_BATS_TARGET" ] && [ -x "$CC_BATS_TARGET" ]; then
     # pattern is unchanged, so this can only ever rewrite LESS than before, never differently. A
     # miss costs a bats run its QoS band; it can never corrupt a command. Compared with `-ef` (same
     # device+inode, symlinks followed) rather than by path, because the shim IS a symlink.
+    # The cc-shim layout counts too (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4): bin/bats
+    # links to the compiled trampoline, which runs ../.bin-real/bats, and THAT is the wrapper.
     _SHIM="${CC_BATS_TARGET%/*}/bats"
-    if [ -x "$_SHIM" ] && [ "$_SHIM" -ef "$CC_BATS_TARGET" ]; then
+    if [ -x "$_SHIM" ] && { [ "$_SHIM" -ef "$CC_BATS_TARGET" ] \
+         || { [ "$_SHIM" -ef "${CC_BATS_TARGET%/*}/../libexec/cc-shim" ] \
+              && [ "${CC_BATS_TARGET%/*}/../.bin-real/bats" -ef "$CC_BATS_TARGET" ]; }; }; then
       _PFX='(/[^[:space:]]*/)'      # absolute spellings only — PATH owns the bare token
     else
       _PFX='(/[^[:space:]]*/)?'     # no shim: the bare token still has no other chokepoint

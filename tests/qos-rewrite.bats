@@ -89,6 +89,23 @@ _install_shim() { ln -sfn "$CCBATS" "$D/bin/bats"; }
   [ "$(cmd_of "$output")" = "timeout 90 $CCBATS t.bats" ]
 }
 
+# The cc-shim layout (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4): bin/bats is a link to
+# the compiled trampoline, which runs ../.bin-real/bats → the wrapper. That is a shim too. The
+# trampoline stand-in is /usr/bin/true: only its inode is compared, it is never run.
+@test "cc-shim layout: bin/bats → libexec/cc-shim with .bin-real/bats → cc-bats counts as the shim" {
+  mkdir -p "$D/libexec" "$D/.bin-real"
+  ln -s /usr/bin/true "$D/libexec/cc-shim"
+  ln -s "$D/libexec/cc-shim" "$D/bin/bats"
+  ln -s "$CCBATS" "$D/.bin-real/bats"
+  run run_hook "echo hello bats world"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "a data-position token was rewritten: $(cmd_of "$output")" >&2; false; }
+  # Control: the trampoline running something OTHER than the wrapper is no shim, so bare is rewritten.
+  rm "$D/.bin-real/bats"; ln -s /usr/bin/true "$D/.bin-real/bats"
+  run run_hook "bats t.bats"
+  [ "$(cmd_of "$output")" = "$CCBATS t.bats" ]
+}
+
 # The guard that makes the token pattern safe: an ABSOLUTE .bats FILE is an argument, not the tool.
 # Without the "prefix must end in /" rule, `/a/b/tests/x.bats` matches as `/a/b/tests/x.` + `bats`.
 @test "an absolute .bats file ARGUMENT is not rewritten — only the command token is" {
