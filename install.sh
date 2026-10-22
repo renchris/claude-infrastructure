@@ -1215,6 +1215,22 @@ if $IS_GLOBAL; then
       link_file "$REPO_DIR/bin/cc-qos-exec" "$CONFIG_DIR/bin/$_qos_name"
     done < "$REPO_DIR/config/qos-shim.names"
   fi
+
+  # cc-shim (2026-10-22, docs/research/kalloc-longterm-2026-10-21/shim.md): a compiled #! launcher,
+  # because macOS 15 keeps ~1.1 KiB of kernel memory per #! exec until reboot. Best effort: no
+  # compiler or a red build prints `unavailable` and install carries on, since every consumer must
+  # already work without it. CC_SHIM_INSTALL=0 skips the compile (hermetic install tests).
+  if [[ "${CC_SHIM_INSTALL:-1}" != 0 && -f "$REPO_DIR/tools/cc-shim/build.sh" ]]; then
+    echo ""
+    echo "cc-shim → $CONFIG_DIR/libexec/cc-shim"
+    if $DRY_RUN; then
+      echo "  [dry-run] tools/cc-shim/build.sh"
+    elif _shim_out=$(CC_SHIM_LINK="$CONFIG_DIR/libexec/cc-shim" /bin/bash "$REPO_DIR/tools/cc-shim/build.sh" 2>&1); then
+      echo "  ✓ ${_shim_out##*$'\n'}"
+    else
+      echo "  ⚠ cc-shim NOT installed — ${_shim_out##*$'\n'}"
+    fi
+  fi
 fi
 
 # --- LaunchAgents (global only) ---
