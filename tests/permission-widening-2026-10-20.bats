@@ -79,7 +79,7 @@ sba() {  # <command> [cwd] → ALLOW | DEFER  (smart-bash-allowlist; the hook ju
   [ "$(vb 'rm -rf /tmp/.pw-bats-x')" = "ASK" ]
   [ "$(vb 'rm -rf /tmp/claude-pw-bats/x')" = "ASK" ]
   [ "$(vb 'rm -rf /tmp/land-lock-pw')" = "ASK" ]
-  python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$S/sub/live.sock"
+  /usr/bin/python3 -c 'import os,socket,sys; d,b=os.path.split(os.path.abspath(sys.argv[1])); os.chdir(d); socket.socket(socket.AF_UNIX).bind(b)' "$S/sub/live.sock"
   [ "$(vb "rm -rf $S/sub")" = "ASK" ]
   [ "$(vb "rm -rf $S/../../etc")" = "ASK" ]
   ln -s "$P/src" "$S/link-out"
@@ -189,7 +189,7 @@ sba() {  # <command> [cwd] → ALLOW | DEFER  (smart-bash-allowlist; the hook ju
   [ "$(sba 'D=/tmp/cc-pw-bats; ls $D && rm -rf "$D"')" = "DEFER" ]
   [ "$(sba "D=$S/a; D=/etc; ls && rm -rf \"\$D\"")" = "DEFER" ]       # bound twice
   [ "$(sba 'ls && rm -rf "$UNSET"')" = "DEFER" ]
-  python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$S/sub/l.sock"
+  /usr/bin/python3 -c 'import os,socket,sys; d,b=os.path.split(os.path.abspath(sys.argv[1])); os.chdir(d); socket.socket(socket.AF_UNIX).bind(b)' "$S/sub/l.sock"
   [ "$(sba "D=$S/sub; ls && rm -rf \"\$D\"")" = "DEFER" ]           # a live listener below it
   # (a LITERAL /tmp target is rm-safe-allowlist.sh's allow; validate-bash's ask overrides it for the
   # reserved names and sockets — pinned in the rm -r REFUSES case above)
