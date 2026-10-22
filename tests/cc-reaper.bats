@@ -4,6 +4,8 @@
 # aborts the reap (WIP checkpointed); every never-reap cause is left untouched. Mocks classify/teardown/
 # checkpoint; uses REAL temp git repos so the work-landed re-check is exercised for real.
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   R="$REPO/bin/cc-reaper"
@@ -75,7 +77,7 @@ setup() {
   # AHEAD: clean tree but 1 genuinely-unlanded commit (content NOT on trunk) → never reapable.
   mkrepo "$D/ahead"; echo more >> "$D/ahead/f"; git -C "$D/ahead" commit -aqm unlanded
   # mock teardown: record argv + ordering; rc from TEARDOWN_RC
-  cat > "$D/bin/teardown" <<EOF
+  cc_stub "$D/bin" teardown - <<EOF
 #!/bin/bash
 echo "TD \$*" >> "$D/order"
 printf '%s\n' "\$*" >> "$D/td-calls"
@@ -86,11 +88,10 @@ printf 'CC_TERM=%s CC_TERM_KITTY_TO=%s\n' "\${CC_TERM:-}" "\${CC_TERM_KITTY_TO:-
 exit \${TEARDOWN_RC:-0}
 EOF
   # mock checkpoint: record it ran (+ ordering)
-  cat > "$D/bin/checkpoint" <<EOF
+  cc_stub "$D/bin" checkpoint - <<EOF
 #!/bin/bash
 cat >> "$D/ckpt-payloads"; echo "CKPT" >> "$D/order"
 EOF
-  chmod +x "$D/bin/teardown" "$D/bin/checkpoint"
   export CC_REAPER_TEARDOWN_BIN="$D/bin/teardown"
   # cc-kitty-socket resolves the LIVE kitty socket from ANY context — including this suite. An
   # ABSENT path is the right default: the resolver arm exports nothing, so every pre-existing test
@@ -141,40 +142,39 @@ EOF
   # delivery and a mailbox-only enqueue, so the stub emits one too: CC_TEST_NOTIFY_VERDICT scripts it
   # (default `delivered` = a live desk read it, the pre-2026-08-01 fixture assumption; `mailbox-only`
   # = the desk-less steady state of this machine; `none` = no token at all, the unreadable third state).
-  cat > "$D/bin/notify" <<EOF
+  cc_stub "$D/bin" notify - <<EOF
 #!/bin/bash
 printf 'NOTIFY %s\n' "\$*" >> "$D/notify-calls"
 _v="\${CC_TEST_NOTIFY_VERDICT:-delivered}"
 [ "\$_v" = none ] || printf 'cc-notify: enqueued=1 verdict=%s\n' "\$_v" >&2
 exit \${CC_TEST_NOTIFY_RC:-0}
 EOF
-  cat > "$D/bin/ps" <<EOF
+  cc_stub "$D/bin" ps - <<EOF
 #!/bin/bash
 n=\$(cat "$D/nlive" 2>/dev/null || echo 1)
 for ((k=0; k<n; k++)); do echo "claude --permission-mode auto --model claude-opus-4-8 --effort max"; done
 EOF
   # mock cc-reconcile: records that (and how) it was invoked so no test hits the LIVE cc-registry, and
   # the reconcile wiring (runs on --reap, before classify) is assertable.
-  cat > "$D/bin/reconcile" <<EOF
+  cc_stub "$D/bin" reconcile - <<EOF
 #!/bin/bash
 printf 'RECON %s\n' "\$*" >> "$D/reconcile-calls"
 echo "cc-reconcile: mock 0 backfilled"
 EOF
   # mock cc-backlog: records that `reap` was invoked (the claim-ledger sweep wiring, --reap only) so no
   # test hits the LIVE backlog. Echoes a summary line like the real one so the reaper surfaces it.
-  cat > "$D/bin/backlog" <<EOF
+  cc_stub "$D/bin" backlog - <<EOF
 #!/bin/bash
 printf 'BACKLOG %s\n' "\$*" >> "$D/backlog-calls"
 echo "cc-backlog reap: 0 reopened, 0 blocked (0 non-terminal scanned)"
 EOF
   # mock cc-inbox-guard: records the sweep call (comms fail-loud backstop wiring, --reap only) so no test
   # hits the LIVE mailbox / operator phone. MUST be mocked — the real guard would sweep ~/.claude/mailbox.
-  cat > "$D/bin/guard" <<EOF
+  cc_stub "$D/bin" guard - <<EOF
 #!/bin/bash
 printf 'GUARD %s\n' "\$*" >> "$D/guard-calls"
 echo "cc-inbox-guard: sweep done — 0 escalation(s)"
 EOF
-  chmod +x "$D/bin/notify" "$D/bin/ps" "$D/bin/reconcile" "$D/bin/backlog" "$D/bin/guard"
   export CC_REAPER_NOTIFY_BIN="$D/bin/notify"
   export CC_REAPER_PS_BIN="$D/bin/ps"
   export CC_REAPER_RECONCILE_BIN="$D/bin/reconcile"
@@ -236,11 +236,11 @@ set_live()  { echo "$1" > "$D/nlive"; }
 # tenancy test overrides it to a value beyond firedAt+BOOT_MAX.
 mock_classify() {
   local cause="$1" cwd="$2" idle="$3" landed="$4" pane="${5:-PANE-X}" started="${6:-$(( $(date +%s) * 1000 ))}"
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 jq -nc '[{name:"t",paneUUID:"$pane",account:"next",cwd:"$cwd",cause:"$cause",idle_s:$idle,work_landed:"$landed",startedAt:$started,successor:"PANE-SUCC",detail:"x"}]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
 }
 # handed-off-lead mock that mirrors REALITY: emits the lead PLUS a LIVE successor session (pid=$$,
 # active) in the SAME enumerated set. cc-classify only labels a session handed-off-lead when
@@ -249,12 +249,12 @@ EOF
 HSUCC="5CC00000-1111-4222-8333-444455556666"
 mock_classify_handoff() {
   local cwd="$1" idle="$2" landed="$3" pane="${4:-PANE-A}"
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$cwd",cause:"handed-off-lead",idle_s:$idle,work_landed:"$landed",successor:"$HSUCC",detail:"x"},
          {name:"succ",paneUUID:"$HSUCC",account:"next",cwd:"$cwd",cause:"active",idle_s:5,work_landed:"no",successor:null,pid:$$,detail:"x"}]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
 }
 td_called() { [ -f "$D/td-calls" ]; }
 
@@ -426,11 +426,11 @@ td_called() { [ -f "$D/td-calls" ]; }
   # is caught. A mock classify supplies both; the teardown call must carry --expect-pid/--expect-lstart.
   mark_fired
   local now_ms=$(( $(date +%s) * 1000 ))          # tenancy-valid startedAt (rule 2) vs the fresh stamp
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 jq -nc '[{name:"t",paneUUID:"$WPANE",account:"next",cwd:"$D/clean",cause:"finished",idle_s:999,work_landed:"yes",pid:4242,lstart:"Fri Jul 18 10:00:00 2026",startedAt:$now_ms,successor:"PANE-SUCC",detail:"x"}]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   td_called
@@ -765,11 +765,11 @@ mock_classify_handoffs() {
         {name:\"lead2\",paneUUID:\"PANE-L2\",account:\"next\",cwd:\"$2\",cause:\"handed-off-lead\",idle_s:999,work_landed:\"yes\",successor:\"$HS2\",detail:\"x\"},
         {name:\"succ2\",paneUUID:\"$HS2\",account:\"next\",cwd:\"$D/clean\",cause:\"active\",idle_s:5,work_landed:\"no\",successor:null,pid:$$,detail:\"x\"}"
   fi
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 jq -nc '[$rows]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
 }
 
 @test "KILL SWITCH: CC_REAPER_DISABLE=1 classifies nothing, tears down nothing, removes nothing" {
@@ -1210,18 +1210,17 @@ selfcheck_pages() { [ -f "$D/notify-calls" ] || { echo 0; return 0; }; grep -c '
   # the blind-spot detector is desensitized (and false-pages at other session mixes). RED before the fix:
   # 3 live claude.exe panes read as 0 live ⇒ "reaper sees all live panes" ⇒ no page (blind to the blind spot).
   set_desk
-  cat > "$D/bin/ps" <<'PSEOF'
+  cc_stub "$D/bin" ps - <<'PSEOF'
 #!/bin/bash
 echo "/Users/x/.claude-183/node_modules/@anthropic-ai/claude-code/bin/claude.exe --permission-mode auto --model claude-opus-4-8"
 echo "claude.exe --permission-mode auto --effort max"
 echo "/opt/claude/bin/claude.exe --model claude-opus-4-8"
 PSEOF
-  chmod +x "$D/bin/ps"
-  cat > "$D/bin/classify" <<'CLEOF'
+  cc_stub "$D/bin" classify - <<'CLEOF'
 #!/bin/bash
 echo '[]'
 CLEOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   notified
@@ -1295,11 +1294,11 @@ CLEOF
   mkdir -p "$D/proj/slug"; export CC_REAPER_PROJECT_ROOTS="$D/proj"
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"       # operator prompt ~now (< 6h hold)
   printf '{"type":"user","isMeta":false,"message":{"role":"user","content":"keep going please"},"timestamp":"%s"}\n' "$ts" > "$D/proj/slug/$sid.jsonl"
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"$sid",cause:"coordination-abandoned",idle_s:9999,work_landed:"yes",successor:null,detail:"x"}]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   ! td_called || false                                 # never reaped — the operator is present
@@ -1311,11 +1310,11 @@ EOF
   mkdir -p "$D/proj/slug"; export CC_REAPER_PROJECT_ROOTS="$D/proj"
   local ts; ts="$(date -u -v-10H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '10 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
   printf '{"type":"user","isMeta":false,"message":{"role":"user","content":"old prompt"},"timestamp":"%s"}\n' "$ts" > "$D/proj/slug/$sid.jsonl"
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"$sid",cause:"coordination-abandoned",idle_s:9999,work_landed:"yes",successor:null,detail:"x"}]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   td_called                                            # 10h-old prompt → not adopted → reaps
@@ -1326,11 +1325,11 @@ EOF
   set_desk
   local pane="C0C02222-1111-4333-8444-555566667777"
   export CC_REAPER_PROJECT_ROOTS="$D/proj-empty"; mkdir -p "$D/proj-empty"
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"no-such-sid",cause:"coordination-abandoned",idle_s:9999,work_landed:"yes",successor:null,detail:"x"}]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   ! td_called || false
@@ -1345,11 +1344,11 @@ EOF
   local sid="c0ffee11-2222-3333-4444-555566667777" pane="F0F02222-1111-4333-8444-555566667777"
   mkdir -p "$D/proj/slug"; export CC_REAPER_PROJECT_ROOTS="$D/proj"
   printf 'not json at all\nhalf a record {"type":"user"\n\001\002 binary junk\n' > "$D/proj/slug/$sid.jsonl"
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"$sid",cause:"coordination-abandoned",idle_s:9999,work_landed:"yes",successor:null,detail:"x"}]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   # `[ ! -f … ]`, NOT `! td_called`: bash exempts a `!`-inverted command from errexit, so a MID-test
@@ -1363,11 +1362,11 @@ EOF
   set_desk
   local pane="D0D02222-1111-4333-8444-555566667777" succ="D5D53333-1111-4333-8444-555566667777"
   # the named successor pane is ABSENT from the classify set → its pid is unknown → continuity unproven
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"sid-h",cause:"handed-off-lead",idle_s:9999,work_landed:"yes",successor:"$succ",detail:"x"}]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   ! td_called || false
@@ -1377,12 +1376,12 @@ EOF
 @test "Gap-2 leg: handed-off-lead with a LIVE successor in the classify set → still reaped (no over-block)" {
   local pane="E0E02222-1111-4333-8444-555566667777" succ="E5E53333-1111-4333-8444-555566667777"
   # the successor row carries pid=$$ (this test proc, alive) → continuity proven → reaps normally
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"sid-h",cause:"handed-off-lead",idle_s:9999,work_landed:"yes",successor:"$succ",detail:"x"},
          {name:"succ",paneUUID:"$succ",account:"next",cwd:"$D/clean",session_id:"sid-s",cause:"active",idle_s:5,work_landed:"no",successor:null,pid:$$,detail:"x"}]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   td_called
@@ -1414,13 +1413,13 @@ EOF
   export CC_REAPER_BEAT_FILE="$D/beat"; echo "$((NOW-60))" > "$D/beat"       # recent last sweep (no inter-suspend)
   export CC_REAPER_SUSPEND_S=900
   # classify BUMPS the clock +10000s while running → simulates a suspend DURING classify
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 echo "$((NOW+10000))" > "$D/now"
 jq -nc '[{name:"lead",paneUUID:"PANE-A",account:"next",cwd:"$D/clean",cause:"handed-off-lead",idle_s:9999,work_landed:"yes",successor:"$HSUCC",detail:"x"},
          {name:"succ",paneUUID:"$HSUCC",account:"next",cwd:"$D/clean",cause:"active",idle_s:5,work_landed:"no",successor:null,pid:$$,detail:"x"}]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   ! td_called || false
@@ -1460,11 +1459,11 @@ mock_classify_safeguard() { # [pane] [cwd] [model] [refusal]
         refusal="${4:-API Error: Fable 5's safeguards flagged this message. Claude Code can't respond to this request with Fable 5.}"
   jq -nc --arg p "$pane" --arg c "$cwd" --arg m "$model" --arg r "$refusal" \
     '[{name:"peer",paneUUID:$p,account:"claude-quaternary",cwd:$c,cause:"safeguard-blocked",idle_s:200,work_landed:"na",blocked_model:$m,refusal:$r,successor:null,detail:"model safeguards refused"}]' > "$D/classify.json"
-  printf '#!/bin/bash\ncat "%s"\n' "$D/classify.json" > "$D/bin/classify"
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  cc_stub "$D/bin" classify "$(printf '#!/bin/bash\ncat "%s"\n' "$D/classify.json")"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
 }
-set_recover() { printf '#!/bin/bash\necho "RECOVER $*" >> "%s"\n' "$D/recover-calls" > "$D/bin/recover"
-                chmod +x "$D/bin/recover"; export CC_REAPER_RECOVER_BIN="$D/bin/recover"; }
+set_recover() { cc_stub "$D/bin" recover "$(printf '#!/bin/bash\necho "RECOVER $*" >> "%s"\n' "$D/recover-calls")"
+                export CC_REAPER_RECOVER_BIN="$D/bin/recover"; }
 
 @test "safeguard-blocked --reap → SURFACED not reaped: originator paged, desk paged, board row, recover cmd" {
   mock_classify_safeguard "$WPANE" "$D/clean"; mark_fired "$WPANE"; set_desk
@@ -1632,11 +1631,10 @@ hold_lock() { mkdir -p "$CC_REAPER_LOCKDIR"; printf '%s\n' "$1" > "$CC_REAPER_LO
 
 mk_garbage_fixtures() {
   GA="$D/gs_ps_a.txt"; GB="$D/gs_ps_b.txt"; KLOG="$D/gs_kills.log"
-  cat > "$D/gs-killer" <<'EOF'
+  cc_stub "$D" gs-killer - <<'EOF'
 #!/bin/bash
 printf '%s %s %s %s\n' "$3" "$1" "$2" "$4" >> "$KILL_LOG"
 EOF
-  chmod +x "$D/gs-killer"
   mkdir -p "$D/gs-wd"
   export CC_REAPER_GARBAGE_PS_A="$GA" CC_REAPER_GARBAGE_PS_B="$GB" \
          CC_REAPER_GARBAGE_KILL="$D/gs-killer" KILL_LOG="$KLOG" \
@@ -2310,13 +2308,12 @@ mk_wrapper_victim() {
   # failed closed on the FIRST 124 — every load-781 sweep read "NO candidates" at exactly the
   # moment reaping mattered most.
   cnt="$D/cls-count"; : > "$cnt"
-  cat > "$D/cls" <<EOF
+  cc_stub "$D" cls - <<EOF
 #!/bin/bash
 echo x >> "$cnt"
 if [ "\$(wc -l < "$cnt" | tr -d ' ')" -eq 1 ]; then sleep 2; fi
 echo '[]'
 EOF
-  chmod +x "$D/cls"
   export CC_REAPER_CLASSIFY_BIN="$D/cls" CC_REAPER_CLASSIFY_TIMEOUT_S=1
   export CC_REAPER_GARBAGE_PS_A=/dev/null CC_REAPER_GARBAGE_PS_B=/dev/null   # pin the arm cheap
   run "$R" sweep
@@ -2375,16 +2372,15 @@ EOF
   # process made resident headless agents invisible to the blind-spot detector itself — the one
   # instrument whose whole job is noticing sessions nothing else enumerated.
   set_desk
-  cat > "$D/bin/ps" <<'PSEOF'
+  cc_stub "$D/bin" ps - <<'PSEOF'
 #!/bin/bash
 echo "/Users/x/.claude-183/node_modules/.bin/claude -p --strict-mcp-config --settings /tmp/s.json --model claude-opus-5 --input-format stream-json --output-format stream-json --verbose CC_PANE_ID=hdl-0123456789abcdef TERM_PROGRAM=Apple_Terminal"
 PSEOF
-  chmod +x "$D/bin/ps"
-  cat > "$D/bin/classify" <<'CLEOF'
+  cc_stub "$D/bin" classify - <<'CLEOF'
 #!/bin/bash
 echo '[]'
 CLEOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   notified
@@ -2395,16 +2391,15 @@ CLEOF
   # The over-widening guard. Dropping the -p exclusion outright would make every transient probe
   # inflate the live count and false-page the operator forever.
   set_desk
-  cat > "$D/bin/ps" <<'PSEOF'
+  cc_stub "$D/bin" ps - <<'PSEOF'
 #!/bin/bash
 echo "/Users/x/.claude-183/node_modules/.bin/claude -p hi CC_PANE_ID=hdl-fedcba9876543210"
 PSEOF
-  chmod +x "$D/bin/ps"
-  cat > "$D/bin/classify" <<'CLEOF'
+  cc_stub "$D/bin" classify - <<'CLEOF'
 #!/bin/bash
 echo '[]'
 CLEOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   run grep -c 'BLIND to 1' "$D/notify-calls"
@@ -2417,16 +2412,15 @@ CLEOF
   # to prevent. The scan stops at the first KEY=value field; here `FOO=` opens the env region and a
   # bare --input-format token sits AFTER it, so it must not be seen.
   set_desk
-  cat > "$D/bin/ps" <<'PSEOF'
+  cc_stub "$D/bin" ps - <<'PSEOF'
 #!/bin/bash
 echo "/Users/x/.claude-183/node_modules/.bin/claude -p hi FOO= --input-format stream-json"
 PSEOF
-  chmod +x "$D/bin/ps"
-  cat > "$D/bin/classify" <<'CLEOF'
+  cc_stub "$D/bin" classify - <<'CLEOF'
 #!/bin/bash
 echo '[]'
 CLEOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   run grep -c 'BLIND to 1' "$D/notify-calls"
@@ -2870,11 +2864,11 @@ mk_subagent() { # <sid> <agent-name> <inflight|returned> <seconds-ago>
 # classify mock that EMITS session_id — mock_classify does not, and leg 3 cannot resolve a
 # transcript without it. Everything else matches mock_classify field for field.
 mock_classify_sid() { # <cause> <cwd> <idle> <landed> <pane> <sid>
-  cat > "$D/bin/classify" <<EOF
+  cc_stub "$D/bin" classify - <<EOF
 #!/bin/bash
 jq -nc '[{name:"t",paneUUID:"$5",account:"next",cwd:"$2",session_id:"$6",cause:"$1",idle_s:$3,work_landed:"$4",startedAt:$(( $(date +%s) * 1000 )),successor:"PANE-SUCC",detail:"x"}]'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
 }
 
 # ── B11/B12: THE BELT'S CAUSE SET vs THE PROMOTION'S (backlog 7c22e9b43956, 2026-08-20) ──────────
@@ -3673,12 +3667,12 @@ FIX
 
 @test "R5c: classify EMPTY at rc 0 while live panes exist is NAMED, not reported as a healthy sweep" {
   # The production shape: the enumerator failed open, so the producer succeeds emptily.
-  cat > "$D/bin/classify" <<'EOF'
+  cc_stub "$D/bin" classify - <<'EOF'
 #!/bin/bash
 printf '[]\n'
 exit 0
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   set_live 4
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
@@ -3690,12 +3684,12 @@ EOF
 @test "R5c CONTROL: an EMPTY box makes an empty classification legitimate — no false alarm" {
   # This is the arm that keeps R5c from being an always-firing alarm. Drop the live_now>0 guard and
   # this test reds — which is the whole reason it is written as a control rather than assumed.
-  cat > "$D/bin/classify" <<'EOF'
+  cc_stub "$D/bin" classify - <<'EOF'
 #!/bin/bash
 printf '[]\n'
 exit 0
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   set_live 0
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
@@ -3713,12 +3707,12 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 @test "R5c SCOPE: a bound-fired classify names the BOUND, and R5c does not re-blame the enumerator" {
-  cat > "$D/bin/classify" <<'EOF'
+  cc_stub "$D/bin" classify - <<'EOF'
 #!/bin/bash
 sleep 30
 printf '[]\n'
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   export CC_REAPER_CLASSIFY_TIMEOUT_S=1
   set_live 4
   run "$R" sweep --reap
@@ -3732,11 +3726,11 @@ EOF
 }
 
 @test "R5c SCOPE: a producer-error classify names the CHILD's rc, and R5c does not re-blame it either" {
-  cat > "$D/bin/classify" <<'EOF'
+  cc_stub "$D/bin" classify - <<'EOF'
 #!/bin/bash
 exit 127
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   set_live 4
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
@@ -3748,11 +3742,11 @@ EOF
 @test "R5b: a non-124 classify rc is the CHILD's own failure and is named as such, not as the bound" {
   # rc 127 is the shape the backlog row prescribes as its falsifier. It is real, it was silent, and it
   # is NOT the mode that fires in production — hence a separate arm from R5c above.
-  cat > "$D/bin/classify" <<'EOF'
+  cc_stub "$D/bin" classify - <<'EOF'
 #!/bin/bash
 exit 127
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   set_live 0                       # isolate the rc arm: no live panes ⇒ R5c stays silent
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
@@ -3777,11 +3771,10 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 @test "R5d: a non-124 reconcile rc is the CHILD's own failure and is NAMED, not silent" {
-  cat > "$D/bin/reconcile" <<'EOF'
+  cc_stub "$D/bin" reconcile - <<'EOF'
 #!/bin/bash
 exit 127
 EOF
-  chmod +x "$D/bin/reconcile"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   [ "$(grep -c 'reconcile FAILED: rc=127 — producer error, NOT the bound' "$CC_REAPER_LOG")" -eq 1 ]
@@ -3790,11 +3783,10 @@ EOF
 }
 
 @test "R5d: a non-124 backlog-reap rc is the CHILD's own failure and is NAMED, not silent" {
-  cat > "$D/bin/backlog" <<'EOF'
+  cc_stub "$D/bin" backlog - <<'EOF'
 #!/bin/bash
 exit 3
 EOF
-  chmod +x "$D/bin/backlog"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   [ "$(grep -c 'backlog-reap FAILED: rc=3 — producer error, NOT the bound' "$CC_REAPER_LOG")" -eq 1 ]
@@ -3803,11 +3795,10 @@ EOF
 
 @test "R5d: a non-124 inbox-guard rc is the CHILD's own failure and is NAMED, not silent" {
   # rc 2 is the guard's OWN spelling at its :53/:95 dependency checks — the reachable mode.
-  cat > "$D/bin/guard" <<'EOF'
+  cc_stub "$D/bin" guard - <<'EOF'
 #!/bin/bash
 exit 2
 EOF
-  chmod +x "$D/bin/guard"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   [ "$(grep -c 'inbox-guard FAILED: rc=2 — producer error, NOT the bound' "$CC_REAPER_LOG")" -eq 1 ]
@@ -3910,12 +3901,12 @@ set_registry() { # <n> — n hermetic cc-registry rows under $CC_REGISTRY_DIR
   # rc 0 over an empty registry — a registration gap, not an enumerator fault, and the old line
   # asserted the fault unconditionally. The registry dir EXISTS here and is EMPTY, which the test
   # above proves is NOT the same state as absent.
-  cat > "$D/bin/classify" <<'EOF'
+  cc_stub "$D/bin" classify - <<'EOF'
 #!/bin/bash
 printf '[]\n'
 exit 0
 EOF
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   set_live 4
   set_registry 0                                    # dir present, zero rows
   [ -d "$CC_REGISTRY_DIR" ]
@@ -3954,10 +3945,9 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 use_real_classify() { # <enumerator body> — the REAL cc-classify with its enumerator seam pinned
-  printf '#!/bin/bash\n%s\n' "$1" > "$D/bin/enum"
-  printf '#!/bin/bash\nexport CC_CLASSIFY_SESSIONS_BIN=%s\nexec bash %s "$@"\n' \
-         "$D/bin/enum" "$REPO/bin/cc-classify" > "$D/bin/classify"
-  chmod +x "$D/bin/enum" "$D/bin/classify"
+  cc_stub "$D/bin" enum "$(printf '#!/bin/bash\n%s\n' "$1")"
+  cc_stub "$D/bin" classify "$(printf '#!/bin/bash\nexport CC_CLASSIFY_SESSIONS_BIN=%s\nexec bash %s "$@"\n' \
+         "$D/bin/enum" "$REPO/bin/cc-classify")"
   export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
 }
 
@@ -4022,10 +4012,10 @@ use_real_classify() { # <enumerator body> — the REAL cc-classify with its enum
   # bound fires, so without this the second site would ship with a mutant that reds nothing —
   # exactly the green-that-means-nothing #226 hit at R5c's two seams.
   set_desk; set_live 4
-  printf '#!/bin/bash\nexit 3\n' > "$D/bin/enum"; chmod +x "$D/bin/enum"
-  printf '#!/bin/bash\nn=$(cat %s 2>/dev/null || echo 0); n=$(( n + 1 )); echo "$n" > %s\nif [ "$n" = 1 ]; then sleep 5; exit 0; fi\nexport CC_CLASSIFY_SESSIONS_BIN=%s\nexec bash %s "$@"\n' \
-         "$D/ccount" "$D/ccount" "$D/bin/enum" "$REPO/bin/cc-classify" > "$D/bin/classify"
-  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  cc_stub "$D/bin" enum "$(printf '#!/bin/bash\nexit 3\n')"
+  cc_stub "$D/bin" classify "$(printf '#!/bin/bash\nn=$(cat %s 2>/dev/null || echo 0); n=$(( n + 1 )); echo "$n" > %s\nif [ "$n" = 1 ]; then sleep 5; exit 0; fi\nexport CC_CLASSIFY_SESSIONS_BIN=%s\nexec bash %s "$@"\n' \
+         "$D/ccount" "$D/ccount" "$D/bin/enum" "$REPO/bin/cc-classify")"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   export CC_REAPER_CLASSIFY_TIMEOUT_S=1
   set_registry 0
   run "$R" sweep --reap
@@ -4134,11 +4124,11 @@ use_real_classify() { # <enumerator body> — the REAL cc-classify with its enum
 
 # The discriminator. RED against the pre-fix subject: nothing exported CC_TERM_KITTY_TO at all.
 @test "launchd shape (no kitty env) + a live socket → cc-teardown inherits the kitty address" {
-  cat > "$D/bin/ksock" <<'EOS'
+  cc_stub "$D/bin" ksock - <<'EOS'
 #!/bin/bash
 echo "unix:/tmp/kitty-fixture-9999"
 EOS
-  chmod +x "$D/bin/ksock"; export CC_REAPER_KITTY_SOCKET_BIN="$D/bin/ksock"
+  export CC_REAPER_KITTY_SOCKET_BIN="$D/bin/ksock"
   unset CC_TERM CC_TERM_KITTY_TO KITTY_LISTEN_ON
   mock_classify_handoff "$D/clean" 999 yes PANE-A
   run "$R" sweep --reap
@@ -4151,11 +4141,11 @@ EOS
 # resolver's rc 4) must export nothing, so a genuine iTerm2 machine keeps its pre-existing path.
 # This is what would fail if the fix ever fabricated an address instead of resolving one.
 @test "no live kitty socket → nothing is exported, the pre-existing path is untouched" {
-  cat > "$D/bin/ksock" <<'EOS'
+  cc_stub "$D/bin" ksock - <<'EOS'
 #!/bin/bash
 exit 4
 EOS
-  chmod +x "$D/bin/ksock"; export CC_REAPER_KITTY_SOCKET_BIN="$D/bin/ksock"
+  export CC_REAPER_KITTY_SOCKET_BIN="$D/bin/ksock"
   unset CC_TERM CC_TERM_KITTY_TO KITTY_LISTEN_ON
   mock_classify_handoff "$D/clean" 999 yes PANE-A
   run "$R" sweep --reap
@@ -4167,12 +4157,12 @@ EOS
 # An operator-set address is an explicit choice (it2-kitty's documented intent channel) and the
 # resolver must never overwrite it — nor even run.
 @test "an operator-set CC_TERM_KITTY_TO wins and the resolver is never called" {
-  cat > "$D/bin/ksock" <<EOF
+  cc_stub "$D/bin" ksock - <<EOF
 #!/bin/bash
 echo called >> "$D/ksock-calls"
 echo "unix:/tmp/kitty-fixture-WRONG"
 EOF
-  chmod +x "$D/bin/ksock"; export CC_REAPER_KITTY_SOCKET_BIN="$D/bin/ksock"
+  export CC_REAPER_KITTY_SOCKET_BIN="$D/bin/ksock"
   unset CC_TERM KITTY_LISTEN_ON
   export CC_TERM_KITTY_TO="unix:/tmp/kitty-operator-chose"
   mock_classify_handoff "$D/clean" 999 yes PANE-A
@@ -4194,7 +4184,7 @@ EOF
   sed -n '/^iso_to_epoch_r(){/,/^}/p' "$R" > "$fn"
   grep -q '%Y-%m-%dT%H:%M:%S' "$fn" || false        # anti-vacuity: the extract IS the parser
   mkdir -p "$D/gnubin"
-  cat > "$D/gnubin/date" <<'EOS'
+  cc_stub "$D/gnubin" date - <<'EOS'
 #!/bin/sh
 # A GNU-dialect date. -j is not a flag it has; --version answers; -u -d parses an ISO instant.
 for a in "$@"; do [ "$a" = "-j" ] && exit 1; done
@@ -4202,7 +4192,6 @@ for a in "$@"; do [ "$a" = "-j" ] && exit 1; done
 [ "$1" = "-u" ] && [ "$2" = "-d" ] && [ "$3" = "2026-08-19T13:05:08Z" ] && { echo 9999999999; exit 0; }
 exit 1
 EOS
-  chmod +x "$D/gnubin/date"
   { printf 'PATH="%s:$PATH"\n' "$D/gnubin"; cat "$fn"; } > "$fn.run"
   echo 'printf "[%s]" "$(iso_to_epoch_r "$1")"' >> "$fn.run"
   run bash "$fn.run" "2026-08-19T13:05:08.449Z"
@@ -4214,14 +4203,13 @@ EOS
   { sed -n '/^iso_to_epoch_r(){/,/^}/p' "$R"; sed -n '/^fired_at_epoch_r(){/,/^}/p' "$R"; } > "$fn"
   grep -q 'FIRED_DIR' "$fn" || false                # anti-vacuity: the extract IS the reader
   mkdir -p "$D/gnubin2" "$D/fired2"
-  cat > "$D/gnubin2/stat" <<'EOS'
+  cc_stub "$D/gnubin2" stat - <<'EOS'
 #!/bin/sh
 # A GNU-dialect stat: -f is not a format flag it has, -c is.
 [ "$1" = "-f" ] && exit 1
 [ "$1" = "-c" ] && { echo 4242; exit 0; }
 exit 1
 EOS
-  chmod +x "$D/gnubin2/stat"
   printf '{"paneUUID":"P","cwd":"x"}\n' > "$D/fired2/P.json"   # no firedAt ⇒ must reach mtime
   { printf 'PATH="%s:$PATH"\nFIRED_DIR="%s"\n' "$D/gnubin2" "$D/fired2"; cat "$fn"; } > "$fn.run"
   echo 'fired_at_epoch_r P; echo " rc=$?"' >> "$fn.run"
