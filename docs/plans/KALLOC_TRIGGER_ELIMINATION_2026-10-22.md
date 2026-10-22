@@ -33,7 +33,7 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
 
 ## Waves
 
-### W0+W1 measure and point fixes — built 2026-10-22 (session kte-w01)
+### W0+W1 measure and point fixes — DONE 2026-10-22 (session kte-w01; landed through `c04753169`, lead-verified by content; operator row `5e6ea2dc29e0` runs migration 0076)
 
 - **Census tool** `scripts/kalloc-exec-census.sh` (`1615ea04c`, `tests/kalloc-exec-census.bats`): one
   bounded `sudo -A gtimeout -s INT`, filtered in the stream to script execs and an allow-list of fields;
@@ -46,8 +46,7 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
   lr-fire-resume `cc-close-attrib` root through their interpreter (`07ad2628e`); cc-settings-parity through
   python3 in all 26 migrations that call it and in c10-batch, not only the three lines the REPORT named
   (`1ab1a938a`); shasum → `/sbin/sha{256,1}sum` in 63 files with byte-identical output, plus
-  `scripts/shasum-lint.sh` at the land gate (teammate sha, "fix(kalloc): shasum call sites run the mach-o
-  sha256sum/sha1sum" and "feat(lint): shasum-lint …", plus `31730cb2a`); 36 launchd plists through their own
+  `scripts/shasum-lint.sh` at the land gate (`b32af6d4f`, `4c749b938`, `31730cb2a`); 36 launchd plists through their own
   interpreter, `hook-shebang-lint.sh` extended to plists, and c10 migration 0076 for the installed copies
   (teammate ld, `b508bc635`, `55e900e2f`, `1492549c3`).
 - **Learnings:** the PATH-stub fork census (`tests/stop-hook-forks-helpers.bash`) cannot see a tool run by
@@ -60,9 +59,9 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
   `scripts/limit-recover/lr-lib.sh:1338`, and the `reso-resume-one` callers in `bin/cc-resume-layout.sh`
   and `scripts/boot-resume-launch.sh` run it by path: left to W4 (call sites), sized by T-0.
 ### W2 agent-context-sync harness — routed
-### W3 infra test suites — waiting on T-1
+### W3 infra test suites — in flight (session kte-w3, fired 2026-10-22 after T-1 passed)
 ### W4 call sites — waiting on W3
-### W5 keep-it-fixed loop — built 2026-10-22 (session kte-w5)
+### W5 keep-it-fixed loop — DONE 2026-10-22 (session kte-w5; landed through `f35645dea`, lead-verified by content)
 
 - **SLO check** `scripts/kalloc-slo.sh` (`tests/kalloc-slo.bats`), ticked by `capacity-alarm.sh`'s launchd
   run (fail-soft, bounded 120 s, after the zone state; damped to once an hour; `CC_CAP_KALLOC_SLO=off`).
