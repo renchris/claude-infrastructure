@@ -277,11 +277,82 @@ RETAIN_S=$(( ${CC_REG_RETAIN_H:-24} * 3600 ))
 now=$(date +%s)
 live=()
 dead=()
-for f in "$REG_DIR"/*.json; do
-  [ -e "$f" ] || continue
-  uuid=$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)
+
+# ── ONE jq AND ONE ps FOR THE WHOLE REGISTRY (R19, reboot-resume 2026-10-21) ─────────────────────
+# The loop below used to fork 3-4 jq and one ps PER ROW. Measured: the census took 74 s at load
+# 40/core against a 75 s cap, and 4 min 25 s of wall time for 2.6 s of CPU on 2026-10-18, so the
+# restore heartbeat carried a stale roster tick after tick. Now one `jq` reads every row into a TSV
+# (file, paneUUID, pid, lstart, surface, startedAt) and one `ps -o pid=,lstart= -p <all pids>` reads
+# every start time; the loop itself forks nothing for a live row. A registry jq cannot parse as a
+# whole (one corrupt file stops jq at that file) falls back to the per-row reads, which sweep the
+# corrupt row exactly as before. CC_SESSIONS_PS_BIN is the test seam for ps.
+REG_TSV=""; REG_BULK=0
+_reg_files=("$REG_DIR"/*.json)
+if [ -e "${_reg_files[0]}" ]; then
+  # Padded at the emitter (tsv-pad-lint): tab is IFS-whitespace, so an empty cell would shift the rest.
+  if REG_TSV="$(jq -r --arg pad $'\037' 'def cell(ph): (if . == null then "" else . end) | tostring
+            | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
+        [input_filename, (.paneUUID | cell($pad)), (.pid | cell($pad)), (.lstart | cell($pad)),
+         (.surface // "pane" | cell($pad)), (.startedAt | cell($pad))] | @tsv' "${_reg_files[@]}" 2>/dev/null)"; then
+    REG_BULK=1
+  fi
+fi
+# pid → canonical lstart, for every pid the registry names, from ONE ps. Empty when ps answered
+# nothing (no pid alive, or ps unusable); REG_PS_OK=0 then keeps kill -0 as the liveness read.
+REG_PS=""; REG_PS_OK=0
+if [ "$REG_BULK" = 1 ]; then
+  _pids="$(printf '%s\n' "$REG_TSV" | awk -F'\t' '$3 ~ /^[0-9]+$/ { print $3 }' | sort -un | paste -sd, -)"
+  if [ -n "$_pids" ]; then
+    REG_PS="$(TZ=UTC LC_ALL=C "${CC_SESSIONS_PS_BIN:-ps}" -o pid=,lstart= -p "$_pids" 2>/dev/null \
+              | awk '{ p = $1; $1 = ""; sub(/^ +/, ""); gsub(/ +/, " "); print p "\t" $0 }')"
+    [ -n "$REG_PS" ] && REG_PS_OK=1
+  fi
+fi
+REG_PS_NL=$'\n'"$REG_PS"$'\n'
+# Fork-free lookups (no $(…), no grep): each sets a variable instead of printing.
+reg_ps_lstart() { # <pid> → REPLY = its lstart from the one ps read, or ""
+  REPLY=""
+  case "$REG_PS_NL" in *$'\n'"$1"$'\t'*) ;; *) return 0 ;; esac
+  REPLY="${REG_PS_NL#*$'\n'"$1"$'\t'}"; REPLY="${REPLY%%$'\n'*}"
+}
+reg_lstart_norm_v() { # <lstart> → REPLY, the same normalisation as reg_lstart_norm
+  # shellcheck disable=SC2086  # word-splitting separates the five fields, as in reg_lstart_norm
+  set -- $1
+  if [ "$#" -ne 5 ]; then REPLY="$*"; return 0; fi
+  case "$2" in
+    ''|*[!0-9]*) REPLY="$1 $2 $3 $4 $5" ;;
+    *)           REPLY="$1 $3 $2 $4 $5" ;;
+  esac
+}
+# A row's start, in seconds: startedAt (ms), else — when the writer left it null — the file's own
+# mtime, so a placeholder row with no startedAt ages out like any other instead of being kept for
+# ever (R19: such rows were never reaped, and hb_tick carried them as fleet).
+reg_started_s() { # <startedAt or ""> <file>
+  local s="${1%%.*}"
+  case "$s" in ''|*[!0-9]*) s="" ;; esac
+  if [ -n "$s" ] && [ "$s" -gt 0 ]; then printf '%s' $(( s / 1000 )); return 0; fi
+  s="$(stat -f %m "$2" 2>/dev/null)"
+  case "$s" in ''|*[!0-9]*) printf 0 ;; *) printf '%s' "$s" ;; esac
+}
+
+reg_rows() { # the TSV the loop reads: bulk when it parsed, else one jq per file (the old path)
+  local f
+  if [ "$REG_BULK" = 1 ]; then printf '%s\n' "$REG_TSV"; return 0; fi
+  for f in "$REG_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    printf '%s\t%s\n' "$f" "$(jq -r --arg pad $'\037' 'def cell(ph): (if . == null then "" else . end) | tostring
+            | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
+        [(.paneUUID | cell($pad)), (.pid | cell($pad)), (.lstart | cell($pad)),
+         (.surface // "pane" | cell($pad)), (.startedAt | cell($pad))] | @tsv' "$f" 2>/dev/null \
+      || printf '\037\t\037\t\037\t\037\t\037')"
+  done
+}
+
+while IFS=$'\t' read -r f uuid pid rec_lstart surface started_at; do
+  [ -n "$f" ] && [ -e "$f" ] || continue
+  [ "$uuid" = $'\037' ] && uuid=""; [ "$pid" = $'\037' ] && pid=""; [ "$rec_lstart" = $'\037' ] && rec_lstart=""
+  [ "$surface" = $'\037' ] && surface=pane; [ "$started_at" = $'\037' ] && started_at=""
   if [ -z "$uuid" ]; then rm -f "$f" 2>/dev/null; continue; fi   # corrupt → sweep (not a liveness call)
-  pid=$(jq -r '.pid // empty' "$f" 2>/dev/null)
 
   stale=0
   if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then stale=1; fi
@@ -302,9 +373,16 @@ for f in "$REG_DIR"/*.json; do
   # start time that is READ and DIFFERS convicts. The fork is paid only for a row whose pid is still
   # alive — a dead-pid row already short-circuited above — so it costs at most one `ps` per live
   # session, on a lister that already spends 2-3 `jq` forks per row.
-  if [ "$stale" = 0 ] && [ -n "$pid" ]; then
-    rec_lstart=$(jq -r '.lstart // ""' "$f" 2>/dev/null)
-    if [ -n "$rec_lstart" ] && ! reg_lstart_matches "$rec_lstart" "$pid"; then stale=1; fi
+  if [ "$stale" = 0 ] && [ -n "$pid" ] && [ -n "$rec_lstart" ]; then
+    if [ "$REG_PS_OK" = 1 ]; then
+      # The one ps read: a pid it does not list died between kill -0 and ps, or is unreadable —
+      # fail-open, exactly as an unreadable ps is below.
+      reg_ps_lstart "$pid"; _now_ls="$REPLY"
+      if [ -n "$_now_ls" ] && [ "$_now_ls" != "$rec_lstart" ]; then
+        reg_lstart_norm_v "$_now_ls"; _a="$REPLY"; reg_lstart_norm_v "$rec_lstart"
+        [ "$_a" = "$REPLY" ] || stale=1
+      fi
+    elif ! reg_lstart_matches "$rec_lstart" "$pid"; then stale=1; fi
   fi
   # The pane cross-check is asked ONLY of rows a terminal can enumerate. A headless row's address
   # is never in `it2 session list` — that list can only ever MISS it — so applying the check would
@@ -322,13 +400,14 @@ for f in "$REG_DIR"/*.json; do
   # continuation had pushed the producer off the statement head, where the lint's detector could no
   # longer see it — the census read 0 while the hazard was still in the file, and lowering the
   # allowlist to match would have made a live site permanently invisible.
-  surface=$(jq -r '.surface // "pane"' "$f" 2>/dev/null)
-  if [ "$surface" != headless ] && [ "$have_panes" = 1 ] \
-     && ! grep -qxF -- "$uuid" <<<"$live_panes"; then stale=1; fi
+  # (Now a `case` on the newline-wrapped list: still no pipe, and no grep fork per row.)
+  if [ "$surface" != headless ] && [ "$have_panes" = 1 ]; then
+    case $'\n'"$live_panes"$'\n' in *$'\n'"$uuid"$'\n'*) ;; *) stale=1 ;; esac
+  fi
 
   if [ "$stale" = 1 ]; then
     # RETENTION, not liveness: keep the evidence for the investigation window, then reap.
-    started=$(jq -r '.startedAt // 0' "$f" 2>/dev/null); started=$(( ${started:-0} / 1000 ))
+    started="$(reg_started_s "$started_at" "$f")"
     if [ "$started" -gt 0 ] && [ $(( now - started )) -gt "$RETAIN_S" ]; then
       rm -f "$f" 2>/dev/null
     else
@@ -337,7 +416,7 @@ for f in "$REG_DIR"/*.json; do
     continue
   fi
   live+=("$f")
-done
+done < <(reg_rows)
 # --all → live + retained-dead (the forensic view). Default → live only (addressing view).
 if [ "${ALL:-0}" = 1 ]; then live+=("${dead[@]+"${dead[@]}"}"); fi
 
@@ -356,16 +435,14 @@ case "$MODE" in
   table)
     {
       printf 'NAME\tUUID\tACCOUNT\tAGE\tCWD\n'
-      for f in "${live[@]}"; do
-        jq -r --argjson now "$now" '
+      jq -r --argjson now "$now" '
           (($now - ((.startedAt // 0) / 1000)) | floor) as $age |
           ( if   $age < 60    then "\($age)s"
             elif $age < 3600  then "\(($age / 60)    | floor)m"
             elif $age < 86400 then "\(($age / 3600)  | floor)h"
             else                   "\(($age / 86400) | floor)d" end ) as $ago |
           [ .name, .paneUUID, .account, $ago, .cwd ] | @tsv
-        ' "$f"
-      done
+        ' "${live[@]}"
     } | { if command -v column >/dev/null 2>&1; then column -t -s "$(printf '\t')"; else cat; fi; }
     offbox_table
     ;;
