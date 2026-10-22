@@ -84,8 +84,12 @@ const drawBand = async ($: EngineInterface, e: RenderInput<'AbovePrompt'>, b: Bo
   return (
     <Box flexDirection="column">
       {head.map((line, i) => <Text key={`h${i}`}>{line === '' ? ' ' : line}</Text>)}
+      {/* WRAP, NEVER TRUNCATE (2026-10-22). truncate-end cut every countdown in a 27-column band to
+          an ellipsis (operator screenshot). The ladder now reaches PANE_MIN (12 cells), so inside it
+          pickFit always finds a layout that fits and this never acts; below it, or on a ladder an
+          older producer wrote (35 cells and up), Ink wraps at whole words and nothing is hidden. */}
       {(variant?.lines ?? []).map((line, i) => (
-        <Text key={`l${i}`} wrap="truncate-end">
+        <Text key={`l${i}`} wrap="wrap">
           {spans(line).map((sp, j) => (
             <Text key={`s${j}`} color={sp.color} bold={sp.bold}>{sp.text}</Text>
           ))}

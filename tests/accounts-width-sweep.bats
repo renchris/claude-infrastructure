@@ -21,7 +21,7 @@
 # never split, because a broken command no longer pastes. The check accepts such a line only when
 # it is ONE token after its indent; any line a word wrap could have shortened is a breach.
 
-WIDTHS="40 50 55 60 70 76 80 100 120 160 200"
+WIDTHS="17 20 22 25 27 30 35 40 50 55 60 70 76 80 100 120 160 200"
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -308,4 +308,75 @@ PY
   rm -f "$CC_PANE_DIR/sweep-sid.mod"
   run relay toolu_C                                      # no mod at all: unchanged
   [ -n "$(printf '%s' "$output" | jq -r '.systemMessage // empty')" ] || { echo "$output"; false; }
+}
+
+# THE NARROW FLOOR (2026-10-22). Operator screenshot of a ~27-column band: every reset countdown cut
+# to an ellipsis by the band's truncate-end, the weekly bars and the prose cut too. The ladder now
+# reaches 12 cells; under 37 the two-row form and the card form keep every account's four values
+# WHOLE. Checked on the ladder itself, at every cell width the band can be handed (pickFit) and
+# every pane width the transcript readout can be drawn into (pickVariant), from the realistic floor
+# (a 17-column pane, a 12-cell band) to 60. The expected values are read off the ladder's widest
+# grid by its own header columns, so a narrow layout that drops, cuts or reorders one is red.
+@test "11 ladder 12..60: every account's 5h and weekly use and resets survive whole, nothing cut" {
+  run ca --readout --ladder --no-agents --max-wait 0
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" > "$D/ladder.json"
+  python3 - "$D/ladder.json" <<'PY'
+import json, re, sys, unicodedata
+L = json.load(open(sys.argv[1]))
+sgr = re.compile("\x1b\\[[0-9;]*m")
+def cells(s):
+    return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in ("W", "F")
+               else 1 for c in sgr.sub("", s))
+names = ["next-quaternary-extremely-long-account-name-for-width-testing", "next2", "next3", "next"]
+wide = [sgr.sub("", x) for x in L["variants"][-1]["lines"]]
+hi = next(i for i, l in enumerate(wide) if re.search(r"\baccount\s+live\b", l))
+ends = [m.end() for m in re.finditer(r"\b(used|resets)\b", wide[hi])][:4]   # 5h used/resets, wk used/resets
+want = {}
+for l in wide[hi + 1:]:
+    if not l.strip():
+        break
+    toks = l[3:].split()
+    n = toks[0] if toks[0] in names else next(
+        (x for x in names if toks[0].endswith("…") and x.startswith(toks[0][:-1])), None)
+    want[n] = [re.findall(r"(\S+(?: \d+[hm])?)$", l[:e])[0] for e in ends]
+assert set(want) == set(names), want
+def variants():
+    for c in range(12, 61):                                    # the band: pickFit
+        v = [x for x in L["variants"] if x["width"] <= c] or L["variants"][:1]
+        yield "band", c, v[-1], c
+    b = L["budget"]
+    for cols in range(17, 66):                                 # the transcript: pickVariant
+        bud = b["cells"][max(0, min(len(b["cells"]) - 1, cols - b["from"]))]
+        v = [x for x in L["variants"] if x["cells"] <= bud] or L["variants"][:1]
+        yield "tx", cols, v[-1], cols - L["gutter"]
+bad = 0
+for surf, w, v, room in variants():
+    pl = [sgr.sub("", x).replace(" ", " ") for x in v["lines"]]
+    grid = any(re.search(r"\b(account|acct)\s+(live|used)\b", x) for x in pl)   # the header row
+    errs = []
+    for x in pl:
+        if cells(x) > room and len(x.split()) > 1:
+            errs.append(f"over: {x!r}")
+        if "…" in x and not grid:
+            errs.append(f"ellipsis: {x!r}")
+        if x.strip() == "·" or x.rstrip().endswith(" ·") or (x.startswith(" ") and x.lstrip().startswith("· ")):
+            errs.append(f"separator at a row edge: {x!r}")
+    if not grid:
+        text = re.sub(r"-\n\s*", "-", "\n".join(pl))
+        toks = re.sub(r"(\d+[dh]) (\d+[hm])\b", r"\1_\2", text).split()
+        for n in names:
+            at = [i for i, t in enumerate(toks) if t == n]
+            if not at:
+                errs.append(f"name not whole: {n}")
+                continue
+            seq = " ".join(toks[at[0] + 1:]).replace("_", " ")
+            pat = r"\s.*?".join(re.escape(x) for x in want[n])
+            if not re.search(pat, " " + seq):
+                errs.append(f"{n}: {want[n]} not in order after the name")
+    if errs:
+        bad += 1
+        print(f"{surf} {w} (variant {v['cells']}): {errs[:3]}")
+sys.exit(1 if bad else 0)
+PY
 }

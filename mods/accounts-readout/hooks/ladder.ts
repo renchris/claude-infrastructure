@@ -65,7 +65,8 @@ export const spans = (line: string): Span[] => {
 
 // THE SESSIONSTART BOARD AS A BAND (2026-10-21). A band never scrolls away, so it needs no
 // survive-one-split budget (docs/research/accounts-board-band-2026-10-21/): the widest layout whose
-// widest line fits the band's own cells; failing any fit, the narrowest there is.
+// widest line fits the band's own cells; failing any fit, the narrowest there is, which drawBand
+// WRAPS (2026-10-22: the ladder starts at 12 cells, so that is a band under 12, or an old ladder).
 export const pickFit = (ladder: Ladder, cells: number): Variant | undefined => {
   let best = ladder.variants[0]
   for (const v of ladder.variants) if (v.width <= cells) best = v

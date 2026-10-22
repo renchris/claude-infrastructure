@@ -53,8 +53,10 @@ checks after the start; band: `green: true`, all five checks).
    and the mod then fails to parse a file the producer wrote with `json.dump`; nothing is drawn.
 4. **A band never scrolls away, so it needs no survive-one-split budget** (the 2026-10-19 study,
    finding 4, applied only to transcript copies). It draws the widest layout whose widest line fits
-   `e.props.bodyColumns` (the band's cells, less the engine's `[-]` mark), and `truncate-end` on each
-   grid row is the guard below the narrowest layout.
+   `e.props.bodyColumns` (the band's cells, less the engine's `[-]` mark). CORRECTED (2026-10-22): the
+   guard below the narrowest layout was `truncate-end`, which cut every countdown in a 27-column band
+   to `…`; the ladder now reaches 12 cells and rows below it WRAP whole words
+   (docs/research/accounts-narrow-2026-10-22/).
 5. **A band can sit for hours before the first prompt, so it applies the hook's staleness bands
    itself**: the board alone while fresh, the hook's `⚠ STALE by …` lines past `CC_BOARD_STALE_S`, and
    the numbers withheld past `CC_BOARD_HARD_S`, with the age read from the snapshot's mtime (the board's)
