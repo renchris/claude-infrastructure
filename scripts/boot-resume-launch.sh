@@ -31,6 +31,11 @@
 #      identity) · 9 capacity shed.
 # Never reuses the current pane (resume-sessions off-by-one rule); always a new window. Fail-loud.
 set -uo pipefail
+# reso-resume-one is #!/usr/bin/env bash and every resumed pane starts it: run by path at a session
+# root it keeps ~1.1 KiB of kernel memory on macOS 15.8.1, so the pane command names its interpreter
+# (plan KALLOC_TRIGGER_ELIMINATION W4, scripts/lib/cc-run.sh). Fail-open: no runner, path as before.
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; fi
 
 # ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
 # Runs at BOOT under launchd, always creating a NEW window — so at machine start a batch of panes
@@ -204,7 +209,8 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # INSIDE the window after this launcher had returned 0. Every word stays single-quoted.
 # CC_RESUME_TEAMMATE_GUARD=checked rides the same way: question 4 below has already been asked (or
 # overridden with `off`), so the engine does not ask it a second time.
-CMD="'env' 'CC_ADMIT_DONE=1' 'CC_RESUME_TEAMMATE_GUARD=checked' $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$cwd") $(shq "$sid")"
+RO_Q=""; cc_argv "$RESUME_ONE"; for _w in "${CC_ARGV[@]}"; do RO_Q="$RO_Q${RO_Q:+ }$(shq "$_w")"; done
+CMD="'env' 'CC_ADMIT_DONE=1' 'CC_RESUME_TEAMMATE_GUARD=checked' $RO_Q $(shq "$acct") $(shq "$cwd") $(shq "$sid")"
 [ -n "$branch" ] && CMD="$CMD $(shq "$branch")"
 # The recovery prompt reaches reso-resume-one as its --prompt-file, a LAUNCH argument (§D4):
 # cc-resume-debt's retry of a failed recycle passes the packet's prompt, so the resumed original

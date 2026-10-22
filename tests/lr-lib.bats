@@ -174,7 +174,7 @@ rc_row() { # $1=pane $2=account [$3=pid] — one registry row naming $SID
   local joined; joined="$(printf '%s\n' "${LR_LAUNCH_TAIL[@]}")"
   printf '%s\n' "$joined" | grep -qx 'CC_PANE_CMD=bash /tmp/lr-launch-x.sh'
   printf '%s\n' "$joined" | grep -qx 'CC_PANE_CMD_INTERACTIVE=1'
-  printf '%s\n' "$joined" | grep -qx 'exec "$CC_PANE_RUNNER"'
+  printf '%s\n' "$joined" | grep -qx 'exec /bin/bash "$CC_PANE_RUNNER"'
   ! printf '%s\n' "$joined" | grep -q 'exec bash'
 }
 @test "launch tail CONTROL: with no runner anywhere the argv fallback is \`-- /bin/bash <launcher>\`" {

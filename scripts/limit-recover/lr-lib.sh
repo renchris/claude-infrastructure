@@ -1330,12 +1330,14 @@ LR_LAUNCH_TAIL=(); LR_SPAWN_SHAPE=""
 # SC2034: LR_LAUNCH_TAIL/LR_SPAWN_SHAPE are this lib's OUTPUT contract, read by lr-handoff.sh and
 # the poller — the directive above the declarations binds to that ONE construct, never into here.
 # SC2016: the single quotes are the point — $CC_PANE_RUNNER must expand in the SPAWNED shell.
+# `/bin/bash` in front: cc-pane-runner is #!/bin/bash, and a by-path #! exec at a session root keeps
+# ~1.1 KiB of kernel memory on macOS 15.8.1 (KALLOC_TRIGGER_ELIMINATION W4; bin/it2-kitty's form).
 # shellcheck disable=SC2034,SC2016
 lr_launch_tail() { # $1=launcher path → fills LR_LAUNCH_TAIL[] and LR_SPAWN_SHAPE (runner|argv)
   local r
   if r="$(lr_runner_bin)"; then
     LR_LAUNCH_TAIL=(--env "CC_PANE_CMD=bash $1" --env "CC_PANE_CMD_INTERACTIVE=1" --env "CC_PANE_RUNNER=$r"
-                    -- "${SHELL:-/bin/zsh}" -l -i -c 'exec "$CC_PANE_RUNNER"')
+                    -- "${SHELL:-/bin/zsh}" -l -i -c 'exec /bin/bash "$CC_PANE_RUNNER"')
     LR_SPAWN_SHAPE="runner"
   else
     LR_LAUNCH_TAIL=(-- /bin/bash "$1")

@@ -122,6 +122,11 @@
 #     line per window on stdout.
 #   · A maybe row still gets no map line (plan § G), and a shell pane never does.
 set -uo pipefail
+# reso-resume-one is #!/usr/bin/env bash and every resumed pane starts it: run by path at a session
+# root it keeps ~1.1 KiB of kernel memory on macOS 15.8.1, so the pane command names its interpreter
+# (plan KALLOC_TRIGGER_ELIMINATION W4, scripts/../scripts/lib/cc-run.sh). Fail-open: no runner, path as before.
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; fi
 
 # Homebrew's cask wrapper (/opt/homebrew/bin/kitty) is a #! script whose whole body is
 # `exec "<app binary>" "$@"`. Run that binary directly: every by-path #! exec keeps ~1.1 KiB of kernel
@@ -233,6 +238,9 @@ fi
 [ -n "$TREE" ] && [ "$DRY_RUN" = 1 ] && [ -z "$KITTY_BIN" ] && KITTY_BIN=/usr/bin/true
 [ -n "$KITTY_BIN" ] && [ -x "$KITTY_BIN" ] || die "no kitty binary (set CC_TERM_KITTY) — this layout is kitty-only"
 [ "$DRY_RUN" = 1 ] || [ -x "$RESUME_ONE" ] || die "resume launcher not executable: $RESUME_ONE"
+# Its argv once: `kitty @ launch -- "${RESUME_ONE_ARGV[@]}"`, and resume_one_q (beside shq, below)
+# for the single-quoted command strings a pane's shell runs.
+cc_argv "$RESUME_ONE"; RESUME_ONE_ARGV=("${CC_ARGV[@]}")
 
 # ── 1. the batch ────────────────────────────────────────────────────────────────────────────────
 # Read with IFS=$'\t' and -r. A tab IS IFS whitespace, so a run of empty fields would collapse and
@@ -307,6 +315,7 @@ if [ "$DESKTOPS" = 1 ]; then
   }
   k() { if [ -n "$SOCK" ]; then kb "$KITTY_BIN" @ --to "$SOCK" "$@"; else kb "$KITTY_BIN" @ "$@"; fi; }
   shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+  resume_one_q() { local w o=""; for w in "${RESUME_ONE_ARGV[@]}"; do o="$o${o:+ }$(shq "$w")"; done; printf '%s' "$o"; }
   fs_osa() { # <marker> → "true" | "false" | "nomatch" | "" — the AXFullScreen READ-BACK
     "$OSASCRIPT" <<EOF 2>/dev/null
 tell application "System Events" to tell process "kitty"
@@ -1036,7 +1045,7 @@ print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
         # store is set here as well so no keychain read can stall a restore.
         cmd="'env' 'CC_ADMIT_DONE=1' 'CLAUDE_CODE_CERT_STORE=bundled'"
         [ -n "$model" ] && cmd="$cmd $(shq "CC_RESUME_MODEL=$model")"
-        cmd="$cmd $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$wt") $(shq "$sid")"
+        cmd="$cmd $(resume_one_q) $(shq "$acct") $(shq "$wt") $(shq "$sid")"
         [ -n "$br" ] && cmd="$cmd $(shq "$br")"
         [ -n "$effort" ] && cmd="$cmd '--effort' $(shq "$effort")"
         [ -n "$pmode" ] && cmd="$cmd '--permission-mode' $(shq "$pmode")"
@@ -1336,7 +1345,7 @@ for n, (idx, gs) in enumerate(bins, 1):
     done_rows=$((done_rows + 1))
     # SHELL ROOT, as scripts/boot-resume-launch.sh's kitty arm: the pane must outlive the session
     # in it, or a later recycle of this pane strands (tests/kitty-recovery-launch.bats SURVIVABILITY).
-    cmd="'env' 'CC_ADMIT_DONE=1' $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$wt") $(shq "$sid")"
+    cmd="'env' 'CC_ADMIT_DONE=1' $(resume_one_q) $(shq "$acct") $(shq "$wt") $(shq "$sid")"
     [ -n "$br" ] && cmd="$cmd $(shq "$br")"
     LA=(launch)
     case "$pos" in
@@ -1566,7 +1575,7 @@ while [ "$g" -lt "$NGROUPS" ]; do
     if [ -z "$head_win" ]; then
       head_win="$("$KITTY_BIN" @ launch --type=os-window --os-window-title "$marker" \
                     --env CC_ADMIT_DONE=1 \
-                    --cwd "$wt" -- "$RESUME_ONE" "$acct" "$wt" "$sid" "$br" 2>&1)"
+                    --cwd "$wt" -- "${RESUME_ONE_ARGV[@]}" "$acct" "$wt" "$sid" "$br" 2>&1)"
       case "$head_win" in
         ''|*[!0-9]*) note "cc-resume-layout: head launch failed for $sid: $head_win"; head_win=""; k=$((k + 1)); continue ;;
       esac
@@ -1577,7 +1586,7 @@ while [ "$g" -lt "$NGROUPS" ]; do
       loc=vsplit; [ $((k % 2)) -eq 1 ] && loc=hsplit
       wid="$("$KITTY_BIN" @ launch --location="$loc" --match "window_id:$head_win" \
                --next-to "id:$head_win" --env CC_ADMIT_DONE=1 \
-               --cwd "$wt" -- "$RESUME_ONE" "$acct" "$wt" "$sid" "$br" 2>&1)"
+               --cwd "$wt" -- "${RESUME_ONE_ARGV[@]}" "$acct" "$wt" "$sid" "$br" 2>&1)"
       cc_log_pane_spawn split kitty "$wid" "$wt" "resume-layout $marker $loc sid=$sid acct=$acct"
       note "  [$marker] win $wid  $acct  $(basename "$wt")"
     fi
