@@ -89,6 +89,8 @@ ASSIGN_RE = re.compile(
     re.S,
 )
 OPERAND_RE = re.compile(r"^\d+(\.\d+)?[smhd]?$")
+PUNCT_RE = re.compile(r"[;&|()<>]+")
+DEFAULT_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*):?[-=](.*)\}$", re.S)
 VAR_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
 HEREDOC_RE = re.compile(r"<<-?\s*\\?(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 FUNC_RE = re.compile(r"^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{?")
@@ -142,9 +144,9 @@ class Universe:
 
 def shell_words(s: str) -> list[str]:
     s = s.replace("$(", " $( ").replace("`", " ` ")
-    lex = shlex.shlex(s, posix=True, punctuation_chars=";&|(){}<>")
+    lex = shlex.shlex(s, posix=True, punctuation_chars=";&|()<>")
     lex.whitespace_split = True
-    lex.commenters = "#"
+    lex.commenters = ""  # strip_comment did it: shlex would cut `${#a[@]}` at its `#`
     try:
         words = list(lex)
     except ValueError:
@@ -157,6 +159,28 @@ def shell_words(s: str) -> list[str]:
         else:
             out.append(w)
     return out
+
+
+def strip_comment(s: str) -> str:
+    """`s` up to its comment: an unquoted `#` at a word start (`${#a}`, `$#`, `a#b` are not one)."""
+    q = ""
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if q == "'":
+            if c == "'":
+                q = ""
+        elif c == "\\":
+            i += 1
+        elif q == '"':
+            if c == '"':
+                q = ""
+        elif c in "'\"":
+            q = c
+        elif c == "#" and (i == 0 or s[i - 1] in " \t;&|("):
+            return s[:i]
+        i += 1
+    return s
 
 
 def open_quote(s: str) -> bool:
@@ -281,16 +305,36 @@ class FileScan:
         self.assign: dict[str, list[str]] = {}
         self.safe_wrappers: set[str] = set()
         self.relay_funcs: set[str] = set()
-        lines = text.split("\n")
-        for idx, line in enumerate(lines):
+        self.lines = text.split("\n")
+        bodies: dict[str, str] = {}
+        for idx, line in enumerate(self.lines):
             m = FUNC_RE.match(line)
             if m:
-                body = "\n".join(lines[idx : idx + 8])
-                name = m.group(1)
-                if "cc_argv" in body or "cc_run" in body:
-                    self.safe_wrappers.add(name)
-                elif name.endswith("bounded"):
-                    self.relay_funcs.add(name)
+                end = idx
+                while end < min(idx + 40, len(self.lines) - 1) and not (
+                    self.lines[end].rstrip().endswith("}")
+                    and (end > idx or "{" in line)
+                ):
+                    end += 1
+                bodies[m.group(1)] = "\n".join(self.lines[idx + 1 : end + 1] or [line])
+        # A wrapper that maps its command through cc_argv/cc_run is safe to call with a #! path,
+        # and so is one that hands its command to such a wrapper (hf_bounded → hf_bounded_s).
+        self.safe_wrappers = {
+            n for n, b in bodies.items() if re.search(r"\bcc_(argv|run)\b", b)
+        }
+        grew = True
+        while grew:
+            grew = False
+            for n, b in bodies.items():
+                if n not in self.safe_wrappers and any(
+                    re.search(r"^\s*" + re.escape(w) + r"\b", b, re.M)
+                    for w in self.safe_wrappers
+                ):
+                    self.safe_wrappers.add(n)
+                    grew = True
+        self.relay_funcs = {
+            n for n in bodies if n.endswith("bounded")
+        } - self.safe_wrappers
         for _, line in logical_lines(text):
             for part in re.split(r"[;&|]\s*", line.strip()):
                 m = ASSIGN_RE.match(part.strip())
@@ -303,7 +347,15 @@ class FileScan:
             for p in sorted(self.uni.by_name.get(m.group(1), ())):
                 if p.startswith(("bin/", "scripts/")):
                     return p
-        for tok in re.findall(r"[^\s\"'(){}:=]+", strip_output_subs(value)):
+        v = strip_output_subs(value)
+        # `${NAME:-default}` stays one word (target_of_word reads both halves); everything else
+        # splits on quotes, parens, braces and `:`/`=` so a path inside a longer value is found.
+        toks = re.findall(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=][^}]*\}", v)
+        toks += re.findall(
+            r"[^\s\"'(){}:=]+",
+            re.sub(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=][^}]*\}", " ", v),
+        )
+        for tok in toks:
             t = self.target_of_word(tok, depth + 1)
             if t:
                 return t
@@ -312,6 +364,11 @@ class FileScan:
     def target_of_word(self, word: str, depth: int = 0) -> str | None:
         if depth > 4 or not word:
             return None
+        d = DEFAULT_RE.match(word)
+        if d:  # "${NAME:-default}": the seam's value if this file assigns one, else the default
+            return self.target_of_word(
+                "$" + d.group(1), depth + 1
+            ) or self.target_of_word(d.group(2), depth + 1)
         v = VAR_RE.match(word)
         if v:
             for value in self.assign.get(v.group(1), ()):
@@ -331,16 +388,28 @@ class FileScan:
                 return cand
         return None
 
+    def physical_line(self, start: int, word: str) -> int:
+        """The line, from a logical line's first, that holds the word's variable or file name."""
+        key = (
+            re.sub(r"^\$\{?|[:}].*$", "", word)
+            if word.startswith("$")
+            else word.rsplit("/", 1)[-1]
+        )
+        for i in range(start - 1, min(start + 30, len(self.lines))):
+            if key and key in self.lines[i]:
+                return i + 1
+        return start
+
     def findings(self) -> list[tuple[int, str, str]]:
         hits: list[tuple[int, str, str]] = []
         for lineno, line in logical_lines(self.text):
             if "/" not in line and "$" not in line:
                 continue
-            for seg in split_subs(line):
+            for seg in split_subs(strip_comment(line)):
                 for word in self.command_words(shell_words(seg)):
                     t = self.target_of_word(word)
                     if t:
-                        hits.append((lineno, word, t))
+                        hits.append((self.physical_line(lineno, word), word, t))
         return hits
 
     def command_words(self, words: list[str]) -> list[str]:
@@ -370,7 +439,11 @@ class FileScan:
                     skip_to(")") + 1
                 )  # `declare -a NAME=( … )`: an array literal, not a subshell
                 continue
-            if w in CMD_START:
+            if w in CMD_START or (
+                PUNCT_RE.fullmatch(w)
+                and w[0] not in "<>"
+                and any(c in w for c in ";&|(")
+            ):  # shlex glues punctuation runs: `));` and `)|` start a command too
                 start = True
                 i += 1
                 continue

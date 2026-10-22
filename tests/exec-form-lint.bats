@@ -54,12 +54,13 @@ _green() { [ "$status" -eq 0 ] || { echo "expected rc 0, got $status:"; echo "$o
   _green
 }
 
-@test "RED: a literal path, a seam variable and a resolve_bin result are each one finding, lines named" {
+@test "RED: a literal path, seam variables (bare, braced, :-default) and a resolve_bin result, lines named" {
   _caller '"$HOME/.claude/bin/tool" a' \
           'T="${CC_TOOL_BIN:-$HOME/.claude/bin/tool}"' 'out="$("$T" b)"' \
-          'H="$(resolve_bin "${CC_H_BIN:-}" helper.sh)"' 'if "$H"; then :; fi'
+          'H="$(resolve_bin "${CC_H_BIN:-}" helper.sh)"' 'if "$H"; then :; fi' \
+          '"${CC_TOOL2_BIN:-$HOME/.claude/bin/tool}" z' '"${T}" c'
   _lint
-  _red 3
+  _red 5
   [[ "$output" == *"2:\$HOME/.claude/bin/tool"* && "$output" == *"4:\$T"* && "$output" == *"6:\$H"* ]] || { echo "$output"; false; }
 }
 
