@@ -3966,7 +3966,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       "$SSL_LINT" "${ssl_files[@]}" >&2 || _sslrc=$?
       if (( _sslrc == 2 )); then arm_nonverdict "shasum-lint"; return 1; fi
       if (( _sslrc != 0 )); then
-        echo "✗ gate: shasum RED — a file this land edits runs /usr/bin/shasum, a #! perl script." >&2
+        echo "✗ gate: shasum RED — a file this land edits runs the shasum perl script (a #! exec)." >&2
         echo "  Use \"\$CC_SHA256\" / \"\$CC_SHA1\" (CC_SHA256=/sbin/sha256sum; [ -x \"\$CC_SHA256\" ] || CC_SHA256=sha256sum)," >&2
         echo "  or source hooks/lib/shasum-direct.sh. Lines are named above." >&2
         gate_red shasum
