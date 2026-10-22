@@ -943,6 +943,38 @@ _copyfix() {   # a fixture whose copy classes are all present + identical, so a 
   [[ "$output" != *"MISSING: ln -sf"* ]]
 }
 
+# The cc-shim layout (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4): bin/it2 links to the
+# compiled trampoline and the copy lives at .bin-real/it2. /usr/bin/true stands in for the trampoline:
+# only its inode is compared.
+_shimfix() {
+  _copyfix
+  mkdir -p "$CC_PARITY_LIVE/libexec" "$CC_PARITY_LIVE/.bin-real"
+  ln -s /usr/bin/true "$CC_PARITY_LIVE/libexec/cc-shim"
+  mv "$CC_PARITY_LIVE/bin/it2" "$CC_PARITY_LIVE/.bin-real/it2"
+  ln -s "$CC_PARITY_LIVE/libexec/cc-shim" "$CC_PARITY_LIVE/bin/it2"
+}
+
+@test "copy: the cc-shim layout (bin/it2 → cc-shim, copy at .bin-real/it2) reads clean" {
+  _shimfix
+  run "$ASSERT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"COPYMISS"* ]] || false
+  [[ "$output" != *"COPYSTALE"* ]]
+}
+
+@test "copy: the cc-shim layout with its .bin-real copy missing or stale ⇒ drift" {
+  _shimfix
+  printf 'it2 v0\n' > "$CC_PARITY_LIVE/.bin-real/it2"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"COPYSTALE"*"it2-wrapper"* ]] || false
+  rm "$CC_PARITY_LIVE/.bin-real/it2"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"COPYMISS"*"it2-wrapper"* ]] || false
+  [[ "$output" != *"MISSING: ln -sf"* ]]
+}
+
 @test "copy: an absent launchd plist ⇒ COPYMISS, and nothing here ever calls launchctl" {
   _copyfix
   rm "$CC_PARITY_LAUNCHD/com.claude.thing.plist"

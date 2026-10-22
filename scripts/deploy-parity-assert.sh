@@ -1211,7 +1211,11 @@ copy_verdict() {   # <label> <src> <dest> — reports, sets drift/noverdict. Nev
   return 0
 }
 copy_verdict 'statusline.sh'   "$REPO/statusline.sh"   "$LIVE/statusline.sh"
-copy_verdict 'bin/it2-wrapper' "$REPO/bin/it2-wrapper" "$LIVE/bin/it2"
+# Behind cc-shim (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4) bin/it2 is a link to the
+# compiled trampoline and the copy lives at .bin-real/it2; a missing copy there reads COPYMISS.
+_it2_dest="$LIVE/bin/it2"
+if [ -L "$_it2_dest" ] && [ "$_it2_dest" -ef "$LIVE/libexec/cc-shim" ]; then _it2_dest="$LIVE/.bin-real/it2"; fi
+copy_verdict 'bin/it2-wrapper' "$REPO/bin/it2-wrapper" "$_it2_dest"
 
 # githooks/ — dest is the CHECKOUT'S OWN hook dir plus the clone template, neither of them under
 # $LIVE, so this class breaks the "$LIVE/<same rel>" invariant twice over. install.sh's foreign-hook
