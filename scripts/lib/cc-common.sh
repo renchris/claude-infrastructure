@@ -26,9 +26,23 @@
 # Deployed by install.sh (which globs scripts/*.sh top-level only, so scripts/lib/ gets its own
 # explicit loop — same treatment as scripts/limit-recover/).
 
+# cc_argv / cc_run (scripts/lib/cc-run.sh, beside this file): every path resolve_bin returns is a
+# tracked #! script, and running one BY PATH keeps ~1.1 KiB of kernel memory until reboot on macOS
+# 15.8.1 (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4). Callers run what resolve_bin hands
+# them as `cc_run "$X" …`, or `cc_argv "$X"; <relay> "${CC_ARGV[@]}" …` under timeout/nohup/exec.
+# Fail-open: a deploy that has this file but not cc-run.sh yet (install.sh links new files on the
+# next converge) gets pass-through definitions, i.e. today's by-path exec, never a missing function.
+# shellcheck source=cc-run.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -f "${BASH_SOURCE[0]%/*}/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/cc-run.sh"; else :; fi
+if ! command -v cc_argv >/dev/null 2>&1; then
+  cc_argv() { CC_ARGV=("$1"); }
+  cc_run() { "$@"; }
+fi
+
 # Resolve a helper binary: env override → beside-script → repo/CFG bin → ~/.claude/bin → PATH.
 # Echoes the resolved path, or "" when nothing is found (callers guard on empty — a missing helper
-# degrades the job, it does not crash it). Always returns 0.
+# degrades the job, it does not crash it). Always returns 0. Run the result with cc_run (above).
 #
 # $0 is deliberately used rather than BASH_SOURCE: this is sourced, so $0 stays the CALLING script
 # and the beside-script/../bin tiers keep resolving relative to it exactly as the inline copies did.

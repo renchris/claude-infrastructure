@@ -426,7 +426,7 @@ kitty_pid_alive() { # <pid> → rc 0 when that pid is a running kitty (a reused 
 page_desk() { # <message> — best effort; the backlog row is the durable half
   local t=""
   [ -f "$ROLES_DIR/desk" ] && t="$(head -1 "$ROLES_DIR/desk" 2>/dev/null | tr -d '[:space:]')"
-  [ -n "$t" ] && [ -n "$NOTIFY" ] && "$NOTIFY" "$t" "$1" >/dev/null 2>&1
+  [ -n "$t" ] && [ -n "$NOTIFY" ] && cc_run "$NOTIFY" "$t" "$1" >/dev/null 2>&1
   return 0
 }
 crash_page() {
@@ -449,7 +449,7 @@ crash_page() {
     if [ "$n" -eq 0 ]; then : > "$ev/crash-paged"; continue; fi   # nothing was live in it: nothing to restore
     step="restart kitty (pid $kp is gone): $n session(s) were live in it at its last heartbeat and nothing has restored them. If you quit it on purpose, ignore this; otherwise run the command."
     bid=""
-    [ -n "$BACKLOG" ] && bid="$("$BACKLOG" needs "$step" --class needs-human --run "$RESTORE_BIN --after-crash --kitty-pid $kp" \
+    [ -n "$BACKLOG" ] && bid="$(cc_run "$BACKLOG" needs "$step" --class needs-human --run "$RESTORE_BIN --after-crash --kitty-pid $kp" \
         --falsifier "test -e $ev.done" --project claude-infrastructure 2>/dev/null | tail -1 | tr -d '[:space:]')"
     case "$bid" in ''|*[!0-9a-f]*) bid="" ;; esac
     page_desk "💥 kitty $kp is gone and $n session(s) went with it. Nothing was relaunched (a quit and a crash look the same). To restore them: $RESTORE_BIN --after-crash --kitty-pid $kp   (preview: add --dry-run)"
@@ -469,7 +469,7 @@ deaf_page() {
     [ -e "$STATE_DIR/deaf-$kp.paged" ] && continue
     # This kitty's own socket, from the one resolver every launchd path uses (it opens no connection:
     # a connect to a deaf kitty would only add one more entry to the queue being measured).
-    sock="$("$KSOCK_BIN" --all 2>/dev/null | sed -n "s|^unix:\\(.*-$kp\\)\$|\\1|p")"; sock="${sock%%$'\n'*}"
+    sock="$(cc_run "$KSOCK_BIN" --all 2>/dev/null | sed -n "s|^unix:\\(.*-$kp\\)\$|\\1|p")"; sock="${sock%%$'\n'*}"
     [ -n "$sock" ] || continue
     why="$(kq_deaf "$sock" "$kp")" || continue
     nc="$("$SYSCTL" -n hw.ncpu 2>/dev/null | tr -d '[:space:]')"; case "$nc" in ''|*[!0-9]*|0) nc=1 ;; esac
@@ -479,7 +479,7 @@ deaf_page() {
     # restore itself no longer waits for load either (R4, 2026-10-21) — it logs one reading and starts.
     [ "$per" != "?" ] && hold=" Load per core is $per: restart anyway. The restore does not wait for load to fall, so waiting by hand gains nothing."
     # The SAME step, class and falsifier as handoff-fire.sh's stuck-kitty row, so one wedge is one row.
-    [ -n "$BACKLOG" ] && "$BACKLOG" needs "restart kitty (control socket stuck: queue full)" --class needs-human \
+    [ -n "$BACKLOG" ] && cc_run "$BACKLOG" needs "restart kitty (control socket stuck: queue full)" --class needs-human \
         --falsifier "test ! -S $sock" >/dev/null 2>&1
     page_desk "🔇 kitty $kp is deaf: its remote control is dead ($why). The sessions in it are STILL WORKING; only new panes, recycles and handoffs are blocked, and only a restart clears it.${hold} Preview: $RESTORE_BIN --restart-kitty --dry-run   ·   restart and restore: $RESTORE_BIN --restart-kitty --confirm $kp"
     log_idl fired ",\"reason\":\"kitty-deaf-page\",\"kitty_pid\":$kp,\"n_open\":0,\"resumed\":0"
@@ -1021,7 +1021,7 @@ EOF
     ACCTS_BIN="$(resolve_bin "" claude-accounts)"
   fi
   if [ -n "$ACCTS_BIN" ] && [ -x "$ACCTS_BIN" ]; then
-    EXHAUSTED_ACCTS="$("$ACCTS_BIN" --json --max-wait 0 2>/dev/null | jq -r --argjson lim "${CC_RESTORE_EXHAUSTED_PCT:-100}" '
+    EXHAUSTED_ACCTS="$(cc_run "$ACCTS_BIN" --json --max-wait 0 2>/dev/null | jq -r --argjson lim "${CC_RESTORE_EXHAUSTED_PCT:-100}" '
         .rows[]? | select(((.weekly_pct // 0) | tonumber? // 0) >= $lim) | .acct // empty' 2>/dev/null | tr '\n' ' ')"
   fi
   if [ -n "$EXHAUSTED_ACCTS" ]; then
@@ -1270,7 +1270,7 @@ early_page() { # restore v2, first round, right after the layout
   [ "$resume_fail" -gt 0 ] && msg="${msg} ⚠ ${resume_fail} failed to launch."
   msg="${msg}$(page_lists)"
   if resolve_page_target && [ -n "$NOTIFY" ]; then
-    "$NOTIFY" "$PAGE_TO" "$msg" >/dev/null 2>&1 || true   # cc-notify's mailbox fallback ⇒ durable at exit 0
+    cc_run "$NOTIFY" "$PAGE_TO" "$msg" >/dev/null 2>&1 || true   # cc-notify's mailbox fallback ⇒ durable at exit 0
     EARLY_TO="$PAGE_TO"; EARLY_KIND="$PAGE_KIND"
     paged_once
     echo "boot-resume: early page delivered to ${PAGE_KIND} ${PAGE_TO}" >&2
@@ -1283,7 +1283,7 @@ early_page() { # restore v2, first round, right after the layout
   printf '%s\n' "$msg" > "$STATE_DIR/undelivered-$BOOT.page" 2>/dev/null || true
   if [ -n "$BACKLOG" ]; then
     BL_OUT="$EVENT_DIR/backlog.out"; BL_WHY="$why"
-    ( "$BACKLOG" needs "$(backlog_step "$why")" --class needs-human --receipt "$STATE_DIR/undelivered-$BOOT.page" \
+    ( cc_run "$BACKLOG" needs "$(backlog_step "$why")" --class needs-human --receipt "$STATE_DIR/undelivered-$BOOT.page" \
         --project claude-infrastructure > "$BL_OUT" 2>/dev/null ) &
     BL_PID=$!
   fi
@@ -1418,7 +1418,7 @@ EOF
       [ "$br" = HEAD ] && br=""
     fi
     [ -z "$br" ] && [ "$RESTORE_V2" = 1 ] && br="$(meta_col "$sid" 6)"   # the reaped-worktree branch
-    "$LAUNCH" --check-only "$alias" "$cwd" "$sid" "$br" >/dev/null 2>"$HELD_ERR"
+    cc_run "$LAUNCH" --check-only "$alias" "$cwd" "$sid" "$br" >/dev/null 2>"$HELD_ERR"
     c_rc=$?
     case "$c_rc" in
       0) ;;
@@ -1503,7 +1503,7 @@ PANES_EOF
 $HB_DIRS
 EOF
     fi
-    CLASSIFIED="$(printf '%s' "$ADMITTED" | "$CLASSIFY" ${CL_ARGS[@]+"${CL_ARGS[@]}"} 2>"$STATE_DIR/last-classify.txt")" || CLASSIFIED=""
+    CLASSIFIED="$(printf '%s' "$ADMITTED" | cc_run "$CLASSIFY" ${CL_ARGS[@]+"${CL_ARGS[@]}"} 2>"$STATE_DIR/last-classify.txt")" || CLASSIFIED=""
     # R20: each event keeps its own copy; last-classify.txt is overwritten by the next run.
     [ "$RESTORE_V2" = 1 ] && { echo "=== $(now_iso) classify ${CL_ARGS[*]-}"; cat "$STATE_DIR/last-classify.txt"; } >> "$EVENT_DIR/classify.txt" 2>/dev/null
   fi
@@ -1643,7 +1643,7 @@ EOF
       # command substitution's pipeline status never reaches this shell. Its stdout goes to the file
       # and its stderr down the pipe to the timestamped log; PIPESTATUS[1] is the layout's own rc.
       echo "=== $(now_iso) layout ${LAY_ARGS[*]} rows=${n_adm}" | ts_lines >> "$LAYOUT_LOG" 2>/dev/null
-      printf '%s' "$ADMITTED" | "$LAYOUT" "${LAY_ARGS[@]}" 2>&1 >"$STATE_DIR/last-layout.out" | ts_lines >> "$LAYOUT_LOG" 2>/dev/null
+      printf '%s' "$ADMITTED" | cc_run "$LAYOUT" "${LAY_ARGS[@]}" 2>&1 >"$STATE_DIR/last-layout.out" | ts_lines >> "$LAYOUT_LOG" 2>/dev/null
       layout_rc="${PIPESTATUS[1]}"; layout_ran=1
       layout_sum="$(grep '^cc-resume-layout: verdict=' "$STATE_DIR/last-layout.out" 2>/dev/null | tail -1)"
       [ "$layout_rc" = 3 ] && [ "$tries" -gt 0 ] || break
@@ -1680,7 +1680,7 @@ EOF
       [ -n "$line" ] || continue
       alias="$(printf '%s' "$line" | cut -f1)"; sid="$(printf '%s' "$line" | cut -f2)"
       cwd="$(printf '%s' "$line" | cut -f3)";   br="$(printf '%s' "$line" | cut -f4)"
-      "$LAUNCH" "$alias" "$cwd" "$sid" "$br" >/dev/null 2>"$HELD_ERR"
+      cc_run "$LAUNCH" "$alias" "$cwd" "$sid" "$br" >/dev/null 2>"$HELD_ERR"
       w_rc=$?
       case "$w_rc" in
         0) resumed=$((resumed + 1))
@@ -1716,7 +1716,7 @@ EOF
     if [ ! -f "$EVENT_DIR/hb.roles.tsv" ] && [ -n "$HB_DIRS" ]; then
       printf '%s' "$HB_DIRS" | sed 's|$|/hb.roles.tsv|' | tr '\n' '\0' | xargs -0 cat 2>/dev/null | sort -u > "$EVENT_DIR/hb.roles.tsv" 2>/dev/null || true
     fi
-    "$REBIND" "$EVENT_DIR" >> "$EVENT_DIR/rebind.out" 2>&1
+    cc_run "$REBIND" "$EVENT_DIR" >> "$EVENT_DIR/rebind.out" 2>&1
     echo "boot-resume: cc-restore-rebind rc $? ($(tail -n 1 "$EVENT_DIR/rebind.out" 2>/dev/null))" >&2
   fi
   if [ "$RESTORE_V2" = 1 ] && [ ! -f "$EVENT_DIR/paged" ] && { [ "$layout_ran" = 1 ] || [ "$opener" = windows ]; }; then
@@ -1800,7 +1800,7 @@ EOF
        && command -v rd_putback >/dev/null 2>&1 && drafts_dir="$(rd_pick "$ROSTER_DIR" "$LOWER" "$BOOT")"; then
       # The socket is handed to these calls only (launchd gives this job no KITTY_WINDOW_ID).
       d_sock="${CC_TERM_KITTY_TO:-}"
-      [ -z "$d_sock" ] && [ -n "$KSOCK_BIN" ] && d_sock="$("$KSOCK_BIN" 2>/dev/null | head -1)"
+      [ -z "$d_sock" ] && [ -n "$KSOCK_BIN" ] && d_sock="$(cc_run "$KSOCK_BIN" 2>/dev/null | head -1)"
       d_sum="$(CC_TERM_KITTY_TO="$d_sock" rd_putback "$drafts_dir" "$STATE_DIR/last-layout.map" "$EVENT_DIR/drafts.log" 2>/dev/null )" || d_sum=""
       n_draft_typed="$(num "$(kv typed "$d_sum")")"
       n_draft_kept="$(num "$(kv kept "$d_sum")")"
@@ -1812,17 +1812,18 @@ EOF
     # socket, so hand it the live one. Detached into its own session: launchd reaps the job's
     # process group when this script exits, and a nohup'd child shares that group.
     ka_sock="${CC_TERM_KITTY_TO:-}"
-    [ -z "$ka_sock" ] && [ -n "$KSOCK_BIN" ] && ka_sock="$("$KSOCK_BIN" 2>/dev/null | head -1)"
+    [ -z "$ka_sock" ] && [ -n "$KSOCK_BIN" ] && ka_sock="$(cc_run "$KSOCK_BIN" 2>/dev/null | head -1)"
     mkdir -p "$HOME/.reso" 2>/dev/null || true
     _dl="$(dirname "$0")/lib/detach.sh"
     # shellcheck source=lib/detach.sh
     # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+    cc_argv "$KEEPALIVE"   # reso-keepalive is #!: detach/nohup run its interpreter (cc-run.sh)
     if [ -f "$_dl" ] && . "$_dl" 2>/dev/null && command -v detach >/dev/null 2>&1; then
       detach "$HOME/.reso/keepalive.out" env CC_KEEPALIVE_MARKERS="$nudged" CC_TERM_KITTY_TO="$ka_sock" \
-        "$KEEPALIVE" "$KEEPALIVE_INTERVAL" >/dev/null 2>&1 || true
+        "${CC_ARGV[@]}" "$KEEPALIVE_INTERVAL" >/dev/null 2>&1 || true
     else
       CC_KEEPALIVE_MARKERS="$nudged" CC_TERM_KITTY_TO="$ka_sock" \
-        nohup "$KEEPALIVE" "$KEEPALIVE_INTERVAL" >>"$HOME/.reso/keepalive.out" 2>&1 &
+        nohup "${CC_ARGV[@]}" "$KEEPALIVE_INTERVAL" >>"$HOME/.reso/keepalive.out" 2>&1 &
       disown 2>/dev/null || true
     fi
   fi
@@ -1904,7 +1905,7 @@ if [ "$RESTORE_V2" = 1 ]; then
   # This round's early page landed (R8): the follow-up, with the confirmed counts, goes to the same
   # session, and the round ends there.
   if [ -n "$EARLY_TO" ]; then
-    [ -n "$NOTIFY" ] && "$NOTIFY" "$EARLY_TO" "(follow-up, prompts confirmed) ${msg}" >/dev/null 2>&1
+    [ -n "$NOTIFY" ] && cc_run "$NOTIFY" "$EARLY_TO" "(follow-up, prompts confirmed) ${msg}" >/dev/null 2>&1
     mark_processed
     log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"interrupted\":$n_int,\"at_rest\":$n_rest,\"opener\":\"$opener\",\"fullscreen_ok\":$desk_fs_ok,\"fullscreen_failed\":$desk_fs_bad,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$EARLY_TO\",\"notified_as\":\"$EARLY_KIND\",\"early_page\":true,\"delivered\":true${V2_IDL}"
     exit 0
@@ -1920,7 +1921,7 @@ fi
 # ── deliver: the owner session, else the desk role, else a live lead role (resolve_page_target).
 #    Nobody ⇒ the backlog; that failing too ⇒ FAIL LOUD, do NOT mark processed. ──
 if [ -z "$BL_PID" ] && resolve_page_target && [ -n "$NOTIFY" ]; then
-  "$NOTIFY" "$PAGE_TO" "$msg" >/dev/null 2>&1 || true   # cc-notify's mailbox fallback ⇒ durable at exit 0
+  cc_run "$NOTIFY" "$PAGE_TO" "$msg" >/dev/null 2>&1 || true   # cc-notify's mailbox fallback ⇒ durable at exit 0
   paged_once
   mark_processed
   log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"interrupted\":$n_int,\"at_rest\":$n_rest,\"opener\":\"$opener\",\"fullscreen_ok\":$desk_fs_ok,\"fullscreen_failed\":$desk_fs_bad,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$PAGE_TO\",\"notified_as\":\"$PAGE_KIND\",\"delivered\":true${V2_IDL}"
@@ -1952,7 +1953,7 @@ else
     wait "$BL_PID" 2>/dev/null
     bid="$(tail -1 "$BL_OUT" 2>/dev/null | tr -d '[:space:]')"
   elif [ -n "$BACKLOG" ]; then
-    bid="$("$BACKLOG" needs "$(backlog_step "$why")" --class needs-human --receipt "$undeliv" --project claude-infrastructure 2>/dev/null | tail -1 | tr -d '[:space:]')"
+    bid="$(cc_run "$BACKLOG" needs "$(backlog_step "$why")" --class needs-human --receipt "$undeliv" --project claude-infrastructure 2>/dev/null | tail -1 | tr -d '[:space:]')"
   fi
   # An id is hex. Anything else — a warning line, an empty write, a usage error — is NOT a filing,
   # and treating it as one is how a fallback reports delivery it never made.

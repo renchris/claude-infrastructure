@@ -252,6 +252,7 @@ ha_classes=""   # newline-separated `class` values of the handoff-alarm records 
 TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
 sweep_bounded() { # <seconds> <cmd…> — rc 124 on a cut (timeout(1)'s contract)
   local s="$1"; shift
+  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }   # #! via its interpreter (cc-run.sh)
   # The `-z` arm below is the fallthrough named above: reachable only if the login PATH stops
   # carrying either binary, NOT because launchd's own PATH is minimal. Measured non-empty here.
   if [ -z "$TIMEOUT_BIN" ] || [ ! -x "$TIMEOUT_BIN" ]; then "$@"; return $?; fi
@@ -342,6 +343,9 @@ _tmo="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || tru
 # remains a real bound while fitting the worst band ever observed rather than the best.
 _qos=""; [ -x /usr/sbin/taskpolicy ] && _qos=/usr/sbin/taskpolicy   # fail-open: no taskpolicy ⇒ plain exec
 _bounded() {
+  # The helpers resolve_bin returns are #! scripts: run them through their interpreter, not by path
+  # (macOS 15.8.1 keeps ~1.1 KiB per by-path #! exec; cc-run.sh). A bare name passes through.
+  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }
   if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
     ${_qos:+$_qos -c utility} "$_tmo" -k 5 "${CC_SWEEP_BOUND_S:-180}" "$@"
   else
@@ -589,7 +593,7 @@ class_b_actuate() {
         case "$dispatch_project" in
           ""|"-") dispatch_project="${CC_SWEEP_PROJECT:-claude-infrastructure}" ;;
         esac
-        "$BACKLOG" add --title "class-B default fired: $ddef" \
+        cc_run "$BACKLOG" add --title "class-B default fired: $ddef" \
           --project "$dispatch_project" \
           --source autonomy-sweep --dod-ref "decision:$did" >/dev/null 2>&1 || true
       fi
