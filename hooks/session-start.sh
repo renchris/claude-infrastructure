@@ -4,6 +4,11 @@
 # about potential initialization delays (per GitHub issue #723)
 
 set -euo pipefail
+# The prunes and cc-claude-bin below are #! scripts: run them through their interpreter, not by path
+# (~1.1 KiB of kernel memory per by-path #! exec on macOS 15.8.1; KALLOC_TRIGGER_ELIMINATION W4).
+# shellcheck source=../scripts/lib/cc-run.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 LOG_DIR=~/.claude/logs
 mkdir -p "$LOG_DIR"
@@ -47,7 +52,7 @@ if [ "$MCP_MODE" != "--refresh-mcp-cache" ] && [ -x "$PRUNE_SCRIPT" ]; then
     # see EOF until every writer closes it — `&` does not close a descriptor and neither does
     # `disown`. An unredirected background prune can therefore hold the SessionStart chain open
     # long after the hook itself has exited (backlog 50627335fe9b).
-    "$PRUNE_SCRIPT" >/dev/null &  # Background, non-blocking
+    cc_run "$PRUNE_SCRIPT" >/dev/null &  # Background, non-blocking
   fi
 fi
 
@@ -60,7 +65,7 @@ LAST_PLAN_PRUNE_FILE="$HOME/.claude/.last-plan-history-prune"
 if [ "$MCP_MODE" != "--refresh-mcp-cache" ] && [ -x "$PLAN_PRUNE_SCRIPT" ]; then
   if [ ! -f "$LAST_PLAN_PRUNE_FILE" ] || [ "$(cat "$LAST_PLAN_PRUNE_FILE" 2>/dev/null)" != "$TODAY" ]; then
     echo "$TODAY" > "$LAST_PLAN_PRUNE_FILE"
-    "$PLAN_PRUNE_SCRIPT" >/dev/null 2>&1 &  # Background, non-blocking
+    cc_run "$PLAN_PRUNE_SCRIPT" >/dev/null 2>&1 &  # Background, non-blocking
   fi
 fi
 
@@ -273,7 +278,7 @@ _resolve_claude_bin() {
   # 2. the fleet SSOT resolver (reads the launcher's own _bin= pin in ~/.zshrc).
   local _r
   if [ -x "$HOME/.claude/bin/cc-claude-bin" ]; then
-    _r="$("$HOME/.claude/bin/cc-claude-bin" --explain 2>/dev/null || true)"
+    _r="$(cc_run "$HOME/.claude/bin/cc-claude-bin" --explain 2>/dev/null || true)"
     if [ -n "$_r" ]; then printf '%s\n' "$_r"; return 0; fi
   fi
   return 1

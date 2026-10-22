@@ -175,12 +175,17 @@ fi
 export CC_HOOK_PARENT_PID="${CC_HOOK_PARENT_PID:-$PPID}"
 
 # One wrapper per child: the rc file's mtime is the child's end time, and all three fds leave the
-# harness pipe, so a late child can never hold the dispatcher's stdout open.
+# harness pipe, so a late child can never hold the dispatcher's stdout open. Each child runs through
+# its own #! interpreter, not by path: ten by-path #! execs per session start each keep ~1.1 KiB of
+# kernel memory on macOS 15.8.1 (KALLOC_TRIGGER_ELIMINATION W4, scripts/lib/cc-run.sh; fail-open).
+# shellcheck source=../scripts/lib/cc-run.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -f "$HERE/../scripts/lib/cc-run.sh" ]; then . "$HERE/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 i=0; n=""
 for c in $CHILDREN; do
   i=$((i + 1)); printf -v n '%02d' "$i"
   if [ ! -x "$DIR/$c" ]; then all="$all $n:-:$c"; continue; fi
-  ( "$DIR/$c" < "$T/payload" > "$T/o$n" 2> "$T/e$n"; echo $? > "$T/r$n" ) </dev/null >/dev/null 2>&1 &
+  ( cc_run "$DIR/$c" < "$T/payload" > "$T/o$n" 2> "$T/e$n"; echo $? > "$T/r$n" ) </dev/null >/dev/null 2>&1 &
   all="$all $n:$!:$c"; map="$map $n:$!:$c"
 done
 [ -n "$map" ] || loud none "none of the startup hooks in this dispatcher is installed and executable in $DIR, so the board, notices and Plans/Tasks/MCP lines are missing. Re-run: bash ~/Development/claude-infrastructure/install.sh"

@@ -275,7 +275,15 @@ _resolve_bound_bin() {
   done
   return 0
 }
+# The helpers this ledger asks (cc-decide, cc-backlog, cc-custody, cc-research) are #! scripts, and
+# seven Stop hooks run it per turn close: each by-path run keeps ~1.1 KiB of kernel memory on macOS
+# 15.8.1 (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4), so _bounded runs its command
+# through its interpreter (scripts/lib/cc-run.sh). Fail-open: no runner = the old by-path exec.
+# shellcheck source=lib/cc-run.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; fi
 _bounded() { local s="$1"; shift
+  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }
   if [ -n "$_WRAP_BOUND_BIN" ]; then "$_WRAP_BOUND_BIN" "$s" "$@"; else "$@"; fi
 }
 
@@ -1183,10 +1191,11 @@ _wl_blc_fill() { # $1 = entry path · $2 = bin · $3.. = list args; rc 0 = a fil
     rmdir "$lock" 2>/dev/null; mkdir "$lock" 2>/dev/null || return 0
   fi
   _wl_detach_ready || { rmdir "$lock" 2>/dev/null; return 1; }
+  cc_argv "$bin"   # the filler runs cc-backlog through its interpreter too (see _bounded)
   if [ -n "$_WRAP_BOUND_BIN" ]; then
-    detach /dev/null /bin/bash -c "$_WL_BLC_FILLER" _ "$out" "$lock" "$_WRAP_BOUND_BIN" 300 "$bin" list "$@" >/dev/null 2>&1
+    detach /dev/null /bin/bash -c "$_WL_BLC_FILLER" _ "$out" "$lock" "$_WRAP_BOUND_BIN" 300 "${CC_ARGV[@]}" list "$@" >/dev/null 2>&1
   else
-    detach /dev/null /bin/bash -c "$_WL_BLC_FILLER" _ "$out" "$lock" "$bin" list "$@" >/dev/null 2>&1
+    detach /dev/null /bin/bash -c "$_WL_BLC_FILLER" _ "$out" "$lock" "${CC_ARGV[@]}" list "$@" >/dev/null 2>&1
   fi || { rmdir "$lock" 2>/dev/null; return 1; }
   return 0
 }

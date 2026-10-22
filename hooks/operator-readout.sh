@@ -205,6 +205,12 @@ _amlib="$_amd/lib/activation-marker.sh"
 # shellcheck source=lib/shasum-direct.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$_amd/lib/shasum-direct.sh" 2>/dev/null || . "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/shasum-direct.sh" 2>/dev/null || CC_SHA1=sha1sum
+# cc-research is a #! script this hook runs on every Stop; run by path it keeps ~1.1 KiB of kernel
+# memory on macOS 15.8.1, so it goes through its interpreter (KALLOC_TRIGGER_ELIMINATION W4). Fails
+# OPEN: until install.sh links scripts/lib/cc-run.sh, cc_argv leaves the path as it is.
+# shellcheck source=../scripts/lib/cc-run.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -f "$_amd/../scripts/lib/cc-run.sh" ]; then . "$_amd/../scripts/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; fi
 # The shared renderer (lib/cc-say.sh, lr-wake 2026-10-18 RC8): rows are fitted to 52 cells by its
 # cc_say_fit/cc_say_cut. Same tiers as above — the checkout's own lib/ first (a brand-new lib has no
 # ~/.claude/lib link until install.sh runs). Fails OPEN: without it rows print unfitted, as before.
@@ -773,8 +779,9 @@ _or_research_prefetch() {
   _OR_RP_PID=""; _OR_RP_F=""
   _or_research_resolve || return 0
   _OR_RP_F="$1"
-  ( if [ -n "$_OR_RP_TO" ]; then "$_OR_RP_TO" -k 1 "$_OR_RP_S" "$_OR_RP_BIN" pending --json
-    else "$_OR_RP_BIN" pending --json; fi > "$_OR_RP_F" 2>/dev/null
+  cc_argv "$_OR_RP_BIN"
+  ( if [ -n "$_OR_RP_TO" ]; then "$_OR_RP_TO" -k 1 "$_OR_RP_S" "${CC_ARGV[@]}" pending --json
+    else "${CC_ARGV[@]}" pending --json; fi > "$_OR_RP_F" 2>/dev/null
     printf '%s\n' "$?" > "$_OR_RP_F.rc" ) &
   _OR_RP_PID=$!
 }
@@ -793,8 +800,9 @@ research_lines() {
     raw=""; [ -f "$_OR_RP_F" ] && raw="$(< "$_OR_RP_F")"
     { read -r rrc < "$_OR_RP_F.rc"; } 2>/dev/null || rrc=1
     case "$rrc" in ''|*[!0-9]*) rrc=1 ;; esac
-  elif [ -n "$_OR_RP_TO" ]; then raw="$("$_OR_RP_TO" -k 1 "$_OR_RP_S" "$_OR_RP_BIN" pending --json 2>/dev/null)" || rrc=$?
-  else raw="$("$_OR_RP_BIN" pending --json 2>/dev/null)" || rrc=$?; fi
+  elif cc_argv "$_OR_RP_BIN" && [ -n "$_OR_RP_TO" ]; then
+    raw="$("$_OR_RP_TO" -k 1 "$_OR_RP_S" "${CC_ARGV[@]}" pending --json 2>/dev/null)" || rrc=$?
+  else raw="$("${CC_ARGV[@]}" pending --json 2>/dev/null)" || rrc=$?; fi
   if [ "$rrc" -ne 0 ]; then
     log_idl degraded "research-pending-unread" '{"why":"cc-research pending failed or timed out"}'
     return 0
