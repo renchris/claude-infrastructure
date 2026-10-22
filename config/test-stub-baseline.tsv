@@ -4,7 +4,7 @@
 # Convert a stub with cc_stub DIR NAME BODY (tests/helpers/cc-stub.bash), then lock the decrease
 # in with: scripts/test-stub-lint.sh --write-baseline. Columns: <path>TAB<count>, LC_ALL=C order.
 tests/account-recovery-lane.bats	1
-tests/accounts-board.bats	5
+tests/accounts-board.bats	3
 tests/accounts-local-job.bats	2
 tests/accounts-width-sweep.bats	1
 tests/activation-watch.bats	21
@@ -16,20 +16,19 @@ tests/assignee-pane-residency.bats	6
 tests/async-hook-hygiene.bats	3
 tests/auth-timeseries-schedule.bats	5
 tests/automode-land-probe.bats	1
-tests/autonomy-sweep.bats	33
+tests/autonomy-sweep.bats	22
 tests/backlog-consolidation-trigger.bats	2
 tests/backlog-freshness.bats	5
 tests/backlog-grouping-engine-absent.bats	1
 tests/backlog-grouping.bats	3
 tests/banner-video.bats	3
-tests/bash-hook-trims-forks.bats	1
 tests/bash32-parse-lint.bats	2
 tests/bats-kill-guard-lint.bats	6
 tests/bats-shellcheck-lint.bats	8
 tests/bats-shim-parity-lint.bats	2
 tests/boot-resume-launch.bats	12
 tests/boot-resume-skip-retired.bats	1
-tests/boot-resume.bats	28
+tests/boot-resume.bats	1
 tests/boundary-handoff.bats	1
 tests/branch-adjudicate.bats	1
 tests/browser-spin-guard.bats	8
@@ -41,7 +40,7 @@ tests/capacity-admit-restore.bats	3
 tests/capacity-admit.bats	6
 tests/capacity-alarm-census-shared.bats	1
 tests/capacity-alarm-chronic.bats	2
-tests/capacity-alarm-kalloc-zone.bats	3
+tests/capacity-alarm-kalloc-zone.bats	4
 tests/capacity-alarm-permb.bats	1
 tests/capacity-alarm-segments.bats	9
 tests/capacity-alarm.bats	10
@@ -119,7 +118,7 @@ tests/cc-lr-wait-notes.bats	4
 tests/cc-lr.bats	1
 tests/cc-notify-socket-wake.bats	2
 tests/cc-notify.bats	10
-tests/cc-offload.bats	28
+tests/cc-offload.bats	4
 tests/cc-pane-close-never-launched.bats	6
 tests/cc-pane-close.bats	7
 tests/cc-pane-headless.bats	1
@@ -131,7 +130,7 @@ tests/cc-premise-plan-open.bats	3
 tests/cc-premise-shard.bats	1
 tests/cc-qos-exec.bats	4
 tests/cc-queue.bats	1
-tests/cc-reaper.bats	52
+tests/cc-reaper.bats	3
 tests/cc-reconcile.bats	2
 tests/cc-recover-safeguard.bats	4
 tests/cc-relayout.bats	4
@@ -153,7 +152,9 @@ tests/cc-roles-target-probe.bats	4
 tests/cc-route.bats	4
 tests/cc-sessions-census.bats	1
 tests/cc-sessions-offbox.bats	1
+tests/cc-shim.bats	4
 tests/cc-spawn-verify.bats	2
+tests/cc-stub.bats	2
 tests/cc-teardown-assignee-adopt.bats	7
 tests/cc-teardown.bats	8
 tests/cc-thread.bats	1
@@ -207,7 +208,7 @@ tests/curl-gate-scope.bats	2
 tests/custody-deathwatch.bats	7
 tests/delivery-verify.bats	2
 tests/deploy-link-parity.bats	2
-tests/deploy-live.bats	21
+tests/deploy-live.bats	13
 tests/deploy-migrations.bats	5
 tests/deploy-now.bats	2
 tests/deploy-parity.bats	17
@@ -370,6 +371,7 @@ tests/jev-predict-land.bats	3
 tests/jev-promote.bats	1
 tests/kalloc-exec-census.bats	3
 tests/kalloc-parity-interp.bats	2
+tests/kalloc-slo.bats	1
 tests/keychain-account-narrowing.bats	1
 tests/kitty-build-swap.bats	2
 tests/kitty-divert-real-it2.bats	1
@@ -422,7 +424,7 @@ tests/lr-fire-resume-pane-ui.bats	4
 tests/lr-fire-resume-reply-drain.bats	1
 tests/lr-fire-resume-screen-multichip.bats	1
 tests/lr-fire-resume-submit.bats	15
-tests/lr-fleet.bats	40
+tests/lr-fleet.bats	4
 tests/lr-handoff-close-source.bats	9
 tests/lr-handoff-flags.bats	15
 tests/lr-handoff-launcher-quoting.bats	11
@@ -518,7 +520,7 @@ tests/operator-readout-recon.bats	1
 tests/operator-readout-research.bats	2
 tests/operator-readout-shared-ledger.bats	1
 tests/operator-readout-stranded.bats	3
-tests/operator-readout.bats	63
+tests/operator-readout.bats	56
 tests/operator-surface-scope.bats	2
 tests/osa-bounds.bats	12
 tests/pane-close-from-inside.bats	7
@@ -542,7 +544,7 @@ tests/pre-session-validate.bats	2
 tests/public-hygiene.bats	4
 tests/push-send.bats	1
 tests/python-deps.bats	4
-tests/qos-chokepoint.bats	8
+tests/qos-chokepoint.bats	9
 tests/qos-rewrite-forks.bats	2
 tests/qos-rewrite-git-grep.bats	3
 tests/qos-rewrite.bats	2
@@ -595,7 +597,7 @@ tests/session-start-mission-gate.bats	2
 tests/session-writes.bats	1
 tests/settings-drift.bats	1
 tests/ship-land-converge-edge.bats	2
-tests/ship-land.bats	113
+tests/ship-land.bats	98
 tests/spawn-lineage.bats	1
 tests/spawn-presence.bats	6
 tests/spawn-wedge-watchdog.bats	6
