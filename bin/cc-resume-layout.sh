@@ -72,8 +72,10 @@
 #     never spends the refusal budget that admits on the 3rd refusal; busy sessions are capped by
 #     CC_ADMIT_RESTORE_R. Only CC_RESTORE_DEADLINE (30 min) sheds the rest.
 #   · ORDER: heartbeat groups (columns 8-9) keep their own windows in slot order; without them, the
-#     project grouping above. Rows with a prompt (column 10) launch last, so the load gate meets them
-#     after the idle rows have settled.
+#     project grouping above. Windows launch most-prompted first, and inside a project window rows
+#     with a prompt (column 10) come first: a prompted session was cut off with work in hand, and
+#     launching it last cost about 90 s per prompted row at the 2026-10-21 restore (R17; the load
+#     gate that ordering once deferred to is gone).
 #   · KITTY'S HEALTH: one `kitty @` call in flight (this loop never backgrounds one), 30 s of backoff
 #     after a timed-out call, and the restore stops when kitty holds more than 180 fds (C3: its soft
 #     limit is 256).
@@ -86,7 +88,11 @@
 #     --match` and toggles the ACTIVE window — kitty-crash-2026-10-15 README), 3 s apart. The verdict is the READ-BACK
 #     (the window's frame fills its display, via hb_display_probe, polled up to
 #     CC_RESTORE_FS_VERIFY=10 s); a window read back as windowed gets focus-window and ONE more
-#     toggle. A refused toggle, or an unreadable state, is never re-toggled.
+#     toggle. A refused toggle, or an unreadable state, is never re-toggled. An unread frame is read
+#     once more, then looked up in com.apple.spaces' fullscreen Spaces; still unread, it counts as
+#     fullscreen_unknown, never as ok (R21). After a placing pass, kitty's own startup window (one
+#     pane, a login shell that never ran a command) is closed: strays_closed=N.
+#   · STAGGER: 2 s after each launch (CC_RESTORE_STAGGER), not the plain path's 12 s (R17).
 #
 # --restore, LAYOUT FIDELITY (2026-10-05, W3 P7; plan § Amendment B gaps 2 and 3): when the heartbeat
 # recorded kitty's tree, each window comes back as it was, and the one-row plan above is only the
@@ -171,7 +177,7 @@ SWIFT_BIN="${CC_SWIFT_BIN:-/usr/bin/swift}"
 PER_WINDOW=0          # 0 = derive from the screen count
 DESKTOPS=0
 TO_ARG=""
-STAGGER="${CC_RESUME_STAGGER:-12}"
+STAGGER="${CC_RESUME_STAGGER:-}"   # "" ⇒ 12 s, or CC_RESTORE_STAGGER (2 s) under --restore (below)
 USE_ALL_SCREENS=0
 DRY_RUN=0
 RESTORE=0             # --restore: the unattended restore path (W3)
@@ -196,6 +202,13 @@ while [ $# -gt 0 ]; do
     *)                 die "unknown argument: $1" ;;
   esac
 done
+
+# The pause after each launched session. R17 (reboot-resume 2026-10-21): 12 s added about 5.2 minutes
+# of pure sleep to a 26-session restore, which already waits on its own capacity probe and kitty's
+# answer to every launch, so under --restore it is 2 s. The plain path keeps 12 s.
+if [ -z "$STAGGER" ]; then
+  if [ "$RESTORE" = 1 ]; then STAGGER="${CC_RESTORE_STAGGER:-2}"; else STAGGER=12; fi
+fi
 
 if [ -n "$TREE" ]; then
   [ "$DESKTOPS" = 1 ] && [ "$RESTORE" = 1 ] || die "--tree needs --desktops --restore"
@@ -256,6 +269,9 @@ if [ "$DESKTOPS" = 1 ]; then
     done
     [ -n "$SOCK" ] || { note "cc-resume-layout: no live kitty control socket — nothing to lay out into"; exit 3; }
   fi
+  # Each spawn's pane-spawn-log row asks the restore heartbeat to re-read THIS kitty's tree (R23);
+  # under launchd there is no KITTY_LISTEN_ON to name it, so the socket rides along.
+  [ -n "$SOCK" ] && export CC_SPAWN_KITTY_TO="$SOCK"
   # BOUNDED (2026-10-02, W3 P2): `kitty @` against a wedged socket never returns, and this runs
   # unattended from launchd, so one stuck call hung the whole restore. Every call now ends within
   # CC_RESUME_K_TIMEOUT seconds with rc 124: 120 s by default, 15 s only under --restore. The default
@@ -323,15 +339,62 @@ EOF
       [ "$HOLDER_OK" = 1 ] || note "cc-resume-layout: lr-lib.sh unreachable — maybe rows are judged by transcript alone"
     fi
     holders() { [ "$HOLDER_OK" = 1 ] && lr_holder_count "$1" 2>/dev/null; return 0; }
-    # Every SessionStart:resume record across the account stores. Mirrored stores count twice both
-    # before and after a launch, so a GAIN is still a gain.
-    resume_marks() {
-      local f c n=0
-      for f in "${HOME:-}"/.claude*/projects/*/"$1".jsonl; do
-        [ -f "$f" ] || continue
-        c="$(grep -c '"hookName":"SessionStart:resume"' "$f" 2>/dev/null)"; n=$((n + ${c:-0}))
+    # resume_marks <sid> <cwd> — the SessionStart:resume records in the session's transcripts.
+    # R6 (reboot-resume 2026-10-21): this globbed every project dir of every account store (about
+    # 73,000 directories, with ~/.claude-next/projects a symlink to ~/.claude/projects, so that store
+    # twice) once per launched row, as the maybe baseline. The transcript sits at
+    # <config>/projects/<cwd slug>/<sid>.jsonl, the path restore-heartbeat.sh's _hb_transcript tries
+    # first, so that path is read in each store, each real path once. Only when no store has it does
+    # the glob run, over each projects root once by real path, and what it finds is cached for the
+    # session (MARK_CACHE) and counted beside the direct paths ever after, so a baseline and a
+    # re-check always count the same files plus any new one.
+    MARK_CACHE=""; MARK_ROOTS=""
+    mark_roots() { # every account store's projects dir, once per real path (kept once one exists)
+      # An EMPTY answer is not kept: a store whose projects dir the resumed session creates during
+      # the launch must be seen by the re-check, or the maybe row can never resolve.
+      [ -n "$MARK_ROOTS" ] && return 0
+      local d r seen=$'\n'
+      for d in "${HOME:-}"/.claude*/projects; do
+        [ -d "$d" ] || continue
+        r="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+        case "$seen" in *$'\n'"$r"$'\n'*) continue ;; esac
+        seen="$seen$r"$'\n'; MARK_ROOTS="$MARK_ROOTS$r"$'\n'
       done
-      printf '%s\n' "$n"
+      return 0
+    }
+    resume_marks() {
+      local sid="$1" slug f r c n=0 files="" glob=""
+      mark_roots
+      # Claude Code's project slug: every character outside [A-Za-z0-9] becomes - (doc_classifier ⇒ doc-classifier).
+      slug="$(printf '%s' "${2:-}" | tr -c 'A-Za-z0-9' '-')"
+      if [ -n "${2:-}" ]; then
+        while IFS= read -r r; do
+          [ -n "$r" ] && [ -f "$r/$slug/$sid.jsonl" ] && files="$files$r/$slug/$sid.jsonl"$'\n'
+        done <<EOF
+$MARK_ROOTS
+EOF
+      fi
+      case "$MARK_CACHE" in
+        *$'\n'"$sid"$'\t'*) glob="${MARK_CACHE#*$'\n'"$sid"$'\t'}"; glob="${glob%%$'\n'*}" ;;
+        *) if [ -z "$files" ]; then
+             note "cc-resume-layout: no transcript for $sid at its cwd path — searching every project dir once"
+             while IFS= read -r r; do
+               [ -n "$r" ] || continue
+               for f in "$r"/*/"$sid".jsonl; do [ -f "$f" ] && glob="$glob$f"$'\037'; done
+             done <<EOF
+$MARK_ROOTS
+EOF
+             [ -n "$glob" ] && MARK_CACHE="$MARK_CACHE"$'\n'"$sid"$'\t'"$glob"
+           fi ;;
+      esac
+      [ -n "$glob" ] && files="$files$(printf '%s' "$glob" | tr '\037' '\n')"$'\n'
+      while IFS= read -r f; do
+        [ -n "$f" ] && [ -f "$f" ] || continue
+        c="$(grep -c '"hookName":"SessionStart:resume"' "$f" 2>/dev/null)"; n=$((n + ${c:-0}))
+      done <<EOF
+$(printf '%s' "$files" | awk 'NF && !seen[$0]++')
+EOF
+      RM_N="$n"   # a variable, not stdout: in $(…) the cache above would die with the subshell
     }
     # kitty's fd count; empty when unreadable. The pid is the one listen_on embeds (kitty.conf:
     # unix:/tmp/kitty-{kitty_pid}), else the KITTY_PID kitty exports into its panes.
@@ -442,7 +505,7 @@ for _, f in sorted(cands, reverse=True):
     #   T  how many windows came from a recorded tree (they are numbered first, in recorded order)
     #   P  window#  tab  pane-key  row|shell  row-index  head|tab|vsplit|hsplit  anchor-key  bias
     #      shell-cwd  group-label  keep|<layout to go to>      — in launch order
-    # Windows holding a prompt row (column 10) launch last, and inside a project window so do those rows.
+    # Windows holding the most prompt rows (column 10) launch first, and inside a project window so do those rows.
     PLAN="$(i=0; for r in "${ROWS[@]}"; do
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$(cell "$r" 3)" "$(cell "$r" 8)" "$(cell "$r" 9)" "$(cell "$r" 10)" "$(cell "$r" 2)"
         i=$((i + 1)); done \
@@ -576,7 +639,7 @@ for path in trees:
         src = "k%sw%s" % (kp, o.get("id"))
         ls = [l for _, n in tabs for l in leaves(n)]
         wins.append({"src": src, "pwid": pwid, "disp": disp.get(pwid), "tabs": tabs, "grp": src,
-                     "prompt": any(l[0] == "row" and l[2] for l in ls)})
+                     "prompt": sum(1 for l in ls if l[0] == "row" and l[2])})
 ntree = len(wins)
 
 # ── rows no tree placed: one row of panes per window (P3b). Heartbeat groups (column 8) keep their
@@ -596,7 +659,7 @@ for k in order:
         rs = sorted(rs, key=slot)
         fb += [(rs[j:j + per], [k[1]]) for j in range(0, len(rs), per)]
     else:
-        rs = sorted(rs, key=lambda r: (r[2], r[0]))
+        rs = sorted(rs, key=lambda r: (-r[2], r[0]))
         chunks += [(k[1], rs[j:j + per]) for j in range(0, len(rs), per)]
 chunks.sort(key=lambda c: -len(c[1]))
 bins = []
@@ -606,12 +669,12 @@ for g, rs in chunks:
             b[0].extend(rs); b[1].append(g); break
     else:
         bins.append([list(rs), [g]])
-fb += [(sorted(rs, key=lambda r: r[2]), gs) for rs, gs in bins]
-fb.sort(key=lambda w: any(r[2] for r in w[0]))
+fb += [(sorted(rs, key=lambda r: -r[2]), gs) for rs, gs in bins]
+fb.sort(key=lambda w: -sum(r[2] for r in w[0]))
 for rs, gs in fb:
     wins.append({"src": "plan", "pwid": "", "disp": None, "grp": "+".join(gs),
                  "tabs": [("horizontal", chain([("row", r[0], r[2]) for r in rs]))],
-                 "prompt": any(r[2] for r in rs)})
+                 "prompt": sum(r[2] for r in rs)})
 for n, w in enumerate(wins, 1):
     w["n"] = n
 
@@ -657,7 +720,7 @@ for w in wins:
                        str(sum(1 for l in ls if l[0] == "row")), str(sum(1 for l in ls if l[0] == "shell")),
                        ";".join("%s:%s" % (lay, sig(n)) for lay, n in w["tabs"])] + (w["disp"] or [""] * 10)))
 out.append(S.join(["T", str(ntree)]))
-for w in sorted(wins, key=lambda w: w["prompt"]):      # windows holding a prompt row launch last
+for w in sorted(wins, key=lambda w: -w["prompt"]):     # most prompt rows first (R17); stable otherwise
     out += [S.join(["P"] + o) for o in w["ops"]]
 print("\n".join(out))
 ' "$PER_WINDOW" ${TREES[@]+"${TREES[@]}"})" || die "the window planner failed"
@@ -670,7 +733,7 @@ print("\n".join(out))
     fi
     t0=$SECONDS; stopped=none; fd_blind=0
     launched=0; failed=0; shed=0; nwin=0; nshell=0; placed=0; place_bad=0
-    WIN_HEAD=(); WIN_NUM=(); MAYBE_SID=(); MAYBE_BASE=(); WIDS=(); WDISP=(); WFS=()
+    WIN_HEAD=(); WIN_NUM=(); MAYBE_SID=(); MAYBE_BASE=(); MAYBE_WT=(); WIDS=(); WDISP=(); WFS=()
     NTREE=0
     while IFS=$'\037' read -r _t wn src pwid ntabs npanes nclaude nsh lsig duuid ddx ddy ddw ddh dfs dwx dwy dww dwh; do
       case "$_t" in
@@ -849,6 +912,10 @@ print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
       fi
     }
 
+    # The windows kitty had BEFORE this restore opened any: the stray-window pass below may close only
+    # one of these, never a window this run made.
+    PRE_LS=""; [ "$DRY_RUN" = 0 ] && PRE_LS="$(kr ls 2>/dev/null)"
+
     cur=""; ctab=""; head=""; thead=""; tlast=""; tfin=""
     close_restore_tab() { # a replayed splits tab stays as built; any other becomes its layout, then even widths
       [ -n "$thead" ] || return 0
@@ -949,7 +1016,7 @@ print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
       esac
       { [ -n "$wt" ] && [ -d "$wt" ]; } && LA+=(--cwd "$wt")
       if [ "$kind" = row ]; then
-        base="$(resume_marks "$sid")"
+        resume_marks "$sid" "$wt"; base="$RM_N"
         # The spawn goes through reso-resume-one, which wraps claude in cc-close-attrib (P2); the cert
         # store is set here as well so no keychain read can stall a restore.
         cmd="'env' 'CC_ADMIT_DONE=1' 'CLAUDE_CODE_CERT_STORE=bundled'"
@@ -968,7 +1035,7 @@ print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
           if [ "$kind" = row ]; then
             printf 'cc-resume-layout: maybe sid=%s rc=%s\n' "$sid" "$rc"
             note "cc-resume-layout: launch unconfirmed for $sid (rc $rc): $wid — re-checked after the batch"
-            MAYBE_SID+=("$sid"); MAYBE_BASE+=("$base")
+            MAYBE_SID+=("$sid"); MAYBE_BASE+=("$base"); MAYBE_WT+=("$wt")
           else
             note "cc-resume-layout: shell pane in ${wt:-?} did not open (rc $rc): $wid"
           fi
@@ -1006,9 +1073,37 @@ EOF
     # window read back as windowed gets ONE more toggle after focus-window. Never re-toggled without
     # a positive "windowed" reading, since a second toggle would undo a first that landed late.
     # No probe or no frame ⇒ unknown, counted as before (by rc) and said so.
-    fs_state() { # <head pane> → 1 | 0 | "" — this pane's OS window, fullscreen per its frame
-      local pwid
+    # R21 (reboot-resume 2026-10-21): an unread state was counted as fullscreen_ok, so all 8 windows
+    # of that restore were reported fullscreen without one being checked. Now a probe that answers
+    # nothing is asked ONCE more, then cross-checked against WindowServer's own record of fullscreen
+    # Spaces (com.apple.spaces: each fullscreen Space carries fs_wid, the CGWindow number, which is
+    # kitty's platform_window_id); a window still unread is fullscreen_unknown, never ok.
+    # CC_DEFAULTS_BIN is the seam; under bats with it unset nothing real is read.
+    spaces_fs_wids() { # → one CGWindow number per line, for every fullscreen Space
+      local db="${CC_DEFAULTS_BIN:-}"
+      if [ -z "$db" ]; then
+        [ -n "${BATS_TEST_FILENAME:-}${BATS_TEST_TMPDIR:-}${BATS_VERSION:-}" ] && return 0
+        db=/usr/bin/defaults
+      fi
+      [ -x "$db" ] || return 0
+      kb "$db" export com.apple.spaces - 2>/dev/null | python3 -c 'import plistlib, sys
+try:
+    d = plistlib.loads(sys.stdin.buffer.read())
+except Exception:
+    sys.exit(0)
+for m in (d.get("SpacesDisplayConfiguration") or {}).get("Management Data", {}).get("Monitors") or []:
+    for s in m.get("Spaces") or []:
+        if s.get("type") == 4 and isinstance(s.get("fs_wid"), int):
+            print(s["fs_wid"])' 2>/dev/null
+    }
+    fs_probe() { # <pwid> → the probe's fullscreen column for that window, or nothing
       command -v hb_display_probe >/dev/null 2>&1 || return 0
+      CC_HB_SWIFT_BIN="$SWIFT_BIN" hb_display_probe "$1" 2>/dev/null | awk -F'\t' -v p="$1" '$1 == p { print $7; exit }'
+    }
+    # <head pane> → 1 (frame fills its display) | S (no frame read, but a fullscreen Space holds it)
+    # | 0 (windowed) | "" (unknown)
+    fs_state() {
+      local pwid s
       pwid="$(kr ls 2>/dev/null | python3 -c 'import json, sys
 try:
     data = json.load(sys.stdin)
@@ -1019,7 +1114,11 @@ for o in data:
         print(o.get("platform_window_id") or "")
         break' "$1" 2>/dev/null)"
       [ -n "$pwid" ] || return 0
-      CC_HB_SWIFT_BIN="$SWIFT_BIN" hb_display_probe "$pwid" 2>/dev/null | awk -F'\t' -v p="$pwid" '$1 == p { print $7; exit }'
+      s="$(fs_probe "$pwid")"
+      [ -n "$s" ] || { sleep "${CC_RESTORE_FS_RETRY_S:-1}"; s="$(fs_probe "$pwid")"; }
+      # A herestring, not `| grep -q`: under pipefail the early exit would SIGPIPE the producer.
+      [ -z "$s" ] && grep -qx -- "$pwid" <<<"$(spaces_fs_wids)" && s=S
+      printf '%s' "$s"
     }
     fs_settled() { # <head pane> → fs_state, polled up to FS_VERIFY s while it reads windowed
       local s t=0
@@ -1030,7 +1129,7 @@ for o in data:
       done
     }
     FS_VERIFY="${CC_RESTORE_FS_VERIFY:-10}"
-    fs_ok=0; fs_bad=0
+    fs_ok=0; fs_bad=0; fs_unk=0
     for w in $(j=0; while [ "$j" -lt "${#WIN_HEAD[@]}" ]; do printf '%s %s\n' "${WIN_NUM[$j]}" "$j"; j=$((j + 1)); done | sort -n | cut -d' ' -f2); do
       hd="${WIN_HEAD[$w]}"; n="${WIN_NUM[$w]}"
       if [ "${WFS[$n]:-1}" = 0 ]; then
@@ -1052,13 +1151,59 @@ for o in data:
         fi
         case "$st" in
           1) fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen (read back, window $hd)" ;;
+          S) fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen (its frame unread; a fullscreen Space holds window $hd, per com.apple.spaces)" ;;
           0) fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] NOT fullscreen after two toggles (read back, window $hd)" ;;
-          *) fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen toggled (window $hd; not read back — no display probe)" ;;
+          *) fs_unk=$((fs_unk + 1)); note "  [CC-DESK-$n] fullscreen toggled, state UNKNOWN (window $hd: no frame read twice, and no fullscreen Space names it)" ;;
         esac
       else
         fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] toggle_fullscreen refused for window $hd — not re-toggled"; sleep "$FS_GAP"
       fi
     done
+    # STRAY STARTUP WINDOWS (R21, 2026-10-21): kitty opens its own window at login, a bare login
+    # shell, and the restore left it beside the 8 it built as a ninth window. After a pass that
+    # placed windows, an OS window that existed BEFORE this run and still holds exactly one pane,
+    # whose only process is the SAME login shell ("-zsh" or "/bin/zsh -l -i", same pid as before) and which
+    # never ran a command (no last_reported_cmdline), is closed. Anything else is left alone: a
+    # window the operator typed in, one with a program running, one this run made, the caller's own.
+    strays=0
+    if [ "$DRY_RUN" = 0 ] && [ "$nwin" -gt 0 ] && [ "$launched" -gt 0 ] && [ -n "$PRE_LS" ]; then
+      for sw in $(kr ls 2>/dev/null | python3 -c '
+import json, os, sys
+def shells(data):
+    out = {}
+    for o in data if isinstance(data, list) else []:
+        tabs = o.get("tabs") or []
+        if len(tabs) != 1 or len(tabs[0].get("windows") or []) != 1:
+            continue
+        w = tabs[0]["windows"][0]
+        fg = w.get("foreground_processes") or []
+        if w.get("is_self") or w.get("last_reported_cmdline") or len(fg) != 1:
+            continue
+        # A login shell is "-zsh" (argv0 dashed) or "/bin/zsh -l -i" (flags only), never one with a script or -c.
+        argv = fg[0].get("cmdline") or []
+        if not argv or os.path.basename(argv[0].lstrip("-")) not in ("zsh", "bash", "fish", "sh") \
+                or any(a not in ("-l", "-i", "--login", "-il", "-li") for a in argv[1:]):
+            continue
+        out[w.get("id")] = fg[0].get("pid")
+    return out
+try:
+    pre, post = shells(json.loads(sys.argv[1])), shells(json.load(sys.stdin))
+except Exception:
+    sys.exit(0)
+made = set(sys.argv[2].split()); me = sys.argv[3]
+for wid, pid in post.items():
+    if wid in pre and pre[wid] == pid and str(wid) not in made and str(wid) != me:
+        print(wid)' "$PRE_LS" "${WIDS[*]:-}" "${KITTY_WINDOW_ID:-}" 2>/dev/null); do
+        if kr close-window --match "id:$sw" >/dev/null 2>&1; then
+          strays=$((strays + 1)); note "cc-resume-layout: closed kitty's stray startup window (pane $sw: a login shell that never ran a command)"
+        else
+          note "cc-resume-layout: could not close stray window $sw — left open"
+        fi
+      done
+      # The tree changed: ask for the heartbeat's re-read, as a spawn does (pane-spawn-log.sh, R23).
+      [ "$strays" -gt 0 ] && command -v _cc_spawn_tree_refresh >/dev/null 2>&1 && _cc_spawn_tree_refresh kitty
+    fi
+
     # Only a replay prints this line, so the default restore's stdout is still map lines then verdict.
     [ "${#TREES[@]}" -gt 0 ] && printf 'cc-resume-layout: layout tree_windows=%s shells=%s placed=%s placed_failed=%s tree_ok=%s tree_fixed=%s tree_mismatch=%s tree_unknown=%s\n' \
       "$NTREE" "$nshell" "$placed" "$place_bad" "$tree_ok" "$tree_fixed" "$tree_bad" "$tree_unk"
@@ -1075,7 +1220,8 @@ for o in data:
         while [ "$j" -lt "${#MAYBE_SID[@]}" ]; do
           if [ "${MSTATE[$j]}" = open ]; then
             h="$(holders "${MAYBE_SID[$j]}")"
-            if [ "$(resume_marks "${MAYBE_SID[$j]}")" -gt "${MAYBE_BASE[$j]}" ] && { [ -z "$h" ] || [ "$h" -ge 1 ]; }; then
+            resume_marks "${MAYBE_SID[$j]}" "${MAYBE_WT[$j]}"
+            if [ "$RM_N" -gt "${MAYBE_BASE[$j]}" ] && { [ -z "$h" ] || [ "$h" -ge 1 ]; }; then
               MSTATE[j]=restored
             else
               open=$((open + 1))
@@ -1104,8 +1250,8 @@ for o in data:
     elif [ "$failed" -eq 0 ] && [ "$fs_bad" -eq 0 ] && [ "$maybe_left" -eq 0 ] && [ "$shed" -eq 0 ]; then verdict=ok
     elif [ "$failed" -eq 0 ] && [ "$fs_bad" -eq 0 ] && [ "$maybe_left" -eq 0 ]; then verdict=shed
     else verdict=degraded; fi
-    printf 'cc-resume-layout: verdict=%s launched=%s shed=%s failed=%s windows=%s fullscreen_ok=%s fullscreen_failed=%s maybe=%s stopped=%s\n' \
-      "$verdict" "$launched" "$shed" "$failed" "$nwin" "$fs_ok" "$fs_bad" "$maybe_left" "$stopped"
+    printf 'cc-resume-layout: verdict=%s launched=%s shed=%s failed=%s windows=%s fullscreen_ok=%s fullscreen_failed=%s fullscreen_unknown=%s maybe=%s stopped=%s strays_closed=%s\n' \
+      "$verdict" "$launched" "$shed" "$failed" "$nwin" "$fs_ok" "$fs_bad" "$fs_unk" "$maybe_left" "$stopped" "$strays"
     [ "$verdict" = failed ] && exit 4
     exit 0
   fi

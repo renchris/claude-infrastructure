@@ -266,17 +266,20 @@ case " $* " in
   *" launch "*)
     if [ -f "$KLOG.mark" ]; then
       s="$(printf '%s' "$*" | grep -o 'sid-[a-z0-9-]*' | head -1)"
-      mkdir -p "$HOME/.claude/projects/p"; echo '{"attachment":{"hookName":"SessionStart:resume"}}' >> "$HOME/.claude/projects/p/$s.jsonl"
+      md="$(cat "$KLOG.markdir" 2>/dev/null || echo p)"
+      mkdir -p "$HOME/.claude/projects/$md"; echo '{"attachment":{"hookName":"SessionStart:resume"}}' >> "$HOME/.claude/projects/$md/$s.jsonl"
     fi
     [ -f "$KLOG.rc124" ] && exit 124
     [ -f "$KLOG.fail" ] && { echo "Error: no such window"; exit 1; }
     n=$(cat "$KLOG.n" 2>/dev/null || echo 100); n=$((n + 1)); echo "$n" > "$KLOG.n"; echo "$n" ;;
   *" toggle_fullscreen "*) [ -f "$KLOG.fsfail" ] && exit 1 ;;
   *" ls --match id:"*) for a; do :; done; grep -qx "${a#id:}" "$KLOG.gone" 2>/dev/null && exit 1 ;;
-  *" ls "*) [ -f "$KLOG.ls" ] && cat "$KLOG.ls" ;;
+  *" ls "*) if [ -f "$KLOG.ls.pre" ]; then cat "$KLOG.ls.pre"; rm -f "$KLOG.ls.pre"   # the first ls only
+            elif [ -f "$KLOG.ls" ]; then cat "$KLOG.ls"; fi ;;
 esac
 exit 0
 SH
+  export CC_RESTORE_FS_RETRY_S=0
   export CC_RESTORE_WAIT=0 CC_RESTORE_K_BACKOFF=0 CC_RESTORE_FS_GAP=0 CC_RESTORE_MAYBE_S=0 CC_RESTORE_MAYBE_POLL=0
   export CC_RESTORE_FS_VERIFY=0
   unset CC_ADMIT_RESTORE_R CC_ADMIT_ACTIVE_CEILING CC_RESTORE_DEADLINE CC_RESTORE_KITTY_PID KITTY_PID
@@ -412,14 +415,78 @@ launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "
   printf '%s\n' "$output" | grep -q 'map sid=sid-repo-a-2 wid=103 oswin=2'
 }
 
-@test "restore: rows with a prompt (column 10) launch after the idle rows" {
+# R17 (reboot-resume 2026-10-21): prompted rows used to launch LAST, which cost about 90 s per
+# prompted row at that restore. RED-proof: against cc1d441f6 both cases below launch the prompted
+# rows last ("sid-repo-a-2 sid-repo-b-1 sid-repo-a-1 ", and g1's window first).
+@test "restore: rows with a prompt (column 10) launch before the idle rows (R17)" {
   restore_setup
   xrow repo-a 1 $'\037' $'\037' $'\037' $'\037' /tmp/prompt-1
   xrow repo-a 2 $'\037' $'\037' $'\037' $'\037' $'\037'
   xrow repo-b 1 $'\037' $'\037' $'\037' $'\037' $'\037'
   restore
   [ "$status" -eq 0 ]
-  [ "$(launched_sids)" = "sid-repo-a-2 sid-repo-b-1 sid-repo-a-1 " ]
+  [ "$(launched_sids)" = "sid-repo-a-1 sid-repo-a-2 sid-repo-b-1 " ]
+}
+
+@test "restore: the window holding the most prompted rows launches first (R17)" {
+  restore_setup
+  xrow repo-a 1 $'\037' $'\037' g1 1 $'\037'
+  xrow repo-a 2 $'\037' $'\037' g1 2 $'\037'
+  xrow repo-a 3 $'\037' $'\037' g2 1 /tmp/prompt-3
+  xrow repo-a 4 $'\037' $'\037' g3 1 /tmp/prompt-4
+  xrow repo-a 5 $'\037' $'\037' g3 2 /tmp/prompt-5
+  restore
+  [ "$status" -eq 0 ]
+  [ "$(launched_sids)" = "sid-repo-a-4 sid-repo-a-5 sid-repo-a-3 sid-repo-a-1 sid-repo-a-2 " ]
+}
+
+@test "restore: 2 s after each launched session by default, never the plain path's 12 s (R17)" {
+  restore_setup
+  unset CC_RESUME_STAGGER
+  mkdir -p "$BATS_TEST_TMPDIR/sleepbin"
+  printf '#!/bin/sh\necho "$*" >> "%s/sleep.log"\n' "$BATS_TEST_TMPDIR" > "$BATS_TEST_TMPDIR/sleepbin/sleep"
+  chmod +x "$BATS_TEST_TMPDIR/sleepbin/sleep"
+  for i in 1 2 3; do row repo-a "$i"; done
+  PATH="$BATS_TEST_TMPDIR/sleepbin:$PATH" run --separate-stderr bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS"
+  [ "$status" -eq 0 ]
+  [ "$(grep -cx 2 "$BATS_TEST_TMPDIR/sleep.log")" -eq 3 ]
+  ! grep -qx 12 "$BATS_TEST_TMPDIR/sleep.log" || false
+  # CC_RESTORE_STAGGER and --stagger still set it.
+  : > "$BATS_TEST_TMPDIR/sleep.log"
+  PATH="$BATS_TEST_TMPDIR/sleepbin:$PATH" CC_RESTORE_STAGGER=1 run --separate-stderr bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS"
+  [ "$(grep -cx 1 "$BATS_TEST_TMPDIR/sleep.log")" -eq 3 ]
+}
+
+# R6: the maybe baseline read the transcript by globbing every project dir of every store, once per
+# launched row. The first case pins that the cwd-slug path alone decides (no glob, the mirrored
+# store read once); RED-proof: against cc1d441f6 the second case fails, since it has no glob-once note.
+@test "restore: resume marks come from the transcript at its cwd slug; a decoy elsewhere is not read (R6)" {
+  restore_setup
+  row repo-a 1
+  wt="$BATS_TEST_TMPDIR/repo-a/w1"; slug="$(printf '%s' "$wt" | tr -c 'A-Za-z0-9' '-')"
+  mkdir -p "$HOME/.claude/projects/$slug" "$HOME/.claude/projects/elsewhere" "$HOME/.claude-next"
+  : > "$HOME/.claude/projects/$slug/sid-repo-a-1.jsonl"
+  for i in 1 2 3 4 5; do echo '{"hookName":"SessionStart:resume"}' >> "$HOME/.claude/projects/elsewhere/sid-repo-a-1.jsonl"; done
+  ln -s "$HOME/.claude/projects" "$HOME/.claude-next/projects"   # the mirrored store: read once
+  printf '%s' "$slug" > "$KLOG.markdir"
+  touch "$KLOG.rc124" "$KLOG.mark"; echo 1 > "$BATS_TEST_TMPDIR/holders.sid-repo-a-1"
+  restore
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q '^cc-resume-layout: maybe-resolved sid=sid-repo-a-1 state=restored holders=1$'
+  ! printf '%s\n' "$stderr" | grep -q 'searching every project dir' || false
+}
+
+@test "restore: with no transcript at its cwd slug, the glob runs once and its find is cached for the re-check (R6)" {
+  restore_setup
+  row repo-a 1
+  mkdir -p "$HOME/.claude/projects/elsewhere"
+  : > "$HOME/.claude/projects/elsewhere/sid-repo-a-1.jsonl"
+  echo elsewhere > "$KLOG.markdir"
+  touch "$KLOG.rc124" "$KLOG.mark"; echo 1 > "$BATS_TEST_TMPDIR/holders.sid-repo-a-1"
+  restore
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q '^cc-resume-layout: maybe-resolved sid=sid-repo-a-1 state=restored holders=1$'
+  [ "$(printf '%s\n' "$stderr" | grep -c 'searching every project dir')" -eq 1 ]
 }
 
 @test "restore: model, effort, permission mode (11) and prompt file (10) ride through; a bad effort is dropped; \\037 is empty" {
@@ -517,6 +584,71 @@ SH
   [ "$(grep -c 'toggle_fullscreen' "$KLOG")" -eq 1 ]
   ! grep -q 'focus-window' "$KLOG" || false
   [ "$(kv fullscreen_ok)" = 1 ]; [ "$(kv fullscreen_failed)" = 0 ]
+}
+
+# R21 (reboot-resume 2026-10-21): an unread fullscreen state was counted as fullscreen_ok, so all 8
+# windows of that restore were reported fullscreen unchecked. RED-proof: against cc1d441f6 the first
+# case prints fullscreen_ok=8 and no fullscreen_unknown field, and asks the probe once per window;
+# the stray case prints no strays_closed field and closes nothing.
+eight_windows() { # 8 one-row windows (heads 101..108 ↔ CGWindows 9001..9008) and a probe that reads nothing
+  local g ls=""
+  for g in 1 2 3 4 5 6 7 8; do
+    xrow repo-a "$g" $'\037' $'\037' "g$g" 1 $'\037'
+    ls="$ls${ls:+,}{\"id\":$g,\"platform_window_id\":$((9000 + g)),\"tabs\":[{\"windows\":[{\"id\":$((100 + g))}]}]}"
+  done
+  printf '[%s]\n' "$ls" > "$KLOG.ls"
+  printf 'hb_display_probe() { printf "%%s\\n" "$*" >> "$BATS_TEST_TMPDIR/probe.args"; }\n' > "$FIX/scripts/lib/restore-heartbeat.sh"
+}
+
+@test "restore: a probe that reads nothing is asked once more, then counted fullscreen_unknown, never ok (R21)" {
+  restore_setup; eight_windows
+  restore
+  [ "$status" -eq 0 ]
+  [ "$(kv fullscreen_unknown)" = 8 ]; [ "$(kv fullscreen_ok)" = 0 ]; [ "$(kv fullscreen_failed)" = 0 ]
+  [ "$(kv verdict)" = ok ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/probe.args")" -eq 16 ]
+  [ "$(grep -c 'toggle_fullscreen' "$KLOG")" -eq 8 ]
+  printf '%s\n' "$stderr" | grep -q 'state UNKNOWN'
+}
+
+@test "restore: an unread window that a fullscreen Space in com.apple.spaces holds counts as ok (R21)" {
+  restore_setup; eight_windows
+  export CC_DEFAULTS_BIN="$BATS_TEST_TMPDIR/defaults"
+  cat > "$CC_DEFAULTS_BIN" <<'SH'
+#!/bin/sh
+[ "$1 $2 $3" = "export com.apple.spaces -" ] || exit 1
+exec python3 -c 'import plistlib, sys
+sp = [{"type": 0, "uuid": "desk"}, {"type": 4, "fs_wid": 9001}, {"type": 4, "fs_wid": 9003}]
+sys.stdout.buffer.write(plistlib.dumps({"SpacesDisplayConfiguration": {"Management Data": {"Monitors": [{"Spaces": sp}]}}}))'
+SH
+  chmod +x "$CC_DEFAULTS_BIN"
+  restore
+  [ "$status" -eq 0 ]
+  [ "$(kv fullscreen_ok)" = 2 ]; [ "$(kv fullscreen_unknown)" = 6 ]
+  printf '%s\n' "$stderr" | grep -q 'a fullscreen Space holds window 101'
+}
+
+@test "restore: kitty's stray startup window (one pane, an untouched login shell) is closed after the pass, nothing else (R21)" {
+  restore_setup
+  row repo-a 1
+  # Before the run: 50 is "-zsh"; 80 is "/bin/zsh -l -i"; 60 ran a command; 70 has two panes; 90 is
+  # a login shell whose pid changes during the run (someone restarted it), so it is not the same shell.
+  sh1='{"pid":4000,"cmdline":["-zsh"]}'
+  printf '[%s]\n' "{\"id\":2,\"tabs\":[{\"windows\":[{\"id\":50,\"foreground_processes\":[$sh1]}]}]},
+    {\"id\":3,\"tabs\":[{\"windows\":[{\"id\":60,\"last_reported_cmdline\":\"ls\",\"foreground_processes\":[{\"pid\":4100,\"cmdline\":[\"-zsh\"]}]}]}]},
+    {\"id\":4,\"tabs\":[{\"windows\":[{\"id\":70,\"foreground_processes\":[{\"pid\":4200,\"cmdline\":[\"-zsh\"]}]},{\"id\":71}]}]},
+    {\"id\":5,\"tabs\":[{\"windows\":[{\"id\":80,\"foreground_processes\":[{\"pid\":4300,\"cmdline\":[\"/bin/zsh\",\"-l\",\"-i\"]}]}]}]},
+    {\"id\":6,\"tabs\":[{\"windows\":[{\"id\":90,\"foreground_processes\":[{\"pid\":4400,\"cmdline\":[\"-zsh\"]}]}]}]}" > "$KLOG.ls.pre"
+  sed 's/"pid":4400/"pid":4401/' "$KLOG.ls.pre" > "$KLOG.ls"
+  restore
+  [ "$status" -eq 0 ]
+  [ "$(grep 'close-window' "$KLOG" | sed 's/.*--match //' | sort | tr '\n' ' ')" = "id:50 id:80 " ]
+  [ "$(kv strays_closed)" = 2 ]
+  # --dry-run, or a pass that launched nothing, closes nothing.
+  : > "$KLOG"; cp "$KLOG.ls" "$KLOG.ls.pre"; touch "$KLOG.fail"
+  restore
+  ! grep -q 'close-window' "$KLOG" || false
+  [ "$(kv strays_closed)" = 0 ]
 }
 
 @test "restore: kitty past 180 fds (pid from the socket name) stops the restore before the next launch" {
@@ -633,16 +765,17 @@ launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
   trestore
   [ "$status" -eq 0 ]
   [ "$(launches)" -eq 4 ]                                         # pane 15 is neither a session nor a shell
-  [ "$(launched_sids)" = "sid-repo-a-4 sid-repo-a-1 sid-repo-a-2 sid-repo-a-3 " ]   # the prompt window launches last
-  launch_n 3 | grep -q -- "--type=tab --match window_id:102 .*'sid-repo-a-2'"
-  launch_n 4 | grep -q -- "--location=vsplit --match window_id:103 --next-to id:103 .*'sid-repo-a-3'"
+  [ "$(launched_sids)" = "sid-repo-a-1 sid-repo-a-2 sid-repo-a-3 sid-repo-a-4 " ]   # the prompt window launches first (R17)
+  launch_n 2 | grep -q -- "--type=tab --match window_id:101 .*'sid-repo-a-2'"
+  launch_n 3 | grep -q -- "--location=vsplit --match window_id:102 --next-to id:102 .*'sid-repo-a-3'"
   [ "$(grep -c 'goto-layout' "$KLOG")" -eq 1 ]
-  grep -q -- 'goto-layout --match window_id:103 horizontal' "$KLOG"
-  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-4 wid=101 oswin=2'
-  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-2 wid=103 oswin=1'
-  # fullscreen: window 6 (head 102) before window 7 (head 101), once each
-  [ "$(grep toggle_fullscreen "$KLOG" | grep -o '^KW=[0-9]*' | tr '\n' ' ')" = "KW=102 KW=101 " ]
-  [ "$(kv windows)" = 2 ]; [ "$(kv fullscreen_ok)" = 2 ]
+  grep -q -- 'goto-layout --match window_id:102 horizontal' "$KLOG"
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-4 wid=104 oswin=2'
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-2 wid=102 oswin=1'
+  # fullscreen: window 6 (head 101) before window 7 (head 104), once each
+  [ "$(grep toggle_fullscreen "$KLOG" | grep -o '^KW=[0-9]*' | tr '\n' ' ')" = "KW=101 KW=104 " ]
+  # no frame is readable in this fixture, so the state is unknown, never ok (R21)
+  [ "$(kv windows)" = 2 ]; [ "$(kv fullscreen_unknown)" = 2 ]; [ "$(kv fullscreen_ok)" = 0 ]
 }
 
 @test "tree: each window is moved to its recorded display before fullscreen; a windowed one gets its frame back and is not toggled" {
@@ -669,7 +802,7 @@ launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
   [ "$(grep toggle_fullscreen "$KLOG" | grep -o '^KW=[0-9]*' | tr '\n' ' ')" = "KW=101 KW=103 " ]   # 102 was windowed
   printf '%s\n' "$output" | grep -qx 'cc-resume-layout: layout tree_windows=3 shells=0 placed=2 placed_failed=1 tree_ok=0 tree_fixed=0 tree_mismatch=0 tree_unknown=0'
   printf '%s\n' "$stderr" | grep -q 'tree read-back skipped'           # the zeros are a skip: no kitty_tree.py in this fixture
-  [ "$(kv fullscreen_ok)" = 2 ]; [ "$(kv verdict)" = ok ]
+  [ "$(kv fullscreen_unknown)" = 2 ]; [ "$(kv verdict)" = ok ]   # toggled, frame unread (R21)
 }
 
 @test "tree: Accessibility refusing the move is said and counted, and the window still goes fullscreen" {
@@ -681,7 +814,7 @@ launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
   trestore
   printf '%s\n' "$stderr" | grep -q 'NOT placed (nomatch)'
   printf '%s\n' "$output" | grep -q 'placed=0 placed_failed=1'
-  [ "$(kv fullscreen_ok)" = 1 ]; [ "$(kv verdict)" = ok ]
+  [ "$(grep -c toggle_fullscreen "$KLOG")" -eq 1 ]; [ "$(kv fullscreen_unknown)" = 1 ]; [ "$(kv verdict)" = ok ]
 }
 
 @test "tree: a row the tree does not hold gets a one-row window after the recorded ones" {
