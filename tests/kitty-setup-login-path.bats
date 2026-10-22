@@ -56,6 +56,26 @@ apply() { run bash "$SETUP"; }
     echo "shim points at $(readlink "$CC_KITTY_SHIM_DIR/it2")"; false; }
 }
 
+# The cc-shim layout (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4): bin/it2 links to the
+# trampoline and the copy is .bin-real/it2. apply must refresh THAT copy, never cp through the link,
+# and give shims/it2 its cc-shim route, .shims-real/it2. The trampoline stand-in is a writable copy
+# of true(1), so a write-through would show up as changed bytes.
+@test "cc-shim layout: apply refreshes .bin-real/it2, adds .shims-real/it2, and never writes through the link" {
+  local cfg="$HOME/.claude"
+  mkdir -p "$cfg/libexec" "$cfg/.bin-real" "$CC_KITTY_BIN_DIR"
+  cp /usr/bin/true "$cfg/libexec/cc-shim"
+  cp /usr/bin/true "$BATS_TEST_TMPDIR/shim-before"
+  ln -s "$cfg/libexec/cc-shim" "$CC_KITTY_BIN_DIR/it2"
+  printf 'stale copy\n' > "$cfg/.bin-real/it2"
+  apply
+  [ -L "$CC_KITTY_BIN_DIR/it2" ] || { echo "$output"; false; }
+  cmp -s "$cfg/libexec/cc-shim" "$BATS_TEST_TMPDIR/shim-before" || { echo "cp wrote through the shim link"; false; }
+  cmp -s "$REPO/bin/it2-wrapper" "$cfg/.bin-real/it2" || { echo ".bin-real/it2 not refreshed"; false; }
+  [ "$cfg/.shims-real/it2" -ef "$cfg/.bin-real/it2" ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'it2 carries the kitty divert')" -eq 1 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'the cc-shim route for')" -eq 1 ] || { echo "$output"; false; }
+}
+
 @test "apply writes the PATH block into the LOGIN rc, not the interactive one" {
   apply
   # .zprofile is the file `zsh -lc` reads; .zshrc is the file it does NOT. Writing the PATH fix to

@@ -143,6 +143,9 @@ BLOCK_ID="cc-kitty-agent-teams"
 # Step 3b writes to the LOGIN rc, which is a DIFFERENT file from SHELL_RC on purpose — see §3b.
 LOGIN_RC="${CC_KITTY_LOGIN_RC:-$HOME/.zprofile}"
 SHIM_DIR="${CC_KITTY_SHIM_DIR:-$HOME/.claude/shims}"
+SHIM_DIR="${SHIM_DIR%/}"
+# Where cc-shim looks when it is run as $SHIM_DIR/<name>: <parent>/.<basename>-real (cc-shim.c derive_target).
+SHIM_REAL_DIR="${SHIM_DIR%/*}/.${SHIM_DIR##*/}-real"
 PATH_BLOCK_ID="cc-it2-login-path"
 
 MODE=apply
@@ -257,11 +260,23 @@ fi
 
 # ── 2. the it2 translator ────────────────────────────────────────────────────────────────────────
 hdr "2. Agent Teams pane backend (native kitty splits)"
+# Where the it2 COPY lives. install.sh may put it behind cc-shim (docs/plans/KALLOC_TRIGGER_
+# ELIMINATION_2026-10-22.md W4): $BIN_DIR/it2 is then a link to the compiled trampoline and the copy
+# is .bin-real/it2 beside $BIN_DIR, which is what gets refreshed and grepped below. A cp onto the
+# link would write THROUGH it into the shared cc-shim binary. Step 3b's shims/it2 needs a target too.
+IT2_REAL="$BIN_DIR/it2"
+IT2_SHIMMED=0
+if [ -L "$BIN_DIR/it2" ] && [ "$BIN_DIR/it2" -ef "${BIN_DIR%/*}/libexec/cc-shim" ]; then
+  IT2_REAL="${BIN_DIR%/*}/.bin-real/it2"
+  IT2_SHIMMED=1
+fi
 if [ "$MODE" = apply ]; then
-  mkdir -p "$BIN_DIR"
+  mkdir -p "$BIN_DIR" "${IT2_REAL%/*}"
   # ~/.claude/bin/it2 is historically a real COPY of bin/it2-wrapper, not a symlink, so it must be
-  # refreshed explicitly or the kitty divert never reaches the live layer.
-  cp "$REPO/bin/it2-wrapper" "$BIN_DIR/it2" && chmod +x "$BIN_DIR/it2"
+  # refreshed explicitly or the kitty divert never reaches the live layer. Any other symlink there
+  # is replaced by the copy, as install.sh's copy_file does, never written through.
+  if [ -L "$IT2_REAL" ]; then rm -f "$IT2_REAL"; fi
+  cp "$REPO/bin/it2-wrapper" "$IT2_REAL" && chmod +x "$IT2_REAL"
   ln -sfn "$REPO/bin/it2-kitty" "$BIN_DIR/it2-kitty"
   # cc-in-kitty answers "is this process genuinely inside a kitty pane?" and is what both halves of
   # the divert consult. install.sh's bin/cc-* glob also deploys it; linking it here too keeps this
@@ -301,7 +316,7 @@ if [ "$MODE" = apply ]; then
     fi
   fi
 fi
-grep -q "TERMINAL DISPATCH" "$BIN_DIR/it2" 2>/dev/null \
+grep -q "TERMINAL DISPATCH" "$IT2_REAL" 2>/dev/null \
   && ok "$BIN_DIR/it2 carries the kitty divert" || no "$BIN_DIR/it2 has no kitty divert"
 [ -x "$BIN_DIR/it2-kitty" ] && ok "it2-kitty deployed" || no "it2-kitty missing at $BIN_DIR"
 # -x follows the symlink, so this fails on a DANGLING link as well as on absence — the two ways
@@ -324,7 +339,7 @@ grep -q "TERMINAL DISPATCH" "$BIN_DIR/it2" 2>/dev/null \
 # inherited by every iTerm2 pane launched from kitty and takes Agent Teams down at USE time.
 [ -x "$BIN_DIR/cc-in-kitty" ] && ok "cc-in-kitty deployed (terminal identity by ancestry)" \
                               || no "cc-in-kitty missing at $BIN_DIR — the divert cannot verify the terminal"
-grep -q "cc-in-kitty" "$BIN_DIR/it2" 2>/dev/null \
+grep -q "cc-in-kitty" "$IT2_REAL" 2>/dev/null \
   && ok "$BIN_DIR/it2 verifies the terminal before diverting" \
   || no "$BIN_DIR/it2 is a STALE COPY that diverts on \$KITTY_WINDOW_ID alone — re-run --apply"
 # A DANGLING symlink is the failure this checks for, not mere absence: -x follows the link, so a
@@ -455,6 +470,12 @@ hdr "3b. login-shell PATH precedence (the it2 Claude Code actually runs)"
 if [ "$MODE" = apply ]; then
   mkdir -p "$SHIM_DIR"
   ln -sfn "$BIN_DIR/it2" "$SHIM_DIR/it2"
+  # Behind cc-shim (step 2) this link reaches the trampoline, which derives its target from the
+  # UNRESOLVED path: <parent>/.shims-real/it2, not .bin-real/it2. Give that route the same copy.
+  if [ "$IT2_SHIMMED" = 1 ]; then
+    mkdir -p "$SHIM_REAL_DIR"
+    ln -sfn "$IT2_REAL" "$SHIM_REAL_DIR/it2"
+  fi
   if ! grep -q "$PATH_BLOCK_ID" "$LOGIN_RC" 2>/dev/null; then
     [ -e "$LOGIN_RC" ] && cp "$LOGIN_RC" "$LOGIN_RC.bak-kitty-$(date +%Y%m%d%H%M%S)"
     cat >> "$LOGIN_RC" <<EOF
@@ -472,6 +493,11 @@ EOF
 fi
 [ "$(readlink "$SHIM_DIR/it2" 2>/dev/null)" = "$BIN_DIR/it2" ] \
   && ok "$SHIM_DIR/it2 -> $BIN_DIR/it2" || no "$SHIM_DIR/it2 does not point at the wrapper"
+if [ "$IT2_SHIMMED" = 1 ]; then
+  [ "$SHIM_REAL_DIR/it2" -ef "$IT2_REAL" ] \
+    && ok "$SHIM_REAL_DIR/it2 -> $IT2_REAL (the cc-shim route for $SHIM_DIR/it2)" \
+    || no "$SHIM_REAL_DIR/it2 does not reach $IT2_REAL — $SHIM_DIR/it2 exits 126 through cc-shim; re-run --apply"
+fi
 grep -q "$PATH_BLOCK_ID" "$LOGIN_RC" 2>/dev/null \
   && ok "$LOGIN_RC prepends $SHIM_DIR" || no "$LOGIN_RC has no $PATH_BLOCK_ID block"
 
