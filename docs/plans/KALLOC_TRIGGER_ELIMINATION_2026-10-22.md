@@ -107,9 +107,48 @@ files converted, lint R4 wired into ship-land beside the HOOK SHEBANG arm.
   needs a named mechanism, which this wave did not establish. ship-land.bats' plain arm finished
   185/185 after the land. Landed through `40de48c0b`; `git log origin/main --grep 'cc_stub\|cc-shim\|R4'`.
 
-### W4 call sites — in flight (session kte-w4, fired 2026-10-22 ~16:45Z, brief `/tmp/fire-kte-w4.txt`)
+### W4 call sites and Mach-O entries — built 2026-10-22 (session kte-w4 + teammate macho)
 
-- Two fires on 2026-10-22 ~13:30Z came back outcome UNKNOWN with no session: kitty pid 1881 answered
+Scope (frozen): cc-run.sh runner + python twin, resolve_bin's callers through it, lint R2 with a ratchet
+baseline wired into ship-land, call sites in census order incl. W1's session roots, Mach-O entries for
+`~/.claude/bin/it2` and the cc-qos-exec names; no blanket shim.
+
+- **Runner** `scripts/lib/cc-run.sh`: `cc_argv PATH` sets `CC_ARGV` to the argv the kernel would build
+  from the `#!` line (xnu space/tab split); `cc_run PATH args` runs it. A Mach-O, a no-`#!` file, a bare
+  name, a non-+x file, a `#!` interpreter and a missing file pass through unchanged. Fork-free, bash 3.2
+  safe. `scripts/lib/cc_run.py` is the same rule for subprocess sites (cc-venue `_run`,
+  cc-model-registered), loaded by file location. `tests/cc-run-lib.bats` 9/9 is differential against
+  by-path runs under /bin/bash 3.2 and Homebrew bash. (`tests/cc-run.bats` belongs to `bin/cc-run`, the
+  unrelated heartbeat tool.)
+- **resolve_bin**: its output contract (a path) is unchanged; `cc-common.sh` sources the runner, so its
+  callers run results through it. autonomy-sweep maps inside `_bounded`/`sweep_bounded`, boot-resume runs
+  its nine helpers with `cc_run`.
+- **Lint R2** `scripts/exec-form-lint.sh` (ratchet) + `scripts/exec-form-lint.py` (predicate) +
+  `config/exec-form-baseline.tsv`; ship-land arm after HOOK SHEBANG, same shape as R4 (selftest,
+  non-verdict on 2, raise refused without `SHIP_LAND_EXEC_FORM_RAISE_OK=1`). Sees literal repo paths,
+  beside-script paths and same-file variables (seam defaults, `resolve_bin`), through exec, timeout,
+  gtimeout, nohup, taskpolicy, env, xargs, `find -exec` and local `*bounded` relays; a wrapper that maps
+  its command through `cc_argv` (or hands it to one that does) is safe. `tests/exec-form-lint.bats`.
+- **Call sites**: 260 findings → 42 after the conversion. The census-order hot paths went first:
+  ship-land's `own_run`/`lint_own_scope`/`selftest_ok` and its cc-backlog sites, postland-verify's
+  prelint runner, wrap-ledger's `_bounded` and its cache filler, operator-readout's cc-research,
+  session-start-dispatch's ten children, the `*bounded` relays (handoff-fire `hf_bounded_s`,
+  lr-reset-poller, lead-crash-watchdog, pane-close-retry, cc-pane-close, strand-fill-arm), then the
+  direct sites in ~60 files. W1's roots: `exec /bin/bash "$CC_PANE_RUNNER"` in handoff-fire and lr-lib;
+  boot-resume-launch and cc-resume-layout build the reso-resume-one argv from `cc_argv`.
+- **Learnings.** (1) bash 3.2 under `set -e` EXITS on a failed `.` even inside `||`; bash 5 does not.
+  Every runner source is `if [ -f X ]; then . X; else <fallback>; fi`. The bug showed up as
+  banner-video's copied-script suite going 0/6. (2) Suites `sed`-extract functions and eval them alone,
+  so relays guard with the builtin `declare -F cc_argv` (no fork), and the seven suites that eval a
+  function that now calls `cc_run` load the runner first. (3) shlex is a weak shell reader: it splits
+  `${X:-d}` on its braces, cuts `${#a[@]}` at the `#`, glues `));`, and cannot see inside a quoted
+  `"$(cmd)"`. Each of these hid real sites until it was fixed.
+- **Left (baseline 42):** zsh-sourced libs (`lib/cc-resume-shell.sh` 10, `lib/*.zsh`; the bash runner
+  is not zsh-safe), applied migrations (9, one-shots), `install.sh` and `deploy-parity-assert.sh` (the
+  teammate's files this wave), test and bench drivers, and one false positive (`bin/cc-kqwait:301` execs
+  its compiled cache binary). By-name calls (`cc-backlog add` typed or in scripts) are outside R2: they
+  are a PATH lookup, and only a launcher at `~/.claude/bin` reaches them (REPORT §2 row 9, not built).
+- Earlier: two fires on 2026-10-22 ~13:30Z came back outcome UNKNOWN with no session: kitty pid 1881 answered
   every `kitten @` with `Error: EOF` for ~3 h (258 peerless unix sockets held). It recovered WITHOUT a
   restart (the third fire engaged); row `13c537f2ed69` closed. Learning: a deaf kitty can come back on
   its own as load falls, and the 5-minute heartbeat's `hb.kitty-ls.json` mtime shows it first. Check
