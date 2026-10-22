@@ -10,6 +10,7 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   F="$BATS_TEST_TMPDIR/fx"
   mkdir -p "$F"
   : > "$F/empty"
