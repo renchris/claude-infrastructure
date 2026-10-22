@@ -147,6 +147,31 @@ plain_no()  { transcript '{"type":"user","cwd":"CWD","message":{"role":"user","c
   [ "$status" -eq 1 ]
 }
 
+# Pane 476 (2026-10-21): the session's `Good to close: yes` reached the transcript only as a
+# narration-thinking paraphrase, so the closer refused a session that had retired itself.
+# RED-proof: against `git show HEAD~1:bin/cc-pane-close` the first case refuses (rc 1).
+fired() { # $1 = closedAt epoch  $2 = transcript sid
+  mkdir -p "$FIX/fired"
+  printf '{"closedAt":"%s","transcript":"/x/projects/p/%s.jsonl","succession":{"kind":"terminal"}}\n' \
+    "$(date -u -r "$1" +%FT%TZ)" "$2" > "$FIX/fired/69.json"
+}
+@test "a self-close stamp for this session after the registration makes its pane closeable" {
+  plain_no; fired $((REG + 60)) "$SID"
+  CC_PANE_CLOSE_FIRED_DIR="$FIX/fired" run "$CLOSE" --pane 69
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"retired itself (self-close stamped"*"kind terminal"* ]] || false
+}
+
+@test "a self-close stamp from before the registration, or for another session, does not count" {
+  plain_no; fired $((REG - 600)) "$SID"
+  CC_PANE_CLOSE_FIRED_DIR="$FIX/fired" run "$CLOSE" --pane 69
+  [ "$status" -eq 1 ]
+  fired $((REG + 60)) "bbbbbbbb-1111-2222-3333-444444444444"
+  CC_PANE_CLOSE_FIRED_DIR="$FIX/fired" run "$CLOSE" --pane 69
+  [ "$status" -eq 1 ]
+  [ ! -e "$FIX/kill.log" ]
+}
+
 @test "the close verdict is read from ASSISTANT text only" {
   transcript '{"type":"user","cwd":"CWD","message":{"role":"user","content":"Good to close: no"}}' \
              '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Good to close: yes — done"}]}}'

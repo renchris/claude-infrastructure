@@ -25,7 +25,12 @@
 # 3. THE SESSION MEANT TO END, or its work is ruled done. One of: its transcript carries `teamName`
 #    (an Agent-Teams member: not resumable, its lead re-spawns members); its LAST assistant text says
 #    `Good to close: yes`; or cc-custody holds an abandon/return for this pane after the registration
-#    (its orchestrator collected the work). Instructions text never counts — assistant text only.
+#    (its orchestrator collected the work); or handoff-fire's self-close stamped this pane's fired
+#    record (`closedAt`) after the registration, for THIS session's transcript. Instructions text
+#    never counts — assistant text only. The stamp exists because the text is not durable: pane 476
+#    (2026-10-21) wrote its `Good to close: yes` in the same message as its self-close call, the
+#    transcript kept that text only as a paraphrasing narration-thinking block, and the closer refused
+#    a session that had retired itself — which the reboot an hour later then resumed.
 # 4. NO WORK AT RISK. The session's cwd (from its transcript) has no uncommitted changes.
 #
 # ── WHAT THE 2026-10-18 HUSKS ADDED (docs/research/lr-wake-incident-2026-10-18/, h defects 1 and 7) ──
@@ -59,7 +64,7 @@
 # Seams (tests): CC_PANE_CLOSE_WATCHDOG_LOG · CC_PANE_CLOSE_KITTY_PID · CC_PANE_CLOSE_PS_BIN ·
 # CC_PANE_CLOSE_KILL_BIN · CC_PANE_CLOSE_IT2 · CC_PANE_CLOSE_STORES · CC_PANE_CLOSE_CUSTODY_BIN ·
 # CC_PANE_CLOSE_LOG · CC_PANE_CLOSE_REMOTE (off = skip remote control) · CC_PANE_CLOSE_SETTLE_S ·
-# CC_PANE_CLOSE_EXIT_DIR · CC_PANE_CLOSE_FIND_BIN · CC_PANE_CLOSE_HANDOFFS_LOG.
+# CC_PANE_CLOSE_EXIT_DIR · CC_PANE_CLOSE_FIND_BIN · CC_PANE_CLOSE_HANDOFFS_LOG · CC_PANE_CLOSE_FIRED_DIR.
 set -u
 
 WLOG="${CC_PANE_CLOSE_WATCHDOG_LOG:-$HOME/.claude/logs/lead-crash-watchdog.log}"
@@ -72,6 +77,7 @@ STORES="${CC_PANE_CLOSE_STORES:-$HOME/.claude-next:$HOME/.claude-secondary:$HOME
 SETTLE="${CC_PANE_CLOSE_SETTLE_S:-3}"
 EXITDIR="${CC_PANE_CLOSE_EXIT_DIR:-$HOME/.claude/run/pane-exit}"
 HLOG="${CC_PANE_CLOSE_HANDOFFS_LOG:-$HOME/.claude/logs/handoffs.jsonl}"
+FIRED="${CC_PANE_CLOSE_FIRED_DIR:-$HOME/.claude/cc-fired}"
 SELF_DIR="$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")"
 FIND="${CC_PANE_CLOSE_FIND_BIN:-$SELF_DIR/cc-find}"
 [ -x "$FIND" ] || FIND="$HOME/.claude/bin/cc-find"
@@ -304,6 +310,16 @@ custody_ruled_done() { # pane since-epoch → 0 iff an abandon/return row for th
   done < <("$CUSTODY" list 2>/dev/null | awk -F'\t' '{ printf "%s\x1f%s\x1f%s\n", $1, $2, $4 }')
   return 1
 }
+self_closed() { # pane sid since-epoch → 0 iff the pane's fired record says THIS session self-closed after since
+  local f="$FIRED/$1.json" row at tp ep
+  [ -s "$f" ] && [ -n "$2" ] || return 1
+  row="$(jq -r '[.closedAt // "", .transcript // "", .succession.kind // ""] | join("\u001f")' "$f" 2>/dev/null)" || return 1
+  IFS=$'\x1f' read -r at tp SC_KIND <<<"$row"
+  [ -n "$at" ] && [ "${tp##*/}" = "$2.jsonl" ] || return 1
+  ep="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$at" +%s 2>/dev/null || echo 0)"
+  [ "$ep" -ge "$3" ] || return 1
+  SC_AT="$at"
+}
 remote_answers() { # → 0 iff kitty remote control answers a listing now
   [ "${CC_PANE_CLOSE_REMOTE:-on}" != off ] && [ -x "$IT2" ] || return 1
   local to=""; for to in /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout; do [ -x "$to" ] && break; to=""; done
@@ -397,6 +413,7 @@ close_one() { # pane — one verdict line on stdout, one log row; RC=1 on a refu
     if [ "$team" = 1 ]; then why="a retired Agent-Teams member (not resumable)"
     elif [ "$close" = yes ]; then why="its last close said Good to close: yes${TP_MOVED:+ (in its full transcript on ${TP_MOVED##*/})}"
     elif custody_ruled_done "$pane" "$reg_ep"; then why="its orchestrator abandoned/returned its custody after it registered"
+    elif self_closed "$pane" "$sid" "$reg_ep"; then why="it retired itself (self-close stamped $SC_AT, kind $SC_KIND)"
     elif moved_live "$sid" "$pane" "$reg_ep"; then
       why="it moved on and a LIVE copy runs in pane $LIVE_PANE (session ${LIVE_SID:0:8})"; skipwork=1
     fi
