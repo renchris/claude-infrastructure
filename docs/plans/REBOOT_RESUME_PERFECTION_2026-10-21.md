@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # Reboot resume: sessions pick up as if never restarted (2026-10-21)
@@ -74,7 +74,21 @@ T3 by the lead's call (its owner-file read tolerates absence). The new plist nee
 done by the lead 2026-10-21 (row a34be1057707): no Nice, no low-priority I/O, logs in ~/.claude/logs.
 Not built: the optional separate restore-heartbeat launchd agent (the in-run heartbeat calls cover it).
 
-### T3 prep and land — open
+### T3 prep and land — DONE (3d9085132, 6c328616f, 76f7d72b8, 2f41fbde1)
+R1 terminal-intent record, R2 owner file and `block --until`, R13 (land phase in the in-flight marker,
+sweep bounded at 900 s, post-push land reported safe, steps always printed, mkdir lock, kitty
+NSAppSleepDisabled), R14 `--arm-restart`, R15, R22 (prep prunes dead-pid sockets and idle non-roster
+temp trees on every run). Not built: recording templateMigrator's duration (a boot-resume.sh line,
+low value). R14's loginwindow check can only be proven at the next restart.
+
+## Outcome (2026-10-22)
+
+All four waves landed and live. Replay of the 2026-10-21 restart now wakes the sessions it left idle
+(owner, promise, unblocked row, carried mail), keeps a self-closing session closed, has no load wait
+and runs at normal priority. Proven only at the next real restart: the end-to-end latency, the early
+page reaching the owner, and kitty no longer blocking the update's restart. Known gaps: no pane-close
+caller of the tree refresh (needs a SessionEnd hook, a settings.json change); the optional separate
+restore-heartbeat agent.
 
 ### T4 layout and heartbeat — DONE (8519389c7)
 R6, R9, R17, R19 (census 31 rows in ~1 s at load 322), R21, R23. Not built: a pane-close caller of
