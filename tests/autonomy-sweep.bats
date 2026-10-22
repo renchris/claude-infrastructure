@@ -5,6 +5,18 @@
 # exists, (b) runs cc-decide expire-sweep and appends each fired class-B default as a cc-backlog
 # item (never acts inline), (c) writes one {fired|abstained} IDL record.
 
+load helpers/cc-stub
+
+# cc_stub_self PATH [BODY] — cc_stub at PATH (BODY on stdin when absent), with `self=<PATH>` put after
+# the #! line. Under the shim "$0" is the body's own .<D>-real path, so these stubs key their logs on
+# "$self", the path the cases read. Stubs the sweep runs as `bash "$x"` (the deployed-dir siblings and
+# the propose-goal, ts7, drain and strand-fill arms) cost no #! exec and stay plain files.
+cc_stub_self() {
+  local p="$1" body
+  if [ $# -ge 2 ]; then body="$2"; else IFS= read -r -d '' body || true; fi
+  cc_stub "${p%/*}" "${p##*/}" "${body%%$'\n'*}"$'\n'"self=$(printf '%q' "$p")"$'\n'"${body#*$'\n'}"
+}
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   # ── $HOME IS THE REDIRECT, and it goes FIRST because everything below inherits it ──────────────
@@ -166,13 +178,12 @@ setup() {
   # that emitted nothing would let the sweep read `unreadable` on every test and prove the wrong
   # thing. CC_STUB_VERDICT / CC_STUB_RC select the outcome per test.
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/stub-notify"
-  cat > "$CC_NOTIFY_BIN" <<'SH'
+  cc_stub_self "$CC_NOTIFY_BIN" <<'SH'
 #!/bin/bash
-echo "$@" >> "$0.log"
+echo "$@" >> "$self.log"
 echo "cc-notify: verdict=${CC_STUB_VERDICT:-delivered} enqueued=1 uuid=desk-pane-uuid-current" >&2
 exit "${CC_STUB_RC:-0}"
 SH
-  chmod +x "$CC_NOTIFY_BIN"
   export CC_STUB_VERDICT=delivered
   export CC_STUB_RC=0
   # HERMETIC osascript: the sweep's liveness-free channel is Notification Center. `auto` probes with
@@ -181,12 +192,11 @@ SH
   # to `off` here, so a test that forgets to opt in cannot reach it at all.
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   export OSA_LOG="$BATS_TEST_TMPDIR/osascript.log"
-  cat > "$BATS_TEST_TMPDIR/bin/osascript" <<'SH'
+  cc_stub "$BATS_TEST_TMPDIR/bin" osascript - <<'SH'
 #!/bin/bash
 cat >/dev/null
 printf '%s\n' "$*" >> "$OSA_LOG"
 SH
-  chmod +x "$BATS_TEST_TMPDIR/bin/osascript"
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
   # …and NAME it. The sweep resolves the binary absolutely (it runs from launchd, where a bare name
   # is not on the PATH), so the stub is reached through the seam rather than by shadowing a name —
@@ -200,13 +210,12 @@ SH
   # session list — the same class of destructive default as the unexported teardown dir above.
   # CC_STUB_IT2_OUT is the listing; CC_STUB_IT2_RC forces a REFUSAL (124 = cut at the bound).
   export CC_IT2_BIN="$BATS_TEST_TMPDIR/stub-it2"
-  cat > "$CC_IT2_BIN" <<'SH'
+  cc_stub_self "$CC_IT2_BIN" <<'SH'
 #!/bin/bash
-echo "$@" >> "$0.log"
+echo "$@" >> "$self.log"
 [ -n "${CC_STUB_IT2_RC:-}" ] && exit "$CC_STUB_IT2_RC"
 printf '%s\n' "${CC_STUB_IT2_OUT:-}"
 SH
-  chmod +x "$CC_IT2_BIN"
   # HERMETIC strand-fill arm: unstubbed it reads the router's live cache through the real
   # claude-accounts. Absent by default (the sweep journals a null decision); one case stubs it.
   export CC_SWEEP_STRAND_FILL_BIN="$BATS_TEST_TMPDIR/no-strand-fill-arm"
@@ -726,11 +735,10 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
 @test "an UNREADABLE verdict is a THIRD state — never promoted to success" {
   # A cc-notify that prints nothing parseable (a future version, a wrapper, a truncated stream) has
   # not proven a reader. Absence of evidence is not delivery.
-  cat > "$CC_NOTIFY_BIN" <<'SH'
+  cc_stub_self "$CC_NOTIFY_BIN" <<'SH'
 #!/bin/bash
-echo "$@" >> "$0.log"
+echo "$@" >> "$self.log"
 SH
-  chmod +x "$CC_NOTIFY_BIN"
   export CC_SWEEP_OS_CHANNEL=off
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
@@ -1410,12 +1418,11 @@ add_backfill_family() {
   # beside it had to unpick after 10 of 10 runs read rc 124 as a verdict
   # (memory: claimed-outcome-vs-checked-outcome).
   local stub="$BATS_TEST_TMPDIR/cc-backlog-stub"
-  cat > "$stub" <<STUB
+  cc_stub "${stub%/*}" "${stub##*/}" - <<STUB
 #!/bin/bash
 [ "\${1:-}" = "backfill" ] && { echo "cc-backlog: store moved under the read"; exit 0; }
 exec "$CC_BACKLOG_BIN" "\$@"
 STUB
-  chmod +x "$stub"
   export CC_BACKLOG_BIN="$stub"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
@@ -2095,8 +2102,7 @@ dead_desk() {
 @test "desk-reach bank-wall arm: an account at its wall with a live grant pages once per grant" {
   dead_desk
   export CC_SWEEP_BANK_WALL_BIN="$BATS_TEST_TMPDIR/bank-wall"
-  printf '#!/bin/bash\nprintf "next\\tnext@grant-a\\tnext is at its weekly limit: redeem it now at clau.de/reset\\n"\n' \
-    > "$CC_SWEEP_BANK_WALL_BIN"; chmod +x "$CC_SWEEP_BANK_WALL_BIN"
+  cc_stub "$BATS_TEST_TMPDIR" bank-wall "$(printf '#!/bin/bash\nprintf "next\\tnext@grant-a\\tnext is at its weekly limit: redeem it now at clau.de/reset\\n"\n')"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
   [ "$(arm_pages bank-wall)" -eq 1 ]
@@ -2104,7 +2110,7 @@ dead_desk() {
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$(arm_pages bank-wall)" -eq 1 ]                 # same grant: never paged twice
   # A NEW grant on the same account is a new key, so it pages again.
-  printf '#!/bin/bash\nprintf "next\\tnext@grant-b\\tnext again\\n"\n' > "$CC_SWEEP_BANK_WALL_BIN"
+  cc_stub "$BATS_TEST_TMPDIR" bank-wall "$(printf '#!/bin/bash\nprintf "next\\tnext@grant-b\\tnext again\\n"\n')"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$(arm_pages bank-wall)" -eq 2 ]
 }
@@ -2112,11 +2118,11 @@ dead_desk() {
 @test "desk-reach bank-wall arm: an UNDELIVERED page leaves no stamp, and an empty answer pages nothing" {
   dead_desk; export CC_SWEEP_OS_CHANNEL=off
   export CC_SWEEP_BANK_WALL_BIN="$BATS_TEST_TMPDIR/bank-wall"
-  printf '#!/bin/bash\nprintf "next\\tnext@k\\tnext at wall\\n"\n' > "$CC_SWEEP_BANK_WALL_BIN"; chmod +x "$CC_SWEEP_BANK_WALL_BIN"
+  cc_stub "$BATS_TEST_TMPDIR" bank-wall "$(printf '#!/bin/bash\nprintf "next\\tnext@k\\tnext at wall\\n"\n')"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ -z "$(ls "$HOME/.claude/autonomy/bank-wall" 2>/dev/null)" ]
   grep -q '"source":"bank-wall".*"delivered":false' "$CC_IDL"
-  printf '#!/bin/bash\nexit 3\n' > "$CC_SWEEP_BANK_WALL_BIN"; : > "$CC_IDL"
+  cc_stub "$BATS_TEST_TMPDIR" bank-wall "$(printf '#!/bin/bash\nexit 3\n')"; : > "$CC_IDL"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   ! grep -q '"source":"bank-wall"' "$CC_IDL" || false
   grep -q '"bank_wall_paged":0' "$CC_IDL"
@@ -2275,7 +2281,7 @@ truncated_tick() {
 @test "strand rung · a FAILED post is journalled and retried next tick; CC_SWEEP_STRAND_PAGE=off skips the rung" {
   export CC_SWEEP_OS_CHANNEL=auto
   mk_strand alarm-strand-2.json recycle-dead
-  printf '#!/bin/bash\ncat >/dev/null\nprintf "%%s\\n" "$*" >> "$OSA_LOG"\nexit 1\n' > "$BATS_TEST_TMPDIR/bin/osascript"
+  cc_stub "$BATS_TEST_TMPDIR/bin" osascript "$(printf '#!/bin/bash\ncat >/dev/null\nprintf "%%s\\n" "$*" >> "$OSA_LOG"\nexit 1\n')"
   truncated_tick
   [ "$status" -eq 0 ]
   [ "$(osa_posts)" -eq 1 ]
@@ -2310,13 +2316,12 @@ strand_env() {
   # The banner seam. $3 is the message alone (`osascript - <title> <message>`), so its length is
   # the length the operator's banner would carry. STRAND_OSA_RC makes the OS leg fail.
   export CC_SWEEP_OSASCRIPT="$BATS_TEST_TMPDIR/strand-osascript"
-  cat > "$CC_SWEEP_OSASCRIPT" <<'SH'
+  cc_stub "$BATS_TEST_TMPDIR" strand-osascript - <<'SH'
 #!/bin/bash
 cat >/dev/null
 [ "${STRAND_OSA_RC:-0}" = 0 ] || exit "$STRAND_OSA_RC"
 printf '%s\n' "$3" >> "$OSA_LOG"
 SH
-  chmod +x "$CC_SWEEP_OSASCRIPT"
   # lr-page's phone leg must never leave the box from a suite, whatever the caller's shell exports.
   unset PUSHOVER_TOKEN PUSHOVER_USER
   export LR_PAGE_CREDS="$BATS_TEST_TMPDIR/no-pushover.env"
