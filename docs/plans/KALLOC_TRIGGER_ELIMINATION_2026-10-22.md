@@ -107,12 +107,14 @@ files converted, lint R4 wired into ship-land beside the HOOK SHEBANG arm.
   needs a named mechanism, which this wave did not establish. ship-land.bats' plain arm finished
   185/185 after the land. Landed through `40de48c0b`; `git log origin/main --grep 'cc_stub\|cc-shim\|R4'`.
 
-### W4 call sites — ready, blocked on kitty (brief `/tmp/fire-kte-w4.txt`, worktree `kte-w4` kept)
+### W4 call sites — in flight (session kte-w4, fired 2026-10-22 ~16:45Z, brief `/tmp/fire-kte-w4.txt`)
 
-- Two fires on 2026-10-22 ~13:30Z came back outcome UNKNOWN with no session: kitty pid 1881 answers every
-  `kitten @` with `Error: EOF` and holds 258 peerless unix sockets, so no pane can open. Operator row
-  `13c537f2ed69` (reopen kitty). Re-fire with the same brief, `--worktree kte-w4`, once
-  `kitten @ ls --self` exits 0.
+- Two fires on 2026-10-22 ~13:30Z came back outcome UNKNOWN with no session: kitty pid 1881 answered
+  every `kitten @` with `Error: EOF` for ~3 h (258 peerless unix sockets held). It recovered WITHOUT a
+  restart (the third fire engaged); row `13c537f2ed69` closed. Learning: a deaf kitty can come back on
+  its own as load falls, and the 5-minute heartbeat's `hb.kitty-ls.json` mtime shows it first. Check
+  that before recommending a restart, and if one is needed it is `cc-restore --restart-kitty --confirm
+  <pid>` (waits for in-flight lands, restores the recorded layout), never a bare quit and reopen.
 - Brief scope: `scripts/lib/cc-run.sh` runner (bash 3.2 safe), `resolve_bin` (`scripts/lib/cc-common.sh:35`)
   through it, lint R2 `scripts/exec-form-lint.sh` beside the HOOK SHEBANG arm (`scripts/ship-land.sh:~3956`),
   call sites in census order including W1's leftovers (`handoff-fire.sh:~1321`, `lr-lib.sh:~1338`,
