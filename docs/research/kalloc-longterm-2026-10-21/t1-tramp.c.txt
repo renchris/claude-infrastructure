@@ -1,0 +1,47 @@
+/* T-1 trampoline (2026-10-22): read the script's own #! line and execv that interpreter with the
+   script as an argument, so the kernel never takes its #! path.
+   usage: tramp <script> [args...]  ->  execv(interp, {interp, [optarg], script, args..., NULL})
+   Minimal parse, as xnu does: up to 512 bytes, interpreter then at most one optional argument. */
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+int main(int argc, char **argv) {
+    if (argc < 2) { fputs("usage: tramp script [args...]\n", stderr); return 64; }
+    char buf[513];
+    int fd = open(argv[1], O_RDONLY);
+    if (fd < 0) { perror(argv[1]); return 126; }
+    ssize_t n = read(fd, buf, 512);
+    close(fd);
+    if (n < 3 || buf[0] != '#' || buf[1] != '!') { fputs("tramp: no #! line\n", stderr); return 126; }
+    buf[n] = '\0';
+    char *nl = memchr(buf, '\n', (size_t)n);
+    if (!nl) { fputs("tramp: #! line has no newline\n", stderr); return 126; }
+    *nl = '\0';
+    char *p = buf + 2;
+    while (*p == ' ' || *p == '\t') p++;
+    char *interp = p;
+    while (*p && *p != ' ' && *p != '\t') p++;
+    char *opt = NULL;
+    if (*p) {
+        *p++ = '\0';
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p) {
+            opt = p;
+            char *e = opt + strlen(opt);
+            while (e > opt && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) *--e = '\0';
+        }
+    }
+    char **v = malloc(sizeof(char *) * (size_t)(argc + 3));
+    if (!v) return 70;
+    int k = 0;
+    v[k++] = interp;
+    if (opt) v[k++] = opt;
+    for (int i = 1; i < argc; i++) v[k++] = argv[i];
+    v[k] = NULL;
+    execv(interp, v);
+    perror(interp);
+    return 127;
+}

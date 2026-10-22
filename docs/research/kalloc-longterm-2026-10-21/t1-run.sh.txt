@@ -1,0 +1,42 @@
+#!/bin/bash
+# T-1 (2026-10-22): the trampoline's own cost. Run as: /bin/bash run.sh [N] [PAIRS]  (never by path)
+# Arms (N units each): L tramp -> /bin/bash leaf.sh (shebang parsed); B /bin/bash leaf.sh;
+# I idle for the mean arm duration (drift). Neither L nor B runs a #! exec, so this spends no leak.
+# Each reading is ONE zprint snapshot (k - cred from the same table), per REPORT §3 Phase 0.
+D=$HOME/.cache/kalloc-t1
+LEAF=$D/leaf.sh; TR=$D/tramp
+N=${1:-2000}; P=${2:-12}
+OUT=$D/rows-n$N.tsv; LOG=$D/run.log
+snap(){ zprint | awk '$1=="data.kalloc.1024"{k=$7} $1=="cred"{c=$7} END{print k, c}'; }
+now(){ perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
+printf 'seq\tpair\tarm\tn\tfails\tarm_secs\twin_secs\tk0\tc0\tk1\tc1\tdres\tload1\n' > "$OUT"
+seq=0; tot=0; cnt=0
+arm(){
+  local a=$1 pr=$2 dur=${3:-0} n=0 f=0 i r0 r1 ta tb tc td te tf
+  ta=$(now); r0=$(snap); tb=$(now)
+  tc=$(now)
+  case $a in
+    L) for ((i=0;i<N;i++)); do "$TR" "$LEAF" || f=$((f+1)); done; n=$N;;
+    B) for ((i=0;i<N;i++)); do /bin/bash "$LEAF" || f=$((f+1)); done; n=$N;;
+    I) perl -e "select(undef,undef,undef,$dur)";;
+  esac
+  td=$(now)
+  te=$(now); r1=$(snap); tf=$(now)
+  set -- $r0 $r1
+  local secs win ld
+  secs=$(echo "$td - $tc" | bc)
+  win=$(echo "scale=3; ($te + $tf)/2 - ($ta + $tb)/2" | bc)
+  ld=$(sysctl -n vm.loadavg | awk '{print $2}')
+  seq=$((seq+1))
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' $seq $pr $a $n $f $secs $win $1 $2 $3 $4 $(( ($3-$4) - ($1-$2) )) $ld >> "$OUT"
+  printf 'seq=%s arm=%s secs=%s dres=%s\n' $seq $a $secs $(( ($3-$4) - ($1-$2) )) >> "$LOG"
+  if [ "$a" != I ]; then tot=$(echo "$tot + $secs" | bc); cnt=$((cnt+1)); fi
+}
+mean(){ echo "scale=3; $tot / $cnt" | bc; }
+printf 'START %s N=%s PAIRS=%s\n' "$(date)" "$N" "$P" >> "$LOG"
+for ((p=1;p<=P;p++)); do
+  if ((p % 2)); then arm L $p; arm B $p; else arm B $p; arm L $p; fi
+  if ((p % 3 == 0)); then arm I $p "$(mean)"; fi
+done
+arm I $((P+1)) "$(mean)"
+printf 'DONE %s\n' "$(date)" >> "$LOG"

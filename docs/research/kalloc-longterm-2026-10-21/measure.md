@@ -153,3 +153,35 @@ files other than this section and ran no `#!` leak arms.
 - Summary 8 ("+3.7 ms, from the extra dyld exec"): the measured figure is 3.5 ms, and the attribution is inferred.
 - Correctly labelled already: L ≈ B is MEASURED only for the argv[1] launcher that execs `/bin/bash`. The `env`-relay and shebang-parsing paths are INFERRED ≈ 0.
 - One INFERRED observation from the snapshot data: the 1:1 instantaneous k/cred co-movement suggests one 1 KiB data allocation per credential. That fits the AppleSystemPolicy `credLabelUpdateExecve` site that willmcginnis traced (comments :1096), but nothing here tests it.
+
+## T-1 (2026-10-22)
+
+The trampoline's own cost (REPORT §3 Phase 0, Q2). Run 2026-10-22 01:38:10-01:45:49 CDT, macOS 15.8.1, same
+boot as above (2026-10-21 14:06:30), 1-min load 30-77 on 10 cores, no EndpointSecurity client (`pgrep -x eslogger`
+empty, unlike the run above).
+
+**Verdict: PASS. L − B = +0.020 ± 0.017 elements per exec (95% CI −0.012..+0.053), below the 0.1 bar.**
+The trampoline adds no measurable kernel retention over `/bin/bash leaf.sh`; Q2 moves from 80% to settled
+at this resolution. The design resolves ±0.017 per exec, about 7x finer than the ±0.11 above, from
+single-snapshot reads, as the Critique predicted.
+
+- **Arms** (N = 3000 each, 12 interleaved pairs, order alternated L B / B L; 5 idle arms for drift):
+  - L: `tramp leaf.sh`. `tramp` is a shebang-PARSING Mach-O (reads line 1, execs its interpreter and
+    optional argument with the script as argv), built `/usr/bin/cc -O2`, ad-hoc signed by the linker. This
+    is the real trampoline's parse path, unlike `launch` above, which hard-coded `/bin/bash`.
+  - B: `/bin/bash leaf.sh`. Neither arm runs a `#!` exec, so the run spent no leak budget.
+- **Instrument:** one `zprint` per reading, `k − cred` from the same table
+  (`zprint | awk '$1=="data.kalloc.1024"{k=$7} $1=="cred"{c=$7} END{print k, c}'`).
+- **Fit** (drift-only, as above): Δresidual = drift·window + L·n_L + B·n_B over 29 rows; residual SD 111
+  elements per arm (480 above). L = +0.038 ± 0.022, B = +0.018 ± 0.017, drift +8.9 ± 3.2 /s.
+- **Paired check** (each pair drift-corrected, L − B): mean +0.020, SD 0.041, SE 0.012, median +0.017, n = 12;
+  10 of 12 within ±0.045, the largest +0.116 (pair 12, load1 58-71). Without the drift term the paired mean
+  is +0.040 ± 0.011, still under the bar.
+- **Latency:** L 17.75 s against B 11.25 s per 3000 (mean `arm_secs`), so **+2.2 ms per call** at load 30-77,
+  against +3.5 ms at load ~150 above. Hot paths should still call `/bin/bash script` directly; the
+  trampoline is for callers that run a script by name.
+- 0 failures in 72,000 execs.
+
+Files: harness `t1-tramp.c.txt` and `t1-run.sh.txt` beside this file (copies of `~/.cache/kalloc-t1/tramp.c`
+and `run.sh`, run as `/bin/bash run.sh 3000 12`); rows `~/.cache/kalloc-t1/rows-n3000.tsv`. T-0 (the
+clean-lineage test) was not run: it needs the operator to open a kitty window started by launchd.
