@@ -246,12 +246,13 @@ pad() { printf '#!/bin/sh%*s\\n' $(($1 - 10)) ''; }
 @test "--selftest passes and --version prints the source hash it was built from" {
   run "$LINK" --selftest
   [ "$status" -eq 0 ]
-  [[ "$output" =~ ^cc-shim\ selftest:\ ok\ ([0-9]+)/([0-9]+)$ ]]
+  [[ "$output" =~ ^cc-shim\ selftest:\ ok\ ([0-9]+)/([0-9]+)$ ]] || false
   [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[2]}" ]
   run "$LINK" --version
   [ "$status" -eq 0 ]
-  local sha
-  sha=$(shasum -a 256 <"$REPO/tools/cc-shim/cc-shim.c")
+  local sha sum=/sbin/sha256sum
+  [ -x "$sum" ] || sum=sha256sum
+  sha=$("$sum" <"$REPO/tools/cc-shim/cc-shim.c")
   [ "$output" = "cc-shim ${sha%% *}" ]
   run "$LINK" --bogus
   [ "$status" -eq 64 ]
@@ -276,7 +277,7 @@ pad() { printf '#!/bin/sh%*s\\n' $(($1 - 10)) ''; }
     while [ "$i" -lt "$N" ] || [ ! -e "$stop" ]; do
       "$S/spin" || fails=$((fails + 1))
       i=$((i + 1))
-      [ "$i" -eq 1 ] && : >"$started"
+      if [ "$i" -eq 1 ]; then : >"$started"; fi
     done
     echo "$i $fails" >"$res"
   ) >/dev/null 2>&1 3>&- &
