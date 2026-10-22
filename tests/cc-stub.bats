@@ -21,6 +21,7 @@ setup_file() {
 }
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermetic: never the live ~/
   unset CC_SHIM CC_SHIM_HOPS
   W="$BATS_TEST_TMPDIR/w"
   mkdir -p "$W"

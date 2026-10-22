@@ -26,6 +26,7 @@ setup_file() {
 }
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermetic: never the live ~/
   S="$BATS_TEST_TMPDIR/stub"
   R="$BATS_TEST_TMPDIR/.stub-real"
   mkdir -p "$S" "$R"
