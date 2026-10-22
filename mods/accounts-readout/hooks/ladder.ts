@@ -62,3 +62,33 @@ export const spans = (line: string): Span[] => {
   push(line.slice(at))
   return out
 }
+
+// THE SESSIONSTART BOARD AS A BAND (2026-10-21). A band never scrolls away, so it needs no
+// survive-one-split budget (docs/research/accounts-board-band-2026-10-21/): the widest layout whose
+// widest line fits the band's own cells; failing any fit, the narrowest there is.
+export const pickFit = (ladder: Ladder, cells: number): Variant | undefined => {
+  let best = ladder.variants[0]
+  for (const v of ladder.variants) if (v.width <= cells) best = v
+  return best
+}
+
+// hooks/accounts-board.sh's fmt_age, so the band labels an age exactly as the hook would.
+export const fmtAge = (s: number): string =>
+  s < 120 ? `${s}s` : s < 7200 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`
+
+// The hook's own staleness bands, applied to a band that may sit above the prompt for hours: fresh
+// shows the board alone (as the hook does), stale puts the hook's age line over it, and past the
+// hard band the numbers are withheld. `grid` false means draw no board lines.
+export const bandHead = (ageS: number, staleS: number, hardS: number): { head: string[]; grid: boolean } =>
+  ageS >= hardS
+    ? { grid: false, head: [
+        `accounts board is ${fmtAge(ageS)} old — numbers withheld as unsafe to read (the 5h window it reports rolls every 5h, so a board this old can describe a window that has ended).`,
+        '  For the live table, run: claude-accounts',
+      ] }
+    : ageS >= staleS
+      ? { grid: true, head: [
+          `⚠ STALE by ${fmtAge(ageS)} — the numbers below are last-known, not current.`,
+          '  Live table: claude-accounts',
+          '',
+        ] }
+      : { grid: true, head: [] }

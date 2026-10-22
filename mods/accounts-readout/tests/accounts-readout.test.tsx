@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { isReadoutCommand, pickVariant, spans } from '../hooks/ladder'
+import { bandHead, fmtAge, isReadoutCommand, pickFit, pickVariant, spans } from '../hooks/ladder'
 import type { Ladder } from '../types'
 
 // A two-layout ladder in the renderer's shape: a stacked 35-cell layout and a 70-cell grid.
@@ -107,5 +107,132 @@ describe('the drawn readout', () => {
     const files = world(on, JSON.stringify(LADDER))
     await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_other', command: 'ls' } as never)
     expect(files[`/tmp/claude-accounts-pane/${SID}.mod`]).toBeUndefined()
+  })
+})
+
+// ── the SessionStart board, as a band above the prompt ────────────────────────────────────────
+const DIR = '/tmp/claude-accounts-pane'
+const REQ = `${DIR}/${SID}.board-band.req`
+const SNAP = `${DIR}/${SID}.board-band.json`
+const NOW = 2_000_000_000
+
+// `hookWrites` is what hooks/accounts-board.sh does beneath the mod: given the stamp naming this
+// session, it leaves the snapshot (and so prints no grid); otherwise it leaves nothing.
+const bandWorld = (on: On, opts: { hookWrites?: string; ageS?: number; env?: Record<string, string> } = {}) => {
+  const files: Record<string, string> = {}
+  const seen: { reqAtHook?: string } = {}
+  mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, opts.env ?? {})
+  on('session.surfaces', () => ({ value: ['terminal'] }) as never)
+  on('fs.write', (_$, e) => { files[e.path] = e.text; return { value: undefined } })
+  on('fs.read', (_$, e) => {
+    const text = files[e.path]
+    return text === undefined ? { deny: `ENOENT ${e.path}` } : { value: text }
+  })
+  on('fs.stat', (_$, e) => ({
+    value: { kind: 'file', size: (files[e.path] ?? '').length, mtimeMs: NOW - (opts.ageS ?? 10) * 1000, isLink: false },
+  }) as never)
+  on('classic.SessionStart', (_$, e) => {
+    seen.reqAtHook = files[REQ]
+    if (opts.hookWrites !== undefined && files[REQ] === e.session_id) files[SNAP] = opts.hookWrites
+    return {}
+  })
+  on('prompt.submit', (_$, e) => ({ text: e.text }) as never)
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine band</Text>
+  })
+  return { files, seen }
+}
+
+const band = ($: Engine, columns: number, extra: { hasSurvey?: boolean } = {}) =>
+  $.ui.mount({
+    plugin: 'accounts-readout', surface: 'terminal', component: 'AbovePrompt',
+    viewport: { columns, rows: 50 },
+    props: {
+      hasSurvey: extra.hasSurvey ?? false, isWorking: false, maxRows: 25, bodyColumns: columns - 5,
+      scroll: { offset: 0, bodyRows: 24 }, view: {},
+    },
+  } as never)
+
+describe('band helpers', () => {
+  test('the widest layout whose widest line fits the band, else the narrowest', () => {
+    expect(pickFit(LADDER, 155)?.cells).toBe(70)
+    expect(pickFit(LADDER, GRID.length)?.cells).toBe(70)
+    expect(pickFit(LADDER, GRID.length - 1)?.cells).toBe(35)
+    expect(pickFit(LADDER, 10)?.cells).toBe(35)
+  })
+
+  test('ages and staleness bands are the hook\'s', () => {
+    expect([fmtAge(5), fmtAge(119), fmtAge(120), fmtAge(7199), fmtAge(7200)]).toEqual(['5s', '119s', '2m', '119m', '2h'])
+    expect(bandHead(299, 300, 3600)).toEqual({ grid: true, head: [] })
+    expect(bandHead(300, 300, 3600).head[0]).toBe('⚠ STALE by 5m — the numbers below are last-known, not current.')
+    expect(bandHead(3600, 300, 3600).grid).toBe(false)
+  })
+})
+
+describe('the SessionStart band', () => {
+  test('stamps before the settings hooks run, then draws the full-width layout and re-lays it out', async ($, on) => {
+    const { files, seen } = bandWorld(on, { hookWrites: JSON.stringify(LADDER) })
+    await $.classic.SessionStart({ source: 'startup', session_id: SID } as never)
+    expect(seen.reqAtHook).toBe(SID)
+    expect(files[REQ]).toBe('')                  // consumed
+    expect(files[SNAP]).toBe('')                 // consumed: an earlier start's never draws
+
+    const wide = await band($, 160)
+    expect(await wide.find({ text: /account live/ })).toBeDefined()
+    expect(await wide.find({ text: /STALE/ })).toBeUndefined()
+    const narrow = await band($, 40)
+    expect(await narrow.find({ text: /account live/ })).toBeUndefined()
+    expect(await narrow.find({ text: /next    5h/ })).toBeDefined()
+    const wideAgain = await band($, 160)
+    expect(await wideAgain.find({ text: /account live/ })).toBeDefined()
+  })
+
+  test('the first prompt takes the band away', async ($, on) => {
+    bandWorld(on, { hookWrites: JSON.stringify(LADDER) })
+    await $.classic.SessionStart({ source: 'startup', session_id: SID } as never)
+    expect(await (await band($, 160)).find({ text: /account live/ })).toBeDefined()
+    await $.prompt.submit({ text: 'hello' } as never)
+    const after = await band($, 160)
+    expect(await after.find({ text: /account live/ })).toBeUndefined()
+    expect(await after.find({ text: /engine band/ })).toBeDefined()
+  })
+
+  test('no snapshot (the hook printed its grid) draws no band', async ($, on) => {
+    bandWorld(on, {})
+    await $.classic.SessionStart({ source: 'startup', session_id: SID } as never)
+    expect(await (await band($, 160)).find({ text: /account live|desk/ })).toBeUndefined()
+  })
+
+  test('compact is left alone, as the hook leaves it', async ($, on) => {
+    const { files, seen } = bandWorld(on, { hookWrites: JSON.stringify(LADDER) })
+    await $.classic.SessionStart({ source: 'compact', session_id: SID } as never)
+    expect(seen.reqAtHook).toBeUndefined()
+    expect(files[SNAP]).toBeUndefined()
+    expect(await (await band($, 160)).find({ text: /account live/ })).toBeUndefined()
+  })
+
+  test('a survey holds the band', async ($, on) => {
+    bandWorld(on, { hookWrites: JSON.stringify(LADDER) })
+    await $.classic.SessionStart({ source: 'startup', session_id: SID } as never)
+    expect(await (await band($, 160, { hasSurvey: true })).find({ text: /account live/ })).toBeUndefined()
+  })
+
+  test('a band left waiting goes STALE, then withholds its numbers, on the hook\'s knobs', async ($, on) => {
+    bandWorld(on, { hookWrites: JSON.stringify(LADDER), ageS: 400 })
+    await $.classic.SessionStart({ source: 'clear', session_id: SID } as never)
+    const stale = await band($, 160)
+    expect(await stale.find({ text: /STALE by 6m/ })).toBeDefined()
+    expect(await stale.find({ text: /account live/ })).toBeDefined()
+  })
+
+  test('past the hard band the numbers are withheld', async ($, on) => {
+    bandWorld(on, { hookWrites: JSON.stringify(LADDER), ageS: 100, env: { CC_BOARD_HARD_S: '60' } })
+    await $.classic.SessionStart({ source: 'resume', session_id: SID } as never)
+    const hard = await band($, 160)
+    expect(await hard.find({ text: /numbers withheld/ })).toBeDefined()
+    expect(await hard.find({ text: /account live/ })).toBeUndefined()
   })
 })
