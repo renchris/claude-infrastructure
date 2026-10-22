@@ -22,7 +22,7 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>export PATH="$HOME/.claude/bin:$PATH"; ~/.claude/scripts/cc-gc.sh --apply</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; /usr/bin/env bash ~/.claude/scripts/cc-gc.sh --apply</string>
   </array>
   <key>StartInterval</key>    <integer>21600</integer>
   <key>RunAtLoad</key>        <false/>

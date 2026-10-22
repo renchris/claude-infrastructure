@@ -48,7 +48,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; "$HOME/.claude/scripts/teammate-reap-alarm.sh"; rc=$?; "$HOME/.claude/scripts/assignee-pane-residency.sh" --quiet >/dev/null 2>&amp;1 || true; exit $rc</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; /bin/bash "$HOME/.claude/scripts/teammate-reap-alarm.sh"; rc=$?; /bin/bash "$HOME/.claude/scripts/assignee-pane-residency.sh" --quiet >/dev/null 2>&amp;1 || true; exit $rc</string>
     </array>
 
     <key>StartInterval</key>

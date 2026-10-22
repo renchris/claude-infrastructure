@@ -26,7 +26,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/Library/Application Support/fnm/aliases/default/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/mcp-ms365-proxy.sh" run</string>
+        <string>export PATH="$HOME/Library/Application Support/fnm/aliases/default/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /usr/bin/env bash "$HOME/.claude/scripts/mcp-ms365-proxy.sh" run</string>
     </array>
 
     <key>RunAtLoad</key>

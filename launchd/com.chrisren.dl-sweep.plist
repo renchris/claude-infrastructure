@@ -14,7 +14,7 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>export PATH="$HOME/.claude/bin:$PATH"; exec ~/.claude/scripts/dl-sweep.sh</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; exec /usr/bin/env bash ~/.claude/scripts/dl-sweep.sh</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict>

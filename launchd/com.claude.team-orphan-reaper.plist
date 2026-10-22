@@ -9,7 +9,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>exec "$HOME/.claude/scripts/team-orphan-reaper.sh"</string>
+        <string>exec /bin/bash "$HOME/.claude/scripts/team-orphan-reaper.sh"</string>
     </array>
 
     <key>StartInterval</key>

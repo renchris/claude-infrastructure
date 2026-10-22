@@ -19,7 +19,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="/usr/bin:/bin"; exec "$HOME/Development/claude-infrastructure/scripts/caffeinate-floor.sh" --run</string>
+        <string>export PATH="/usr/bin:/bin"; exec /bin/bash "$HOME/Development/claude-infrastructure/scripts/caffeinate-floor.sh" --run</string>
     </array>
 
     <key>RunAtLoad</key>

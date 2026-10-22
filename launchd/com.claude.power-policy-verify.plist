@@ -20,7 +20,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/Development/claude-infrastructure/scripts/power-policy-verify.sh" --verify</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec /bin/bash "$HOME/Development/claude-infrastructure/scripts/power-policy-verify.sh" --verify</string>
     </array>
 
     <key>StartInterval</key>

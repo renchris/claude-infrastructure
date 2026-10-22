@@ -102,7 +102,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/capacity-alarm.sh" --quiet</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /bin/bash "$HOME/.claude/scripts/capacity-alarm.sh" --quiet</string>
     </array>
 
     <key>StartInterval</key>

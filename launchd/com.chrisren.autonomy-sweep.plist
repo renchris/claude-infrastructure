@@ -21,7 +21,7 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>export PATH="$HOME/.claude/bin:$PATH"; export CC_FIRE_CLOUD=on; if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility ~/.claude/scripts/autonomy-sweep.sh; fi; exec ~/.claude/scripts/autonomy-sweep.sh</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; export CC_FIRE_CLOUD=on; if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility /bin/bash ~/.claude/scripts/autonomy-sweep.sh; fi; exec /bin/bash ~/.claude/scripts/autonomy-sweep.sh</string>
   </array>
   <key>StartInterval</key>    <integer>300</integer>
   <key>RunAtLoad</key>        <false/>

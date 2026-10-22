@@ -17,7 +17,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export DESK_INVARIANT_BRIEF="$HOME/Development/claude-infrastructure/docs/templates/desk-boot-brief.md"; exec "$HOME/.claude/scripts/desk-invariant.sh" --once</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export DESK_INVARIANT_BRIEF="$HOME/Development/claude-infrastructure/docs/templates/desk-boot-brief.md"; exec /bin/bash "$HOME/.claude/scripts/desk-invariant.sh" --once</string>
     </array>
 
     <key>StartInterval</key>

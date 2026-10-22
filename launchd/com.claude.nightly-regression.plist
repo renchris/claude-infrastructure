@@ -17,7 +17,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/Development/claude-infrastructure/scripts/nightly-regression.sh" --run</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec /bin/bash "$HOME/Development/claude-infrastructure/scripts/nightly-regression.sh" --run</string>
     </array>
 
     <key>StartCalendarInterval</key>

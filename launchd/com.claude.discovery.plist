@@ -31,7 +31,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISCOVER_FRONTIER_LEDGER="$HOME/Development/claude-infrastructure/docs/research/FRONTIER_HOLES.md"; export CC_DISCOVER_PROJECT="claude-infrastructure"; exec "$HOME/.claude/bin/cc-discover" --once</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISCOVER_FRONTIER_LEDGER="$HOME/Development/claude-infrastructure/docs/research/FRONTIER_HOLES.md"; export CC_DISCOVER_PROJECT="claude-infrastructure"; exec /bin/bash "$HOME/.claude/bin/cc-discover" --once</string>
     </array>
 
     <key>StartInterval</key>

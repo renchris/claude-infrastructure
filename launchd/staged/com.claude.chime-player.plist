@@ -49,7 +49,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/chime-player.sh"</string>
+        <string>export PATH="$HOME/.claude/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /bin/bash "$HOME/.claude/scripts/chime-player.sh"</string>
     </array>
 
     <key>RunAtLoad</key>

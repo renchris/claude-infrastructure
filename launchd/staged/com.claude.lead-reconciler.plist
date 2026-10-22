@@ -56,7 +56,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/Development/claude-infrastructure/scripts/lead-reconciler.sh" --once</string>
+        <string>export PATH="$HOME/.claude/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /bin/bash "$HOME/Development/claude-infrastructure/scripts/lead-reconciler.sh" --once</string>
     </array>
 
     <!-- FALSE deliberately: loading the job must not fire an immediate reconcile against a roster

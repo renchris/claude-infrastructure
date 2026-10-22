@@ -87,7 +87,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:$HOME/Library/Application Support/fnm/aliases/default/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/browser-spin-guard.sh" --notify --reap</string>
+        <string>export PATH="$HOME/.claude/bin:$HOME/Library/Application Support/fnm/aliases/default/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /usr/bin/env bash "$HOME/.claude/scripts/browser-spin-guard.sh" --notify --reap</string>
     </array>
 
     <key>RunAtLoad</key>

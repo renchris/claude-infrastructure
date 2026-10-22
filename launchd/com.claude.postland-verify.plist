@@ -18,7 +18,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility "$HOME/.claude/scripts/postland-verify.sh" --run-if-needed; fi; exec "$HOME/.claude/scripts/postland-verify.sh" --run-if-needed</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility /bin/bash "$HOME/.claude/scripts/postland-verify.sh" --run-if-needed; fi; exec /bin/bash "$HOME/.claude/scripts/postland-verify.sh" --run-if-needed</string>
     </array>
 
     <key>StartInterval</key>

@@ -13,7 +13,7 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>export PATH="$HOME/.claude/bin:$PATH"; ~/.claude/scripts/scratchpad-reaper.sh --apply</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; /bin/bash ~/.claude/scripts/scratchpad-reaper.sh --apply</string>
   </array>
   <key>StartInterval</key>    <integer>21600</integer>
   <key>RunAtLoad</key>        <false/>

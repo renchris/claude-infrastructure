@@ -61,7 +61,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>exec "$HOME/.claude/scripts/permission-harvest-run.sh"</string>
+        <string>exec /usr/bin/env bash "$HOME/.claude/scripts/permission-harvest-run.sh"</string>
     </array>
 
     <key>StartCalendarInterval</key>

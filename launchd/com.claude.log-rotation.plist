@@ -7,7 +7,7 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>export PATH="$HOME/.claude/bin:$PATH"; ~/.claude/scripts/rotate-autonomy-logs.sh</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; /bin/bash ~/.claude/scripts/rotate-autonomy-logs.sh</string>
   </array>
   <key>StartInterval</key>    <integer>3600</integer>
   <key>RunAtLoad</key>        <true/>

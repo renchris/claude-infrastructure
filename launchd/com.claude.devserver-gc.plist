@@ -45,7 +45,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export DEVGC_ACT=1; exec "$HOME/.claude/scripts/devserver-gc-run.sh"</string>
+        <string>export DEVGC_ACT=1; exec /usr/bin/env bash "$HOME/.claude/scripts/devserver-gc-run.sh"</string>
     </array>
 
     <key>StartCalendarInterval</key>

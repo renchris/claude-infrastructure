@@ -18,7 +18,7 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:$PATH"; if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility ~/.claude/scripts/public-publish-tick.sh; fi; exec ~/.claude/scripts/public-publish-tick.sh</string>
+    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:$PATH"; if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility /usr/bin/env bash ~/.claude/scripts/public-publish-tick.sh; fi; exec /usr/bin/env bash ~/.claude/scripts/public-publish-tick.sh</string>
   </array>
   <!-- Daily, not every 3 h (2026-10-12, docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md O3): each tick
        re-runs the filter-repo projection, and a public mirror a day behind costs nothing.

@@ -30,7 +30,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/.claude/scripts/qos-census.sh" --quiet</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec /bin/bash "$HOME/.claude/scripts/qos-census.sh" --quiet</string>
     </array>
 
     <key>StartInterval</key>

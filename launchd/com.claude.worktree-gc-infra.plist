@@ -52,7 +52,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility "$HOME/.claude/scripts/worktree-gc-infra-run.sh" --auto; fi; exec "$HOME/.claude/scripts/worktree-gc-infra-run.sh" --auto</string>
+        <string>if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility /usr/bin/env bash "$HOME/.claude/scripts/worktree-gc-infra-run.sh" --auto; fi; exec /usr/bin/env bash "$HOME/.claude/scripts/worktree-gc-infra-run.sh" --auto</string>
     </array>
 
     <key>WatchPaths</key>

@@ -44,7 +44,7 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>export PATH="$HOME/.claude/bin:$PATH"; cc-relogin-poll --once</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; /usr/bin/env bash "$HOME/.claude/bin/cc-relogin-poll" --once</string>
   </array>
   <key>StartInterval</key>    <integer>3600</integer>
   <key>RunAtLoad</key>        <false/>

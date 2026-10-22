@@ -47,7 +47,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>exec "$HOME/.claude/scripts/browse-mirror-sync.sh"</string>
+        <string>exec /usr/bin/env bash "$HOME/.claude/scripts/browse-mirror-sync.sh"</string>
     </array>
 
     <key>WatchPaths</key>

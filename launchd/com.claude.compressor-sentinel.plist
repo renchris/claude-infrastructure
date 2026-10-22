@@ -93,7 +93,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; export CC_SENTINEL_ACT=stop; export CC_SENTINEL_ACT_RSS_KB=40960; export CC_SENTINEL_ACT_CAP=400; exec "$HOME/.claude/scripts/compressor-sentinel.sh"</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; export CC_SENTINEL_ACT=stop; export CC_SENTINEL_ACT_RSS_KB=40960; export CC_SENTINEL_ACT_CAP=400; exec /bin/bash "$HOME/.claude/scripts/compressor-sentinel.sh"</string>
     </array>
 
     <key>RunAtLoad</key>
