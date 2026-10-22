@@ -116,8 +116,13 @@ setup() {
 }
 
 @test "--successor <dead pane> → aborts at the liveness gate (exit 3) BEFORE any completion push" {
-  run env CC_COMPLETION_PUSH_BIN="$STUB" bash "$HF" self-close --successor "NOPANE-4444" --session-id "fake:DDDD-4444"
-  [ "$status" -eq 3 ]
+  # The resolver must ANSWER "absent": unpinned, it asked the LIVE kitty, and a deaf or busy one reads
+  # CANNOT TELL instead (exit 7, not 3; 2026-10-22). iTerm2 path, with an osascript that answers empty.
+  local bin="$BATS_TEST_TMPDIR/absent-bin"; mkdir -p "$bin"
+  printf '#!/bin/bash\nexit 0\n' > "$bin/osascript"; chmod +x "$bin/osascript"
+  run env -u KITTY_WINDOW_ID -u KITTY_LISTEN_ON CC_TERM=iterm2 PATH="$bin:$PATH" \
+      CC_COMPLETION_PUSH_BIN="$STUB" bash "$HF" self-close --successor "NOPANE-4444" --session-id "fake:DDDD-4444"
+  [ "$status" -eq 3 ] || { echo "rc=$status"; echo "$output" | tail -5; false; }
   [ ! -f "$MARK" ]     # a successor close is NOT terminal — no push
 }
 
