@@ -779,6 +779,9 @@ same_as_control() {  # [source] → the subject's bytes equal the control's, and
 }
 
 @test "29d band: a STALE or HARD board keeps its labelled static text — never an unlabelled band" {
+  # the STALE text names the producer's launchd state; read live, a keepwarm tick starting between
+  # the control's run and the subject's makes the two differ (2026-10-22, the failed land's RED)
+  stub_launchd idle0
   band_setup; age_board 900; touch -r "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD.ladder.json"
   same_as_control
   [[ "$(jqv '.systemMessage')" == *"STALE"* ]] || false
