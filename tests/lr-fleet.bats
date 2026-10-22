@@ -3,6 +3,8 @@
 # Hermetic: four fixture stores under $HOME, a fixture registry, a recording lr-handoff stub, a
 # claude-accounts stub, and the capacity gate pinned open. Nothing here types into a pane.
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   FLEET="$REPO/scripts/limit-recover/lr-fleet.sh"
@@ -55,7 +57,7 @@ setup() {
   SID="52e35019-17e8-40f6-a54f-$(printf '%012d' "$(printf '%s' "$BATS_TEST_TMPDIR" | cksum | cut -d' ' -f1)")"
   # lr-handoff stub: records argv, exits per LRH_RC, prints the announcements the fleet parses
   export LR_HANDOFF_BIN="$BATS_TEST_TMPDIR/lr-handoff"
-  cat > "$LR_HANDOFF_BIN" <<'SH'
+  cc_stub "${LR_HANDOFF_BIN%/*}" "${LR_HANDOFF_BIN##*/}" - <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "${LRH_LOG:?}"
 # ORDERING LOG, NOT A CLOCK. A walltime assertion in this repo has to carry the sibling suites'
@@ -73,17 +75,16 @@ esac
 echo "/bundle/path"
 exit "${LRH_RC:-0}"
 SH
-  chmod +x "$LR_HANDOFF_BIN"; export LRH_LOG="$BATS_TEST_TMPDIR/lrh.log"; : > "$LRH_LOG"
+  export LRH_LOG="$BATS_TEST_TMPDIR/lrh.log"; : > "$LRH_LOG"
   # Exported HERE, not inside the cases that use it: shellcheck models a @test body as a subshell,
   # so an `export` in one is SC2030/SC2031 — and the two facts a case needs (the path, and an empty
   # file) are both available from setup without one.
   export LRH_SEQ="$BATS_TEST_TMPDIR/lrh.seq"; : > "$LRH_SEQ"
   export CC_ACCOUNTS_BIN="$HOME/bin/claude-accounts"
-  cat > "$CC_ACCOUNTS_BIN" <<'SH'
+  cc_stub "${CC_ACCOUNTS_BIN%/*}" "${CC_ACCOUNTS_BIN##*/}" - <<'SH'
 #!/bin/bash
 case "$*" in *--rank*) printf 'next2 0.9\nnext3 0.8\nnext4 0.5\n' ;; esac
 SH
-  chmod +x "$CC_ACCOUNTS_BIN"
   # ── the census's own seams (LIMIT_DETECT_100P W3) ───────────────────────────────────────────
   # THE SLOW SCAN STAYS THE DEFAULT IN THIS SUITE, deliberately. `lf_census` delegates to
   # bin/cc-limited, whose `--json` is a RICHER schema than the 11-field list these cases assert on
@@ -287,7 +288,7 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   # .claude-secondary IS next2 in the repo's account map, which lr-fleet resolves even with
   # CC_ACCOUNT_MAP pinned at an absent path — so rank next2 first and it must be passed over.
-  printf '#!/bin/bash\ncase "$*" in *--rank*) printf "next2 0.9\\nnext4 0.5\\n" ;; esac\n' > "$CC_ACCOUNTS_BIN"
+  cc_stub "${CC_ACCOUNTS_BIN%/*}" "${CC_ACCOUNTS_BIN##*/}" "$(printf '#!/bin/bash\ncase "$*" in *--rank*) printf "next2 0.9\\nnext4 0.5\\n" ;; esac\n')"
   run bash "$FLEET" --recover
   grep -q -- "--target next4" "$LRH_LOG" || { cat "$LRH_LOG"; false; }
 }
@@ -523,14 +524,13 @@ assert r["disposition"]=="RECOVERABLE", r
   # No registry row at all. A stub `ps` is the only honest way to put a --resume leaf
   # in the process table without launching a real claude.
   mkdir -p "$BATS_TEST_TMPDIR/psbin"
-  cat > "$BATS_TEST_TMPDIR/psbin/ps" <<PS
+  cc_stub "$BATS_TEST_TMPDIR/psbin" ps - <<PS
 #!/bin/bash
 case "\$*" in
   *lstart*) exec /bin/ps "\$@" ;;
   *) printf '%s\n' " 77720     1 claude --permission-mode auto --resume $SID" ;;
 esac
 PS
-  chmod +x "$BATS_TEST_TMPDIR/psbin/ps"
   PATH="$BATS_TEST_TMPDIR/psbin:$PATH" run bash "$FLEET" --locate --json
   echo "$output" | python3 -c '
 import json,sys
@@ -547,14 +547,13 @@ assert r["pid"]=="77720", r
   net_tx "$SEC" "$SID"
   mark "$SEC" "$SID"
   mkdir -p "$BATS_TEST_TMPDIR/psbin"
-  cat > "$BATS_TEST_TMPDIR/psbin/ps" <<'PS'
+  cc_stub "$BATS_TEST_TMPDIR/psbin" ps - <<'PS'
 #!/bin/bash
 case "$*" in
   *lstart*) exec /bin/ps "$@" ;;
   *) printf '%s\n' " 12345     1 /bin/bash -c something-unrelated" ;;
 esac
 PS
-  chmod +x "$BATS_TEST_TMPDIR/psbin/ps"
   PATH="$BATS_TEST_TMPDIR/psbin:$PATH" run bash "$FLEET" --locate --json
   echo "$output" | python3 -c '
 import json,sys
@@ -700,7 +699,7 @@ _ph_count() { # → lf_phantom_actives, with only the function under test loaded
   # join has a floor at the attempt's own start. A pre-seeded row would be indistinguishable from a
   # two-day-old refusal, and joining THAT is the defect (memory: work-item-next-step-inherits-its-
   # store's-half-life). So the stub writes it, exactly where lr-fire-resume does.
-  cat > "$LR_HANDOFF_BIN" <<SH
+  cc_stub "${LR_HANDOFF_BIN%/*}" "${LR_HANDOFF_BIN##*/}" - <<SH
 #!/bin/bash
 printf '%s\n' "\$*" >> "\${LRH_LOG:?}"
 printf '{"ts":"%s","hook":"capacity-admit","sid":"?","disposition":"refused","reason":"capacity","gate":"capacity-admit","verdict":"refuse","basis":"measured","caller":"lr-fire-resume","what":"resume $SID on next3","detail":"load 2.57/core > 2.0 (refusal 2 of budget 3)","term":"load","terms":"load,headroom,segments,active"}\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$CC_ADMIT_IDL"
@@ -708,7 +707,6 @@ echo "lr-handoff: --in-place: the recycle did NOT verify (handoff-fire rc=1)" >&
 echo "/bundle/path"
 exit 4
 SH
-  chmod +x "$LR_HANDOFF_BIN"
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   run bash "$FLEET" --one "$SID" --target next3 --source-pane 616
   [ "$status" -eq 4 ] || { echo "$output"; false; }
@@ -720,13 +718,12 @@ SH
 @test "W1(a): --detach returns in ≤3s while the driver is still running, and prints its log path" {
   export CC_ADMIT_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/cc-notify"
-  cat > "$CC_NOTIFY_BIN" <<SH
+  cc_stub "${CC_NOTIFY_BIN%/*}" "${CC_NOTIFY_BIN##*/}" - <<SH
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/notify.log"
 SH
-  chmod +x "$CC_NOTIFY_BIN"
   # a SLOW actuator: a blocking --one cannot return before this finishes
-  cat > "$LR_HANDOFF_BIN" <<'SH'
+  cc_stub "${LR_HANDOFF_BIN%/*}" "${LR_HANDOFF_BIN##*/}" - <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "${LRH_LOG:?}"
 sleep 10
@@ -734,7 +731,6 @@ echo "lr-handoff: recycled IN PLACE — pane X continues session Y" >&2
 echo "/bundle/path"
 exit 0
 SH
-  chmod +x "$LR_HANDOFF_BIN"
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   t0=$(date +%s)
   run bash "$FLEET" --one "$SID" --target next3 --source-pane 616 --detach
@@ -757,12 +753,11 @@ SH
 # panes 513 and 641 both got fleet/one-20260924T222100Z) shared ONE run dir, and each truncated the
 # other's detached.log and results.tsv. The sid in the name keeps them apart.
 @test "RED PROOF: a --one --detach run dir carries the sid, so same-second runs never share one" {
-  cat > "$LR_HANDOFF_BIN" <<'SH'
+  cc_stub "${LR_HANDOFF_BIN%/*}" "${LR_HANDOFF_BIN##*/}" - <<'SH'
 #!/bin/bash
 echo "/bundle/path"
 exit 0
 SH
-  chmod +x "$LR_HANDOFF_BIN"
   export CC_NOTIFY_BIN=/usr/bin/true
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   run bash "$FLEET" --one "$SID" --target next3 --source-pane 616 --detach
@@ -783,14 +778,13 @@ SH
 @test "W4: a registry pid that IS the --resume process is ONE writer, not two — RECOVERABLE" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"          # row() writes pid $$, which is alive
   mkdir -p "$BATS_TEST_TMPDIR/psbin"
-  cat > "$BATS_TEST_TMPDIR/psbin/ps" <<PS
+  cc_stub "$BATS_TEST_TMPDIR/psbin" ps - <<PS
 #!/bin/bash
 case "\$*" in
   *lstart*) exec /bin/ps "\$@" ;;
   *) printf '%s\n' " $$     1 claude --permission-mode auto --resume $SID" ;;
 esac
 PS
-  chmod +x "$BATS_TEST_TMPDIR/psbin/ps"
   PATH="$BATS_TEST_TMPDIR/psbin:$PATH" run bash "$FLEET" --locate
   [[ "$output" == *"RECOVERABLE"* ]] || { echo "$output"; false; }
   [[ "$output" != *"DUPLICATE"* ]] || { echo "$output"; false; }
@@ -804,14 +798,13 @@ PS
   # stub, so it filtered itself out and this control passed for the wrong reason on its first run.
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   mkdir -p "$BATS_TEST_TMPDIR/psbin"
-  cat > "$BATS_TEST_TMPDIR/psbin/ps" <<PS
+  cc_stub "$BATS_TEST_TMPDIR/psbin" ps - <<PS
 #!/bin/bash
 case "\$*" in
   *lstart*) exec /bin/ps "\$@" ;;
   *) printf '%s\n' " 424242     1 claude --permission-mode auto --resume $SID" ;;
 esac
 PS
-  chmod +x "$BATS_TEST_TMPDIR/psbin/ps"
   PATH="$BATS_TEST_TMPDIR/psbin:$PATH" run bash "$FLEET" --locate
   [[ "$output" == *"DUPLICATE"* ]] || { echo "$output"; false; }
 }
@@ -853,14 +846,13 @@ PS
 # exactly the failure this column exists to name.
 @test "W4: pane_after is read from the registry AFTER the run — an absent row is a NAMED gap" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
-  cat > "$LR_HANDOFF_BIN" <<'SH'
+  cc_stub "${LR_HANDOFF_BIN%/*}" "${LR_HANDOFF_BIN##*/}" - <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "${LRH_LOG:?}"
 rm -f "${CC_REGISTRY_DIR:?}"/616.json       # the relaunch that never re-registered
 echo "lr-handoff: recycled IN PLACE — pane X continues session Y" >&2
 echo "/bundle/path"
 SH
-  chmod +x "$LR_HANDOFF_BIN"
   run bash "$FLEET" --recover
   [[ "$output" == *"52e35019  616      ?"* ]] || { echo "$output"; false; }
   [[ "$output" == *"UNPROVEN"* ]] || { echo "$output"; false; }
@@ -873,14 +865,13 @@ SH
 # the foreground and the case needs no polling.
 detached_one() { # runs --one as the detached child does; the mail lands in $BATS_TEST_TMPDIR/notify.log
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/cc-notify" CC_ADMIT_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/notify.log"\n' "$BATS_TEST_TMPDIR" > "$CC_NOTIFY_BIN"
-  chmod +x "$CC_NOTIFY_BIN"
+  cc_stub "${CC_NOTIFY_BIN%/*}" "${CC_NOTIFY_BIN##*/}" "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/notify.log"\n' "$BATS_TEST_TMPDIR")"
   run env LR_FLEET_DETACHED=1 LR_FLEET_REQUESTER=999 LR_INPLACE_AWAIT=0 \
     LR_FLEET_PROOF_WAIT_S="${PROOF_WAIT:-2}" LR_FLEET_PROOF_POLL_S=1 \
     bash "$FLEET" --one "$SID" --target next3 --source-pane 616
 }
 unregistering_handoff() { # the relaunch that never re-registers (the /exit landed, nothing came back)
-  cat > "$LR_HANDOFF_BIN" <<'SH'
+  cc_stub "${LR_HANDOFF_BIN%/*}" "${LR_HANDOFF_BIN##*/}" - <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "${LRH_LOG:?}"
 rm -f "${CC_REGISTRY_DIR:?}"/616.json
@@ -889,7 +880,6 @@ rm -f "${CC_REGISTRY_DIR:?}"/616.json
 echo "lr-handoff ${SID:-x}: verdict=SWITCHED-UNPROVEN from=.claude to=next3 proven=no trigger=limit" >&2
 echo "/bundle/path"
 SH
-  chmod +x "$LR_HANDOFF_BIN"
 }
 
 @test "[RED] an in-place run whose relaunch is never proven does NOT mail verdict=RECOVERED" {
@@ -1023,7 +1013,7 @@ STUB
 
 capped_holder() {
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/accounts-capped"
-  printf '#!/bin/sh\necho %s\n' "'{\"rows\":[{\"acct\":\"next3\",\"session_pct\":0,\"weekly_pct\":100}]}'" > "$CC_ACCOUNTS_BIN"; chmod +x "$CC_ACCOUNTS_BIN"
+  cc_stub "${CC_ACCOUNTS_BIN%/*}" "${CC_ACCOUNTS_BIN##*/}" "$(printf '#!/bin/sh\necho %s\n' "'{\"rows\":[{\"acct\":\"next3\",\"session_pct\":0,\"weekly_pct\":100}]}'")"
 }
 
 @test "…a holder whose account is capped AGAIN is moved onward FROM the holder's store, and nothing is typed" {
@@ -1323,7 +1313,7 @@ _pick() { # <source acct> <tier> <sid> → lf_pick_target's answer, with only wh
 rank_expiry_stub() { # $1 = how many leading calls expire (rc 3, no stdout); later calls answer next3
   export RANK_N="$BATS_TEST_TMPDIR/rank.n"; : > "$RANK_N"; export RANK_EXPIRE="$1"
   export ACC_LOG="$BATS_TEST_TMPDIR/acct.argv"; : > "$ACC_LOG"
-  cat > "$CC_ACCOUNTS_BIN" <<'SH'
+  cc_stub "${CC_ACCOUNTS_BIN%/*}" "${CC_ACCOUNTS_BIN##*/}" - <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "${ACC_LOG:?}"
 case "$*" in *--rank*) : ;; *) exit 0 ;; esac
@@ -1331,7 +1321,6 @@ echo x >> "${RANK_N:?}"
 [ "$(wc -l < "$RANK_N")" -le "${RANK_EXPIRE:?}" ] && { echo "claude-accounts: max-wait expired" >&2; exit 3; }
 printf 'next3 0.8\n'
 SH
-  chmod +x "$CC_ACCOUNTS_BIN"
 }
 
 @test "[D1.3] a router rc 3 (its window ran out) is asked ONCE more with a longer bound, and routes" {
@@ -1355,7 +1344,7 @@ SH
 
 @test "D1.3 CONTROL: a genuine no (rc 1, nothing routable) is final — not retried" {
   export ACC_LOG="$BATS_TEST_TMPDIR/acct.argv"; : > "$ACC_LOG"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$ACC_LOG"\ncase "$*" in *--rank*) echo "claude-accounts: no routable account for general: next3=5h-cutoff" >&2; exit 1 ;; esac\n' > "$CC_ACCOUNTS_BIN"
+  cc_stub "${CC_ACCOUNTS_BIN%/*}" "${CC_ACCOUNTS_BIN##*/}" "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$ACC_LOG"\ncase "$*" in *--rank*) echo "claude-accounts: no routable account for general: next3=5h-cutoff" >&2; exit 1 ;; esac\n')"
   run _pick next2 claude-opus-5 "$SID"
   [ "$status" -eq 1 ]
   [ "$(grep -c -- '--rank' "$ACC_LOG")" = 1 ] || { cat "$ACC_LOG"; false; }
@@ -1364,8 +1353,8 @@ SH
 
 # ── A PARK IS FOR WHEN NOTHING CAN HOST THE SESSION (operator ruling 2026-10-01) ─────────────────
 soft_router() { # $1=the router's reason text · $2=the --json rows
-  printf '#!/bin/bash\ncase "$*" in *--rank*) echo "claude-accounts: no routable account for general: %s" >&2; exit 1 ;; *--json*) echo %s ;; esac\n' \
-    "$1" "'{\"rows\":$2}'" > "$HOME/bin/claude-accounts"
+  cc_stub "$HOME/bin" claude-accounts "$(printf '#!/bin/bash\ncase "$*" in *--rank*) echo "claude-accounts: no routable account for general: %s" >&2; exit 1 ;; *--json*) echo %s ;; esac\n' \
+    "$1" "'{\"rows\":$2}'")"
 }
 @test "soft fallback: every account excluded only for a soft reason → the one with the most weekly headroom is taken" {
   soft_router "next3=recovery-weekly-thin; next4=kmax-concurrency" \
@@ -1389,8 +1378,8 @@ soft_router() { # $1=the router's reason text · $2=the --json rows
 
 # ── THE SESSION'S OWN ACCOUNT CAME BACK (2026-10-01) ─────────────────────────────────────────────
 own_acct() { # $1=the next2 row's extra JSON fields · rank answers next3 if anything asks
-  printf '#!/bin/bash\ncase "$*" in *--json*) echo %s ;; *--rank*) printf "next3 0.8\\n" ;; esac\n' \
-    "'{\"rows\":[{\"acct\":\"next2\"$1}]}'" > "$HOME/bin/claude-accounts"
+  cc_stub "$HOME/bin" claude-accounts "$(printf '#!/bin/bash\ncase "$*" in *--json*) echo %s ;; *--rank*) printf "next3 0.8\\n" ;; esac\n' \
+    "'{\"rows\":[{\"acct\":\"next2\"$1}]}'")"
   export LF_CC_TUI="$BATS_TEST_TMPDIR/cc-tui-own.sh" LF_NUDGE_ENGAGE_S=10
   cat > "$LF_CC_TUI" <<STUB
 cc_tui_submit() {
@@ -1433,8 +1422,7 @@ STUB
 
 @test "W3: rc 5 REFUSES the run and leaves census.tsv ABSENT — an empty file reads as a clean fleet" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
-  printf '#!/bin/sh\necho "cc-limited: instrument unreadable: accounts.json" >&2\nexit 5\n' \
-    > "$BATS_TEST_TMPDIR/cc-limited-5"; chmod +x "$BATS_TEST_TMPDIR/cc-limited-5"
+  cc_stub "$BATS_TEST_TMPDIR" cc-limited-5 "$(printf '#!/bin/sh\necho "cc-limited: instrument unreadable: accounts.json" >&2\nexit 5\n')"
   CC_LIMITED="$BATS_TEST_TMPDIR/cc-limited-5" LF_SLOW_SCAN=0 run bash "$FLEET" --recover
   [ "$status" -ne 0 ] || { echo "$output"; false; }
   [[ "$output" == *"INSTRUMENT UNREADABLE"* ]] || { echo "$output"; false; }
@@ -1451,13 +1439,12 @@ STUB
   # The contract's own words: rows ARE printed at 6. Treating 6 like 5 would discard a census that
   # is merely incomplete, which is the opposite error and just as silent.
   blocked_tx "$SEC" "$SID"
-  cat > "$BATS_TEST_TMPDIR/cc-limited-6" <<SH
+  cc_stub "$BATS_TEST_TMPDIR" cc-limited-6 - <<SH
 #!/bin/sh
 echo "cc-limited: degraded: marker file capped" >&2
 printf '$SID\t$SEC\tnext2\t-\t-\t$CWD\t-\tNO-PANE\tlimit\tlimit\t99\n'
 exit 6
 SH
-  chmod +x "$BATS_TEST_TMPDIR/cc-limited-6"
   CC_LIMITED="$BATS_TEST_TMPDIR/cc-limited-6" LF_SLOW_SCAN=0 run bash "$FLEET" --locate
   [[ "$output" == *"census DEGRADED"* ]] || { echo "$output"; false; }
   [[ "$output" == *"52e35019"*"NO-PANE"* ]] || { echo "$output"; false; }
@@ -1476,12 +1463,12 @@ SH
   # W4 measured 40.3 / 64.5 / 86.1 s of census on a path that had already been handed the sid.
   # The store resolver still runs first; this pins that the delegation did not quietly re-add it.
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
-  cat > "$BATS_TEST_TMPDIR/cc-limited-spy" <<SH
+  cc_stub "$BATS_TEST_TMPDIR" cc-limited-spy - <<SH
 #!/bin/sh
 printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/census-calls"
 exit 4
 SH
-  chmod +x "$BATS_TEST_TMPDIR/cc-limited-spy"; : > "$BATS_TEST_TMPDIR/census-calls"
+  : > "$BATS_TEST_TMPDIR/census-calls"
   CC_LIMITED="$BATS_TEST_TMPDIR/cc-limited-spy" LF_SLOW_SCAN=0 LRH_RC=0 \
     run bash "$FLEET" --one "${SID:0:8}" --target next3
   [ ! -s "$BATS_TEST_TMPDIR/census-calls" ] || { cat "$BATS_TEST_TMPDIR/census-calls"; false; }
@@ -1559,7 +1546,7 @@ SH
     >> "$TER/projects/$SLUG/$SID.jsonl"
   # (3) a live successor: an argv leaf, via a stub `ps` (as D7 does), so no real process is named
   mkdir -p "$BATS_TEST_TMPDIR/psbin"
-  cat > "$BATS_TEST_TMPDIR/psbin/ps" <<PS
+  cc_stub "$BATS_TEST_TMPDIR/psbin" ps - <<PS
 #!/bin/bash
 case "\$*" in
   *command=*) printf '%s\n' " 77721     1 claude --permission-mode auto --resume $SID" ;;
@@ -1567,7 +1554,7 @@ case "\$*" in
 esac
 PS
   # (4) a terminal that lists the husk window and records any close — never a real kitty
-  printf '#!/bin/bash\necho unix:/nonexistent/kitty-fixture\n' > "$BATS_TEST_TMPDIR/kitty-socket"
+  cc_stub "$BATS_TEST_TMPDIR" kitty-socket "$(printf '#!/bin/bash\necho unix:/nonexistent/kitty-fixture\n')"
   cat > "$BATS_TEST_TMPDIR/kitty" <<'SH'
 #!/bin/bash
 case "$*" in
@@ -1575,7 +1562,7 @@ case "$*" in
   *" ls") printf '[{"tabs":[{"windows":[{"id":"HUSKP-9x7z"}]}]}]\n' ;;
 esac
 SH
-  chmod +x "$BATS_TEST_TMPDIR/psbin/ps" "$BATS_TEST_TMPDIR/kitty-socket" "$BATS_TEST_TMPDIR/kitty"
+  chmod +x "$BATS_TEST_TMPDIR/kitty"   # left plain: it finds its log via dirname "$0"
   PATH="$BATS_TEST_TMPDIR/psbin:$PATH" CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/kitty-socket" \
     CC_TERM_KITTY="$BATS_TEST_TMPDIR/kitty" run bash "$FLEET" --retire-husks
   [[ "$output" == *"would retire — re-run with --yes"* ]] || { echo "the fixture never reached the --yes gate: $output"; false; }
@@ -1593,14 +1580,14 @@ husk_close_fixture() { # a complete proof for husk pane 4242 with --yes; the gua
   printf '{"type":"assistant","timestamp":"2026-09-09T00:52:00.000Z","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"the successor speaking"}]}}\n' \
     >> "$TER/projects/$SLUG/$SID.jsonl"
   mkdir -p "$BATS_TEST_TMPDIR/psbin"
-  cat > "$BATS_TEST_TMPDIR/psbin/ps" <<PS
+  cc_stub "$BATS_TEST_TMPDIR/psbin" ps - <<PS
 #!/bin/bash
 case "\$*" in
   *command=*) printf '%s\n' " 77721     1 claude --permission-mode auto --resume $SID" ;;
   *) exec /bin/ps "\$@" ;;
 esac
 PS
-  printf '#!/bin/bash\necho unix:/nonexistent/kitty-fixture\n' > "$BATS_TEST_TMPDIR/kitty-socket"
+  cc_stub "$BATS_TEST_TMPDIR" kitty-socket "$(printf '#!/bin/bash\necho unix:/nonexistent/kitty-fixture\n')"
   # lists window 4242 until a close-window is recorded, so the fresh-ls read-back sees the effect
   cat > "$BATS_TEST_TMPDIR/kitty" <<'SH'
 #!/bin/bash
@@ -1611,8 +1598,8 @@ case "$*" in
 esac
 SH
   # shellcheck disable=SC2016  # the stub's $* / ${STUB_RC} expand when the STUB runs
-  printf '#!/bin/bash\necho "$*" >> "%s"\nexit "${STUB_RC:-0}"\n' "$BATS_TEST_TMPDIR/fs-guard.log" > "$BATS_TEST_TMPDIR/fs-guard"
-  chmod +x "$BATS_TEST_TMPDIR/psbin/ps" "$BATS_TEST_TMPDIR/kitty-socket" "$BATS_TEST_TMPDIR/kitty" "$BATS_TEST_TMPDIR/fs-guard"
+  cc_stub "$BATS_TEST_TMPDIR" fs-guard "$(printf '#!/bin/bash\necho "$*" >> "%s"\nexit "${STUB_RC:-0}"\n' "$BATS_TEST_TMPDIR/fs-guard.log")"
+  chmod +x "$BATS_TEST_TMPDIR/kitty"   # left plain: it finds its log via dirname "$0"
 }
 husk_close_run() {
   # CC_CLOSE_COMPOSER_GUARD=off: the shim's composer guard reads get-text, which this kitty does not
@@ -1692,7 +1679,7 @@ husk_close_run() {
 # one is a write-and-exit, dispatched before any sweep — bin/claude-accounts:5830), so no case can
 # reach a live router or a live ledger.
 acct_stub() {
-  cat > "$CC_ACCOUNTS_BIN" <<'SH'
+  cc_stub "${CC_ACCOUNTS_BIN%/*}" "${CC_ACCOUNTS_BIN##*/}" - <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "${ACC_LOG:?}"
 case "$*" in
@@ -1705,7 +1692,6 @@ case "$*" in
 esac
 exit 0
 SH
-  chmod +x "$CC_ACCOUNTS_BIN"
   export ACC_LOG="$BATS_TEST_TMPDIR/acct.argv"; : > "$ACC_LOG"
   export ACC_SEQ="$BATS_TEST_TMPDIR/acct.seq"; : > "$ACC_SEQ"
   # EVERY knob is exported HERE, empty, even the ones no case sets by default. A `VAR=x run …`
@@ -2000,19 +1986,17 @@ overlapped() { # <log> <start-token> — 0 when the log DOES overlap (the pool a
 
 @test "RED PROOF (§9): a --dry-run --detach mails verdict=DRYRUN, never FAILED" {
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/cc-notify"
-  cat > "$CC_NOTIFY_BIN" <<SH
+  cc_stub "${CC_NOTIFY_BIN%/*}" "${CC_NOTIFY_BIN##*/}" - <<SH
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/notify.log"
 SH
-  chmod +x "$CC_NOTIFY_BIN"
   # The actuator must never be reached at all on this path; if it is, the dry run is not dry and
   # this test is measuring something else.
-  cat > "$LR_HANDOFF_BIN" <<'SH'
+  cc_stub "${LR_HANDOFF_BIN%/*}" "${LR_HANDOFF_BIN##*/}" - <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "${LRH_LOG:?}"
 exit 0
 SH
-  chmod +x "$LR_HANDOFF_BIN"
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   t0=$(date +%s)
   run bash "$FLEET" --one "$SID" --target next3 --source-pane 616 --dry-run --detach
@@ -2029,18 +2013,16 @@ SH
 
 @test "EQUIVALENCE GUARD (§9): FAILED still means attempted-and-broken — a real actuator failure keeps it" {
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/cc-notify"
-  cat > "$CC_NOTIFY_BIN" <<SH
+  cc_stub "${CC_NOTIFY_BIN%/*}" "${CC_NOTIFY_BIN##*/}" - <<SH
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/notify.log"
 SH
-  chmod +x "$CC_NOTIFY_BIN"
-  cat > "$LR_HANDOFF_BIN" <<'SH'
+  cc_stub "${LR_HANDOFF_BIN%/*}" "${LR_HANDOFF_BIN##*/}" - <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "${LRH_LOG:?}"
 echo "lr-handoff: exploded" >&2
 exit 1
 SH
-  chmod +x "$LR_HANDOFF_BIN"
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   t0=$(date +%s)
   run bash "$FLEET" --one "$SID" --target next3 --source-pane 616 --detach
@@ -2111,7 +2093,7 @@ one_slots_held() { # $1 = holder pid for slot-1 and slot-2
 # ══ D6.6 / D6.7 (LIMIT_RECOVER_FLEET_V2 W6b): a HOLD names itself, and a draft hold keeps the screen ═
 held_notify_stub() {
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/cc-notify" NOTIFY_LOG="$BATS_TEST_TMPDIR/notify.log"; : > "$NOTIFY_LOG"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$NOTIFY_LOG"\n' > "$CC_NOTIFY_BIN"; chmod +x "$CC_NOTIFY_BIN"
+  cc_stub "${CC_NOTIFY_BIN%/*}" "${CC_NOTIFY_BIN##*/}" "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$NOTIFY_LOG"\n')"
   export LF_COMPOSER_SNAPSHOT="$BATS_TEST_TMPDIR/lcs" LCS_LOG="$BATS_TEST_TMPDIR/lcs.log"; : > "$LCS_LOG"
   cat > "$LF_COMPOSER_SNAPSHOT" <<'SH'
 printf '%s\n' "$*" >> "${LCS_LOG:?}"
@@ -2150,7 +2132,7 @@ held_run() { # $1 = the HELD token lr-handoff prints (empty = none); $2 = focus
 # Pushover credentials exist. The phone leg for the rail is lr-page's alone (the reroute give-up page).
 @test "[1dc45a0d583c] a no-requester verdict reaches the desk with cc-notify's phone leg OFF" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"; held_notify_stub
-  printf '#!/bin/bash\nprintf "pf=%%s %%s\\n" "${CC_NOTIFY_PHONE_FALLBACK:-unset}" "$*" >> "$NOTIFY_LOG"\n' > "$CC_NOTIFY_BIN"
+  cc_stub "${CC_NOTIFY_BIN%/*}" "${CC_NOTIFY_BIN##*/}" "$(printf '#!/bin/bash\nprintf "pf=%%s %%s\\n" "${CC_NOTIFY_PHONE_FALLBACK:-unset}" "$*" >> "$NOTIFY_LOG"\n')"
   unset LR_FLEET_REQUESTER
   held_run ""
   grep -q '^pf=0 --role desk lr-fleet --one' "$NOTIFY_LOG" || { cat "$NOTIFY_LOG"; false; }
@@ -2158,7 +2140,7 @@ held_run() { # $1 = the HELD token lr-handoff prints (empty = none); $2 = focus
 
 @test "1dc45a0d583c CONTROL: a requester's mail keeps cc-notify's own default — only the desk call is muted" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"; held_notify_stub
-  printf '#!/bin/bash\nprintf "pf=%%s %%s\\n" "${CC_NOTIFY_PHONE_FALLBACK:-unset}" "$*" >> "$NOTIFY_LOG"\n' > "$CC_NOTIFY_BIN"
+  cc_stub "${CC_NOTIFY_BIN%/*}" "${CC_NOTIFY_BIN##*/}" "$(printf '#!/bin/bash\nprintf "pf=%%s %%s\\n" "${CC_NOTIFY_PHONE_FALLBACK:-unset}" "$*" >> "$NOTIFY_LOG"\n')"
   unset CC_NOTIFY_PHONE_FALLBACK
   export LR_FLEET_REQUESTER=999
   held_run ""
@@ -2224,7 +2206,7 @@ husk_fixture() {
   HL="$HB/lr-launch-${SID:0:8}-RK7r1I.sh"
   printf '#!/bin/bash\nexport LR_ADMIT_TOKEN=%s\nexec true\n' "$HTOK" > "$HL"
   export LF_HF_BIN="$BATS_TEST_TMPDIR/hf-stub"
-  cat > "$LF_HF_BIN" <<SH
+  cc_stub "${LF_HF_BIN%/*}" "${LF_HF_BIN##*/}" - <<SH
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/hf.argv"
 if [ -n "\${HF_STUB_REREGISTER:-}" ]; then
@@ -2237,7 +2219,6 @@ if [ -n "\${HF_STUB_HELD:-}" ]; then
 fi
 exit 0
 SH
-  chmod +x "$LF_HF_BIN"
   nudge_tui 0 1                                      # a nudge, if anything sends one, is recorded
 }
 
