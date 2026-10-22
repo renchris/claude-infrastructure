@@ -59,7 +59,46 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
   `scripts/limit-recover/lr-lib.sh:1338`, and the `reso-resume-one` callers in `bin/cc-resume-layout.sh`
   and `scripts/boot-resume-launch.sh` run it by path: left to W4 (call sites), sized by T-0.
 ### W2 agent-context-sync harness — routed
-### W3 infra test suites — in flight (session kte-w3, fired 2026-10-22 after T-1 passed)
+### W3 infra test suites — built 2026-10-22 (session kte-w3, fired 2026-10-22 after T-1 passed)
+
+Scope (frozen): tools/cc-shim + tests/cc-shim.bats, vendored bats-core 1.13.0 with "$BASH" internal
+calls run by bin/cc-bats, the tests/helpers cc_stub helper + tests/cc-stub.bats, the top-12 census test
+files converted, lint R4 wired into ship-land beside the HOOK SHEBANG arm.
+
+- **cc-shim** `tools/cc-shim/cc-shim.c` + `build.sh` (cache `~/.cache/cc-shim/<sha16>-<arch>/`, link
+  `~/.claude/libexec/cc-shim`, 0555, `--selftest` 26/26), best-effort build in `install.sh`. Matches the
+  kernel on 19/19 #! forms measured on 15.8.1; deliberate differences: no newline in 512 bytes, 513-byte
+  lines and bare `#!` exit 126 (the kernel's ENOEXEC lets a bash caller run the file silently);
+  `env NAME` is resolved on the caller's PATH and exec'd directly only when it is a Mach-O. Hop guard 16.
+  `tests/cc-shim.bats` is differential against by-path kernel runs (~17 kernel execs per run).
+- **bats-core 1.13.0** under `vendor/bats-core` (upstream tarball, = Homebrew's bytes), nine internal
+  execs run as `"$BASH" <path>` (`# cc-kalloc:` hunks; the six the REPORT named plus bin/bats, the
+  preprocessor and built-in formatters). `bin/cc-bats` prefers it (after the CC_BATS_REAL pin;
+  `CC_BATS_VENDORED=0` opts out), runs it through bash, and exports CC_SHIM. Upstream PR drafted, not
+  opened: `docs/research/kalloc-longterm-2026-10-21/upstream-bats-pr.md`.
+- **cc_stub** `tests/helpers/cc-stub.bash` (REPORT's `tests/lib/` does not exist): `cc_stub DIR NAME
+  BODY|-`, batch form `cc_stub_dir`/`cc_stub_finish`, plain fallback without CC_SHIM.
+- **R4** `scripts/test-stub-lint.sh` + `config/test-stub-baseline.tsv`; a `cc_stub` body never counts;
+  the ship-land arm refuses a count over baseline and a raised baseline row.
+- **Learnings.** A converted stub must be one the subject EXECS: `python3 "$x"`, `bash "$x"`, read,
+  listed or committed-as-data fixtures stay plain (a link to a Mach-O breaks them). A body keyed on
+  `$0` sees `.<D>-real/NAME`. At load 300-480 teammate panes would not spawn (kitty launch rc 124), so
+  the conversions ran on the three existing teammates and the lead.
+- **Converted, census order** (exec'd stubs converted / left plain; every file run before, with
+  cc-shim, and plain): boot-resume 27/1 (93/93), boundary-handoff-forks + bash-hook-trims-forks via
+  `tests/stop-hook-forks-helpers.bash` (batch form, every PATH name; 6 and 10 tests, same results all
+  arms — boundary-handoff test 5 is a pre-existing wall-clock flake), ship-land 15/~95 (185/185),
+  autonomy-sweep 11/22 (mostly red at load ~370 before and after on its 30 s subject bound; the 26
+  cases that reach a converted stub pass with the bound raised), accounts-board 4/1 (42/42),
+  operator-readout 8/56 (134/134), cc-reaper 49/3 (236/236), lr-fleet 36/4 (same 5 reds as before),
+  cc-offload 24/4 (60/60), deploy-live 9/13 (168/168); postland-verify follows in its own land. The
+  ~95 left in ship-land are fixture-repo content the gate commits and shellchecks.
+- **Vendored shellcheck.** Upstream's files fail bare shellcheck on SC1091/SC2034/SC2154 only;
+  `vendor/bats-core/.shellcheckrc` waives those three for that tree (the patch adds none).
+- **Not built, and why:** the plain arm of ship-land.bats was still running at land (shim arm 185/185);
+  the `-j` GNU-parallel path of the bats patch is untested (no `parallel` on this box); the upstream
+  bats PR is drafted, not opened (brief). Land: `git log origin/main --grep 'cc_stub\|cc-shim\|R4' --oneline`.
+
 ### W4 call sites — waiting on W3
 ### W5 keep-it-fixed loop — DONE 2026-10-22 (session kte-w5; landed through `f35645dea`, lead-verified by content)
 
