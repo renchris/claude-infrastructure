@@ -1,0 +1,13 @@
+# shellcheck configuration for the vendored bats-core 1.13.0 (VENDORED.md) — not our code.
+#
+# The land gate shellchecks every changed shell file BARE (scripts/ship-land.sh run_gate), and
+# shellcheck reads the NEAREST .shellcheckrc, so this file replaces the repo-root one for this tree.
+# Upstream's files carry three codes, each measured on the unpatched v1.13.0 tarball with the same
+# finding set as our patched copy (the "$BASH" patch adds none):
+#   SC1091 (info)    `source "$BATS_ROOT/lib/…"`: a runtime path shellcheck cannot follow without -x.
+#   SC2034 (warning) variables set for the test file that bats sources later (bats-gather-tests,
+#                    test_functions.bash, tracing.bash) — used, just not in the same file.
+#   SC2154 (warning) the mirror image: variables those sourced libs define for the file reading them.
+# Waived here, for this tree only, rather than editing upstream lines we re-vendor verbatim.
+# SC2001/SC2015 repeat the repo-root policy, which this file shadows.
+disable=SC1091,SC2034,SC2154,SC2001,SC2015
