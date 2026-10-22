@@ -809,7 +809,8 @@ mk_live_worktree() { # <repo-name> <branch> <wtpath>   — a REAL worktree, left
 rr_decide() { # $1=claude rc → runs rr_close_on_clean_exit; status 0 = close, 1 = keep
   local fn; fn="$(sed -n '/^rr_close_on_clean_exit() {/,/^}/p' "$RRO")"
   [ -n "$fn" ] || { echo "rr_close_on_clean_exit not found in $RRO"; return 2; }
-  run bash -c "$fn"$'\n''rr_close_on_clean_exit "$1"' "$RRO" "$1"
+  # cc-run.sh first: the function runs the fullscreen guard through cc_run (plan KALLOC W4).
+  run bash -c ". \"\$2\""$'\n'"$fn"$'\n''rr_close_on_clean_exit "$1"' "$RRO" "$1" "$REPO_ROOT/scripts/lib/cc-run.sh"
 }
 rr_env() { # the fullscreen guard (the close's LAST gate) is a stub logging argv, exiting $GUARD_RC (default 0)
   export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks" KITTY_WINDOW_ID=42

@@ -56,6 +56,8 @@
 #    at "worktree <wt> missing" having been admitted specifically on the promise that it would not.
 #    The repo is now DERIVED from the worktree itself; see resolve_repo.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 # The 4th positional stays the branch — boot-resume-launch.sh, boot-resume.sh and the
 # /resume-sessions runbook all pass it, and lr-select.py's 4th TSV column feeds it verbatim. Flags
@@ -1152,7 +1154,7 @@ rr_close_on_clean_exit() { # $1=claude's exit status → 0 close the pane / 1 ke
     _c="${_sd:+$_sd/kitty-fullscreen-guard}"
     [ -n "$_c" ] && [ -x "$_c" ] || _c="${HOME:-}/.claude/bin/kitty-fullscreen-guard"
   fi
-  if [ ! -x "$_c" ] || ! "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool reso-resume-one >&2; then
+  if [ ! -x "$_c" ] || ! cc_run "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool reso-resume-one >&2; then
     printf '[reso-resume-one] last pane of a fullscreen (or unreadable) kitty window, or no guard at %s — keeping the shell\n' "$_c" >&2
     return 1
   fi

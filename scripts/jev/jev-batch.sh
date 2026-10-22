@@ -19,6 +19,8 @@
 #      job refuses to exceed any of them. A token that authorises an unbounded act is not consent.
 # An agent must never write this file. The whole point is that a human did.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 _resolve_self() {
   local p="$1" d
@@ -57,7 +59,7 @@ if [ ! -f "$ARM" ]; then
     _log "not-armed — no call made (arm with: cc-jev arm)"
     exit 0
   fi
-  _live_sha="$("$ROOT/scripts/jev/promote-memory.sh" --corpus-sha 2>/dev/null)"
+  _live_sha="$(cc_run "$ROOT/scripts/jev/promote-memory.sh" --corpus-sha 2>/dev/null)"
   if [ -z "$_live_sha" ]; then
     _log "unattended: cannot read the live corpus identity — no call made"
     exit 0
@@ -83,7 +85,7 @@ EOF
     exit 0
   fi
   # Synthesise the same bounded terms an arming would have carried, from the same source of truth.
-  MAXC="$("$ROOT/scripts/jev/promote-memory.sh" --plan-calls 2>/dev/null)"
+  MAXC="$(cc_run "$ROOT/scripts/jev/promote-memory.sh" --plan-calls 2>/dev/null)"
   case "$MAXC" in ''|*[!0-9]*) MAXC=133 ;; esac
   CAPB="${CC_JEV_PROMO_CAP_B:-1200}"; EXPIRES="n/a (unattended)"; CORPUS="memory-orphans"
   _log "UNATTENDED — corpus ${_live_sha} differs from last completed (${_last_sha:-none}); max_calls=${MAXC}"

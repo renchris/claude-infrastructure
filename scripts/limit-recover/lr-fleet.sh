@@ -29,6 +29,8 @@
 # Iron rule 7 binds: this script never pushes, ships or deploys. Exit 0 = every located session
 # recovered (or nothing to do); 1 = PARTIAL, named gaps in the report; 2 = usage/refused.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; cc_run() { "$@"; }; fi
 
 _LF_SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 LR="$(cd "$(dirname "$_LF_SELF")" && pwd)"
@@ -403,7 +405,7 @@ lf_census() { # → the 11-field TSV on stdout; rc 0 ok · 5 instrument unreadab
   # CAPTURED, not streamed: rc 5 means the instrument could not look, and its contract is EMPTY
   # stdout. Streaming would let a stub — or a future partial write — put bytes on stdout that a
   # caller then stores as a census, and an empty-or-partial census.tsv reads as a clean fleet.
-  _rows="$("$_cl" --all --tsv 2>"$_err")"; _rc=$?
+  _rows="$(cc_run "$_cl" --all --tsv 2>"$_err")"; _rc=$?
   [ -s "$_err" ] && sed 's/^/lr-fleet: /' "$_err" >&2
   rm -f "$_err"
   case "$_rc" in
@@ -714,7 +716,7 @@ lf_rank_why() { # $1=the rank's stderr file → the router's own reason text on 
 lf_charge_assign() { # $1=account → always 0; the stderr line IS the record when it does not land
   [ "${DRY:-0}" = 1 ] && { echo "lr-fleet: DRY — not charging --assign $1 (nothing is launching)" >&2; return 0; }
   [ -x "$ACCOUNTS" ] || return 0
-  "$ACCOUNTS" --assign "$1" --src lr-fleet >/dev/null 2>&1 \
+  cc_run "$ACCOUNTS" --assign "$1" --src lr-fleet >/dev/null 2>&1 \
     || echo "lr-fleet: --assign $1 was NOT recorded — the router cannot see this recovery until it burns; a concurrent pick may stack onto the same account" >&2
   return 0
 }
@@ -739,7 +741,7 @@ lf_rank_timed() { # $1=kind $2=stderr file $3=run dir [$4=source account] → th
   case "$rw" in ''|*[!0-9]*) rw=15 ;; esac
   for try in 1 2; do
     t0="$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%d", time*1000' 2>/dev/null || echo 0)"
-    rc=0; out="$("$ACCOUNTS" --rank "$kind" --recovery --max-wait "$w" ${srcarg:+--src "$srcarg"} 2>>"$err")" || rc=$?
+    rc=0; out="$(cc_run "$ACCOUNTS" --rank "$kind" --recovery --max-wait "$w" ${srcarg:+--src "$srcarg"} 2>>"$err")" || rc=$?
     t1="$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%d", time*1000' 2>/dev/null || echo 0)"
     printf '%s kind=%s try=%s max_wait=%s rc=%s wall_ms=%s\n' "$(date -u +%FT%TZ)" "$kind" "$try" "$w" "$rc" "$(( t1 - t0 ))" \
       >> "$rdir/rank.timing" 2>/dev/null || true
@@ -1596,7 +1598,7 @@ case "$MODE" in
     # exec, not a pipe: there is nothing for this process to add, and a consumer reading the
     # census's schema directly cannot be desynchronised from it by a re-render here.
     if [ "$JSON" = 1 ] && [ "${LF_SLOW_SCAN:-0}" != 1 ] && [ -x "${CC_LIMITED:-$LR/../../bin/cc-limited}" ]; then
-      exec "${CC_LIMITED:-$LR/../../bin/cc-limited}" --all --json
+      cc_argv "${CC_LIMITED:-$LR/../../bin/cc-limited}"; exec "${CC_ARGV[@]}" --all --json
     fi
     # rc 6 IS NOT A REFUSAL. The contract says rows ARE printed at 6 — it means "this census is
     # incomplete", not "this census is absent" — so discarding them here would be the opposite
@@ -1808,7 +1810,7 @@ EOF
       # that earns the full census below. rc 5/6 are the instrument's, and are propagated verbatim.
       _cl="${CC_LIMITED:-$LR/../../bin/cc-limited}"; row=""; _q=4
       if [ "${LF_SLOW_SCAN:-0}" != 1 ] && [ -x "$_cl" ]; then
-        row="$("$_cl" --all --sid "$SID" --tsv 2>/dev/null)"; _q=$?
+        row="$(cc_run "$_cl" --all --sid "$SID" --tsv 2>/dev/null)"; _q=$?
         case "$_q" in
           3) echo "lr-fleet: --one $SID — the census calls this prefix AMBIGUOUS; pass the full uuid" >&2; exit 2 ;;
           5|6) echo "lr-fleet: --one $SID — census instrument rc $_q; not falling through to the slow scan over a broken instrument" >&2; exit "$_q" ;;
@@ -1913,12 +1915,12 @@ EOF
       printf '%s\n' "$_lf_msg" > "$FLEET_DIR/$RUN/verdict.txt"
       _lf_notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
       if [ -x "$_lf_notify" ]; then
-        if [ -n "${LR_FLEET_REQUESTER:-}" ]; then "$_lf_notify" "$LR_FLEET_REQUESTER" "$_lf_msg" || echo "lr-fleet: cc-notify to ${LR_FLEET_REQUESTER} FAILED — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2
+        if [ -n "${LR_FLEET_REQUESTER:-}" ]; then cc_run "$_lf_notify" "$LR_FLEET_REQUESTER" "$_lf_msg" || echo "lr-fleet: cc-notify to ${LR_FLEET_REQUESTER} FAILED — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2
         # The desk call mutes cc-notify's phone fallback (decision 1dc45a0d583c, as bin/cc-desk-page
         # does): the desk has no claimant, so the fallback would push "undeliverable page" for every
         # daemon verdict once phone creds exist. The rail's phone leg is lr-page's, at the reroute
         # give-up (lr-reset-poller.sh reroute_parked). Never the limited session's own pane.
-        else CC_NOTIFY_PHONE_FALLBACK=0 "$_lf_notify" --role desk "$_lf_msg" || echo "lr-fleet: no requester pane and the desk role did not take it — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2
+        else CC_NOTIFY_PHONE_FALLBACK=0 cc_run "$_lf_notify" --role desk "$_lf_msg" || echo "lr-fleet: no requester pane and the desk role did not take it — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2
         fi
       else
         echo "lr-fleet: cc-notify unreachable at $_lf_notify — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2

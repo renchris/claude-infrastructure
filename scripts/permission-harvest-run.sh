@@ -24,6 +24,8 @@
 # 3.11.4, and the tool must be exercised on the interpreter that will actually run it (§10 B3-7).
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 # ── BAND. `taskpolicy -c utility` HERE, never `ProcessType Background` in the plist. That key
 #    applies Darwin's darwinbg task role, a ONE-WAY floor: every descendant sits at PRI 4 and
@@ -347,7 +349,7 @@ note "verdict=$VERDICT rc=$HARVEST_RC actionable=$ACTIONABLE proposal=$BASENAME"
 # measured at 1,045 s. It resolves latest.json, so a decayed week still self-closes the stale row.
 if [ "$VERDICT" = "proposed" ] && [ "$ACTIONABLE" -gt 0 ]; then
   if [ -x "$BACKLOG" ] || command -v "$BACKLOG" >/dev/null 2>&1; then
-    "$BACKLOG" needs \
+    cc_run "$BACKLOG" needs \
       "Apply the $ACTIONABLE harvested allow rules in $BASENAME (proposed $RUN_DATE)" \
       --project claude-infrastructure \
       --class needs-human --receipt "$OUT/$BASENAME" \

@@ -36,6 +36,8 @@
 #        · CC_PANE_CLOSE_QUEUE_DIR (the lib's).
 
 set -u
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; cc_run() { "$@"; }; fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
@@ -61,11 +63,12 @@ for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/
   [[ -n "$_c" && -x "$_c" ]] && { PCQ_TIMEOUT_BIN="$_c"; break; }
 done
 bounded() {
+  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }   # #! via its interpreter (cc-run.sh)
   if [[ -z "$PCQ_TIMEOUT_BIN" ]]; then "$@"; return $?; fi
   "$PCQ_TIMEOUT_BIN" -k 3 "$TIMEOUT_S" "$@"
 }
 
-page() { "$PAGE_BIN" --source pane-close-retry "$1" >/dev/null 2>&1 || true; }
+page() { cc_run "$PAGE_BIN" --source pane-close-retry "$1" >/dev/null 2>&1 || true; }
 
 # ── self-close rows: observe, page once, tell the session once — never act ─────────────────────
 # Two one-shot signals with different preconditions. The desk page needs only a dead retrier, so it
@@ -109,10 +112,10 @@ done 3<<<"$ROWS"
 # The LIVE socket first, then a row's recorded one. A row's socket can name a kitty that has since
 # restarted: asking it would hold every row forever, and comparing a row against its own socket
 # could never notice the generation change in (b).
-KITTY="${CC_PCQ_KITTY_BIN:-$("$HERE/../bin/cc-kitty-bin" 2>/dev/null || command -v kitty 2>/dev/null || true)}"
+KITTY="${CC_PCQ_KITTY_BIN:-$(cc_run "$HERE/../bin/cc-kitty-bin" 2>/dev/null || command -v kitty 2>/dev/null || true)}"
 IT2="${CC_PCQ_IT2_BIN:-$(command -v it2 2>/dev/null || echo "$HOME/.claude/bin/it2")}"
 SOCK="${KITTY_LISTEN_ON:-}"
-[[ -n "$SOCK" ]] || SOCK="$("${CC_PCQ_KITTY_SOCKET_BIN:-$HERE/../bin/cc-kitty-socket}" 2>/dev/null || true)"
+[[ -n "$SOCK" ]] || SOCK="$(cc_run "${CC_PCQ_KITTY_SOCKET_BIN:-$HERE/../bin/cc-kitty-socket}" 2>/dev/null || true)"
 if [[ -z "$SOCK" ]]; then
   while IFS= read -r _row <&3; do
     SOCK="$(pcq_get "$_row" kitty_sock)"; [[ -n "$SOCK" ]] && break

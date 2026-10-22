@@ -117,6 +117,8 @@
 #      CC_DEPLOY_PARITY_ASSERT (UNSET ⇒ scripts/deploy-parity-assert.sh; SET-EMPTY ⇒ refresh off) ·
 #      CC_DEPLOY_MIGRATIONS (UNSET ⇒ scripts/deploy-migrations.sh; SET-EMPTY ⇒ migration converge off).
 # bash-3.2-safe, no eval, fail-closed, never rolls back.
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -uo pipefail
 
 DEPLOY_REPO="${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
@@ -821,8 +823,8 @@ refusal_escalate() { # <class> <msg> <n> <first-epoch> <now>
     # …and the row is filed WITHOUT --run when there is none, rather than with a placeholder: an
     # operator-facing row whose command cannot help is what `cc-do` would offer to run for them.
     if [ -n "$run" ]
-      then id="$("$BACKLOG_BIN" needs "$title" --class needs-human --run "$run" --project claude-infrastructure 2>/dev/null || true)"
-      else id="$("$BACKLOG_BIN" needs "$title" --class needs-human --project claude-infrastructure 2>/dev/null || true)"
+      then id="$(cc_run "$BACKLOG_BIN" needs "$title" --class needs-human --run "$run" --project claude-infrastructure 2>/dev/null || true)"
+      else id="$(cc_run "$BACKLOG_BIN" needs "$title" --class needs-human --project claude-infrastructure 2>/dev/null || true)"
     fi
     id="$(printf '%s' "$id" | tr -d '[:space:]')"
   fi
@@ -1053,7 +1055,7 @@ host_cut_page() { # <suite> <n> <deployed-sha> — an HONEST page: names no test
   # is left UNEXPANDED: cc-premise runs the stored string through `/bin/sh -c`, so it resolves at
   # probe time rather than pinning the record to whatever tree deployed. The suite is single-quoted
   # for that second parse.
-  [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
+  [ -x "$BACKLOG_BIN" ] && cc_run "$BACKLOG_BIN" add \
     --title "post-deploy HOST CUT (no verdict): $1" \
     --falsifier "$(fals_host "$1")" \
     --project claude-infrastructure --source deploy-live >/dev/null
@@ -1268,7 +1270,7 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
   # in tests/deploy-live.bats), and `fals_host_set` already strips these counts because they are
   # not part of the path either. The magnitudes stay where they belong — the log line above and the
   # page's `failing:` line, both of which are per-deploy and meant to move.
-  [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
+  [ -x "$BACKLOG_BIN" ] && cc_run "$BACKLOG_BIN" add \
     --title "post-deploy HOST RED:$(printf '%s' "$red" | sed 's/([0-9]*)//g')" \
     --falsifier "$(fals_host_set "$red")" \
     --project claude-infrastructure --source deploy-live >/dev/null
@@ -1768,10 +1770,10 @@ migrations_converge() { # never fails, never changes the exit code
   # nothing", and a converge step that quietly ran for real underneath it would make the operator's
   # one safe way to inspect a deploy the thing that performs it.
   if [ "$DRY_RUN" -eq 1 ]; then
-    "$MIGRATIONS_BIN" --dry-run || true
+    cc_run "$MIGRATIONS_BIN" --dry-run || true
     return 0
   fi
-  "$MIGRATIONS_BIN" || say "migration converge reported a FAILURE — see $STATE_MIGRATIONS/failed/ (the deploy itself stands: a migration failure is a finding about the enforcing store, and scripts/wrap-ledger.sh is what refuses ✅ while it holds)"
+  cc_run "$MIGRATIONS_BIN" || say "migration converge reported a FAILURE — see $STATE_MIGRATIONS/failed/ (the deploy itself stands: a migration failure is a finding about the enforcing store, and scripts/wrap-ledger.sh is what refuses ✅ while it holds)"
   return 0
 }
 STATE_MIGRATIONS="${CC_MIGRATIONS_STATE:-$HOME/.claude/autonomy/migrations}"
@@ -1951,11 +1953,11 @@ kitty_config_reload() {
   [ -x "$tool" ] || return 0
   if [ "$DRY_RUN" -eq 1 ]; then
     out="$(CC_KITTY_RELOAD_STAMP="${CC_KITTY_RELOAD_STAMP:-$HOME/.claude/autonomy/kitty-config-deployed}" \
-           "$tool" --would 2>/dev/null)" || true
+           cc_run "$tool" --would 2>/dev/null)" || true
     [ -n "$out" ] && say "kitty-reload: ${out#cc-kitty-reload: }"
     return 0
   fi
-  out="$("$tool" 2>&1)" || true
+  out="$(cc_run "$tool" 2>&1)" || true
   case "$out" in
     *verdict=unchanged*) : ;;                       # the common tick — silent by design
     *) [ -n "$out" ] && say "kitty-reload: ${out#cc-kitty-reload: }" ;;
@@ -2678,7 +2680,7 @@ fi
 # surfaced VERBATIM on both arms regardless — it is the producer's own account and this caller has
 # no business paraphrasing it.
 if [ -x "$DEPLOY_REPO/install.sh" ]; then
-  INSTALL_ERR="$("$DEPLOY_REPO/install.sh" 2>&1 >/dev/null)" && INSTALL_RC=0 || INSTALL_RC=$?
+  INSTALL_ERR="$(cc_run "$DEPLOY_REPO/install.sh" 2>&1 >/dev/null)" && INSTALL_RC=0 || INSTALL_RC=$?
   if [ "$INSTALL_RC" -ne 0 ]; then
     INSTALL_SAID="install.sh said: ${INSTALL_ERR:-<it printed nothing to stderr>}"
     BEHIND_TRUNK="$(g rev-list --count HEAD..origin/main 2>/dev/null || echo '?')"

@@ -51,6 +51,8 @@
 # CC_STRAND_FILL_KMAX (accounts.json router.KMAX) · CC_STRAND_FILL_PROMPT_FILE ·
 # CC_STRAND_FILL_FIRE_TIMEOUT_S · CC_STRAND_FILL_NOW (fixed clock).
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; fi
 
 case "${1:-}" in
   --tick) ;;
@@ -86,6 +88,7 @@ for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/
 done
 bounded() { # <seconds> <cmd…>
   local s="$1"; shift
+  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }   # #! via its interpreter (cc-run.sh)
   if [ -z "$TIMEOUT_BIN" ]; then "$@"; return $?; fi
   "$TIMEOUT_BIN" -k 5 "$s" "$@"
 }

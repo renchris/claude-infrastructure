@@ -122,6 +122,8 @@
 #   CC_CLOUD_STATE (shared with bin/cc-cloud, so the two can never disagree about a declaration).
 #
 # bash 3.2-safe (no declare -A / mapfile).
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -euo pipefail
 
 DEFAULT_SHARED="$HOME/Development/claude-infrastructure"
@@ -818,7 +820,7 @@ fill_paths() {  # <decl-id> — best-effort, never fatal to a land that already 
 handback_report() {
   local hb="$REPO/scripts/backlog-handback.sh"
   [ -x "$hb" ] || return 0
-  "$hb" render 2>/dev/null || true
+  cc_run "$hb" render 2>/dev/null || true
   return 0
 }
 
@@ -829,7 +831,7 @@ land_one() {  # <branch> — classify() must have run for it. → 0 landed, else
   [ "$DRY_RUN" = 1 ] && a+=(--dry-run)
   # The override is scoped to THIS command, never exported: nothing else inherits a widened
   # session-branch regex.
-  SHIP_LAND_SESSION_BRANCH_RE="$LAND_BRANCH_RE" "$LAND_BIN" "${a[@]}" || rc=$?
+  SHIP_LAND_SESSION_BRANCH_RE="$LAND_BRANCH_RE" cc_run "$LAND_BIN" "${a[@]}" || rc=$?
   return "$rc"
 }
 

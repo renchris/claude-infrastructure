@@ -188,6 +188,7 @@ FAKE
   x_pin="$(sed -n '/^pin_term_verdict_for_watcher() {/,/^}/p' "$HF")";   [ -n "$x_pin" ]
   eval "$x_kt"; eval "$x_socks"; eval "$x_tmpl"; eval "$x_ans"; eval "$x_field"
   eval "$x_acc"; eval "$x_say"
+  . "$REPO/scripts/lib/cc-run.sh"   # the pin runs cc-in-kitty through cc_run
   eval "$x_term"; eval "$x_pin"
 
   clean_term

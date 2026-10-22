@@ -55,6 +55,8 @@
 # Exit: 0 ok · 1 the verb's own failure · 2 usage · 3 a precondition is not met (setup grades it).
 
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 _self="${BASH_SOURCE[0]}"
 while [ -L "$_self" ]; do
@@ -633,12 +635,12 @@ cmd_up() {
     mkfifo "$FIRE_FIFO" 2>/dev/null || : >"$FIRE_LOG"
     if [ -p "$FIRE_FIFO" ]; then
       tee "$FIRE_LOG" <"$FIRE_FIFO" >&2 & local tee_pid=$!
-      ( cd "$REPO" && CC_FIRE_CLOUD=on "$FIRE_BIN" --cloud --prompt-file "$pf" --account "$account" $dry ) 2>"$FIRE_FIFO"
+      ( cd "$REPO" && CC_FIRE_CLOUD=on cc_run "$FIRE_BIN" --cloud --prompt-file "$pf" --account "$account" $dry ) 2>"$FIRE_FIFO"
       rc=$?
       wait "$tee_pid" 2>/dev/null
       rm -f "$FIRE_FIFO"
     else
-      ( cd "$REPO" && CC_FIRE_CLOUD=on "$FIRE_BIN" --cloud --prompt-file "$pf" --account "$account" $dry ) 2>"$FIRE_LOG"
+      ( cd "$REPO" && CC_FIRE_CLOUD=on cc_run "$FIRE_BIN" --cloud --prompt-file "$pf" --account "$account" $dry ) 2>"$FIRE_LOG"
       rc=$?
       cat "$FIRE_LOG" >&2
     fi
@@ -889,7 +891,7 @@ cmd_watch() {
     [ -x "$SPLIT_BIN" ] || { note "cc-offload: $SPLIT_BIN missing"; return 3; }
     # Delegated so the anchor discipline (--match/--next-to/--source-window) stays in ONE place —
     # a bare `kitty @ launch` splits whatever tab kitty last focused, not the calling pane.
-    "$SPLIT_BIN" --location vsplit --cwd "$REPO" --title "cloud" --keep-focus \
+    cc_run "$SPLIT_BIN" --location vsplit --cwd "$REPO" --title "cloud" --keep-focus \
       -- "$_self" watch --interval "$interval"
     return $?
   fi
@@ -920,12 +922,12 @@ cmd_land() {
 
   if [ "$all" = 0 ]; then
     printf '%sBranches the cloud has pushed home:%s\n' "$C_HEAD" "$C_OFF"
-    "$RECONCILE_BIN" --list
+    cc_run "$RECONCILE_BIN" --list
     local rc=$?
     [ "$rc" = 0 ] && printf '\n%sLand them:%s cc-offload land --all\n' "$C_META" "$C_OFF"
     return "$rc"
   fi
-  CONFIRM=1 "$RECONCILE_BIN" --all $dry "${extra[@]+"${extra[@]}"}"
+  CONFIRM=1 cc_run "$RECONCILE_BIN" --all $dry "${extra[@]+"${extra[@]}"}"
 }
 
 # ═══ open ════════════════════════════════════════════════════════════════════════════════════════

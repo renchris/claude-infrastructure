@@ -24,6 +24,8 @@
 #
 # ⚠️ RED TODAY BY DESIGN (bin/cc-respawn unbuilt). Exit: 0 = every criterion met · 1 = not ready.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 cd "$(dirname "$0")/.." || exit 2
 PASS=0; FAIL=0; TODO=0
 ok(){   printf '  ✅ %-5s %s\n' "$1" "$2"; PASS=$((PASS+1)); }
@@ -43,7 +45,7 @@ if [ ! -f "$TOOL" ]; then
   todo "RS-e" "NOT BUILT — OUTCOME RECORDS (abstention law): every phase writes {prepared|refused|stop-verified|stop-failed|spawn-verified|spawn-missing} to ~/.claude/respawn/ (CC_RESPAWN_RECORDS_DIR) — a silent respawn protocol cannot be audited."
   todo "RS-f" "NOT BUILT — EFFECT-VERIFIED SPAWN: verify-spawned proves a successor process for --member is LIVE (ps command-line carries --agent-name <member> — the memory-verified method), exit 5 LOUD when absent. A respawn is not delivered until the successor is SEEN running."
 else
-  "$TOOL" selftest >/dev/null 2>&1 && ok "RS" "cc-respawn selftest GREEN — RS-a GO-in-brief fail-closed, RS-b checkpoint-before-stop, RS-c effect-verified stop ({pid,start} identity, live→5/dead→0/recycled→0), RS-d continuity fields, RS-e outcome records on every path, RS-f effect-verified spawn all fire RED-provably" || bad "RS" "cc-respawn selftest not green — an RS-a..f RED-proof does not fire"
+  cc_run "$TOOL" selftest >/dev/null 2>&1 && ok "RS" "cc-respawn selftest GREEN — RS-a GO-in-brief fail-closed, RS-b checkpoint-before-stop, RS-c effect-verified stop ({pid,start} identity, live→5/dead→0/recycled→0), RS-d continuity fields, RS-e outcome records on every path, RS-f effect-verified spawn all fire RED-provably" || bad "RS" "cc-respawn selftest not green — an RS-a..f RED-proof does not fire"
   if [ -f tests/cc-respawn.bats ] && command -v bats >/dev/null 2>&1; then
     # `</dev/null`: bats INHERITS stdin into every test, so a suite stubbing a stdin-consuming binary
     # with an unconditional `cat` hangs forever when stdin never EOFs (5e460544 measured rc 124;

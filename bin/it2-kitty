@@ -91,6 +91,8 @@
 # Seams: CC_TERM_KITTY (kitty binary) · CC_TERM_KITTY_TO (socket) · IT2_KITTY_TIMEOUT_S
 #        · CC_TERM_KITTY_PID (optional: the kitty pid a delivery target must live in — prove_target
 #          refuses a window whose env.KITTY_PID differs or is absent; exit 1, like any refusal there)
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 set -uo pipefail
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); these are Mach-O. Linux: coreutils.
@@ -1658,7 +1660,7 @@ else:
       # of re-running the same verdict 4 times (incident 2026-10-16, 3 husk episodes x 4 retries).
       # The other refusals keep exit 1 and are retried, because under load they can be transient.
       # Not 3 (that is "not inside kitty", above) and not 64-69 (taken).
-      { _fserr="$(CC_TERM_KITTY="$KITTY_BIN" "$_fsg" --window "$SESSION" \
+      { _fserr="$(CC_TERM_KITTY="$KITTY_BIN" cc_run "$_fsg" --window "$SESSION" \
           --to "${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}" --mode refuse --scope pane --tool it2-kitty \
           2>&1 1>&3 3>&-)"; _fsrc=$?; } 3>&1
       [ -z "$_fserr" ] || printf '%s\n' "$_fserr" >&2

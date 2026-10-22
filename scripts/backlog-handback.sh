@@ -76,6 +76,8 @@
 #   66 at least one record in the store is malformed (reported, never silently skipped) ·
 #   70 at least one apply failed.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 REPO_DIR="${CC_HANDBACK_REPO:-$(cd "$(dirname "$SELF")/.." && pwd)}"
@@ -114,7 +116,7 @@ load_ledger() {
   LEDGER_OK=0; LEDGER_JSON="[]"
   [ -f "$LEDGER" ] || return 1          # the cloud case — see "CANNOT FOLD" above
   [ -x "$CB" ] || command -v "$CB" >/dev/null 2>&1 || return 1
-  local out; out="$("$CB" list --all --json 2>/dev/null)" || return 1
+  local out; out="$(cc_run "$CB" list --all --json 2>/dev/null)" || return 1
   [ -n "$out" ] || return 1
   printf '%s' "$out" | "$JQ" -e 'type == "array"' >/dev/null 2>&1 || return 1
   LEDGER_JSON="$out"; LEDGER_OK=1; return 0
@@ -322,13 +324,13 @@ cmd_apply() {
     if [ "$dry" = 1 ]; then say "would apply: $R_VERB $R_ID"; done_n=$((done_n + 1)); continue; fi
     local rc=0
     if [ "$R_VERB" = "done" ]; then
-      "$CB" "done" "$R_ID" --evidence "$R_EVIDENCE" >/dev/null 2>&1 || rc=$?
+      cc_run "$CB" "done" "$R_ID" --evidence "$R_EVIDENCE" >/dev/null 2>&1 || rc=$?
     else
       # THE CLASS GATE: the relayed needs text keeps its own class prefix; else it is an operator step
       # (needs-human), and the handback record it came from is the receipt.
       local hcls=needs-human
       case "$R_NEEDS" in needs-credential*|needs-human*|not-yet-true*|no-capacity*|"On or after "*) hcls="" ;; esac
-      "$CB" block "$R_ID" --needs "$R_NEEDS" ${hcls:+--class "$hcls"} --conviction 80 --receipt "$f" >/dev/null 2>&1 || rc=$?
+      cc_run "$CB" block "$R_ID" --needs "$R_NEEDS" ${hcls:+--class "$hcls"} --conviction 80 --receipt "$f" >/dev/null 2>&1 || rc=$?
     fi
     if [ "$rc" -ne 0 ]; then
       warn "✗ ${R_ID} ${R_VERB} — cc-backlog exited $rc ($f)"; failed=$((failed + 1)); continue
@@ -378,7 +380,7 @@ selftest() {
 
   # THE BOX CASE: a real ledger, the real cc-backlog.
   local rid
-  rid="$("$CB" add --title 'handback selftest row' --project claude-infrastructure 2>/dev/null)"
+  rid="$(cc_run "$CB" add --title 'handback selftest row' --project claude-infrastructure 2>/dev/null)"
   # Double-quoted so $rid EXPANDS — `[ -n '$rid' ]` tests the literal string and is true forever,
   # which is a test that cannot fail and therefore proves nothing (memory: control-must-replay).
   t "fixture row filed"                                "[ -n \"$rid\" ]"

@@ -126,6 +126,8 @@
 #
 # Usage:  cc-spawn-verify <agent-name> [--timeout N] [--quiet] [--cloud <session-id>]
 #         cc-spawn-verify --all <name>...      → verifies each, exits non-zero if ANY is not RUNNING
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -euo pipefail
 
 TIMEOUT="${CC_SPAWN_VERIFY_TIMEOUT:-25}"
@@ -240,7 +242,7 @@ is_offbox() {
   local id="${CLOUD_ID:-$1}"
   [ -n "$id" ] || return 1
   [ -n "$CC_CLOUD" ] && [ -x "$CC_CLOUD" ] || return 1
-  "$CC_CLOUD" is-offbox "$id" >/dev/null 2>&1
+  cc_run "$CC_CLOUD" is-offbox "$id" >/dev/null 2>&1
 }
 
 # ── IS THE AGENT PROCESS RUNNING? ────────────────────────────────────────────────────────────────

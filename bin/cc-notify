@@ -156,6 +156,8 @@
 #   8 = a --cloud send the API REFUSED (ok:false, or an unparseable answer) — stderr carries its reason;
 #   124 = killed by a signal mid-send (a caller's own bound fired) — read `enqueued=` on stderr to
 #   learn whether the message persisted; the rc alone cannot tell you.
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -uo pipefail
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
@@ -665,7 +667,7 @@ if [ "$CLOUD_GIVEN" = 1 ]; then
     echo "  refusing the send: an unobservable target cannot carry a checkable delivery claim." >&2
     exit 3
   fi
-  if ! "$CC_CLOUD" is-offbox "$CLOUD_ID" >/dev/null 2>&1; then
+  if ! cc_run "$CC_CLOUD" is-offbox "$CLOUD_ID" >/dev/null 2>&1; then
     verdict cloud-unobservable reason=undeclared "cloud=$CLOUD_ID"
     echo "cc-notify: [$CLOUD_ID] is NOT a declared, unretired cloud session — refusing to send." >&2
     echo "  an undeclared cloud target is unobservable from this box (no pane, no pid, no transcript,"  >&2
@@ -685,7 +687,7 @@ if [ "$CLOUD_GIVEN" = 1 ]; then
       CLOUD_CLAUDE="$("$_sd/cc-claude-bin" 2>/dev/null || true)"
     fi
     if [ -z "$CLOUD_CLAUDE" ] && [ -x "$HOME/.claude/bin/cc-claude-bin" ]; then
-      CLOUD_CLAUDE="$("$HOME/.claude/bin/cc-claude-bin" 2>/dev/null || true)"
+      CLOUD_CLAUDE="$(cc_run "$HOME/.claude/bin/cc-claude-bin" 2>/dev/null || true)"
     fi
   fi
   if [ -z "$CLOUD_CLAUDE" ] || [ ! -x "$CLOUD_CLAUDE" ]; then
@@ -711,7 +713,7 @@ if [ "$CLOUD_GIVEN" = 1 ]; then
   # current account" is precisely the guess that manufactures the misleading error. It gets its own
   # warning and proceeds unrouted, because refusing would strand every declaration made before
   # today — but it is never silent.
-  CLOUD_ACCT="$("$CC_CLOUD" show "$CLOUD_ID" 2>/dev/null | sed -n 's/^account=//p' | head -1)"
+  CLOUD_ACCT="$(cc_run "$CC_CLOUD" show "$CLOUD_ID" 2>/dev/null | sed -n 's/^account=//p' | head -1)"
   CLOUD_CFG=""
   if [ -n "$CLOUD_ACCT" ]; then
     CLOUD_CFG="$(jq -r --arg a "$CLOUD_ACCT" '.accounts[]? | select(.name==$a) | (.config_dir // empty)' \
@@ -1466,7 +1468,7 @@ _wake_headless() {   # rc 0 = a turn was genuinely queued; any other rc = not wo
   [ -n "$wbin" ] && [ -x "$wbin" ] || { echo "cc-notify: no cc-wake-headless available to wake [$u]" >&2; return 1; }
   # stdout folded onto stderr: this runs on the send path, whose stdout is the caller's, and the
   # waker's diagnostics belong beside cc-notify's own verdict lines.
-  "$wbin" "$u" >&2
+  cc_run "$wbin" "$u" >&2
 }
 
 # ── SOCKET WAKE FOR A DEAF IDLE PANE (docs/plans/AGENT_PEER_WAKE.md, capability 1) ─────────────────
@@ -1485,7 +1487,7 @@ _wake_pane() {   # rc 0 = a turn was queued; any other rc = not woken (cc-wake's
     for wbin in "$_sd/cc-wake" "$HOME/.claude/bin/cc-wake" ""; do [ -n "$wbin" ] && [ -x "$wbin" ] && break; done
   fi
   [ -n "$wbin" ] && [ -x "$wbin" ] || return 1
-  "$wbin" "$u" --no-wait --from "${FROM:-unknown}" >/dev/null 2>"$MAILBOX_DIR/.cc-wake-last.$$" ; local rc=$?
+  cc_run "$wbin" "$u" --no-wait --from "${FROM:-unknown}" >/dev/null 2>"$MAILBOX_DIR/.cc-wake-last.$$" ; local rc=$?
   sed 's/^/  /' "$MAILBOX_DIR/.cc-wake-last.$$" >&2 2>/dev/null; rm -f "$MAILBOX_DIR/.cc-wake-last.$$"
   return "$rc"
 }

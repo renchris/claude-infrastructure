@@ -58,6 +58,8 @@
 #   DRI_ROLES_DIR · DRI_ROLE · DRI_IDL · DRI_PAGES_DIR · DRI_NOTIFY · DRI_PUSH · DRI_PS ·
 #   DRI_PGREP · DRI_HOME · DRI_STATE_SUBDIR · DRI_PAGE_DEDUP_S
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
 CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
@@ -131,7 +133,7 @@ page() { # $1=verdict $2=message $3=remediation-command
   else command -v osascript >/dev/null 2>&1 && \
     dri_osa osascript -e "display notification \"${2//\"/}\" with title \"Desk recycle INERT (${1//\"/})\"" >/dev/null 2>&1 || true
   fi
-  [ -x "$PUSH" ] && "$JQ" -cn --arg m "$2" '{message:$m}' | "$PUSH" >/dev/null 2>&1
+  [ -x "$PUSH" ] && "$JQ" -cn --arg m "$2" '{message:$m}' | cc_run "$PUSH" >/dev/null 2>&1
   return 0
 }
 

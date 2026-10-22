@@ -31,6 +31,8 @@
 #   scripts/banner-timeline-anchor.sh assets/banner/v6a-long-night.svg [--gap 25]
 
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ASSET="${1:-}"; shift || true
@@ -78,7 +80,7 @@ shoot "$WORK/raw-second.png"
 
 # frozen references bracketing BOTH hypotheses: t≈0 and t≈GAP
 TIMES="0,0.5,1,2,3,$(python3 -c "print(max(0,$GAP-1))"),$GAP,$(python3 -c "print($GAP+1)")"
-"$HERE/banner-shots.sh" "$ASSET" --times "$TIMES" --bg dark --scheme dark --scale 1 \
+cc_run "$HERE/banner-shots.sh" "$ASSET" --times "$TIMES" --bg dark --scheme dark --scale 1 \
   --out "$WORK/ref" >/dev/null 2>&1
 
 python3 - "$WORK" "$GAP" <<'PY'

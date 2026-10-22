@@ -44,6 +44,8 @@
 #              export TEAMMATE_CLOSE_GRACE_S=<sec>          (default 3) — grace before the detached pane close
 
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 # PATH hardening — scripts/unattended-path-lint.sh governs this line.
 # This file already learned this lesson on ONE of its two pane backends: the kitty leg routes through
@@ -680,7 +682,7 @@ for _c in "$HOOK_DIR/../scripts/lib/pane-close-queue.sh" \
 done
 
 # Best-effort desk page (never fatal).
-_page_desk() { "$CC_NOTIFY_BIN" --role desk "$1" >/dev/null 2>&1 || true; }
+_page_desk() { cc_run "$CC_NOTIFY_BIN" --role desk "$1" >/dev/null 2>&1 || true; }
 
 # Damped desk page: <fingerprint> <message>. The fingerprint is the page's STATE — never a clock or a
 # counter, which would change every sweep and silently disable damping while looking wired.
@@ -1170,7 +1172,7 @@ if $TREE_DIRTY && (( DEFER_COUNT + 1 < MAX_DEFERS )); then
   echo "$DEFER_COUNT" > "$DEFER_COUNTER"
   log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): dirty tree"
   # Snapshot what's there so we don't lose work if they never quiesce.
-  "$HOOK_DIR/teammate-checkpoint.sh" <<<"{\"hook_event_name\":\"TeammateIdle\",\"session_id\":\"$SESSION_ID\",\"cwd\":\"$WORKTREE\",\"team_name\":\"$TEAM_NAME\",\"teammate_name\":\"$TEAMMATE_NAME\"}" \
+  cc_run "$HOOK_DIR/teammate-checkpoint.sh" <<<"{\"hook_event_name\":\"TeammateIdle\",\"session_id\":\"$SESSION_ID\",\"cwd\":\"$WORKTREE\",\"team_name\":\"$TEAM_NAME\",\"teammate_name\":\"$TEAMMATE_NAME\"}" \
     2>/dev/null || true
   # Do NOT emit {"continue": false}; let the teammate keep working.
   exit 0
@@ -1247,7 +1249,7 @@ if [[ -n "$WORKTREE" && -x "$REAP_GUARD" ]]; then
   _rg_rc=0
   _budget_or_defer reap-guard
   # --transcript: reap-guard trusts it only when it names this sid's file, else it scans the roots.
-  "$REAP_GUARD" decide --worktree "$WORKTREE" --member "$TEAMMATE_NAME" --spawn-time "$_spawn_s" --session-id "$SESSION_ID" \
+  cc_run "$REAP_GUARD" decide --worktree "$WORKTREE" --member "$TEAMMATE_NAME" --spawn-time "$_spawn_s" --session-id "$SESSION_ID" \
       --tree-scope "$_tree_scope" --tree-verdict "$TREE_VERDICT" ${TRANSCRIPT_PATH:+--transcript "$TRANSCRIPT_PATH"} \
       >/dev/null 2>&1 || _rg_rc=$?
   if (( _rg_rc != 0 )); then
@@ -1340,7 +1342,7 @@ log "Auto-shutdown idle teammate: $TEAMMATE_NAME (team: $TEAM_NAME) t=${SECONDS}
 # This must happen BEFORE git worktree remove.
 CHECKPOINT_OK=false
 if [[ -n "$WORKTREE" ]]; then
-  "$HOOK_DIR/teammate-checkpoint.sh" <<<"{\"hook_event_name\":\"TeammateIdle\",\"session_id\":\"$SESSION_ID\",\"cwd\":\"$WORKTREE\",\"team_name\":\"$TEAM_NAME\",\"teammate_name\":\"$TEAMMATE_NAME\"}" \
+  cc_run "$HOOK_DIR/teammate-checkpoint.sh" <<<"{\"hook_event_name\":\"TeammateIdle\",\"session_id\":\"$SESSION_ID\",\"cwd\":\"$WORKTREE\",\"team_name\":\"$TEAM_NAME\",\"teammate_name\":\"$TEAMMATE_NAME\"}" \
     2>/dev/null || true
   # ── ASSERT ON THE ARTIFACT, NOT THE EXIT CODE (2026-08-04) ─────────────────────────────────────
   # teammate-checkpoint.sh exits 0 on BOTH of its no-op paths — :140-143 "tree clean" and :201-204
@@ -1568,7 +1570,7 @@ pin_term_verdict() {
   # cc-in-kitty's honest answer for "not kitty" is exit 1, so a bare call would abort this hook
   # under errexit — capture the code instead.
   local _rc=0
-  "$_cik" >/dev/null 2>&1 || _rc=$?
+  cc_run "$_cik" >/dev/null 2>&1 || _rc=$?
   case "$_rc" in
     0) export CC_TERM=kitty  ;;
     1) export CC_TERM=iterm2 ;;

@@ -46,6 +46,8 @@
 #        POSTLAND_AUTOREVERT=off (verify + page, never push a revert).
 # C10: OPERATOR loads the plist (docs/activation/pending-activation/09-postland-verify-activate.sh).
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 # Bound the OS-notification fork (machine-wide iTerm2/AppleEvent wedge, 2026-07-26). This one
 # targets NotificationCenter rather than iTerm2, so it is not the root cause — but it is an
@@ -959,7 +961,7 @@ cond_slug() {
 file_linked() {
   local fentry="$1" title="$2" falsifier="$3" cond bid lerr lrc
   [ -x "$BACKLOG_BIN" ] || return 0
-  bid="$("$BACKLOG_BIN" add --title "$title" --falsifier "$falsifier" \
+  bid="$(cc_run "$BACKLOG_BIN" add --title "$title" --falsifier "$falsifier" \
            --project claude-infrastructure --source postland-verify 2>/dev/null)"
   # An id is the ONE thing `link` cannot proceed without, and cmd_add echoes it on the idempotent
   # path too — so an empty capture is a real add failure, never a re-file.
@@ -968,7 +970,7 @@ file_linked() {
     return 0
   fi
   cond="$(cond_slug "$fentry")"
-  lerr="$("$BACKLOG_BIN" link "$bid" --condition "$cond" 2>&1 >/dev/null)"; lrc=$?
+  lerr="$(cc_run "$BACKLOG_BIN" link "$bid" --condition "$cond" 2>&1 >/dev/null)"; lrc=$?
   if [ "$lrc" -eq 0 ]; then
     log "backlog verdict=filed+linked id=$bid condition=$cond entry=$fentry"
   else
@@ -1226,9 +1228,11 @@ prelint_invoke() { # <script> <outfile> [argv…] → rc. THE one invocation sha
   # path). QOS above needs no such guard because it is never empty. `"$@"` IS safe empty — it is a
   # positional expansion, not an array one — which is what keeps the scan's "no positional arg"
   # contract below exact rather than passing an empty string.
+  # The lint runs through its own #! interpreter, not by path (cc-run.sh; plan KALLOC W4).
   local sc="$1" so="$2"; shift 2
   ( cd "$WORKTREE" && unset CC_HERM_OWN CC_WALLTIME_OWN SHIP_LAND_HERM_OWN_SCOPE
-    bounded "$LINT_TO" ${LINT_QOS[@]+"${LINT_QOS[@]}"} "./$sc" "$@" ) > "$so" 2>&1
+    run=("./$sc"); declare -F cc_argv >/dev/null && { cc_argv "./$sc"; run=("${CC_ARGV[@]}"); }
+    bounded "$LINT_TO" ${LINT_QOS[@]+"${LINT_QOS[@]}"} "${run[@]}" "$@" ) > "$so" 2>&1
 }
 prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Appends any RED to FAILING
   # (so it flows through the existing verdict chain: FAILING non-empty ⇒ RED, and it OUTRANKS a cut
@@ -3334,7 +3338,7 @@ EOF
     "$(fals_red "$file" "$c")"
   sid="$(author_sid "$c")"
   [ -n "$sid" ] && [ -x "$NOTIFY_BIN" ] \
-    && "$NOTIFY_BIN" "$sid" "post-land AUTO-REVERT $outcome — your land $c12 failed $file in the trunk verifier; revert branch $br" >/dev/null 2>&1
+    && cc_run "$NOTIFY_BIN" "$sid" "post-land AUTO-REVERT $outcome — your land $c12 failed $file in the trunk verifier; revert branch $br" >/dev/null 2>&1
   if [ "$rc" -ne 0 ]; then
     # The revert did NOT land: trunk is still red, deploy stays pinned to the last green (R3 holds
     # by construction), and this needs a human. State-keyed page, same protocol as the RED page.
@@ -3662,7 +3666,7 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
       # stderr is CAPTURED, not discarded: a --condition add against an item already marked done
       # warns and deliberately does NOT re-open (cc-backlog's DONE-GUARD). Swallowing that would
       # make a RECURRENCE invisible — the exact failure mode being fixed — so it goes to runner.log.
-      berr="$("$BACKLOG_BIN" add --title "$ftitle" --condition "$(cond_slug "$fentry")" \
+      berr="$(cc_run "$BACKLOG_BIN" add --title "$ftitle" --condition "$(cond_slug "$fentry")" \
                 --project claude-infrastructure --source postland-verify 2>&1 >/dev/null)"; brc=$?
       # COUNT THE CHECKED OUTCOME, NOT THE ATTEMPT. The obvious shape here is `… || true` followed
       # by an unconditional `nfiled++`, and it logs "filed=3" for three adds that were all REFUSED —
@@ -3696,11 +3700,11 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
       # Same accusation, same correction. "(your land)" over an orphan pages the session whose sha
       # the land lane already rewrote, for a commit it can no longer act on — and that session is
       # the one most likely to try the revert the page is refusing.
-      "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest bisected to $c12, which is NOT in trunk — a rebase-land orphaned it, so do not revert it ($otwin) — see $pf" >/dev/null 2>&1
+      cc_run "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest bisected to $c12, which is NOT in trunk — a rebase-land orphaned it, so do not revert it ($otwin) — see $pf" >/dev/null 2>&1
     elif [ -n "$bisected" ]; then
-      "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest at $c12 (your land) — see $pf" >/dev/null 2>&1
+      cc_run "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest at $c12 (your land) — see $pf" >/dev/null 2>&1
     else
-      "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest observed after your land $c12 — NO bisect verdict (${BISECT_WHY:-unknown}, load ${BISECT_LOAD:-?}); NOT attributed to your commit — see $pf" >/dev/null 2>&1
+      cc_run "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest observed after your land $c12 — NO bisect verdict (${BISECT_WHY:-unknown}, load ${BISECT_LOAD:-?}); NOT attributed to your commit — see $pf" >/dev/null 2>&1
     fi
   fi
   # AUTO-REVERT only a BISECTED culprit (guard 0). When the bisect was undecidable, `culprit` above
@@ -3747,7 +3751,7 @@ hung_actions() { # <sha> <tree> — page + backlog + notify, routed to the SEAM 
   notify "Claude post-land HUNG" "$file wedges at $WEDGE_AT — un-stubbed seam, see $pf"
   sid="$(author_sid "$sha")"
   [ -n "$sid" ] && [ -x "$NOTIFY_BIN" ] \
-    && "$NOTIFY_BIN" "$sid" "post-land HUNG: $file wedged at $WEDGE_AT on your land — un-stubbed external seam, see $pf" >/dev/null 2>&1
+    && cc_run "$NOTIFY_BIN" "$sid" "post-land HUNG: $file wedged at $WEDGE_AT on your land — un-stubbed external seam, see $pf" >/dev/null 2>&1
   return 0
 }
 run_target() { # <sha> — the whole check-set + verdict for ONE sha

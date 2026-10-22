@@ -25,6 +25,8 @@
 #   status                            list windows currently wearing a wash
 # rc: 0 ok · 4 no live kitty socket · 2 usage
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 REPO="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/.." && pwd)"
 ASSETS="$REPO/assets/kitty-wash"
@@ -33,7 +35,7 @@ ASSETS="$REPO/assets/kitty-wash"
 # Socket: a hook or launchd job carries no KITTY_LISTEN_ON, so never assume it (bin/cc-kitty-socket).
 _sock() {
   if [ -n "${KITTY_LISTEN_ON:-}" ]; then printf '%s' "$KITTY_LISTEN_ON"; return 0; fi
-  local s; s="$("$REPO/bin/cc-kitty-socket" 2>/dev/null)" || return 4
+  local s; s="$(cc_run "$REPO/bin/cc-kitty-socket" 2>/dev/null)" || return 4
   [ -n "$s" ] || return 4; printf '%s' "$s"
 }
 _k() { local to; to="$(_sock)" || return 4; kitty @ --to "$to" "$@"; }

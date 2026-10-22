@@ -51,6 +51,8 @@
 # Receipt: the caller redirects stdout; the launcher writes $BUNDLE/INGEST-VERIFIED.txt.
 
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 LRV_RC=0
 LRV_FIRST_FAIL=""
@@ -458,7 +460,7 @@ _scwd="${WT:-$PWD}"
 sc_run() { # $1=config dir  $2…=verb and flags → the hook's own line on stdout, the hook's rc
   local _cfg="$1"; shift
   ( cd "$_scwd" 2>/dev/null || exit 97
-    CLAUDE_CONFIG_DIR="$_cfg" CLAUDE_CODE_SESSION_ID="$SID" "$SC" "$@" 2>&1 )
+    CLAUDE_CONFIG_DIR="$_cfg" CLAUDE_CODE_SESSION_ID="$SID" cc_run "$SC" "$@" 2>&1 )
 }
 # The owner recorded at the key, read off `status`'s parenthesised HEADER — never off the line.
 # `status` prints `ARMED (<n> continuations, sid=<sid>): <step text>` and the step text is arbitrary

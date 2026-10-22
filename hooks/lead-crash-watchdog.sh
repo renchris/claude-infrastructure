@@ -14,6 +14,8 @@
 # Exit: always 0 (hook must never block session startup).
 
 set -euo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; cc_run() { "$@"; }; fi
 
 # ── THE ARM FILE IS READ HERE, NOT BY THE CALLER'S SHELL (backlog 159c2211b0f2) ──────────────────
 # The operator's recorded arming lives in ~/.claude/autonomy/watchdog.env (LCW_ORPHAN_CLOSE=1). Until
@@ -74,6 +76,7 @@ lcw_osa() {
 # Same degradation contract as lcw_osa: no timeout(1) ⇒ run unbounded rather than lose the call.
 lcw_bounded() {
   local s="$1"; shift
+  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }   # #! via its interpreter (cc-run.sh)
   if [ -z "$LCW_OSA_TB" ] || [ ! -x "$LCW_OSA_TB" ]; then "$@"; return $?; fi
   "$LCW_OSA_TB" -k 3 "$s" "$@"
 }
@@ -2050,7 +2053,7 @@ pane_verdict_close() { # $1=sid $2=tty — ALWAYS returns 0; the close verdict g
   if [[ -z "$procs" ]] || ! printf '%s\n' "$procs" | pane_procs_are_shells; then
     log "[watchdog $sid] pane close NOT ATTEMPTED — $tty is no longer at a bare shell after the grace"; return 0
   fi
-  out=$("$bin" --pane "$LEAD_PANE" 2>&1 </dev/null) || rc=$?
+  out=$(cc_run "$bin" --pane "$LEAD_PANE" 2>&1 </dev/null) || rc=$?
   log "[watchdog $sid] pane close of ${LEAD_PANE} via cc-pane-close rc=$rc: ${out//$'\n'/ }"
   return 0
 }

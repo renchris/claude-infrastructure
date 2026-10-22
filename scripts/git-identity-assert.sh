@@ -38,6 +38,8 @@
 # `set -uo pipefail`, not -e: every predicate answers by exit code and errexit would abort on the
 # first honest "no" instead of letting the sweep finish and report it.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 export LC_ALL=C
 
 # ── The contract, and why the env seams are SEALED in production ───────────────────────────────
@@ -85,7 +87,7 @@ die2()  { echo "git-identity-assert: ⛔ $*" >&2; exit 2; }
 do_check() {
   local repo="${1:-$PWD}"
   git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die2 "not a git repo: $repo"
-  "$HOOK" --check "$repo"
+  cc_run "$HOOK" --check "$repo"
 }
 
 # ── repair ────────────────────────────────────────────────────────────────────────────────────
@@ -93,7 +95,7 @@ do_repair() {
   local repo="${1:-$PWD}" out rc
   git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die2 "not a git repo: $repo"
 
-  out="$("$HOOK" --check "$repo")"; rc=$?
+  out="$(cc_run "$HOOK" --check "$repo")"; rc=$?
   if [ "$rc" -eq 0 ]; then echo "$out"; return 0; fi
 
   # The ONLY unambiguous repair: a local override differs from the sanctioned address while the
@@ -105,7 +107,7 @@ do_repair() {
 
   if [ -n "$loc" ] && [ "$loc" != "$WANT_EMAIL" ] && [ "$glob" = "$WANT_EMAIL" ]; then
     git -C "$repo" config --local --remove-section user 2>/dev/null
-    out="$("$HOOK" --check "$repo")"; rc=$?
+    out="$(cc_run "$HOOK" --check "$repo")"; rc=$?
     [ "$rc" -eq 0 ] && { echo "repaired  $repo  (dropped local override '$loc')"; echo "          $out"; return 0; }
     echo "REPAIR-INCOMPLETE  $repo"; echo "  $out"; return 1
   fi
@@ -198,7 +200,7 @@ do_sweep() {
 
     local out rc
     if [ "$repair" -eq 1 ]; then out="$(do_repair "$repo")"; rc=$?
-    else out="$("$HOOK" --check "$repo")"; rc=$?; fi
+    else out="$(cc_run "$HOOK" --check "$repo")"; rc=$?; fi
 
     case "$out" in
       n/a*) skipped=$((skipped+1)); continue ;;   # out of scope: not the owner's GitHub repo
@@ -314,17 +316,17 @@ do_selftest() {
   git -C "$R" config user.email wrong@nowhere.test
   git -C "$R" config user.name wrong
 
-  "$HOOK" --check "$R" >/dev/null 2>&1; rc=$?
+  cc_run "$HOOK" --check "$R" >/dev/null 2>&1; rc=$?
   if [ "$rc" -eq 0 ]; then echo "  ✓ out-of-scope repo (no owner remote) is not gated"
   else echo "  ✗ out-of-scope repo was gated — the hook would red the bats corpus"; fails=$((fails+1)); fi
 
   git -C "$R" remote add origin "https://github.com/$WANT_OWNER/probe.git"
-  "$HOOK" --check "$R" >/dev/null 2>&1; rc=$?
+  cc_run "$HOOK" --check "$R" >/dev/null 2>&1; rc=$?
   if [ "$rc" -eq 1 ]; then echo "  ✓ in-scope repo with a wrong identity is REFUSED"
   else echo "  ✗ in-scope repo with a wrong identity PASSED — the gate is inert"; fails=$((fails+1)); fi
 
   git -C "$R" config user.email "$WANT_EMAIL"
-  "$HOOK" --check "$R" >/dev/null 2>&1; rc=$?
+  cc_run "$HOOK" --check "$R" >/dev/null 2>&1; rc=$?
   if [ "$rc" -eq 0 ]; then echo "  ✓ in-scope repo with the sanctioned identity is allowed"
   else echo "  ✗ sanctioned identity was refused — the gate blocks correct work"; fails=$((fails+1)); fi
 

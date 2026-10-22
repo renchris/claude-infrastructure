@@ -46,6 +46,8 @@
 #
 # bash 3.2 (launchd runs /bin/bash): no associative arrays, no mapfile, no ${x,,}.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 _LRU_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
 LRU_DIR="$(cd "$(dirname "$_LRU_SELF")" && pwd)"
@@ -130,7 +132,7 @@ fi
 LRU_RD_LOG=/dev/null   # a drive points this at its run dir; stdout stays the result row
 lru_rd() { # cc-resume-debt <args> → its rc; 127 when the tool is absent (callers fall back)
   [ -x "$LRU_RD_BIN" ] || return 127
-  "$LRU_RD_BIN" "$@" >> "$LRU_RD_LOG" 2>&1
+  cc_run "$LRU_RD_BIN" "$@" >> "$LRU_RD_LOG" 2>&1
 }
 # One mail per result. `poller-auto` is a requester NAME, not an address: mailed literally it exits
 # 3 (target unknown) and the verdict reached nobody (incident 2026-09-28). It, and any other value
@@ -141,9 +143,9 @@ lru_mail() { # $1=requested_by $2=message
   case "$1" in
     ''|'?'|-) return 0 ;;
     poller-auto) rc=3 ;;
-    *) "$LRU_NOTIFY_BIN" "$1" "$2" >/dev/null 2>&1 || rc=$? ;;
+    *) cc_run "$LRU_NOTIFY_BIN" "$1" "$2" >/dev/null 2>&1 || rc=$? ;;
   esac
-  [ "$rc" = 3 ] && { "$LRU_NOTIFY_BIN" --role desk "$2" >/dev/null 2>&1 || true; }
+  [ "$rc" = 3 ] && { cc_run "$LRU_NOTIFY_BIN" --role desk "$2" >/dev/null 2>&1 || true; }
   return 0
 }
 
@@ -696,7 +698,7 @@ lru_census() { # [$1=ref: pane id or sid prefix; empty = all] → TSV rows on st
   snap="$(lru_snapshot)"
   # F4: a pane showing a live bg session is judged by it, not by its frozen parent (see lru_bg_sessions).
   hostpids=" $(lru_bg_sessions "$snap" | awk -F'\t' '$8 != "" && $8 != "-" { printf "%s ", $8 }')"
-  target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
+  target_bin="$(cc_run "$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
   [ -n "$target_bin" ] || { lru_say "cannot resolve the current binary ($LRU_CLAUDE_BIN_CMD) — refusing to judge 'current'"; return 2; }
   # pass 1: live rows (pid in the snapshot, lstart agreeing when the row records one)
   pass="$(lru_live_pass "$snap")"
@@ -1505,7 +1507,7 @@ lru_window_free() { # $1=window id → 0 free to type into · 1 occupied (LRU_KW
   return 0
 }
 lru_bg_stop() { # $1=src cfg $2=jobId $3=bg pid $4=run dir → 0 stopped and gone · 1 not
-  local bin; bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
+  local bin; bin="$(cc_run "$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
   [ -n "$bin" ] || return 1
   CLAUDE_CONFIG_DIR="$1" "$bin" stop "$2" >> "$4/stop.log" 2>&1 || true
   lru_wait_gone "$3" "${LRU_BG_STOP_S:-30}"
@@ -2105,10 +2107,10 @@ lru_notify_lead() { # $1=sid $2=team args $3=member name $4=team
   local lsid out lpane rc=0
   lsid="$(lru_flag "$2" --parent-session-id "$LRU_RE_TEAMTOK")"
   [ -n "$lsid" ] && [ -x "$LRU_CCFIND_BIN" ] && [ -x "$LRU_NOTIFY_BIN" ] || return 0
-  out="$("$LRU_CCFIND_BIN" "$lsid" 2>/dev/null)" || true
+  out="$(cc_run "$LRU_CCFIND_BIN" "$lsid" 2>/dev/null)" || true
   lpane="$(printf '%s\n' "$out" | LRU_S="$lsid" awk -F'\t' '$1 == ENVIRON["LRU_S"] && $6 == "LIVE" { print $2; exit }')"
   [ -n "$lpane" ] || return 0
-  "$LRU_NOTIFY_BIN" "$lpane" "cc-lr upgrade: your teammate $3@$4 (${1:0:8}) ended during an in-place upgrade and was not relaunched; a new-window resume cannot carry its team identity, so it stays down unless you bring it back." >/dev/null 2>&1 || rc=$?
+  cc_run "$LRU_NOTIFY_BIN" "$lpane" "cc-lr upgrade: your teammate $3@$4 (${1:0:8}) ended during an in-place upgrade and was not relaunched; a new-window resume cannot carry its team identity, so it stays down unless you bring it back." >/dev/null 2>&1 || rc=$?
   [ "$rc" = 3 ] && lru_say "lead notice for ${1:0:8}: cc-notify does not know pane $lpane - nothing sent"
   return 0
 }
@@ -2327,7 +2329,7 @@ LRU_CCFIND_BIN="${LRU_CCFIND_BIN:-$LRU_DIR/../../bin/cc-find}"
 lru_pane_bound() { # $1=sid $2=pane → 0 cc-find binds the LIVE session to this pane · 1 not · 127 no tool
   local out
   [ -x "$LRU_CCFIND_BIN" ] || return 127
-  out="$("$LRU_CCFIND_BIN" "$1" 2>/dev/null)" || true
+  out="$(cc_run "$LRU_CCFIND_BIN" "$1" 2>/dev/null)" || true
   printf '%s\n' "$out" | awk -F'\t' -v s="$1" -v p="$2" '$1 == s && $2 == p && $6 == "LIVE" { f = 1 } END { exit !f }'
 }
 # The identity --relaunch-at-shell checks before it types: the old claude's tty and the pane's own
@@ -2747,7 +2749,7 @@ EOF
     fi
   fi
   [ "$role" = lead ] && team="session-${sid:0:8}"
-  target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
+  target_bin="$(cc_run "$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
   binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
   [ -n "$eff" ] && [ "$eff" != - ] || eff=high
   acct="$(jq -r '.account // empty' "$LRU_REG_DIR/$pane.json" 2>/dev/null)"
@@ -3312,7 +3314,7 @@ lru_refill() { # → 0 when it queued ≥ 1 request
   { printf '# ts=%s dur_s=%s load1=%s rc=%s\n' "$(lru_now)" "$(( $(lru_now) - t ))" "$(lru_load1)" "$crc"; printf '%s\n' "$rows"; } \
     > "$UPG_STATE/.census.tsv.tmp" 2>/dev/null && mv -f "$UPG_STATE/.census.tsv.tmp" "$UPG_STATE/.census.tsv"
   [ "$crc" = 0 ] || { lru_say "refill: census rc $crc - nothing queued"; return 1; }
-  target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
+  target_bin="$(cc_run "$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
   binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
   case "$rows" in *$'\t'upgrade-teammate*) snap="$(lru_snapshot)" ;; esac
   while IFS=$'\t' read -r p s _ _ tgt _ _ _ _ pid d; do
@@ -3355,7 +3357,7 @@ lru_auto_enqueue() { # → prints one line per queued sid; rc 0 always
   census="$(lru_census "" 2>/dev/null)" || return 0
   mkdir -p "$UPG_QUEUE" 2>/dev/null || return 0
   local tgt target_bin binlabel
-  target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
+  target_bin="$(cc_run "$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
   binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
   case "$census" in *$'\t'upgrade-teammate*) snap="$(lru_snapshot)" ;; esac
   while IFS=$'\t' read -r p s _ _ tgt _ _ _ _ pid d; do

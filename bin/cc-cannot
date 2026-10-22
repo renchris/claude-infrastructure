@@ -67,6 +67,8 @@
 # Output: <VERDICT>\t<class>\t<evidence>
 # Exit:   0 HUMAN · 1 REFUTED · 2 UNRESOLVED (and every internal failure)
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 QUIET=0
 while [ $# -gt 0 ]; do
@@ -192,7 +194,7 @@ CC_OWNER="$HOME/.claude/bin/cc-owner"
 # So a scheduler receipt is only good for the invocation the scheduler actually makes: if the
 # handed-over command carries a flag the owner's own command line does not, ABSTAIN.
 if [ -x "$CC_OWNER" ]; then
-  if owner="$("$CC_OWNER" "$CMD" 2>/dev/null)" && [ -n "$owner" ]; then
+  if owner="$(cc_run "$CC_OWNER" "$CMD" 2>/dev/null)" && [ -n "$owner" ]; then
     _flag_divergence=0
     for _f in $(printf '%s' "$CMD" | tr ' ' '\n' | grep -E '^--?[a-zA-Z]' || true); do
       printf '%s' "$owner" | grep -Fq -- "$_f" || _flag_divergence=1

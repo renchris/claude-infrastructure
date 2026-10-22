@@ -24,6 +24,8 @@
 # Exit 0 = every check passed. Non-zero = at least one failed; the summary names which.
 
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SHOTS="$HERE/banner-shots.sh"
@@ -123,7 +125,7 @@ if [[ "$ASSET" == *.svg ]]; then
 fi
 
 # ── 1. LINT ───────────────────────────────────────────────────────────────────────────────────
-if lint_out=$("$SHOTS" "$ASSET" --lint 2>&1); then
+if lint_out=$(cc_run "$SHOTS" "$ASSET" --lint 2>&1); then
   ok "LINT   one animation per element"
 else
   bad "LINT   $(printf '%s' "$lint_out" | head -3 | tr '\n' ' ')"
@@ -132,7 +134,7 @@ fi
 # ── 2. SEAM ───────────────────────────────────────────────────────────────────────────────────
 # The whole claim of a seamless loop reduces to this one identity, so it gets the strictest guard.
 seam_dir="$WORK/seam"
-"$SHOTS" "$ASSET" --times "0,$PERIOD" --bg dark --scheme dark --out "$seam_dir" >/dev/null 2>&1
+cc_run "$SHOTS" "$ASSET" --times "0,$PERIOD" --bg dark --scheme dark --out "$seam_dir" >/dev/null 2>&1
 p0="$seam_dir/${STEM}-dark-dark-t0.png"
 pP="$seam_dir/${STEM}-dark-dark-t${PERIOD}.png"
 h0=$(hash_of "$p0" 2>/dev/null || true)
@@ -152,7 +154,7 @@ alive_dir="$WORK/alive"
 times=$(python3 -c "
 n=$ALIVE_N; span=$ALIVE_SPAN
 print(','.join(f'{i*span/(n-1):.2f}' for i in range(n)))")
-"$SHOTS" "$ASSET" --times "$times" --bg dark --scheme dark --out "$alive_dir" >/dev/null 2>&1
+cc_run "$SHOTS" "$ASSET" --times "$times" --bg dark --scheme dark --out "$alive_dir" >/dev/null 2>&1
 hashes=(); missing=0
 while IFS= read -r f; do
   h=$(hash_of "$f" 2>/dev/null || true)
@@ -177,7 +179,7 @@ theme_dir="$WORK/themes"
 th_dark=""; th_light=""; th_none=""
 for s in dark light none; do
   page=light; [[ "$s" == dark ]] && page=dark
-  "$SHOTS" "$ASSET" --times 0 --bg "$page" --scheme "$s" --out "$theme_dir" >/dev/null 2>&1
+  cc_run "$SHOTS" "$ASSET" --times 0 --bg "$page" --scheme "$s" --out "$theme_dir" >/dev/null 2>&1
   h=$(hash_of "$theme_dir/${STEM}-${page}-${s}-t0.png" 2>/dev/null || true)
   case "$s" in dark) th_dark="$h" ;; light) th_light="$h" ;; none) th_none="$h" ;; esac
 done
@@ -191,7 +193,7 @@ fi
 
 # ── 5. STILL ──────────────────────────────────────────────────────────────────────────────────
 still_dir="$WORK/still"
-"$SHOTS" "$ASSET" --reduced-motion --bg dark --scheme dark --out "$still_dir" >/dev/null 2>&1
+cc_run "$SHOTS" "$ASSET" --reduced-motion --bg dark --scheme dark --out "$still_dir" >/dev/null 2>&1
 hs=$(hash_of "$still_dir/${STEM}-dark-dark-reduced.png" 2>/dev/null || true)
 if [[ -n "$hs" ]]; then ok "STILL  prefers-reduced-motion renders a frozen frame"
 else bad "STILL  NOT PROVEN — reduced-motion render missing or empty"; fi

@@ -39,6 +39,8 @@
 # Other exits: 0 ok, 3 helper not built (run `cc-dia-act build`), 5 act failed, 64 usage,
 # 124 wait-for timed out.
 set -u
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
 CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
@@ -125,7 +127,7 @@ need_dia() {
   n=$("$PGREP" -x Dia 2>/dev/null | wc -l | tr -d ' ')
   [ "${n:-0}" -ge 1 ] || fail 4 "NOT_RUNNING: Dia is not running; cc-dia-act never launches it"
   [ "$n" -eq 1 ] || fail 6 "TARGET_AMBIGUOUS: $n Dia processes; refusing while the clean-profile launcher runs"
-  line=$("$SELF_DIR/cc-dia-js" status)
+  line=$(cc_run "$SELF_DIR/cc-dia-js" status)
   case "$line" in DIA_JS=ON*|DIA_JS=OFF*) ;; *) fail 6 "TARGET_AMBIGUOUS: cc-dia-js says: $line" ;; esac
   DIA_PID=$(printf '%s' "$line" | sed -n 's/.* pid=\([0-9][0-9]*\).*/\1/p')
   [ -n "$DIA_PID" ] || fail 6 "TARGET_AMBIGUOUS: no pid in: $line"

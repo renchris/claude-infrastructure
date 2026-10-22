@@ -28,6 +28,8 @@
 #   Push: CC_PUSH_SEND_BIN · CC_ANNOUNCE_BIN · CC_DIGEST_ROLE (default desk).
 # BSD+GNU portable, no eval, fail-loud. Exit 0 (emit) · 2 (usage) · 5 (push: a requested delivery leg FAILED).
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
 CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
@@ -115,7 +117,7 @@ emit() {
 
   printf '## Backlog (open)\n\n'
   local bl=""
-  [ -n "$BACKLOG" ] && bl="$("$BACKLOG" list --open 2>/dev/null || true)"
+  [ -n "$BACKLOG" ] && bl="$(cc_run "$BACKLOG" list --open 2>/dev/null || true)"
   if [ -n "$bl" ]; then printf '%s\n' "$bl" | sed 's/^/    /'; else printf '_no open backlog items_\n'; fi
   printf '\n'
 
@@ -124,7 +126,7 @@ emit() {
   # — the operator does it, then `cc-backlog unblock <id>` returns it to the dispatchable wave.
   printf '## Blocked on operator (needs a human step)\n\n'
   local blk=""
-  [ -n "$BACKLOG" ] && blk="$("$BACKLOG" list --all --json 2>/dev/null \
+  [ -n "$BACKLOG" ] && blk="$(cc_run "$BACKLOG" list --all --json 2>/dev/null \
     | jq -r '.[] | select(.status=="blocked")
              | "- [\(.id)] \(.project) — \(.title)\n      ↳ needs: \(if (.needs // "")=="" then "(unspecified)" else .needs end)  →  unblock: cc-backlog unblock \(.id)"' 2>/dev/null || true)"
   if [ -n "$blk" ]; then printf '%s\n' "$blk"; else printf '_none blocked on operator_\n'; fi
@@ -228,7 +230,7 @@ compute_counts() { # <digest_file>
     landed="$(tail -n "$LAND_TAIL" "$LAND_LOG" 2>/dev/null | grep -c .)"; landed="${landed:-0}"
   fi
   if [ -n "$BACKLOG" ]; then
-    backlog="$("$BACKLOG" list --open 2>/dev/null | grep -c .)"; backlog="${backlog:-0}"
+    backlog="$(cc_run "$BACKLOG" list --open 2>/dev/null | grep -c .)"; backlog="${backlog:-0}"
   fi
   if [ -d "$DECISIONS_DIR" ]; then
     for f in "$DECISIONS_DIR"/*.json; do [ -e "$f" ] || continue
@@ -269,7 +271,7 @@ deliver_push() { # <digest_file>
 
   if [ "$PUSH_DESK" = 1 ]; then
     if [ -n "$ANNOUNCE" ] && [ -x "$ANNOUNCE" ]; then
-      "$ANNOUNCE" --from cc-digest --event digest "$PUSH_ROLE" "Morning digest ready — $summary" >/dev/null 2>&1; rc=$?
+      cc_run "$ANNOUNCE" --from cc-digest --event digest "$PUSH_ROLE" "Morning digest ready — $summary" >/dev/null 2>&1; rc=$?
       if [ "$rc" = 0 ]; then echo "cc-digest: ✅ desk-role wake delivered ($PUSH_ROLE)" >&2
       else echo "cc-digest: ⛔ desk-role wake NOT verified ($PUSH_ROLE, cc-announce rc=$rc)" >&2; worst=5; fi
     else

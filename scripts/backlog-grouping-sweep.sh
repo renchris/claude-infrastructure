@@ -69,6 +69,8 @@
 # `--file` mode, so `--assert` stays a pure read: it is run as a probe under cc-premise's 20 s bound,
 # and a probe that writes to the ledger it is being asked about is not a probe.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$HERE")"
@@ -108,7 +110,7 @@ engine_absent() {
     # disappears while the grouper is present is a different fact from a grouper the deploy classes
     # never carried, and a change between them is news that must not wait out the other's TTL.
     if ! command -v damp_should_send >/dev/null 2>&1 || damp_should_send "store:backlog" "GROUPING-ENGINE-ABSENT:$2"; then
-      "$BACKLOG_BIN" add --project claude-infrastructure \
+      cc_run "$BACKLOG_BIN" add --project claude-infrastructure \
         --condition backlog-grouping-engine-absent \
         --title "the backlog grouping sweep cannot run: $1 — it is wired into autonomy-sweep on a 300 s tick and has been reporting success while folding nothing; every ungrouped row stays one dispatch slot until the engine is back" \
         --source backlog-grouping-sweep \
@@ -192,7 +194,7 @@ case "$MODE" in
     # RETRACTS. Note that `cc-backlog add --falsifier` reaches a row only while CREATING it (on a
     # known id it is deliberately a no-op — see cmd_add's UPDATE ARM), so this attaches once, at first
     # filing, and `cc-backlog falsify` is the verb for correcting it later.
-    "$BACKLOG_BIN" add --project claude-infrastructure \
+    cc_run "$BACKLOG_BIN" add --project claude-infrastructure \
       --condition backlog-ungrouped-over-floor \
       --title "$TITLE" \
       --source backlog-grouping-sweep \

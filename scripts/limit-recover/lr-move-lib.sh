@@ -17,6 +17,8 @@
 # could no longer take a prompt (762a6daa, a stale tombstone in its target), and one NOTMOVED was
 # false nine minutes later (98aae987). Every conjunct below is a file or a process fact, and
 # `cc-lr move --status` recomputes all of them at any time, after a crash or a reboot.
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 lr_move_state() { printf '%s' "${LR_STATE_DIR:-$HOME/.reso/limit-recover}"; }
 lr_move_dir() { printf '%s/move/%s' "$(lr_move_state)" "$1"; }
@@ -417,7 +419,7 @@ lr_move_summary() { # $1=batch dir $2=batch $3=status $4=note $5=target auth aft
 lr_move_summary_mail() { # → mails LR_MOVE_SUMMARY_MAIL to the requester only, never to a moved pane (a mailed no-prompt resume takes a turn)
   local notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}" by="${LR_MOVE_SUMMARY_BY:-}"
   if [ "${CC_LR_MOVE_MAIL:-on}" != off ] && [ -n "$by" ] && [ "$by" != "?" ] && [ -x "$notify" ]; then
-    "$notify" "$by" "$LR_MOVE_SUMMARY_MAIL" >/dev/null 2>&1 || true
+    cc_run "$notify" "$by" "$LR_MOVE_SUMMARY_MAIL" >/dev/null 2>&1 || true
   fi
   return 0
 }

@@ -104,6 +104,8 @@
 # run's events.jsonl. LRH_PRECHECK=off skips it (and restores the previous ordering verbatim).
 # A held draft is not refused when the caller set LRH_CARRY_DRAFT=1 on an --in-place move (the move
 # worker, after proving the box stale): the recycle carries it unsent into the successor instead.
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -euo pipefail
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
 CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
@@ -722,7 +724,7 @@ acct_to_cfg() {
 if [[ "$TARGET" == "auto" ]]; then
   kind="general"; case "$MODEL" in fable|claude-fable-*) kind="fable" ;; esac
   # STRAND_FIRST=off: this pick records no --assign claim, and a promoted thin account is budgeted for one fire.
-  TARGET=$(CC_ROUTE_DISPATCH_STRAND_FIRST=off "$HOME/bin/claude-accounts" --route "$kind" 2>/dev/null | tr -d '[:space:]' || true)
+  TARGET=$(CC_ROUTE_DISPATCH_STRAND_FIRST=off cc_run "$HOME/bin/claude-accounts" --route "$kind" 2>/dev/null | tr -d '[:space:]' || true)
   [[ -n "$TARGET" ]] || { echo "lr-handoff: claude-accounts --route $kind returned nothing — pass --target explicitly" >&2; exit 2; }
 fi
 TCFG=$(acct_to_cfg "$TARGET")
@@ -808,7 +810,7 @@ lrh_verdict() { # <TOKEN> <proven yes|no> <note> [state, when the verdict is not
   fi
   notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
   if [[ -x "$notify" ]]; then
-    "$notify" "$to" "$msg" >/dev/null 2>&1 \
+    cc_run "$notify" "$to" "$msg" >/dev/null 2>&1 \
       || echo "lr-handoff: cc-notify to pane $to FAILED — the verdict is stderr-only: $msg" >&2
   else
     echo "lr-handoff: cc-notify unreachable at $notify — the verdict is stderr-only: $msg" >&2

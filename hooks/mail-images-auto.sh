@@ -10,6 +10,8 @@
 # Scope: get-mail-message / get-mail-message-mime ONLY. A LIST read returns many
 # messages and must not trigger N extractions.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
 CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
@@ -45,7 +47,7 @@ else
   CMI="$HOME/.claude/bin/cc-mail-images"
   [ -x "$CMI" ] || CMI="$HOME/Development/claude-infrastructure/bin/cc-mail-images"
   [ -x "$CMI" ] || exit 0
-  "$CMI" --id "$mid" --out "$out" >>"$LOG" 2>&1 || exit 0
+  cc_run "$CMI" --id "$mid" --out "$out" >>"$LOG" 2>&1 || exit 0
   n=$(/usr/bin/python3 -c "import json;print(len(json.load(open('$out/manifest.json')).get('images',[])))" 2>/dev/null || echo 0)
 fi
 [ "${n:-0}" -gt 0 ] 2>/dev/null || exit 0

@@ -60,6 +60,8 @@
 #   CLAUDE_KIMI_DRYRUN=1     print the resolved env contract + argv instead of exec'ing (for tests)
 
 set -euo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 # --- resolvable defaults (all overridable via env) --------------------------------------------
 KIMI_BASE_URL="${KIMI_BASE_URL:-https://api.moonshot.ai/anthropic}"
@@ -119,7 +121,7 @@ _resolve_bin() {
     resolver="$(command -v cc-claude-bin 2>/dev/null || true)"
   fi
   if [ -n "$resolver" ] && [ -x "$resolver" ]; then
-    resolved="$("$resolver" 2>/dev/null || true)"
+    resolved="$(cc_run "$resolver" 2>/dev/null || true)"
     if [ -n "$resolved" ] && [ -x "$resolved" ]; then printf '%s' "$resolved"; return 0; fi
   fi
   if command -v claude-latest >/dev/null 2>&1; then command -v claude-latest; return 0; fi

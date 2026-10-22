@@ -34,6 +34,8 @@
 #        CC_KALLOC_SLO_LOG (one line per evaluation; default ~/.claude/logs/kalloc-slo.log)
 # Runs under /bin/bash 3.2 (capacity-alarm's launchd tick): no arrays, no bash-4 syntax.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERIES="$HOME/.claude/logs/kalloc-zone-series.tsv"
@@ -193,7 +195,7 @@ if [ "$VERDICT" = breach ] && [ "$FILE" = 1 ]; then
   live=""
   if [ -n "$FILED_ID" ]; then
     if command -v jq >/dev/null 2>&1 && [ -x "$BLG" ]; then
-      if _js="$("$BLG" list --all --json 2>/dev/null)"; then
+      if _js="$(cc_run "$BLG" list --all --json 2>/dev/null)"; then
         _sts="$(printf '%s' "$_js" | jq -r --arg id "$FILED_ID" '.[]? | select(.id == $id) | .status' 2>/dev/null | tail -1)"
         case "$_sts" in ''|done) live=no ;; *) live=yes ;; esac
       else live=unknown
@@ -207,7 +209,7 @@ if [ "$VERDICT" = breach ] && [ "$FILE" = 1 ]; then
     FILED="not filed (row ${FILED_ID:-?} is closed, filed $(( (NOW - FILED_AT) / 3600 )) h ago; re-file after $((REFILE_S / 86400)) d)"
   elif ! [ -x "$BLG" ]; then FILED="FAILED: cc-backlog not executable at $BLG"
   else
-    _out="$("$BLG" needs "$TITLE" --class needs-human --run "$RUN" --project claude-infrastructure 2>/dev/null)"; _rc=$?
+    _out="$(cc_run "$BLG" needs "$TITLE" --class needs-human --run "$RUN" --project claude-infrastructure 2>/dev/null)"; _rc=$?
     _id="$(printf '%s\n' "$_out" | grep -Eo '^[0-9a-f]{12}$' | tail -1)"
     if [ "$_rc" -eq 0 ] && [ -n "$_id" ]; then FILED="new row $_id"; FILED_ID="$_id"; FILED_AT="$NOW"
     else FILED="FAILED: cc-backlog needs rc=$_rc (retried next evaluation)"

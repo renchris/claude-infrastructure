@@ -27,6 +27,8 @@
 #
 # Exit: 0 = every criterion met (ready) · 1 = not ready (any FAIL/TODO) · 2 = internal error.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 cd "$(dirname "$0")/.." || exit 2
 PASS=0; FAIL=0; TODO=0
 ok(){   printf '  ✅ %-6s %s\n' "$1" "$2"; PASS=$((PASS+1)); }
@@ -104,7 +106,7 @@ fi
 if [ ! -x "$TEARDOWN" ]; then
   bad "TD" "bin/cc-teardown missing — the reaper has no effect-verified actuator"
 else
-  "$TEARDOWN" --selftest >/dev/null 2>&1 \
+  cc_run "$TEARDOWN" --selftest >/dev/null 2>&1 \
     && ok "TD" "cc-teardown --selftest green (effect-verified close · blind 0-list → INDETERMINATE, never false 'gone')" \
     || bad "TD" "cc-teardown --selftest RED"
 fi

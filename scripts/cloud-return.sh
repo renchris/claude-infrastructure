@@ -72,6 +72,8 @@
 #
 # bash 3.2-safe.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 SELF="$0"; while [ -L "$SELF" ]; do _t="$(readlink "$SELF")"; case "$_t" in /*) SELF="$_t" ;; *) SELF="$(dirname "$SELF")/$_t" ;; esac; done
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd -P)"
@@ -753,7 +755,7 @@ handle() { # <row-json> → prints outcome lines
       cost_write "$STATE/$id.land-cost" "$land_floor" floor
     fi
     UNIT_LANDED=1
-    land_out="$(CONFIRM=1 "$RECONCILE_BIN" --land "$branch" 2>&1)"; land_rc=$?
+    land_out="$(CONFIRM=1 cc_run "$RECONCILE_BIN" --land "$branch" 2>&1)"; land_rc=$?
     land_took=$(( $(date +%s) - land_start ))
     # A refusal costs the same wall time a success does, so it prices a land exactly as well; what
     # is being estimated is the gate's duration, not its verdict.

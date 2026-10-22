@@ -63,7 +63,8 @@ setup() {
 }
 
 # slice <file> → the land_failure_inbox function, verbatim, from the SUBJECT's own bytes.
-slice() { sed -n '/^land_failure_inbox() {/,/^}/p' "$1"; }
+# The runner first: the function runs cc-backlog through cc_run (scripts/lib/cc-run.sh, plan KALLOC W4).
+slice() { cat "$REPO/scripts/lib/cc-run.sh"; sed -n '/^land_failure_inbox() {/,/^}/p' "$1"; }
 
 # fx_main → a fixture main checkout with one commit.
 fx_main() {

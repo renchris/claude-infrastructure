@@ -37,6 +37,8 @@
 # bash 3.2-safe (macOS system bash), matching hooks/session-register.sh.
 
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 RC_OK=0; RC_NO=1; RC_INDET=2; RC_USAGE=3
 
@@ -342,7 +344,7 @@ pane_kitty_discover() {
   local ks s
   ks="${CC_KITTY_SOCKET_BIN:-$DRIVER_DIR/cc-kitty-socket}"
   [ -x "$ks" ] || return 0
-  s="$("$ks" --unique 2>/dev/null)" && [ -n "$s" ] || return 0
+  s="$(cc_run "$ks" --unique 2>/dev/null)" && [ -n "$s" ] || return 0
   CC_TERM=kitty; CC_TERM_KITTY_TO="$s"; export CC_TERM CC_TERM_KITTY_TO
 }
 

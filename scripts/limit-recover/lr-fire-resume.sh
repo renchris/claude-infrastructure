@@ -37,6 +37,8 @@
 # LR_LAUNCH_GUARD=off (no launch lock, no holder re-check), CC_RESUME_TEAMMATE_GUARD=off|checked
 # (skip the team-blind member test: the caller already read the closed argv), LR_TEAM_PS_SNAPSHOT.
 set -euo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); these are Mach-O. Linux: coreutils.
 CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
@@ -765,7 +767,7 @@ _LR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -n "${LR_PRESEED_DONE:-}" ]]; then
   _lrf_detail "preseed skipped" "LR_PRESEED_DONE=$LR_PRESEED_DONE"
 else
-  "$_LR_DIR/lr-preseed-env.sh" "$cfg" "$WT" || true
+  cc_run "$_LR_DIR/lr-preseed-env.sh" "$cfg" "$WT" || true
 fi
 
 # Resolve the binary from the ONE SSOT (bin/cc-claude-bin), never a local constant. This used to
@@ -779,7 +781,7 @@ fi
 if [[ -n "${LR_CLAUDE_BIN:-}" ]]; then
   BIN="$LR_CLAUDE_BIN"
 else
-  BIN="$("$_LR_DIR/../../bin/cc-claude-bin" 2>/dev/null)" || BIN=""
+  BIN="$(cc_run "$_LR_DIR/../../bin/cc-claude-bin" 2>/dev/null)" || BIN=""
 fi
 if [[ -z "$BIN" || ! -f "$BIN" || ! -x "$BIN" ]]; then
   echo "✗ lr-fire-resume: cannot resolve the claude binary (LR_CLAUDE_BIN='${LR_CLAUDE_BIN:-}', cc-claude-bin found none)." >&2

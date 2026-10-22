@@ -14,6 +14,8 @@
 #   - Bounded content. It records the corpus, the per-file byte cap and the call ceiling, and the
 #     batch refuses to exceed any of them. A token authorising an unbounded act is not consent.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 TTL="${CC_JEV_ARM_TTL_MIN:-180}"
 # CALLS is DERIVED from the live corpus, not chosen. It was a hardcoded 60, which at the batch's
@@ -74,7 +76,7 @@ ARM_ROOT="$(cd "$(dirname "$ARM_SELF")/../.." && pwd)"
 jev_window_open || exit 4
 
 if [ "$CALLS" -eq 0 ]; then
-  CALLS="$("$ARM_ROOT/scripts/jev/promote-memory.sh" --plan-calls 2>/dev/null)"
+  CALLS="$(cc_run "$ARM_ROOT/scripts/jev/promote-memory.sh" --plan-calls 2>/dev/null)"
   case "$CALLS" in
     ''|*[!0-9]*)
       printf '⚠ could not size the window from the corpus (is there a cc-jev rank run on disk?).\n' >&2

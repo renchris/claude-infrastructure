@@ -66,6 +66,8 @@
 #        FSE_WATCH_SAMPLE (sampler binary; 0 = no sample) FSE_WATCH_STATE FSE_WATCH_LOG
 #        FSE_WATCH_LEDGER FSE_WATCH_NOW FSE_WATCH_ROOT_OK (tests: allow --restart without EUID 0)
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 NOTIFY=0; RESTART=0
 for a in "$@"; do
@@ -260,7 +262,7 @@ elif [ "$NOTIFY" = 1 ] && [ "$VERDICT" != ok ]; then
     msg="fseventsd $VERDICT: footprint ${FP_MB} MB (${CMPRS_MB} MB compressed, ${_gr} MB/h), pid $PID up ${AGE_S}s, swap used ${SWAP_MB} MB. A restart clears it (launchd respawns the daemon at once): sudo killall fseventsd — or install the root watchdog: bash ~/Development/claude-infrastructure/migrations/0057-fseventsd-watchdog.sh --confirm com.claude.fseventsd-watchdog"
     rc=0
     if [ -n "${FSE_WATCH_PAGE:-}" ]; then "$FSE_WATCH_PAGE" --source fseventsd-watch -- "$msg" >/dev/null 2>&1 || rc=$?
-    elif [ -x "$HOME/.claude/bin/cc-desk-page" ]; then "$HOME/.claude/bin/cc-desk-page" --source fseventsd-watch -- "$msg" >/dev/null 2>&1 || rc=$?
+    elif [ -x "$HOME/.claude/bin/cc-desk-page" ]; then cc_run "$HOME/.claude/bin/cc-desk-page" --source fseventsd-watch -- "$msg" >/dev/null 2>&1 || rc=$?
     elif command -v cc-desk-page >/dev/null 2>&1; then cc-desk-page --source fseventsd-watch -- "$msg" >/dev/null 2>&1 || rc=$?
     else rc=127; fi
     # cc-desk-page exits 0 only when some channel took the page; anything else is said, never

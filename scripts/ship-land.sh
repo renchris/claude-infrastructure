@@ -233,6 +233,12 @@ _resolve_self() {  # <path> → absolute path, every symlink hop resolved (bash 
 }
 SELF="$(_resolve_self "${BASH_SOURCE[0]:-$0}")"
 SCRIPT_DIR="$(dirname "$SELF")"
+# The lints, gates and cc-backlog this pipeline runs are #! scripts; each by-path #! exec keeps ~1.1 KiB
+# of kernel memory on macOS 15.8.1, and a land runs dozens (plan KALLOC_TRIGGER_ELIMINATION W4). They go
+# through their interpreter via scripts/lib/cc-run.sh. Fail-open: no runner, the old by-path exec.
+# shellcheck source=lib/cc-run.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -f "$SCRIPT_DIR/lib/cc-run.sh" ]; then . "$SCRIPT_DIR/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 # The lesson a verdict line points at, as an ABSOLUTE path through the DEREFERENCED self-path (SELF
 # above), so a live-path run via ~/.claude/scripts/ names the checkout's docs/lessons body. Prints
 # nothing when the body is absent — a dead pointer is worse than none. Never fails.
@@ -1377,14 +1383,14 @@ land_failure_inbox() {  # $1=exit code $2=cause word
     ""|.*) : ;;                                  # unresolvable, or a sandbox — do not file a lie
     *) nargs=("${nargs[@]}" --project "$land_proj") ;;
   esac
-  id="$(CC_BACKLOG_KICK=off "$bl" "${nargs[@]}" 2>/dev/null || true)"
+  id="$(CC_BACKLOG_KICK=off cc_run "$bl" "${nargs[@]}" 2>/dev/null || true)"
   if [[ -z "$id" ]]; then
     # A cc-backlog that predates `add --run` refuses the call (exit 2, no id). A failed land that
     # files NOTHING is the silent form of the defect this inbox ends, so fall back to the legacy
     # born-blocked form: the row still exists, and the next re-key sweep can move it.
     nargs=(needs "$rtitle" --run "$rrun" --session "${CLAUDE_CODE_SESSION_ID:-}")
     case "$land_proj" in ""|.*) : ;; *) nargs=("${nargs[@]}" --project "$land_proj") ;; esac
-    id="$("$bl" "${nargs[@]}" 2>/dev/null || true)"
+    id="$(cc_run "$bl" "${nargs[@]}" 2>/dev/null || true)"
   fi
   # THE FALSIFIER — the half that was missing, and the reason this population rotted. A row filed
   # here measures ONE thing: that ship-land exited non-zero. It never re-asks, so it is a PREDICTION
@@ -1407,7 +1413,7 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # because a backlog row could not be annotated. Reading an rc is not touching one.
   #
   if [[ -n "$id" && -n "$ref" && -n "$oracle" ]]; then
-    fout="$("$bl" falsify "$id" --probe "bash ${oracle} ${ref} --no-fetch" 2>&1)"; frc=$?
+    fout="$(cc_run "$bl" falsify "$id" --probe "bash ${oracle} ${ref} --no-fetch" 2>&1)"; frc=$?
     if [[ "$frc" -eq 5 ]]; then
       # rc 5 ⇒ the probe exits 0 RIGHT NOW ⇒ the oracle says this ref's content is ALREADY on
       # trunk: the land died AFTER its content landed, and there is nothing to re-land. So this is
@@ -1418,7 +1424,7 @@ land_failure_inbox() {  # $1=exit code $2=cause word
       # finished. Then CLOSE it, do not probe it."
       # `done` is QUOTED because it is a shell keyword: bare, shellcheck reads it as an unterminated
       # loop body (SC1010) and the gate's own lint goes red on this file.
-      "$bl" "done" "$id" --evidence \
+      cc_run "$bl" "done" "$id" --evidence \
         "auto-retracted at filing: ${oracle##*/} reports ${ref}'s content already on trunk, so this land died after its content landed and there is nothing to re-land (cc-backlog falsify REFUSED the probe, rc 5)" \
         >/dev/null 2>&1 || true
       printf '· ship-land: re-land row %s CLOSED at filing — %s is already on trunk\n' "$id" "$ref" >&2
@@ -1437,7 +1443,7 @@ land_failure_inbox() {  # $1=exit code $2=cause word
       # cc-backlog still runs its filing-day screen and still WARNS that nothing was executed.
       # A probe stored unscreened is worth strictly more than no probe: the sweep re-runs it every
       # six hours and its first run is that screen, six hours late.
-      fout2="$("$bl" falsify "$id" --probe "bash ${oracle} ${ref} --no-fetch" --no-run 2>&1)"; frc2=$?
+      fout2="$(cc_run "$bl" falsify "$id" --probe "bash ${oracle} ${ref} --no-fetch" --no-run 2>&1)"; frc2=$?
       if [[ "$frc2" -eq 0 ]]; then
         printf '· ship-land: re-land row %s carries a falsifier stored UNSCREENED (cc-backlog falsify rc=%s on the screened attempt); the sweep runs it first.\n' \
           "$id" "$frc" >&2
@@ -1897,7 +1903,7 @@ land_retract_rows() {
   [[ -x "$bl" && -n "${LANDED_HEAD:-}" ]] || return 0
   short="$(git rev-parse --short "$LANDED_HEAD" 2>/dev/null || printf '%s' "$LANDED_HEAD")"
   if [[ -n "${BRANCH:-}" ]]; then
-    rows="$("$bl" list --all --json 2>/dev/null | jq -r --arg t "re-land ${BRANCH}: ship-land could not complete and its author's pane may be gone" \
+    rows="$(cc_run "$bl" list --all --json 2>/dev/null | jq -r --arg t "re-land ${BRANCH}: ship-land could not complete and its author's pane may be gone" \
              '.[] | select(.status != "done" and .title == $t and (.falsifier // "") != "") | .id' 2>/dev/null || true)"
     for id in $rows; do
       if CC_BACKLOG_KICK=off "$bl" "done" "$id" --kind falsified --pointer stored \
@@ -3258,6 +3264,7 @@ stamp_gate_green() {  # gate-green asserts "the FULL suite proved THIS tree" —
 # indirect expansion, bash 3.2 safe (verified on 3.2.57).
 own_run() {
   local sw="SHIP_LAND_${1}_OWN_SCOPE" var="$2" val="$3"; shift 3
+  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }   # a #! lint via its interpreter (cc-run.sh)
   if [[ "${!sw:-on}" = "off" ]]; then
     # STRICT, and it must be the ABSENCE of the variable rather than an empty one — that is the
     # whole distinction above. The subshell is what makes `unset` local to this call.
@@ -3336,10 +3343,11 @@ bats_sc_nonverdict() {
 # shellcheck disable=SC2329  # invoked from all eight of run_gate's own-scope arms below.
 lint_own_scope() {  # $1=lint path · $2=diff range
   local lint="$1" range="$2" line
-  local spec=()
+  local spec=() run=("$1")
+  declare -F cc_argv >/dev/null && { cc_argv "$lint"; run=("${CC_ARGV[@]}"); }   # via its interpreter (cc-run.sh)
   while IFS= read -r line; do
     [[ -n "$line" ]] && spec+=("$line")
-  done < <("$lint" --print-scope 2>/dev/null)
+  done < <("${run[@]}" --print-scope 2>/dev/null)
   # bash 3.2 errors on "${arr[@]}" for an EMPTY array under `set -u`, so this test is not cosmetic —
   # it is also the rc-2 gate. Same guard, same reason, as collect_actuation in permission-gate-lint.
   [[ "${#spec[@]}" -gt 0 ]] || return 2
@@ -3452,7 +3460,9 @@ selftest_ok() {  # $1=lint path · $2…=extra files its selftest READS → the 
     return 0
   fi
   SELFTEST_MEMO_RUNS=$(( SELFTEST_MEMO_RUNS + 1 ))
-  "$lint" --selftest >/dev/null 2>&1 || rc=$?
+  local run=("$lint")
+  declare -F cc_argv >/dev/null && { cc_argv "$lint"; run=("${CC_ARGV[@]}"); }   # via its interpreter (cc-run.sh)
+  "${run[@]}" --selftest >/dev/null 2>&1 || rc=$?
   if [ "$rc" = "0" ] && [ "$armed" = "1" ]; then memo_file_record "$ck" "$lint"; fi
   return "$rc"
 }
@@ -3891,7 +3901,7 @@ run_gate() {  # $1=range → 0 green / 1 red
         # --own-range: BLOCK on bullets this land ADDED, advisory on the rest. A rebase onto a
         # moved trunk routinely brings in siblings' bullets, and convicting this land for them is
         # attribution by reachability. Coverage is intact: every bullet is added by SOME land.
-        "$RULES_LINT" --file "$_rf" --own-range "$range" >&2 || { _rrc=$?; [[ "$_rrc" -eq 2 ]] && break; }
+        cc_run "$RULES_LINT" --file "$_rf" --own-range "$range" >&2 || { _rrc=$?; [[ "$_rrc" -eq 2 ]] && break; }
       done <<< "$rules_own"
       if (( _rrc == 2 )); then arm_nonverdict "rules-hook-budget-lint"; return 1; fi
       if (( _rrc != 0 )); then
@@ -3928,7 +3938,7 @@ run_gate() {  # $1=range → 0 green / 1 red
         return 1  # gate_bounded: SHIP_LAND_TEST_STUB_LINT=/nonexistent — escape for a broken detector
       fi
       local _tslrc=0
-      if (( ${#tsl_files[@]} > 0 )); then "$TSL_LINT" --files "${tsl_files[@]}" >&2 || _tslrc=$?; fi
+      if (( ${#tsl_files[@]} > 0 )); then cc_run "$TSL_LINT" --files "${tsl_files[@]}" >&2 || _tslrc=$?; fi
       if (( _tslrc == 2 )); then arm_nonverdict "test-stub-lint"; return 1; fi
       if (( _tslrc != 0 )); then
         echo "✗ gate: test-stub RED — a test file this land edits writes more inline #! stubs than its baseline." >&2
@@ -3976,7 +3986,7 @@ run_gate() {  # $1=range → 0 green / 1 red
         return 1  # gate_bounded: SHIP_LAND_HOOK_SHEBANG_LINT=/nonexistent — escape for a broken detector
       fi
       local _hsrc=0
-      "$HSB_LINT" >&2 || _hsrc=$?
+      cc_run "$HSB_LINT" >&2 || _hsrc=$?
       if (( _hsrc == 2 )); then arm_nonverdict "hook-shebang-lint"; return 1; fi
       if (( _hsrc != 0 )); then
         echo "✗ gate: hook-shebang RED — a template hook, statusLine or launchd job execs a #! script by bare path." >&2
@@ -4062,7 +4072,7 @@ run_gate() {  # $1=range → 0 green / 1 red
         return 1  # gate_bounded: SHIP_LAND_SHASUM_LINT=/nonexistent — escape for a broken detector
       fi
       local _sslrc=0
-      "$SSL_LINT" "${ssl_files[@]}" >&2 || _sslrc=$?
+      cc_run "$SSL_LINT" "${ssl_files[@]}" >&2 || _sslrc=$?
       if (( _sslrc == 2 )); then arm_nonverdict "shasum-lint"; return 1; fi
       if (( _sslrc != 0 )); then
         echo "✗ gate: shasum RED — a file this land edits runs the shasum perl script (a #! exec)." >&2
@@ -4100,7 +4110,7 @@ run_gate() {  # $1=range → 0 green / 1 red
         return 1  # gate_bounded: SHIP_LAND_IB_BIN=/nonexistent — escape for a broken detector; fires only on lands touching CLAUDE*.md or .claude/rules
       fi
       local _ibrc=0
-      "$IB_BIN" range "$range" --repo "$(pwd -P)" >&2 || _ibrc=$?
+      cc_run "$IB_BIN" range "$range" --repo "$(pwd -P)" >&2 || _ibrc=$?
       if (( _ibrc == 2 )); then arm_nonverdict "instruction-budget"; return 1; fi
       if (( _ibrc != 0 )); then
         echo "✗ gate: instruction-budget RED — this land grows an always-loaded instruction file or" >&2
@@ -4130,7 +4140,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       fi
       local -a _pfa=()
       while IFS= read -r _pf; do [[ -n "$_pf" ]] && _pfa+=(--file "$_pf"); done <<< "$planfm_own"
-      if ! "$PLANFM_LINT" "${_pfa[@]}" >&2; then
+      if ! cc_run "$PLANFM_LINT" "${_pfa[@]}" >&2; then
         echo "✗ gate: plan frontmatter RED — open each named plan with ---/status: …/--- (or mark a" >&2
         echo "  design companion with a first line <!-- plan-companion: <PLAN> -->)." >&2
         gate_red plan-frontmatter
@@ -4529,7 +4539,7 @@ run_gate() {  # $1=range → 0 green / 1 red
     # earned under one environment into another. It is the most expensive selftest of the eleven and
     # it is excluded anyway: an unsound memo on a detector-validity proof is worse than the seconds.
     local _st_rc=0 _st_out=""
-    _st_out="$("$UNATTENDED_LINT" --selftest 2>/dev/null)" || _st_rc=$?
+    _st_out="$(cc_run "$UNATTENDED_LINT" --selftest 2>/dev/null)" || _st_rc=$?
     # A SIGNAL DEATH IS A THIRD STATE, NEVER RED (measured 2026-09-11, during the land of backlog
     # 5a5a3073626c). This is the ONE selftest deliberately excluded from selftest_ok's memo — see
     # its header above — so it is the only arm that re-runs its full ~2.5min scan on EVERY round,
@@ -4809,7 +4819,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       # this arm's degradation is the HOUSE RULE, not an exception to it. What IS distinctive here
       # is the magnitude of the alternative: a strict whole-tree run of this lint is 164 findings,
       # i.e. a guaranteed outage on every land, where a sibling's strict run is clean.
-      bown="$("$SC_BATS_LINT" --own-lines "$range" 2>/dev/null || true)"
+      bown="$(cc_run "$SC_BATS_LINT" --own-lines "$range" 2>/dev/null || true)"
       [[ -n "$bown" ]] && echo "→ gate: bats-shellcheck own-scope — blocking on $(printf '%s\n' "$bown" | grep -c .) changed line(s); pre-existing findings advisory." >&2
     fi
     echo "→ gate: .bats shellcheck ratchet (this gate never linted a test file before)" >&2
@@ -4917,7 +4927,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red testname-eval-selftest
       return 1
     fi
-    "$TESTNAME_LINT" tests >&2; _arm_rc=$?
+    cc_run "$TESTNAME_LINT" tests >&2; _arm_rc=$?
     if (( _arm_rc == 2 )); then arm_nonverdict "bats-testname-eval-lint"; return 1; fi
     if (( _arm_rc != 0 )); then
       echo "✗ gate: @test-name eval RED — a name above EXPANDS, so bats deletes that word from the" >&2
@@ -4968,7 +4978,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red loaded-untracked-selftest
       return 1
     fi
-    "$LOADED_LINT" >&2; _arm_rc=$?
+    cc_run "$LOADED_LINT" >&2; _arm_rc=$?
     if (( _arm_rc == 2 )); then arm_nonverdict "loaded-untracked-lint"; return 1; fi
     # gate_bounded: EVENT-ON-FIRST-LAND, ONE-git-add-CLEARABLE — same one-land budget. The corpus
     # baseline is ZERO offenders at the commit that adds this arm, so the only tree this can refuse
@@ -5038,7 +5048,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red fleet-manifest-selftest
       return 1
     fi
-    "$FLEETMAN_LINT" >&2; _arm_rc=$?
+    cc_run "$FLEETMAN_LINT" >&2; _arm_rc=$?
     if (( _arm_rc == 2 )); then arm_nonverdict "fleet-manifest-lint"; return 1; fi
     if (( _arm_rc != 0 )); then
       echo "✗ gate: fleet-manifest coverage RED — this tree commits a launchd plist that fleet.manifest" >&2
@@ -5076,7 +5086,7 @@ run_gate() {  # $1=range → 0 green / 1 red
   local ADM_LINT="${SHIP_LAND_ADM_LINT:-scripts/offbox-admission-lint.sh}"
   if [[ -x "$ADM_LINT" ]] && [[ -d tests ]]; then
     local adm_rc=0
-    "$ADM_LINT" --range "$range" >&2 || adm_rc=$?
+    cc_run "$ADM_LINT" --range "$range" >&2 || adm_rc=$?
     if (( adm_rc == 2 )); then
       echo "⛔ gate: offbox-admission could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
       echo "  Nothing is wrong with the suites named above (if any). Re-run /ship when the box is quieter." >&2

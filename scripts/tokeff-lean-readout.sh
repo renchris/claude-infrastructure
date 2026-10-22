@@ -23,6 +23,8 @@
 # is ~/.claude/autonomy/tokeff/lean-readout.log.
 # bash 3.2-safe.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 SELF="$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"
 REPO="${TOKEFF_LEAN_REPO:-$(cd "$(dirname "$SELF")/.." && pwd)}"   # seam: tests point it at a fixture
@@ -57,7 +59,7 @@ EXCLUDE_SLUG="${TOKEFF_LEAN_EXCLUDE_SLUG:--private-tmp-|-tmp-|tokeff}"
 # shellcheck disable=SC2016  # the python program is single-quoted on purpose; $ there is Python's
 readout() { # prints one markdown paragraph, or fails
   local js
-  js="$("$LEDGER" --by-agent-type --exclude-slug="$EXCLUDE_SLUG" --since "$SINCE" --until "$UNTIL" --json)" || return 1
+  js="$(cc_run "$LEDGER" --by-agent-type --exclude-slug="$EXCLUDE_SLUG" --since "$SINCE" --until "$UNTIL" --json)" || return 1
   printf '%s' "$js" | /usr/bin/python3 -c '
 import json, sys
 d = json.load(sys.stdin)

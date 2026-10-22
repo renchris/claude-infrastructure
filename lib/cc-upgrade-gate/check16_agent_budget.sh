@@ -26,6 +26,8 @@
 # in any account's .claude.json (bin/cc-agent-budget-flags). That is context, not the verdict: a flag
 # arriving is the day the switch starts to matter.
 # shellcheck shell=bash
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 _G16_PROMPT='Do not launch anything. Quote verbatim every sentence in your Agent tool description that mentions a budget of tokens for agents you launch. If there is no such sentence, reply exactly NONE.'
 _G16_RX='budget of [0-9][0-9,]* tokens'
@@ -67,7 +69,7 @@ _g16_flags() {
   fl="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)/bin/cc-agent-budget-flags"
   [ -x "$fl" ] || fl="$HOME/.claude/bin/cc-agent-budget-flags"
   [ -x "$fl" ] || { echo "server flags: not read (cc-agent-budget-flags absent)"; return 0; }
-  j="$("$fl" --json 2>/dev/null)"
+  j="$(cc_run "$fl" --json 2>/dev/null)"
   printf '%s' "$j" | jq -r '
     if type != "array" then "server flags: unreadable"
     else ([.[] | .account as $a | .flags[] | "\($a | sub(".*/"; "")):\(.flag)=\(.value | tostring)"]) as $hits

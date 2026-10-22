@@ -119,6 +119,8 @@
 # said nothing. And the cure is ordered so the pin is never load-bearing: upgrade to the version this
 # repo pins, then RE-MEASURE. A witness that still fails after the upgrade is not news about the
 # venue, and the verdict says so rather than falling through to READY.
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -uo pipefail
 # CAPTURED BEFORE THE FORCED PREPEND, AND IT IS LOAD-BEARING. The line below is the launchd-safe
 # idiom every sibling here uses, and it puts /usr/bin AHEAD of everything — including /usr/local/bin,
@@ -688,7 +690,7 @@ else
     else
       printf '  fetched bats-core v%s at %s  (compare against the tag page; this is provenance, not proof)\n' \
         "$BATS_WANT" "$(git -C "$bsrc" rev-parse HEAD 2>/dev/null || echo '?')"
-      if "$bsrc/install.sh" /usr/local >/dev/null 2>&1 && [ -x /usr/local/bin/bats ]; then
+      if cc_run "$bsrc/install.sh" /usr/local >/dev/null 2>&1 && [ -x /usr/local/bin/bats ]; then
         PATH="/usr/local/bin:$PATH"; export PATH
         hash -r 2>/dev/null || true
         # …AND THE LAND DOES NOT RUN UNDER OUR PATH — arm 2's clause, and it bites harder here.
@@ -718,7 +720,7 @@ fi
 # strongest available statement that its clean verdict will mean something at land time.
 rc=0
 if [ -x "$SC_LINT" ] && repo_has_suites; then
-  if out="$("$SC_LINT" --selftest 2>&1)"; then
+  if out="$(cc_run "$SC_LINT" --selftest 2>&1)"; then
     printf 'assert : bats-shellcheck-lint --selftest OK — %s\n' "$(printf '%s' "$out" | sed -n 's/^bats-shellcheck-lint --selftest: \([0-9]*\/[0-9]*\).*/\1/p' | head -1)"
   else
     printf 'assert : bats-shellcheck-lint --selftest did NOT pass (exit %s) — the land will not reach a verdict here.\n' "$?" >&2

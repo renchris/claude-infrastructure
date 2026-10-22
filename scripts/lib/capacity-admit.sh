@@ -104,6 +104,8 @@
 #      CC_ADMIT_ACTIVE_CPU_FILE(~/.claude/autonomy/active-cpu.json) ·
 #      CC_ADMIT_ACTIVE_CPU_MIN_CORES(0.25) · CC_ADMIT_ACTIVE_CPU_MAX_AGE_S(90) — see _cc_admit_active_cpu
 # Pure definitions only — safe to source under `set -u`. bash 3.2-safe, BSD+GNU portable, no eval.
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/./cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/./cc-run.sh"; else cc_run() { "$@"; }; fi
 
 # ══ THE HARDWARE TERMS — ONE IMPLEMENTATION, TWO POLICIES ══════════════════════════════════════
 # Everything from here to `CC_ADMIT_REASON` is the MEASUREMENT, and it is shared verbatim with
@@ -1286,7 +1288,7 @@ _cc_admit_page() { # $1=text
   [ -n "$n" ] || n="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-notify"
   [ -x "$n" ] || n="$HOME/.claude/bin/cc-notify"
   [ -x "$n" ] || return 0
-  "$n" --page "$1" >/dev/null 2>&1 || true
+  cc_run "$n" --page "$1" >/dev/null 2>&1 || true
   return 0
 }
 

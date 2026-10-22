@@ -25,6 +25,8 @@
 # `cc-cloud list --json` per §9.3, and it is not this one. What is fixed here is the lie: where a
 # row for an off-box id exists, the board no longer calls it dead.
 set -u
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 TDIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
 HANDOFF_T="${CC_BOARD_HANDOFF_PCT:-73}"
 STALE_S="${CC_BOARD_STALE_S:-900}"
@@ -117,7 +119,7 @@ fi
 is_offbox() { # $1=session-id → 0 iff DECLARED off-box and not retired
   [ -n "${1:-}" ] || return 1
   [ -n "$CC_CLOUD" ] && [ -x "$CC_CLOUD" ] || return 1
-  "$CC_CLOUD" is-offbox "$1" >/dev/null 2>&1
+  cc_run "$CC_CLOUD" is-offbox "$1" >/dev/null 2>&1
 }
 
 now=$(date +%s)

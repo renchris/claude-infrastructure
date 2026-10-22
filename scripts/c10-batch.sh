@@ -35,6 +35,8 @@
 # Seams: CC_MIGRATIONS_STATE (ledger), CC_C10_REPO (migrations source), CC_DECIDE_BIN.
 # bash 3.2-safe.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 # Resolve every symlink hop: the live layer reaches this file as ~/.claude/scripts/c10-batch.sh, a
 # link into the checkout, and ~/.claude has no migrations/ — an unresolved path saw zero candidates
@@ -75,7 +77,7 @@ run_verify() {
 
 decision_actioned() { # <id>
   [ -x "$DECIDE" ] || return 1
-  "$DECIDE" list --all --json 2>/dev/null | jq -e --arg i "$1" 'any(.[]; .id == $i and .status == "actioned")' >/dev/null 2>&1
+  cc_run "$DECIDE" list --all --json 2>/dev/null | jq -e --arg i "$1" 'any(.[]; .id == $i and .status == "actioned")' >/dev/null 2>&1
 }
 
 # candidates — one migration name per line: the staged ledger ∪ un-ledgered c10 files.

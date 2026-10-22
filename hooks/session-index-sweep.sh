@@ -13,6 +13,8 @@
 # to the 20 in lib/session-index-helpers.sh so one grep finds every escaper in the subsystem — see
 # that file's header for why the ${v//…} form is the wrong tool for this particular job.
 set -euo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 # Resolve helpers — follow symlink to repo
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -312,7 +314,7 @@ if [ "$CC_HISTORY_UNION_MINUTES" -gt 0 ] 2>/dev/null; then
             # KEEP the tool's own verdict on failure and append the rc, rather than replacing it:
             # "verdict=no-sources" and "verdict=out-is-a-source" are different incidents with
             # different fixes, and a bare "rc=1" collapses them into one unreadable line.
-            if _hu_verdict="$("$_hu_bin" 2>&1 | tail -1)"; then :; else
+            if _hu_verdict="$(cc_run "$_hu_bin" 2>&1 | tail -1)"; then :; else
                 _hu_verdict="${_hu_verdict:-verdict=no-output} rc=$?"
             fi
             session_index_log "History union: $_hu_verdict"
@@ -360,7 +362,7 @@ _read_ledger_tick() {
     bin="${CC_READ_LEDGER_BIN:-$(dirname "$hooks_dir")/bin/cc-memory-read-ledger}"
     if [ -x "$bin" ]; then
         rc=0
-        out="$("$bin" 2>/dev/null)" || rc=$?
+        out="$(cc_run "$bin" 2>/dev/null)" || rc=$?
         last="$(printf '%s\n' "$out" | tail -1)"
         case "$last" in
             "LEDGER-VERDICT scanned="*) disp=fired; reason=ledger-written ;;

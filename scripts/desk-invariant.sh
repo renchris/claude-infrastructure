@@ -31,6 +31,8 @@
 # Selftest: `desk-invariant.sh --selftest` — stubbed it2/registry/transcript/wait dirs, RED-proven.
 # Launchd: launchd/com.claude.desk-invariant.plist (300s StartInterval, PATH incl ~/.claude/bin).
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 # Bound the OS-notification fork (machine-wide iTerm2/AppleEvent wedge, 2026-07-26). This one
 # targets NotificationCenter rather than iTerm2, so it is not the root cause — but it is an
@@ -201,7 +203,7 @@ notify() { # <title> <msg> — OS-level, API-independent (osascript, or a stub i
 push_page() { # <msg> — Pushover break-through; a no-op (exit 0) when unarmed
   local msg="$1"
   [ -x "$PUSH" ] || return 0
-  "$JQ" -cn --arg m "$msg" --arg c "$CANNED_CWD" '{message:$m,cwd:$c}' | "$PUSH" >/dev/null 2>&1 || true
+  "$JQ" -cn --arg m "$msg" --arg c "$CANNED_CWD" '{message:$m,cwd:$c}' | cc_run "$PUSH" >/dev/null 2>&1 || true
 }
 
 # v2 (critique F7 — the operator's LITERAL complaint): re-engagement must NEVER keystroke a live composer.
@@ -259,7 +261,7 @@ fire_replacement() { # fire a fresh desk from the canned brief (role-tagged). Re
   # desk launches IN PLACE at $CANNED_CWD. DESK_INVARIANT_ISOLATION_SKIP=0 drops it, no code edit.
   local -a fire_args=(--prompt-file "$BRIEF" --as-role "$ROLE" --cwd "$CANNED_CWD")
   [ "$ISOLATION_SKIP" = 1 ] && fire_args+=(--in-place)
-  FIRE_ERR="$("$FIRE_BIN" "${fire_args[@]}" 2>&1 >/dev/null)"
+  FIRE_ERR="$(cc_run "$FIRE_BIN" "${fire_args[@]}" 2>&1 >/dev/null)"
   local rc=$?
   FIRE_ERR="$(printf '%s' "$FIRE_ERR" | tr '\n' ' ' | cut -c1-300)"
   return "$rc"
@@ -710,7 +712,7 @@ selftest() {
 recycle_invariant_check() {
   local s="${DESK_INVARIANT_RECYCLE_CHECK:-$SCRIPT_DIR/desk-recycle-invariant.sh}"
   [ -x "$s" ] || return 0
-  "$s" --once >/dev/null 2>&1 || true
+  cc_run "$s" --once >/dev/null 2>&1 || true
   return 0
 }
 

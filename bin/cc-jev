@@ -20,6 +20,8 @@
 # ZDR is on and fails closed, and only the closing message is sent — no transcript, no paths, no
 # history. It is still the operator's call, not the agent's.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; fi
 
 # Resolve $0 through its symlinks BEFORE deriving anything from it. ~/.claude/{bin,scripts}/ are
 # per-file symlinks into the checkout, so an unresolved `dirname "$0"/..` yields ~/.claude — which
@@ -247,11 +249,11 @@ case "${1:-status}" in
   status) cmd_status ;;
   probe)  cmd_probe ;;
   ask)    shift; cmd_ask "${1:--}" ;;
-  pilot)  shift; exec "$ROOT/scripts/jev/pilot.sh" "$@" ;;
-  rank)   shift; exec "$ROOT/scripts/jev/rank-memory.sh" "$@" ;;
-  promote) shift; exec "$ROOT/scripts/jev/promote-memory.sh" "$@" ;;
-  arm)    shift; exec "$ROOT/scripts/jev/arm.sh" "$@" ;;
-  batch)  shift; exec "$ROOT/scripts/jev/jev-batch.sh" "$@" ;;
+  pilot)  shift; cc_argv "$ROOT/scripts/jev/pilot.sh"; exec "${CC_ARGV[@]}" "$@" ;;
+  rank)   shift; cc_argv "$ROOT/scripts/jev/rank-memory.sh"; exec "${CC_ARGV[@]}" "$@" ;;
+  promote) shift; cc_argv "$ROOT/scripts/jev/promote-memory.sh"; exec "${CC_ARGV[@]}" "$@" ;;
+  arm)    shift; cc_argv "$ROOT/scripts/jev/arm.sh"; exec "${CC_ARGV[@]}" "$@" ;;
+  batch)  shift; cc_argv "$ROOT/scripts/jev/jev-batch.sh"; exec "${CC_ARGV[@]}" "$@" ;;
   -h|--help|help) usage ;;
   *) usage; exit 2 ;;
 esac

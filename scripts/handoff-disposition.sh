@@ -48,6 +48,8 @@
 #   CC_SESSIONS_BIN (default ~/.claude/bin/cc-sessions)
 #   CC_TASKS_DIR    (default ~/.claude/tasks)
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
 SESSIONS_BIN="${CC_SESSIONS_BIN:-$HOME/.claude/bin/cc-sessions}"
@@ -169,7 +171,7 @@ fi
 peers_json='[]'
 registry_indeterminate=false
 if [ "${#SLUGS[@]}" -gt 0 ]; then
-  names=$("$SESSIONS_BIN" --names 2>/dev/null); rc=$?
+  names=$(cc_run "$SESSIONS_BIN" --names 2>/dev/null); rc=$?
   if [ "$rc" -eq 127 ]; then
     note "cc-sessions unavailable (fired_peers_alive=[])"
   elif [ "$rc" -ne 0 ]; then

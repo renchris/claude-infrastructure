@@ -41,6 +41,8 @@
 # Seams: CC_SLOPE_POINTS ("0 3 6 9") · CC_SLOPE_SETTLE_S (120) · CC_SLOPE_MEASURE_S (60)
 #        CC_SLOPE_MAX_N (16) · CC_SLOPE_MAX_START_LOAD (14) · CC_SLOPE_CLAUDE_BIN · CC_SLOPE_OUT
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 POINTS="${CC_SLOPE_POINTS:-0 3 6 9}"
 SETTLE_S="${CC_SLOPE_SETTLE_S:-120}"
@@ -241,7 +243,7 @@ for N in $POINTS; do
 
   sleep "$SETTLE_S"
 
-  J="$("$PROBE" --seconds "$MEASURE_S" --json --label "N=$N" 2>/dev/null)" || J=""
+  J="$(cc_run "$PROBE" --seconds "$MEASURE_S" --json --label "N=$N" 2>/dev/null)" || J=""
   if [ -z "$J" ]; then
     printf '%6s  %10s  %14s  %s\n' "$N" "BLIND" "BLIND" "(probe failed — no row)"
     continue

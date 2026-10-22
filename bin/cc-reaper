@@ -77,6 +77,8 @@
 # see docs/AUTONOMOUS-REAPER-ACTIVATION.md. The tool itself never self-installs a daemon.
 
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CLASSIFY_BIN="${CC_REAPER_CLASSIFY_BIN:-$HERE/cc-classify}"
 TEARDOWN_BIN="${CC_REAPER_TEARDOWN_BIN:-$HERE/cc-teardown}"
@@ -117,7 +119,7 @@ if [ "${CC_REAPER_KITTY_ADDR:-1}" = 1 ] \
    && [ -z "${CC_TERM:-}" ] && [ -z "${CC_TERM_KITTY_TO:-}" ] && [ -z "${KITTY_LISTEN_ON:-}" ]; then
   # --unique (2026-10-08): with two live kitties "the oldest" is a guess about whose window N a close
   # targets — window ids restart at 1 in every kitty — so ambiguity exports nothing, like no kitty.
-  _reaper_sock="$("${CC_REAPER_KITTY_SOCKET_BIN:-$HERE/cc-kitty-socket}" --unique 2>/dev/null)" || _reaper_sock=""
+  _reaper_sock="$(cc_run "${CC_REAPER_KITTY_SOCKET_BIN:-$HERE/cc-kitty-socket}" --unique 2>/dev/null)" || _reaper_sock=""
   if [ -n "$_reaper_sock" ]; then
     CC_TERM=kitty
     CC_TERM_KITTY_TO="$_reaper_sock"
@@ -1777,7 +1779,7 @@ checkpoint_first() { # <cwd> <name> <sid> — snapshot WIP to refs/wip/<name>/LA
   local cwd="$1" name="$2" sid="$3"
   [ -x "$CHECKPOINT_BIN" ] || { log "checkpoint: $CHECKPOINT_BIN not executable — SKIP (no snapshot)"; return 1; }
   printf '{"session_id":"%s","hook_event_name":"TeammateIdle","cwd":"%s","team_name":"cc-reaper","teammate_name":"%s"}' \
-    "$sid" "$cwd" "$name" | "$CHECKPOINT_BIN" >/dev/null 2>&1 || true
+    "$sid" "$cwd" "$name" | cc_run "$CHECKPOINT_BIN" >/dev/null 2>&1 || true
   return 0
 }
 
@@ -2668,7 +2670,7 @@ sweep() {
     # sweep_age is logged beside it so the wider span stays visible and the change is auditable.
     decided_age=$(( decided_at - classify_t0 ))
     local sweep_age=$(( decided_at - sweep_t0 ))
-    "$TEARDOWN_BIN" "$pane" --done-evidence "$ev" --decided-at "$decided_at" "${expect_args[@]+"${expect_args[@]}"}"; trc=$?
+    cc_run "$TEARDOWN_BIN" "$pane" --done-evidence "$ev" --decided-at "$decided_at" "${expect_args[@]+"${expect_args[@]}"}"; trc=$?
     if [ "$trc" = 0 ]; then
       reaped=$((reaped+1)); say "    torn down + effect-verified (cc-teardown exit 0)"; log "reaped $name [$cause] pane=$pane decided_age=${decided_age}s sweep_age=${sweep_age}s"
       clear_fired_marker "$pane"        # the pane is gone — retire its fired-peer marker (T-P3-4)

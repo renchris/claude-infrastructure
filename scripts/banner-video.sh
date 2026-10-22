@@ -40,6 +40,8 @@
 # optional and only the read-back check is skipped without it.
 
 set -euo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SHOTS="$HERE/banner-shots.sh"
@@ -131,7 +133,7 @@ FRAMES="$WORK/frames"; mkdir -p "$FRAMES"
 TIMES_ARG=$(tr '\n' ',' < "$WORK/times.txt" | sed 's/,$//')
 printf 'banner-video: rendering %s frames of %s (%ss loop @ %s fps)…\n' \
   "$NFRAMES" "$STEM" "$PERIOD" "$FPS" >&2
-if ! "$SHOTS" "$ASSET" --times "$TIMES_ARG" --bg "$BG" --out "$FRAMES" \
+if ! cc_run "$SHOTS" "$ASSET" --times "$TIMES_ARG" --bg "$BG" --out "$FRAMES" \
        --width "$WIDTH" --scale "$SCALE" > "$WORK/shots.log" 2>&1; then
   cat "$WORK/shots.log" >&2
   die "banner-shots.sh failed — no frames to encode"

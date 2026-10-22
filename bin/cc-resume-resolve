@@ -46,6 +46,8 @@
 # Env overrides (tests): CC_RESUME_STORES (colon-separated config dirs, bypasses the account
 # map), CC_ACCOUNT_MAP (path to account-map.generated.sh), HOME.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 usage() { sed -n '/^# Usage:/,/^#   cc-resume-resolve -h/p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -175,7 +177,7 @@ if [ "$CWD_EXISTS" = 0 ] && [ -n "$CWD" ]; then
   [ -x "$WTT" ] || WTT="$(command -v wt-tombstone 2>/dev/null)"
   [ -n "$WTT" ] && [ -x "$WTT" ] || WTT="$HOME/.claude/bin/wt-tombstone"
   if [ -x "$WTT" ]; then
-    if PK="$("$WTT" parked "$CWD" 2>/dev/null)" && [ -n "$PK" ]; then
+    if PK="$(cc_run "$WTT" parked "$CWD" 2>/dev/null)" && [ -n "$PK" ]; then
       TAB="$(printf '\t')"
       EXTRA="parked=1
 parked_path=${PK#*"$TAB"}"
@@ -188,8 +190,8 @@ parked_path=${PK#*"$TAB"}"
       # The ledger records the PHYSICAL path; the tree is gone, so canonicalise its parent.
       CANON="$CWD"
       _p="$(cd -P -- "$(dirname "$CWD")" 2>/dev/null && pwd -P)" && CANON="$_p/$(basename "$CWD")"
-      ROW="$("$WTT" find "$CANON" "$@" 2>/dev/null)"
-      [ -z "$ROW" ] && [ "$CANON" != "$CWD" ] && ROW="$("$WTT" find "$CWD" "$@" 2>/dev/null)"
+      ROW="$(cc_run "$WTT" find "$CANON" "$@" 2>/dev/null)"
+      [ -z "$ROW" ] && [ "$CANON" != "$CWD" ] && ROW="$(cc_run "$WTT" find "$CWD" "$@" 2>/dev/null)"
       if [ -n "$ROW" ] && command -v jq >/dev/null 2>&1; then
         { IFS= read -r T_ID; IFS= read -r T_REPO; IFS= read -r T_BRANCH; IFS= read -r T_HEAD
           IFS= read -r T_PRES; IFS= read -r T_REF; } <<EOF

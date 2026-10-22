@@ -20,6 +20,8 @@
 # Cost: a handful of small Haiku turns. Nothing is written outside the work directory.
 
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 PROG=${0##*/}
 WORK="${CC_HEADLESS_PROBE_DIR:-${TMPDIR:-/tmp}/headless-probe.$$}"
@@ -154,7 +156,7 @@ MAIL_FILE=""
 if [ -n "$SID" ]; then
   MAIL_FILE="$MAIL_DIR/$SID.md"
   if [ -x "$HOME/.claude/bin/cc-notify" ]; then
-    MAIL_VERDICT=$("$HOME/.claude/bin/cc-notify" --mailbox-only "$SID" "$MAIL_TOKEN probe mail" 2>&1 \
+    MAIL_VERDICT=$(cc_run "$HOME/.claude/bin/cc-notify" --mailbox-only "$SID" "$MAIL_TOKEN probe mail" 2>&1 \
                      | grep -o 'verdict=[a-z-]*' | head -1)
     MAIL_VERDICT="${MAIL_VERDICT:-no-verdict-token}"
   else

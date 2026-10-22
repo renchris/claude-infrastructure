@@ -6,6 +6,8 @@
 # Receives JSON on stdin with task details (task_id, task_subject, teammate_name, team_name).
 
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 # PATH hardening — scripts/unattended-path-lint.sh governs this line.
 # A hook inherits the PATH of the Claude Code process that fired it, and that PATH is a function of
@@ -202,9 +204,9 @@ run_infra_gate() {  # runs from $WORKTREE_PATH; exits 0 (pass/skip) or 2 (fail)
     local scl="scripts/bats-shellcheck-lint.sh" bown="" scout=""
     if [ -x "$scl" ]; then
       if git rev-parse --verify -q "$trunk" >/dev/null 2>&1; then
-        bown="$("$scl" --own-lines "$trunk...HEAD" 2>/dev/null || true)"
+        bown="$(cc_run "$scl" --own-lines "$trunk...HEAD" 2>/dev/null || true)"
       fi
-      if ! scout="$(CC_BATS_SC_OWN="$bown" "$scl" tests 2>&1)"; then
+      if ! scout="$(CC_BATS_SC_OWN="$bown" cc_run "$scl" tests 2>&1)"; then
         rc=1; summary="${summary}"$'\n'"[bats-shellcheck]"$'\n'"${scout}"
       fi
     fi
@@ -225,7 +227,7 @@ run_infra_gate() {  # runs from $WORKTREE_PATH; exits 0 (pass/skip) or 2 (fail)
   # half is worth printing either way.
   if [ -x "scripts/bats-kill-guard-lint.sh" ]; then
     local kgout=""
-    if ! kgout="$(CC_KILLGUARD_OWN="$kgown" scripts/bats-kill-guard-lint.sh tests 2>&1)"; then
+    if ! kgout="$(CC_KILLGUARD_OWN="$kgown" cc_run scripts/bats-kill-guard-lint.sh tests 2>&1)"; then
       rc=1; summary="${summary}"$'\n'"[bats-kill-guard]"$'\n'"${kgout}"
     fi
   fi
@@ -239,7 +241,7 @@ run_infra_gate() {  # runs from $WORKTREE_PATH; exits 0 (pass/skip) or 2 (fail)
   # so this protects the triage fallback, which is needed exactly when something else has gone wrong.
   if [ -x "scripts/bats-testname-eval-lint.sh" ]; then
     local tnout=""
-    if ! tnout="$(scripts/bats-testname-eval-lint.sh tests 2>&1)"; then
+    if ! tnout="$(cc_run scripts/bats-testname-eval-lint.sh tests 2>&1)"; then
       rc=1; summary="${summary}"$'\n'"[bats-testname-eval]"$'\n'"${tnout}"
     fi
   fi

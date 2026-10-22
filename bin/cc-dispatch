@@ -272,6 +272,8 @@
 #                                             add-kick; the bound is a POPULATION, never a count
 #   CC_DISPATCH_VENUE_NEW_MAX (default: 2)    labels per decide pass
 #   (CC_BACKLOG_FILE flows through to the backlog bin unchanged — tests point it at a temp jsonl.)
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -uo pipefail
 
 PAGES_DIR="${CC_DISPATCH_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
@@ -901,7 +903,7 @@ cloud_declare() {
     # the verdict rather than silently absent.
     local cust cbin
     cbin="$(resolve_bin "${CC_DISPATCH_CUSTODY_BIN:-}" cc-custody "$HOME/.claude/bin/cc-custody")" || cbin=""
-    if [ -n "$cbin" ] && "$cbin" open --cwd "$PWD" --target "cloud:$sid" --marker "$sid" \
+    if [ -n "$cbin" ] && cc_run "$cbin" open --cwd "$PWD" --target "cloud:$sid" --marker "$sid" \
          --slug "cloud-$sid" >/dev/null 2>&1; then
       cust="custody OPEN"
     else
@@ -923,13 +925,13 @@ cloud_declare() {
   local -a dargs=(declare --id "$sid" --branch "$branch" --item "$id" --custody "$sid")
   [ -n "$acct" ] && dargs+=(--account "$acct")
   [ -n "$nb" ] && dargs+=(--notify-back "$nb")
-  if ! "$ccbin" "${dargs[@]}" >/dev/null 2>&1; then
+  if ! cc_run "$ccbin" "${dargs[@]}" >/dev/null 2>&1; then
     printf 'UNDECLARED — %s fired as %s but cc-cloud declare --id %s --branch %s FAILED' "$id" "$sid" "$sid" "$branch"
     return 1
   fi
   local cust cbin
   cbin="$(resolve_bin "${CC_DISPATCH_CUSTODY_BIN:-}" cc-custody "$HOME/.claude/bin/cc-custody")" || cbin=""
-  if [ -n "$cbin" ] && "$cbin" open --cwd "$PWD" --target "cloud:$sid" --marker "$sid" \
+  if [ -n "$cbin" ] && cc_run "$cbin" open --cwd "$PWD" --target "cloud:$sid" --marker "$sid" \
        --slug "cloud-$sid" ${nb:+--notify-back "$nb"} >/dev/null 2>&1; then
     cust="custody OPEN (marker $sid)"
   else
@@ -1151,10 +1153,10 @@ dispatcher_stamp() {
 #     claimed-outcome-vs-checked-outcome). So the marker is the RETURN VALUE of what succeeded.
 self_release() {
   local id="$1" token="$2"
-  if "$backlog" reopen "$id" --by "$SID" --self-release "$token" >/dev/null 2>&1; then
+  if cc_run "$backlog" reopen "$id" --by "$SID" --self-release "$token" >/dev/null 2>&1; then
     printf ', self-release'
   else
-    "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true
+    cc_run "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true
   fi
 }
 
@@ -1413,7 +1415,7 @@ ready_paths() {
   vbin="${CC_DISPATCH_VENUE_BIN:-$(cd "$(dirname "$_self")" 2>/dev/null && pwd)/cc-venue}"
   [ -x "$vbin" ] || vbin="$(resolve_bin "" cc-venue "$HOME/.claude/bin/cc-venue")" || vbin=""
   [ -n "$vbin" ] && [ -x "$vbin" ] || return 2
-  out="$(CC_PREMISE_REPO="$r" "$vbin" paths "$id" 2>/dev/null)"; rc=$?
+  out="$(CC_PREMISE_REPO="$r" cc_run "$vbin" paths "$id" 2>/dev/null)"; rc=$?
   [ "$rc" -eq 0 ] || return 2
   printf '%s' "$out"
   return 0
@@ -1487,7 +1489,7 @@ ready_relabel() {
   vbin="${CC_DISPATCH_VENUE_BIN:-$(cd "$(dirname "$_self")" 2>/dev/null && pwd)/cc-venue}"
   [ -x "$vbin" ] || vbin="$(resolve_bin "" cc-venue "$HOME/.claude/bin/cc-venue")" || vbin=""
   [ -n "$vbin" ] && [ -x "$vbin" ] || return 1
-  CC_PREMISE_REPO="$r" "$vbin" label "$id" >/dev/null 2>&1
+  CC_PREMISE_REPO="$r" cc_run "$vbin" label "$id" >/dev/null 2>&1
 }
 
 # readiness_verdict <id> <project> <venuePlan> <cluster-src> <may-repair 0|1>
@@ -1973,7 +1975,7 @@ dispatch() { # <dry|run|decide>
     || die3 "backlog bin unresolvable (set CC_DISPATCH_BACKLOG_BIN)"
 
   # 1. pull + filter dispatchable (status=="open" skips already-claimed).
-  items="$("$backlog" list --open --json 2>/dev/null)"; rc=$?
+  items="$(cc_run "$backlog" list --open --json 2>/dev/null)"; rc=$?
   [ "$rc" -eq 0 ] || die3 "'$backlog list --open --json' failed (rc=$rc)"
   printf '%s' "$items" | jq -e 'type=="array"' >/dev/null 2>&1 \
     || die3 "backlog list did not return a JSON array"
@@ -2350,7 +2352,7 @@ EOF
       while IFS="$(printf '\t')" read -r sid sdod; do
         [ -n "$sid" ] && [ -n "$sdod" ] || continue
         [ -f "$sdod" ] || continue                                  # not a plan path ⇒ fail OPEN
-        sst="$("$findplan" --status "$sdod" 2>/dev/null)" || continue   # exit 2 / unreadable ⇒ OPEN
+        sst="$(cc_run "$findplan" --status "$sdod" 2>/dev/null)" || continue   # exit 2 / unreadable ⇒ OPEN
         case "$sst" in complete|superseded) slist="$slist$sid	$sst	$(basename "$sdod")
 " ;; esac
       done < <(printf '%s' "$premise_scan" \
@@ -2377,7 +2379,7 @@ EOF
             # evidence says PREMISE, never "verified": no code was read by this retraction.
             # `done` is QUOTED: unquoted, shellcheck parses the verb as the loop keyword (SC1010)
             # and the land gate runs bare shellcheck, which is stricter than -S warning.
-            "$backlog" "done" "$sid" --evidence "premise-retracted: $sdod is $sst (source=plan-open; no code verified by this retraction)" >/dev/null 2>&1 || true
+            cc_run "$backlog" "done" "$sid" --evidence "premise-retracted: $sdod is $sst (source=plan-open; no code verified by this retraction)" >/dev/null 2>&1 || true
           fi
         done <<< "$(printf '%s' "$slist")"
       fi
@@ -2674,8 +2676,8 @@ EOF
   wave_n="$(printf '%s' "$wave" | jq 'length' 2>/dev/null || echo 0)"
   wperrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-waveplan.XXXXXX" 2>/dev/null || true)"
   while :; do
-    if [ -n "$wperrf" ]; then plan="$("$waveplan" --items "$wave" --json 2>"$wperrf")"; rc=$?
-    else                      plan="$("$waveplan" --items "$wave" --json 2>/dev/null)";  rc=$?; fi
+    if [ -n "$wperrf" ]; then plan="$(cc_run "$waveplan" --items "$wave" --json 2>"$wperrf")"; rc=$?
+    else                      plan="$(cc_run "$waveplan" --items "$wave" --json 2>/dev/null)";  rc=$?; fi
     [ "$rc" -eq 0 ] && break
     wpverdict=""; wpcap=""; wpexc=""
     if [ -n "$wperrf" ] && [ -s "$wperrf" ]; then
@@ -2928,8 +2930,8 @@ EOF
     fi
     local cerrf crc cexc cwarn cgate
     cerrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-claim.XXXXXX" 2>/dev/null || true)"
-    if [ -n "$cerrf" ]; then "$backlog" "${claim_args[@]}" >/dev/null 2>"$cerrf"; crc=$?
-    else                     "$backlog" "${claim_args[@]}" >/dev/null 2>&1;       crc=$?
+    if [ -n "$cerrf" ]; then cc_run "$backlog" "${claim_args[@]}" >/dev/null 2>"$cerrf"; crc=$?
+    else                     cc_run "$backlog" "${claim_args[@]}" >/dev/null 2>&1;       crc=$?
     fi
     cexc="$(claim_excerpt "$cerrf")"
     # BOTH READS HAPPEN BEFORE THE rm, and the ordering is the defect rather than an optimisation:
@@ -3114,7 +3116,7 @@ EOF
         vdbin="${CC_DISPATCH_VENUE_BIN:-$(cd "$(dirname "$_self")" 2>/dev/null && pwd)/cc-venue}"
         [ -x "$vdbin" ] || vdbin="$(resolve_bin "" cc-venue "$HOME/.claude/bin/cc-venue")" || vdbin=""
         if [ -n "$vdbin" ] && [ -x "$vdbin" ]; then
-          if dspec="$("$vdbin" dodspec "$id" --repo "$irepo" 2>/dev/null)" && [ -n "$dspec" ]; then
+          if dspec="$(cc_run "$vdbin" dodspec "$id" --repo "$irepo" 2>/dev/null)" && [ -n "$dspec" ]; then
             dod_render="$dspec"
           fi
         fi
@@ -3443,7 +3445,7 @@ EOF
             # strictly better than a row silently stranded as `claimed` with no owner.
             wblocked=reopened
             if [ -n "$backlog" ] && [ -x "$backlog" ] \
-               && "$backlog" block "$id" --class needs-human --conviction 80 --receipt "git -C $wcwd status --porcelain => $wnote" --needs "$wnote. Salvage or retire it, then unblock: inspect with \`git -C $wcwd status --porcelain && git -C $wcwd log $wbase..HEAD\`; if there is nothing to keep, \`git -C $wrepo worktree remove --force $wcwd\` — then \`cc-backlog unblock $id\`." >/dev/null 2>&1
+               && cc_run "$backlog" block "$id" --class needs-human --conviction 80 --receipt "git -C $wcwd status --porcelain => $wnote" --needs "$wnote. Salvage or retire it, then unblock: inspect with \`git -C $wcwd status --porcelain && git -C $wcwd log $wbase..HEAD\`; if there is nothing to keep, \`git -C $wrepo worktree remove --force $wcwd\` — then \`cc-backlog unblock $id\`." >/dev/null 2>&1
             then wblocked=blocked; fi
             FAILED=$((FAILED + 1))
             idl failed "$id: $wnote — not fired ($wblocked${wsr2})"
@@ -3483,12 +3485,12 @@ EOF
       else
         local -a up_args=(up --via api --task "$cloud_pf" --account "$acct" --item "$id")
         [ -n "$cnb" ] && up_args+=(--notify-back "$cnb")
-        if [ -n "$ferrf" ]; then "$offload_bin" "${up_args[@]}" >"$ferrf" 2>&1; frc=$?
-        else                     "$offload_bin" "${up_args[@]}" >/dev/null 2>&1; frc=$?
+        if [ -n "$ferrf" ]; then cc_run "$offload_bin" "${up_args[@]}" >"$ferrf" 2>&1; frc=$?
+        else                     cc_run "$offload_bin" "${up_args[@]}" >/dev/null 2>&1; frc=$?
         fi
       fi
-    elif [ -n "$ferrf" ]; then "$spawn" "${fire_args[@]}" >"$ferrf" 2>&1; frc=$?
-    else                     "$spawn" "${fire_args[@]}" >/dev/null 2>&1; frc=$?
+    elif [ -n "$ferrf" ]; then cc_run "$spawn" "${fire_args[@]}" >"$ferrf" 2>&1; frc=$?
+    else                     cc_run "$spawn" "${fire_args[@]}" >/dev/null 2>&1; frc=$?
     fi
     # …BUT ONLY THE FAILURES WERE EVER READ, AND THAT IS ITS OWN BLIND SPOT (2026-08-07).
     # The paragraph above fixed "a failure verdict with no evidence" and left the mirror image

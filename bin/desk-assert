@@ -25,6 +25,8 @@
 #                         default: the five ~/.claude*/projects dirs)
 #   DESK_ASSERT_NOW      (epoch seconds "now"; default `date +%s`)
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 SESSIONS_BIN="${CC_SESSIONS_BIN:-$HOME/.claude/bin/cc-sessions}"
 NOW="${DESK_ASSERT_NOW:-$(date +%s)}"
@@ -78,7 +80,7 @@ fi
 
 # --- leg 2: PANE — resolve sid -> current pane via cc-sessions --json -------------------------
 pane=""
-if rows="$("$SESSIONS_BIN" --json 2>/dev/null)" && [ -n "$rows" ]; then
+if rows="$(cc_run "$SESSIONS_BIN" --json 2>/dev/null)" && [ -n "$rows" ]; then
   pane="$(printf '%s' "$rows" | jq -r --arg s "$SID" '.[] | select(.session_id == $s) | .paneUUID' 2>/dev/null | head -1)"
 fi
 [ -n "$pane" ] || add_missing "pane(no cc-sessions row for $SID)"

@@ -209,6 +209,8 @@
 #   CC_REGISTRY_DIR · CC_ENGAGE_HOMES — hooks/lib/engagement.sh's own seams, honoured as-is
 #   CC_BACKLOG_STALE_CLAIM_S  default 5400  — SHARED with `cc-backlog reap`, never re-defaulted here
 #   CC_BACKLOG_BIN · CC_DRAIN_NOW (test clock)
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -329,7 +331,7 @@ emit() { # render + exit, per mode. Called exactly once.
       # no-op on a known id), so this attaches once, at first filing; `cc-backlog falsify` is the
       # verb for correcting it later. The TITLE, by contrast, IS kept current by the update arm —
       # which is why the live numbers belong there and not in the condition key.
-      "$BACKLOG_BIN" add --project claude-infrastructure \
+      cc_run "$BACKLOG_BIN" add --project claude-infrastructure \
         --condition local-drain-chain-dead \
         --title "$TITLE" \
         --source drain-chain-assert \
@@ -352,7 +354,7 @@ command -v jq >/dev/null 2>&1 || { WHY="skipped"; emit; }
 command -v assistant_turn_in   >/dev/null 2>&1 || { WHY="skipped"; emit; }
 command -v cc_engagement_homes >/dev/null 2>&1 || { WHY="skipped"; emit; }
 
-ROWS="$("$BACKLOG_BIN" list --open --json 2>/dev/null)" || ROWS=""
+ROWS="$(cc_run "$BACKLOG_BIN" list --open --json 2>/dev/null)" || ROWS=""
 printf '%s' "$ROWS" | jq -e 'type=="array"' >/dev/null 2>&1 || { WHY="read-failed"; emit; }
 
 LIVE="$(printf '%s' "$ROWS" | jq 'length')"

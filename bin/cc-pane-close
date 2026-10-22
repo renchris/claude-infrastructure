@@ -66,6 +66,8 @@
 # CC_PANE_CLOSE_LOG · CC_PANE_CLOSE_REMOTE (off = skip remote control) · CC_PANE_CLOSE_SETTLE_S ·
 # CC_PANE_CLOSE_EXIT_DIR · CC_PANE_CLOSE_FIND_BIN · CC_PANE_CLOSE_HANDOFFS_LOG · CC_PANE_CLOSE_FIRED_DIR.
 set -u
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; cc_run() { "$@"; }; fi
 
 WLOG="${CC_PANE_CLOSE_WATCHDOG_LOG:-$HOME/.claude/logs/lead-crash-watchdog.log}"
 PS="${CC_PANE_CLOSE_PS_BIN:-/bin/ps}"
@@ -97,7 +99,7 @@ command -v jq >/dev/null 2>&1 || { echo "cc-pane-close: jq is required" >&2; exi
 kitty_pid() {
   [ -n "${CC_PANE_CLOSE_KITTY_PID:-}" ] && { printf '%s' "$CC_PANE_CLOSE_KITTY_PID"; return 0; }
   local s="${KITTY_LISTEN_ON:-}"
-  [ -n "$s" ] || s="$("$(dirname "$0")/cc-kitty-socket" 2>/dev/null || true)"
+  [ -n "$s" ] || s="$(cc_run "$(dirname "$0")/cc-kitty-socket" 2>/dev/null || true)"
   s="${s##*kitty-}"; case "$s" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s' "$s"
 }
@@ -139,7 +141,7 @@ fs_guard_any_clear() {
   g="$(fs_guard_path)" || rc=$?
   [ "$rc" = 2 ] && return 0
   [ "$rc" = 0 ] && [ -n "$KPID" ] || return 1
-  "$g" --any-fs --kitty-pid "$KPID" >&2
+  cc_run "$g" --any-fs --kitty-pid "$KPID" >&2
 }
 # rc 0 = removing THIS pane cannot empty a fullscreen OS window (h defect 7). `--scope pane` asks
 # whether the pane is its OS window's last one; `os-window` is always last and would refuse every
@@ -149,7 +151,7 @@ fs_guard_pane() { # $1=pane → rc 0 only on the guard's own rc 0
   g="$(fs_guard_path)" || rc=$?
   [ "$rc" = 2 ] && return 0
   [ "$rc" = 0 ] || return 1
-  "$g" --window "$1" --to "unix:/tmp/kitty-$KPID" --scope pane --mode refuse --tool cc-pane-close >&2
+  cc_run "$g" --window "$1" --to "unix:/tmp/kitty-$KPID" --scope pane --mode refuse --tool cc-pane-close >&2
 }
 
 same_store() { # cfg a, cfg b → 0 iff one store (~/.claude-next's projects is a symlink to ~/.claude's)
@@ -188,6 +190,7 @@ transcript_resolve() { # sid
 TO_BIN=""; for t in /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout; do [ -x "$t" ] && { TO_BIN="$t"; break; }; done
 bounded() { # secs cmd… — the command under a kill bound when a timeout binary exists
   local s="$1"; shift
+  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }   # #! via its interpreter (cc-run.sh)
   if [ -n "$TO_BIN" ]; then "$TO_BIN" -k 2 "$s" "$@"; else "$@"; fi
 }
 # kitty's own listing, read once: the window pid it holds for a pane is the pane's identity when a

@@ -38,6 +38,7 @@ setup() {
   [ -f "$DISPATCH" ] || skip "bin/cc-dispatch not found at $DISPATCH"
   LIB="$BATS_TEST_TMPDIR/lib.sh"
   {
+    cat "$REPO/scripts/lib/cc-run.sh"   # cc_run: cloud_declare runs cc-cloud through its interpreter
     sed -n '/^resolve_bin()/,/^}/p'   "$DISPATCH"
     sed -n '/^fire_venue()/,/^}/p'    "$DISPATCH"
     sed -n '/^fire_branch()/,/^}/p'   "$DISPATCH"

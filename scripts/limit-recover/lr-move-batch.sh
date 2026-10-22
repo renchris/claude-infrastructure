@@ -26,6 +26,8 @@
 # No swap row gets an admission token and no gate runs after /exit (LR_ADMIT_MODE=swap in the worker).
 # Kill switch LR_MOVE_LANE=off: every row is NOTMOVED, nothing is claimed or started.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 BATCH="${1:?usage: lr-move-batch.sh <batch>}"
 LR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -191,7 +193,7 @@ route_read() { # [$1=--fresh] → as above
   ROUTE_WHY=""
   [ -x "$AB" ] || { ROUTE_WHY="the router is not executable at $AB"; return 3; }
   errf="$BDIR/router.err"
-  out="$("$AB" --rank general ${1:+"$1"} 2>"$errf")" || rc=$?
+  out="$(cc_run "$AB" --rank general ${1:+"$1"} 2>"$errf")" || rc=$?
   if [ "$rc" -ne 0 ] || [ -z "$out" ]; then ROUTE_WHY="the router could not answer (rc $rc)"; return 3; fi
   case $'\n'"$(printf '%s\n' "$out" | awk 'NF { print $1 }')"$'\n' in *$'\n'"$TO"$'\n'*) return 0 ;; esac
   ROUTE_WHY="$(sed -n 's/.*excluded — //p' "$errf" | tr ';' '\n' | sed 's/^ *//' \

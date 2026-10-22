@@ -24,6 +24,8 @@
 #
 # ⚠️ RED TODAY BY DESIGN (bin/cc-route unbuilt). Exit: 0 = every criterion met · 1 = not ready.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 cd "$(dirname "$0")/.." || exit 2
 PASS=0; FAIL=0; TODO=0
 ok(){   printf '  ✅ %-6s %s\n' "$1" "$2"; PASS=$((PASS+1)); }
@@ -43,7 +45,7 @@ if [ ! -f "$TOOL" ]; then
   todo "RT-e" "NOT BUILT — SSOT DISCIPLINE: model ids parsed LIVE from model-config.yaml with key-anchored, value-bounded parses (frontier_access.model, roles.lead_default); window state DELEGATED to claude-accounts (the reference frontier_window()). Parse failure → exit 3 LOUD — never default open OR closed, never hardcode (two real incidents: frontier-window-ssot-discipline)."
   todo "RT-f" "NOT BUILT — OUTCOME RECORDS (abstention law): every plan, fallback, cliff-stop, and refusal appends a record to ~/.claude/route/ (CC_ROUTE_RECORDS_DIR) — routing that cannot be audited cannot be trusted."
 else
-  "$TOOL" selftest >/dev/null 2>&1 && ok "RT" "cc-route selftest GREEN — slot plans, frontier-edge fallback (reason-carrying, fable-id-free), quota-cliff stop (exit 4 + limit-recover, no plan), cliff→kimi offer gated on 'claude-kimi wired' (RT-g: still exit 4, OFFER not auto-route), data-unavailable stop, SSOT parse fail-loud, outcome records all fire RED-provably" || bad "RT" "cc-route selftest not green — an RT-a..g RED-proof does not fire"
+  cc_run "$TOOL" selftest >/dev/null 2>&1 && ok "RT" "cc-route selftest GREEN — slot plans, frontier-edge fallback (reason-carrying, fable-id-free), quota-cliff stop (exit 4 + limit-recover, no plan), cliff→kimi offer gated on 'claude-kimi wired' (RT-g: still exit 4, OFFER not auto-route), data-unavailable stop, SSOT parse fail-loud, outcome records all fire RED-provably" || bad "RT" "cc-route selftest not green — an RT-a..g RED-proof does not fire"
   if [ -f tests/cc-route.bats ] && command -v bats >/dev/null 2>&1; then
     # `</dev/null`: bats INHERITS stdin into every test, so a suite stubbing a stdin-consuming binary
     # with an unconditional `cat` hangs forever when stdin never EOFs (5e460544 measured rc 124;

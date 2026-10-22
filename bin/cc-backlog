@@ -933,6 +933,8 @@
 # THE DECISION JOURNAL — every verdict above (KEEP / BLOCK / REOPEN / abstain) appends one record to
 # the autonomy IDL (${CC_BACKLOG_IDL:-~/.claude/autonomy/idl.jsonl}), carrying the ORACLE EVIDENCE it
 # turned on. Live mode only: `--dry-run` writes nothing, journal included. See idl_verdict.
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -uo pipefail
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
 CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
@@ -1954,7 +1956,7 @@ close_pointer_check() {
     moved)
       # the co-versioned sibling, never a bare PATH lookup (same reason as premise_bin)
       dlb="${CC_BACKLOG_DL_BIN:-$(dirname "$(self_path)")/dl}"
-      "$dlb" show "$ptr" >/dev/null 2>&1 || { printf 'dl show %s does not resolve' "$ptr"; return 1; } ;;
+      cc_run "$dlb" show "$ptr" >/dev/null 2>&1 || { printf 'dl show %s does not resolve' "$ptr"; return 1; } ;;
     ruled)
       dd="${CC_DECISIONS_DIR:-$HOME/.claude/autonomy/decisions}"
       [ -f "$dd/$ptr.json" ] || { printf 'no decision packet %s' "$ptr"; return 1; }
@@ -6952,7 +6954,7 @@ land_lock_owner() {
   local id="$1" wt="$2"
   local ll="$wt/scripts/land-lock.sh"
   [ -x "$ll" ] || return 1
-  local lockdir; lockdir="$(cd "$wt" && "$ll" --print-lock-dir 2>/dev/null)" || return 1
+  local lockdir; lockdir="$(cd "$wt" && cc_run "$ll" --print-lock-dir 2>/dev/null)" || return 1
   [ -n "$lockdir" ] || return 1
   local lock="$lockdir/lock.d"
   [ "$(cat "$lock/branch" 2>/dev/null)" = "wt-$id" ] || return 1

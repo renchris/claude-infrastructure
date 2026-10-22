@@ -404,6 +404,8 @@
 # Neither --cwd nor --worktree: the launcher self-routes (at the reso PRIMARY root
 # _cc_route_check auto-creates a fresh cc-<ts> worktree; inside an existing worktree or any
 # non-reso dir it launches in place).
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; cc_run() { "$@"; }; fi
 set -euo pipefail
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); these are Mach-O. Linux: coreutils.
 CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
@@ -1147,6 +1149,7 @@ hf_bounded() {
 # this bound exists to cut (memory: invariant-can-live-in-an-absent-token).
 hf_bounded_s() { # <seconds|empty> <cmd...>
   local _s="$1"; shift
+  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }   # #! via its interpreter (cc-run.sh)
   if [ -z "$_s" ] || [ "$_s" = 0 ] || [ -z "$HF_TIMEOUT_BIN" ] || [ ! -x "$HF_TIMEOUT_BIN" ]; then
     "$@"; return $?
   fi
@@ -1316,9 +1319,12 @@ hf_argv_launch() { # → populates HF_ARGV[] + HF_ARGV_ACTIVE (0 ⇒ this fire t
   # ITERM_SESSION_ID that every hook and cc-notify address is keyed on) AND for the launcher-function
   # resolution above. Verified end-to-end on kitty 0.48.2: a $CMD carrying `&&`, quotes and a
   # `"$(cat …)"` substitution round-trips through --env byte-identical.
+  # `exec /bin/bash "$CC_PANE_RUNNER"`, not `exec "$CC_PANE_RUNNER"`: cc-pane-runner is #!/bin/bash, and
+  # a by-path #! exec at a session ROOT keeps ~1.1 KiB of kernel memory on macOS 15.8.1 (plan
+  # KALLOC_TRIGGER_ELIMINATION W4; the same form bin/it2-kitty's launch already uses).
   # shellcheck disable=SC2016
   HF_ARGV=(--env "CC_PANE_CMD=$CMD" --env "CC_PANE_CMD_INTERACTIVE=1" --env "CC_PANE_RUNNER=$CC_RUNNER_BIN"
-           -- "${SHELL:-/bin/zsh}" -l -i -c 'exec "$CC_PANE_RUNNER"')
+           -- "${SHELL:-/bin/zsh}" -l -i -c 'exec /bin/bash "$CC_PANE_RUNNER"')
   HF_ARGV_ACTIVE=1
   return 0
 }
@@ -2336,7 +2342,7 @@ pin_term_verdict_for_watcher() {
   # iTerm2 path, because cc-in-kitty's NORMAL answer for "not kitty" is exit 1 — a probe whose
   # honest negative verdict kills its caller. Capture the code instead; `|| rc=$?` is exempt.
   local rc=0
-  "$cik" >/dev/null 2>&1 || rc=$?
+  cc_run "$cik" >/dev/null 2>&1 || rc=$?
   case "$rc" in
     0) export CC_TERM=kitty  ;;
     1) export CC_TERM=iterm2 ;;            # pin both directions: an unpinned watcher is free to drift

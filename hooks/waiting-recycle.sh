@@ -172,6 +172,8 @@
 # NOTE: deliberately NO `set -e` — a hook must fail SAFE (abstain), and a stray non-zero from a grep
 # test must never become the script's exit code and suppress a legitimate abstain-log. -u/pipefail are
 # on for hygiene; every path ends `exit 0`.
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -uo pipefail
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
 CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
@@ -685,7 +687,7 @@ wr_os_notify() { # $1=title $2=msg — OS notification (osascript, or a stub in 
 }
 wr_push_page() { # $1=msg — Pushover break-through; no-op (return 0) when the hook is missing/INERT
   [ -x "$PUSH_BIN" ] || return 0
-  jq -cn --arg m "$1" --arg c "$CWD" '{message:$m,cwd:$c}' | "$PUSH_BIN" >/dev/null 2>&1 || true
+  jq -cn --arg m "$1" --arg c "$CWD" '{message:$m,cwd:$c}' | cc_run "$PUSH_BIN" >/dev/null 2>&1 || true
 }
 # refusal_line <file> — the ONE most informative line of a refused actuator's captured output, made
 # safe to embed in a JSON string and in an OS-notification argument. handoff-fire prints its refusals
@@ -1348,7 +1350,7 @@ fi
 # busy-page, SAFE ⇒ the idle Stage-1→2 ladder. That is where the "emergency page fallback" comes from.
 size_busy=0
 if [ "$high_ctx" = 0 ] && [ "$over_size" = 1 ]; then high_ctx=1; size_busy=1; fi
-dod_carry="$("${DOD_PERSIST:-$(dirname "$0")/dod-persist.sh}" get 2>/dev/null || true)"
+dod_carry="$(cc_run "${DOD_PERSIST:-$(dirname "$0")/dod-persist.sh}" get 2>/dev/null || true)"
 fire_mode=idle; drain_section=""
 
 if [ "$SAFE" = 0 ]; then
@@ -1528,7 +1530,7 @@ if [ "$stage2_pending" = 1 ]; then
     # model was told not to do the one thing that would have saved it. That is this condition's whole
     # failure class — nothing observes the absence — reached through the mechanism built to cure it.
     errf="$FIRE_DIR/wr-fire-${SID}.err"; fire_rc=0
-    "$HANDOFF_FIRE" --recycle --prompt-file "$pf" ${UUID:+--session-id "$UUID"} </dev/null >"$errf" 2>&1 || fire_rc=$?
+    cc_run "$HANDOFF_FIRE" --recycle --prompt-file "$pf" ${UUID:+--session-id "$UUID"} </dev/null >"$errf" 2>&1 || fire_rc=$?
     if [ "$fire_rc" != 0 ]; then
       # ── REFUSED — retract the claim, un-anchor, page, and tell the model the TRUTH ──────────────
       hf_why="$(refusal_line "$errf")"

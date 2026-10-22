@@ -49,6 +49,8 @@
 # survives intact: deploy-parity-assert `continue`s those files before emitting MISSING, so
 # link_refresh cannot touch a hook deliberately left unlinked until its staged activation runs.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; fi
 
 REPO="${CC_DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
 # Same seam shape as deploy-live.sh's own CC_DEPLOY_PARITY_ASSERT: `-` not `:-`, so SET-EMPTY is
@@ -86,4 +88,4 @@ for a in "$@"; do
 done
 [ "$quiet" -eq 1 ] || printf '→ deploy-now delegates to the sanctioned advance: %s %s\n' "$DEPLOY_LIVE" "$*" >&2
 
-exec "$DEPLOY_LIVE" "$@"
+cc_argv "$DEPLOY_LIVE"; exec "${CC_ARGV[@]}" "$@"

@@ -1263,8 +1263,10 @@ _pick() { # <source acct> <tier> <sid> → lf_pick_target's answer, with only wh
   # W6b: lf_pick_target now calls lf_charge_assign and lf_rank_why, and writes the rank's stderr
   # under $FLEET_DIR/$RUN. An extraction that omits either helper does not test a smaller program,
   # it tests a DIFFERENT one — `command not found` is rc 127, which `|| true` would launder.
-  sed -n '/^lf_acct_of_cfg() {/,/^}/p;/^_lf_target_holds_sid() {/,/^}/p;/^lf_rank_why() {/,/^}/p;/^lf_charge_assign() {/,/^}/p;/^lf_rank_timed() {/,/^}/p;/^lf_pick_target() {/,/^}/p;/^lf_soft_candidates() {/,/^}/p' \
-    "$FLEET" > "$BATS_TEST_TMPDIR/pick.sh"
+  # cc_run (scripts/lib/cc-run.sh) too: lf_charge_assign and lf_rank_timed run claude-accounts through it.
+  { cat "$REPO/scripts/lib/cc-run.sh"
+    sed -n '/^lf_acct_of_cfg() {/,/^}/p;/^_lf_target_holds_sid() {/,/^}/p;/^lf_rank_why() {/,/^}/p;/^lf_charge_assign() {/,/^}/p;/^lf_rank_timed() {/,/^}/p;/^lf_pick_target() {/,/^}/p;/^lf_soft_candidates() {/,/^}/p' \
+    "$FLEET"; } > "$BATS_TEST_TMPDIR/pick.sh"
   bash -c '
     . "$1" 2>/dev/null
     . "$2" 2>/dev/null || true

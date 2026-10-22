@@ -19,6 +19,8 @@
 # — all abstain. cc-cannot is itself three-valued and fails to UNRESOLVED, so ignorance never
 # reaches this hook as a verdict.
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
 CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
@@ -95,7 +97,7 @@ fi
 VERDICTS=""
 while IFS= read -r c; do
   [ -n "$c" ] || continue
-  out="$("$CC" -- "$c" 2>/dev/null)"; rc=$?
+  out="$(cc_run "$CC" -- "$c" 2>/dev/null)"; rc=$?
   [ "$rc" -eq 1 ] || continue                      # ONLY a refutation is actionable
   VERDICTS="${VERDICTS}  · ${c}"$'\n'"      → $(printf '%s' "$out" | cut -f2- | tr '\t' ' ')"$'\n'
 done <<< "$CANDS"

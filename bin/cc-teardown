@@ -55,6 +55,8 @@
 #   (the crash-watchdog MARKER dir — the READER's own env var, steered in lockstep for tests; distinct
 #   from CC_TEARDOWN_RECORDS_DIR, which is this script's decision-record sink).
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 # Bound every fork that reaches the iTerm2 API (machine-wide wedge, 2026-07-26: a bare
 # `it2 session list --json` returned rc 124 with zero output while blocked forks piled up across
@@ -601,7 +603,7 @@ EOF
 
 resolve() { # <target> → sets paneUUID/pid/cwd/sname; rc1 = unknown. Matches paneUUID first, then name.
   local t="$1" obj
-  obj="$("$CC_SESSIONS" --all --json 2>/dev/null | jq -c --arg t "$t" \
+  obj="$(cc_run "$CC_SESSIONS" --all --json 2>/dev/null | jq -c --arg t "$t" \
      '(map(select(.paneUUID==$t)) + map(select(.name==$t))) | .[0] // empty' 2>/dev/null)"
   [ -n "$obj" ] || return 1
   paneUUID="$(printf '%s' "$obj" | jq -r '.paneUUID // empty')"
@@ -858,7 +860,7 @@ main() {
 
   # ── 2. SAFETY GATE — (a) work-safe + (b) positive-done via the standalone module ────────────────────
   local gate_out grc gdec grk greason
-  gate_out="$("$GATE" decide --cwd "$cwd" --done-evidence "$done_ev" 2>/dev/null)"; grc=$?
+  gate_out="$(cc_run "$GATE" decide --cwd "$cwd" --done-evidence "$done_ev" 2>/dev/null)"; grc=$?
   git_state="$(printf '%s' "$gate_out" | jq -r '.git_state // empty' 2>/dev/null)"
   if [ "$grc" != 0 ]; then
     gdec="$(printf '%s'    "$gate_out" | jq -r '.decision // empty'    2>/dev/null)"

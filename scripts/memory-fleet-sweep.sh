@@ -59,6 +59,8 @@
 # Usage: memory-fleet-sweep.sh [--rotate] [--quiet] [--reach] [--schema]
 # Exit:  0 every index under both caps · 1 at least one index over · 2 error
 set -euo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 ROTATE=0; QUIET=0; REACH=0; SCHEMA=0
 for a in "$@"; do
@@ -171,7 +173,7 @@ EOF
   fi
   [ "$QUIET" -eq 1 ] || printf '%-46s %8s %6s %6s %5s  %s\n' "$(printf '%.46s' "$slug")" "$c" "$l" "$e" "$d" "$st"
   if [ "$st" = OVER ] && [ "$ROTATE" -eq 1 ] && [ -x "$ROTOR" ]; then
-    printf '    → rotating: '; "$ROTOR" "$idx" 2>&1 | tail -1
+    printf '    → rotating: '; cc_run "$ROTOR" "$idx" 2>&1 | tail -1
   fi
 done <<EOF
 $INDEXES

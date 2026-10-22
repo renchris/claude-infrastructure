@@ -84,6 +84,8 @@
 # fixture and destroy exactly the property each case is proving. The land gate runs `shellcheck` bare
 # at default severity, where an info is a hard RED, and per-line directives would outnumber the code.
 # shellcheck disable=SC2016
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -uo pipefail
 
 # Resolve $0 THROUGH its symlinks before deriving the repo root. ~/.claude/scripts/ is a directory of
@@ -294,9 +296,9 @@ stage_c10() { # <file> <name> → 0 staged / 1 malformed
   id=""
   if [ -x "$BACKLOG_BIN" ]; then
     if [ -n "$run" ]; then
-      id="$("$BACKLOG_BIN" needs "$step" --class needs-human --run "$run" --project claude-infrastructure 2>/dev/null | tr -d '[:space:]')"
+      id="$(cc_run "$BACKLOG_BIN" needs "$step" --class needs-human --run "$run" --project claude-infrastructure 2>/dev/null | tr -d '[:space:]')"
     else
-      id="$("$BACKLOG_BIN" needs "$step" --class needs-human --project claude-infrastructure 2>/dev/null | tr -d '[:space:]')"
+      id="$(cc_run "$BACKLOG_BIN" needs "$step" --class needs-human --project claude-infrastructure 2>/dev/null | tr -d '[:space:]')"
     fi
   fi
   record staged "$name" "class=c10" "step=$step" "run=$run" "backlog=${id:-unfiled}"
@@ -383,12 +385,12 @@ settle_staged() {
       if [ -n "$sup" ]; then
         record superseded "$name" "class=c10" "by=$sup" "backlog=${bl:-unfiled}"
         moved=$(( moved + 1 ))
-        [ -n "$bl" ] && [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" "done" "$bl" \
+        [ -n "$bl" ] && [ -x "$BACKLOG_BIN" ] && cc_run "$BACKLOG_BIN" "done" "$bl" \
           --evidence "migrations/$name.sh declares migration-superseded-by: $sup — its step will never run" >/dev/null 2>&1
       else
         record applied "$name" "class=c10" "settled=registration-state" "backlog=${bl:-unfiled}"
         applied=$(( applied + 1 ))
-        [ -n "$bl" ] && [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" "done" "$bl" \
+        [ -n "$bl" ] && [ -x "$BACKLOG_BIN" ] && cc_run "$BACKLOG_BIN" "done" "$bl" \
           --evidence "registration-state verdict=registered for $name: its migration-verify oracle exits 0 in every config dir (settled at converge $(now_s))" >/dev/null 2>&1
       fi
       rm -f "$j"
@@ -404,13 +406,13 @@ settle_staged() {
     if [ "$DRY" -eq 1 ]; then say "settle: would re-title $name from its current header"; continue; fi
     [ -x "$BACKLOG_BIN" ] || continue
     if [ -n "$run" ]; then
-      nid="$("$BACKLOG_BIN" needs "$nstep" --class needs-human --run "$run" --project claude-infrastructure ${bl:+--receipt "$f"} 2>/dev/null | tr -d '[:space:]')"
+      nid="$(cc_run "$BACKLOG_BIN" needs "$nstep" --class needs-human --run "$run" --project claude-infrastructure ${bl:+--receipt "$f"} 2>/dev/null | tr -d '[:space:]')"
     else
-      nid="$("$BACKLOG_BIN" needs "$nstep" --class needs-human --project claude-infrastructure ${bl:+--receipt "$f"} 2>/dev/null | tr -d '[:space:]')"
+      nid="$(cc_run "$BACKLOG_BIN" needs "$nstep" --class needs-human --project claude-infrastructure ${bl:+--receipt "$f"} 2>/dev/null | tr -d '[:space:]')"
     fi
     [ -n "$nid" ] || continue
     if [ -n "$bl" ] && [ "$nid" != "$bl" ]; then
-      "$BACKLOG_BIN" "done" "$bl" --kind superseded --pointer "$nid" \
+      cc_run "$BACKLOG_BIN" "done" "$bl" --kind superseded --pointer "$nid" \
         --evidence "re-titled from migrations/$name.sh's current migration-step; carried by $nid" >/dev/null 2>&1 || true
     fi
     record staged "$name" "class=c10" "step=$nstep" "run=$run" "backlog=$nid"

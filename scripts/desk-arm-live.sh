@@ -56,6 +56,8 @@
 #   OVERRIDES discovery entirely) · CC_ARM_BRIEF (brief template) · CC_ARM_HOOK (installed hook used to
 #   resolve the default cwd) · CC_ARM_ROLES_DIR + CC_ARM_DESK_ROLE (live-desk config detection)
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
 CC_SHA1=/sbin/sha1sum; [ -x "$CC_SHA1" ] || CC_SHA1=sha1sum
 
@@ -198,7 +200,7 @@ for cfg in "${CFG_ROOTS[@]}"; do
   fi
   # Delegate to the CLI with the desk's cwd as PWD and this config dir as CLAUDE_CONFIG_DIR, so the
   # sentinel lands on the exact (cfg, cwd) key the desk's own hook invocation will look up.
-  if out="$( cd "$CWD" && CLAUDE_CONFIG_DIR="$cfg" "$WR" arm --brief "$BRIEF" ${MODE_FLAG:+$MODE_FLAG} ${BUSY_FLAG:+$BUSY_FLAG} 2>&1 )"; then
+  if out="$( cd "$CWD" && CLAUDE_CONFIG_DIR="$cfg" cc_run "$WR" arm --brief "$BRIEF" ${MODE_FLAG:+$MODE_FLAG} ${BUSY_FLAG:+$BUSY_FLAG} 2>&1 )"; then
     echo "  ✓ $cfg → arm-$key ($MODE): $out"
   else
     echo "  ✗ $cfg → arm-$key FAILED: $out" >&2

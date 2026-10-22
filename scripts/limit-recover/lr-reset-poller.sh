@@ -38,6 +38,8 @@
 #
 # Usage: lr-reset-poller.sh [--dry-run] [--once] [--move-kick]   (launchd runs it bare every ~10 min)
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; cc_run() { "$@"; }; fi
 
 # ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
 # A launchd job that spawns GUI windows autonomously every ~10 min is the textbook shape of a pane
@@ -72,6 +74,7 @@ else
   done
 fi
 lrp_bounded() {
+  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }   # #! via its interpreter (cc-run.sh)
   if [ -z "$LRP_TIMEOUT_BIN" ] || [ ! -x "$LRP_TIMEOUT_BIN" ]; then "$@"; return $?; fi
   "$LRP_TIMEOUT_BIN" -k 3 "$LRP_TIMEOUT_S" "$@"
 }
@@ -813,7 +816,7 @@ lrp_engagement_audit() {
 # that cannot observe what it guards is indistinguishable from no check). The JSON is now PIPED in.
 account_has_headroom() {
   local acct="$1" j
-  j=$("$HOME/bin/claude-accounts" --json 2>/dev/null) || return 0   # unreadable ⇒ don't block
+  j=$(cc_run "$HOME/bin/claude-accounts" --json 2>/dev/null) || return 0   # unreadable ⇒ don't block
   printf '%s' "$j" | python3 -c '
 import json,sys
 acct=sys.argv[1]
@@ -2304,7 +2307,7 @@ PY
 CC_LIMITED_BIN="${CC_LIMITED:-$LR/../../bin/cc-limited}"
 if [[ -x "$CC_LIMITED_BIN" && "${LR_POLLER_NO_CENSUS:-0}" != 1 ]]; then
   _cj=$(mktemp "${TMPDIR:-/tmp}/lrp-census.XXXXXX")
-  if "$CC_LIMITED_BIN" --all --json > "$_cj" 2>/dev/null; then
+  if cc_run "$CC_LIMITED_BIN" --all --json > "$_cj" 2>/dev/null; then
     lrp_census_ingest "$_cj"
     # THE RE-SURFACE PAGE, damped on STATE and never on a log grep. One page per
     # (account, cap, resetsAt, count): the same cap still holding an hour later is the same
@@ -2631,10 +2634,10 @@ _rr_general="" _rr_general_asked=0 _rr_fable="" _rr_fable_asked=0 _rr_n=0
 reroute_rank() { # $1=lane → the router's stdout, asked at most once per tick per lane
   local ab="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}" out
   if [[ "$1" == fable ]]; then
-    (( _rr_fable_asked )) || { _rr_fable="$("$ab" --rank fable --recovery --max-wait 3 2>/dev/null || true)"; _rr_fable_asked=1; }
+    (( _rr_fable_asked )) || { _rr_fable="$(cc_run "$ab" --rank fable --recovery --max-wait 3 2>/dev/null || true)"; _rr_fable_asked=1; }
     out="$_rr_fable"
   else
-    (( _rr_general_asked )) || { _rr_general="$("$ab" --rank general --recovery --max-wait 3 2>/dev/null || true)"; _rr_general_asked=1; }
+    (( _rr_general_asked )) || { _rr_general="$(cc_run "$ab" --rank general --recovery --max-wait 3 2>/dev/null || true)"; _rr_general_asked=1; }
     out="$_rr_general"
   fi
   printf '%s\n' "$out"

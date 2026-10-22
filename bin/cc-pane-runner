@@ -72,6 +72,8 @@
 #   this file's PATH into every runner pane, including the ordinary shell it degrades to.)
 
 set -u
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 _dir="${CC_PANE_CMD_DIR:-}"
 _id="${KITTY_WINDOW_ID:-}"
@@ -272,7 +274,7 @@ _close_pane() { # $1=what exited $2=why it may close
       # "last" across every tab of the OS window, so this refuses exactly the crash trigger (the
       # last pane of a fullscreen window) — os-window scope would refuse every pane of every
       # fullscreen window and keep the husks this decision exists to remove (K3 as amended).
-      if ! "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner >&2; then
+      if ! cc_run "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner >&2; then
         CC_SAY_DETAIL="$_v $_why — last pane of a fullscreen (or unreadable) kitty window, keeping the shell" \
           _say warn "last pane of a fullscreen window" "close it by hand"
         return 0

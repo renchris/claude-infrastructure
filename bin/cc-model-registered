@@ -31,6 +31,29 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+
+
+def _load_cc_argv() -> Callable[[str], list[str]]:
+    """scripts/lib/cc_run.py's cc_argv: a #! helper run by path keeps ~1.1 KiB of kernel memory on
+    macOS 15.8.1, so it runs through its interpreter (plan KALLOC_TRIGGER_ELIMINATION W4). Loaded by
+    file location, not sys.path, and fail-open to the old by-path argv."""
+    import importlib.util
+
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "cc_run", os.path.join(HERE, "..", "scripts", "lib", "cc_run.py")
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.cc_argv
+    except (OSError, ImportError, AttributeError):
+        return lambda path: [path]
+
+
+cc_argv = _load_cc_argv()
 
 CONTROL = "claude-opus-5"
 USAGE = "usage: cc-model-registered <model-id> [--bin PATH]"
@@ -44,13 +67,12 @@ def count_id(buf: mmap.mmap | bytes, ident: str) -> int:
 
 def resolve_bin() -> str:
     """The launcher's binary through bin/cc-claude-bin (sibling first, then PATH). Empty on failure."""
-    here = os.path.dirname(os.path.realpath(__file__))
-    resolver = os.path.join(here, "cc-claude-bin")
+    resolver = os.path.join(HERE, "cc-claude-bin")
     if not os.access(resolver, os.X_OK):
         resolver = shutil.which("cc-claude-bin") or ""
     if not resolver:
         return ""
-    out = subprocess.run([resolver], capture_output=True, text=True, check=False)
+    out = subprocess.run(cc_argv(resolver), capture_output=True, text=True, check=False)
     return out.stdout.strip() if out.returncode == 0 else ""
 
 

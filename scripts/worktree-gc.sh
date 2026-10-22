@@ -159,6 +159,8 @@
 #                         lock's own open fd, never its age. See section 4 at the bottom.
 #
 # bash 3.2-safe (macOS default): no associative arrays, no mapfile, no [[ -v ]].
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -uo pipefail
 
 # Wall-clock start, for the `elapsed=` line at the bottom (plan §6 R-b). Stamped HERE, before arg
@@ -661,7 +663,7 @@ fi
 NOTIFY_CWDS=""
 ORACLES=0
 if [ -x "$CC_NOTIFY_BIN" ] && command -v "$JQ_BIN" >/dev/null 2>&1; then
-  if NOTIFY_RAW="$("$CC_NOTIFY_BIN" --list --json 2>/dev/null)"; then
+  if NOTIFY_RAW="$(cc_run "$CC_NOTIFY_BIN" --list --json 2>/dev/null)"; then
     NOTIFY_CWDS="$(printf '%s' "$NOTIFY_RAW" | "$JQ_BIN" -r '.[]?.cwd // empty' 2>/dev/null)"
     ORACLES=$((ORACLES + 1))
   fi
@@ -1005,7 +1007,7 @@ load_backlog() {
   [ -x "$BACKLOG_BIN" ] || { BACKLOG_ERR="cc-backlog not executable at $BACKLOG_BIN"; return 1; }
   command -v "$JQ_BIN" >/dev/null 2>&1 || { BACKLOG_ERR="jq unavailable"; return 1; }
   local raw
-  raw="$("$BACKLOG_BIN" list --all --json 2>/dev/null)" \
+  raw="$(cc_run "$BACKLOG_BIN" list --all --json 2>/dev/null)" \
     || { BACKLOG_ERR="cc-backlog list --all --json failed"; return 1; }
   BACKLOG_TABLE="$(printf '%s' "$raw" | "$JQ_BIN" -r '.[]? | [.id, .status, (.wasDone|tostring)] | @tsv' 2>/dev/null)" \
     || { BACKLOG_ERR="cc-backlog JSON unparseable"; return 1; }

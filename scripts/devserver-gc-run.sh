@@ -15,6 +15,8 @@
 # refusal are belt and braces. System dirs first so the entitled system tools win.
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 
 REPO="/Users/chrisren/Development/claude-infrastructure"
 # Resolution order: explicit seam (the suite and a pre-deploy smoke run use it) → the deployed live
@@ -48,7 +50,7 @@ if [ ! -x "$CENSUS" ];  then emit error "reason=module-missing path=$CENSUS"; ex
 ACT="${DEVGC_ACT:-0}"
 if [ "$ACT" = 1 ]; then MODE=(--reap); else MODE=(--reap --dry-run); fi
 
-OUT="$("$CENSUS" "${MODE[@]}" 2>&1)"; RC=$?
+OUT="$(cc_run "$CENSUS" "${MODE[@]}" 2>&1)"; RC=$?
 printf '%s\n' "$OUT" >> "$LOG"
 
 if [ "$RC" = 3 ]; then emit oracle-blind "reason=lsof-inoperable act=$ACT"; exit 3; fi

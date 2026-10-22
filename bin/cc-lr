@@ -62,6 +62,8 @@
 #
 # rc 0 ok · 1 nothing matched · 2 REFUSED (and nothing was created) · 3 usage
 set -uo pipefail
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); this is Mach-O. Linux: coreutils.
 CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
 
@@ -524,7 +526,7 @@ cl_acct_name() { # <label> → the account-map NAME for cl_acct_dirs' labels; rc
 cl_acct_cap() { # <name> → stdout "weekly 100%" / "5-hour 100%"; rc 0 capped · 1 headroom · 2 unreadable
   local ab="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}"
   [ -x "$ab" ] || return 2
-  "$ab" --json 2>/dev/null | /usr/bin/python3 -c '
+  cc_run "$ab" --json 2>/dev/null | /usr/bin/python3 -c '
 import json, sys
 try: rows = json.loads(sys.stdin.read()).get("rows", [])
 except Exception: sys.exit(2)
@@ -838,7 +840,7 @@ cl_switch_auto_target() { # [source acct, default this session's] → stdout: ac
   ab="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}"
   [ -x "$ab" ] || { printf 'the ranker is not executable at %s' "$ab"; return 2; }
   [ -n "$src" ] || src="$(cl_from_acct)"
-  out="$(CC_ROUTE_DESK_HYST=off "$ab" --rank interactive 2>/dev/null)" || rc=$?
+  out="$(CC_ROUTE_DESK_HYST=off cc_run "$ab" --rank interactive 2>/dev/null)" || rc=$?
   # The ranker's own taxonomy: 2 = it answered and every account is excluded by POLICY, 3 = it has
   # no DATA. The first is a real "nothing is safe"; the second is our blindness, not a verdict.
   case "$rc" in
@@ -917,7 +919,7 @@ cl_target_unroutable() { # $1=target [--strict] → rc 0 excluded (reason on std
     printf '%s' "no scratch file to hold the router's reasons"; return 3
   fi
   for fresh in "" --fresh; do
-    rc=0; out="$("$ab" --rank general ${fresh:+"$fresh"} 2>"$errf")" || rc=$?
+    rc=0; out="$(cc_run "$ab" --rank general ${fresh:+"$fresh"} 2>"$errf")" || rc=$?
     if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
       rm -f "$errf"
       [ "$strict" -eq 1 ] || return 1
@@ -947,7 +949,7 @@ cl_relogin_hint() { # $1=account $2=router reason → one line on stdout, or not
   local ab info em dp
   case "$2" in *login*|*token*|*stale*|*auth*|*keychain*|*logged-out*) ;; *) return 0 ;; esac
   ab="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}"
-  info="$("$ab" --relogin-info "$1" 2>/dev/null || true)"
+  info="$(cc_run "$ab" --relogin-info "$1" 2>/dev/null || true)"
   em="$(printf '%s' "$info" | jq -r '.email // empty' 2>/dev/null || true)"
   dp="$(printf '%s' "$info" | jq -r '.dia_profile // empty' 2>/dev/null || true)"
   printf 'the cure is a login: cc-relogin %s --dia%s' "$1" \

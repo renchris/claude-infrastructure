@@ -133,6 +133,8 @@
 #   CC_BACKLOG_BIN             cc-backlog, for the --file arm
 #   CC_BACKLOG_FLOW_WINDOW_S   default 604800 (§6's "week")
 #   CC_BACKLOG_FLOW_NOW        test clock (epoch seconds)
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -236,7 +238,7 @@ emit() { # render + exit, per mode. Called exactly once.
       # `--falsifier` reaches a row only while CREATING it (cmd_add's update arm is a deliberate
       # no-op on a known id, and cc-backlog falsify is the only door to an existing one), so this
       # attaches once, at first filing, and the row retires itself the week the sign flips.
-      "$BACKLOG_BIN" add --project claude-infrastructure \
+      cc_run "$BACKLOG_BIN" add --project claude-infrastructure \
         --condition backlog-inflow-net-positive \
         --title "$TITLE" \
         --source backlog-flow-assert \

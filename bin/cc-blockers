@@ -176,6 +176,8 @@
 # a home in operator-readout's ... and NOTHING else". Two homes for one pile is the second-renderer
 # defect this file refuses in three other places. If the pile ever does belong on this board it is
 # as a BREACH — growth past a budget, or staleness — never as a census.
+# shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
+if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; cc_run() { "$@"; }; fi
 set -uo pipefail
 
 IDL_FILE="${CC_REAPER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
@@ -1041,7 +1043,7 @@ teammate_reap_rows() { # → one JSON object per line (possibly none)
   now="$(date +%s 2>/dev/null || true)"
   case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac
   [ -x "$REAP_ALARM_SH" ] || return 0                                 # not deployed ⇒ no premise
-  out="$("$REAP_ALARM_SH" --json 2>/dev/null || true)"
+  out="$(cc_run "$REAP_ALARM_SH" --json 2>/dev/null || true)"
   [ -n "$out" ] || return 0
   v="$(printf '%s' "$out" | jq -r '.verdict // empty' 2>/dev/null || true)"
   # OK and NOT-EXERCISED are silence by design; NO-DATA asserts nothing and must not read as a
@@ -1063,7 +1065,7 @@ handoff_alarm_polarity_rows() { # → one JSON object per line (possibly none)
   now="$(date +%s 2>/dev/null || true)"
   case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac
   [ -x "$HF_ALARM_POLARITY_SH" ] || return 0                          # not deployed ⇒ no premise
-  out="$("$HF_ALARM_POLARITY_SH" --json 2>/dev/null || true)"
+  out="$(cc_run "$HF_ALARM_POLARITY_SH" --json 2>/dev/null || true)"
   [ -n "$out" ] || return 0
   v="$(printf '%s' "$out" | jq -r '.verdict // empty' 2>/dev/null || true)"
   [ "$v" = red ] || return 0                                          # green and abstain are silence
@@ -1093,9 +1095,10 @@ janitor_stale_rows() { # → one JSON object per line (possibly none)
   case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac
   [ -x "$WTGC_ASSERT_SH" ] || return 0                                # not deployed ⇒ no premise
   if command -v timeout >/dev/null 2>&1; then
-    out="$(CC_WTGC_STRANDED_BOUND=3 timeout 20 "$WTGC_ASSERT_SH" --assert 2>/dev/null)"; rc=$?
+    cc_argv "$WTGC_ASSERT_SH"
+    out="$(CC_WTGC_STRANDED_BOUND=3 timeout 20 "${CC_ARGV[@]}" --assert 2>/dev/null)"; rc=$?
   else
-    out="$(CC_WTGC_STRANDED_BOUND=3 "$WTGC_ASSERT_SH" --assert 2>/dev/null)"; rc=$?
+    out="$(CC_WTGC_STRANDED_BOUND=3 cc_run "$WTGC_ASSERT_SH" --assert 2>/dev/null)"; rc=$?
   fi
   [ -n "$out" ] || return 0
   [ "$rc" = 3 ] || return 0        # 0 = bounded and fresh (silence); anything else = no verdict
@@ -1188,7 +1191,7 @@ permission_pending_rows() { # → one JSON object per line (possibly none)
 fleet_alarm_rows() { # → one JSON object per line (possibly none)
   local out
   [ -x "$CC_FLEET_BIN" ] || return 0                                  # absent/not-exec ⇒ no verdict
-  out="$("$CC_FLEET_BIN" --json 2>/dev/null)" || return 0              # non-zero ⇒ fail open
+  out="$(cc_run "$CC_FLEET_BIN" --json 2>/dev/null)" || return 0              # non-zero ⇒ fail open
   [ -n "$out" ] || return 0
   printf '%s\n' "$out" | jq -cRn 'inputs | fromjson? | select(type=="object")
                                   | select(.kind == "fleet-inert")' 2>/dev/null || true
