@@ -37,8 +37,8 @@ SRC="$here/cc-shim.c"
 
 # Asserted, not trusted: an empty or short key would be one cache dir SHARED across source versions.
 sha=""
-if [ -x /sbin/sha256sum ]; then sha=$(/sbin/sha256sum <"$SRC") || sha=""; fi
-if [ -z "$sha" ] && command -v shasum >/dev/null 2>&1; then sha=$(shasum -a 256 <"$SRC") || sha=""; fi
+CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum   # Mach-O here; coreutils on Linux
+sha=$("$CC_SHA256" <"$SRC" 2>/dev/null) || sha=""
 sha=${sha%% *}
 case "$sha" in *[!0-9a-f]* | '') unavailable degenerate-hash ;; esac
 [ "${#sha}" -eq 64 ] || unavailable degenerate-hash
