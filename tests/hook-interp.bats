@@ -172,7 +172,7 @@ fleet() { # one shared file linked from three dirs, plus one forked real copy
                     printf "%s\n%s\n" "$CC_SHA1" "$CC_SHA256"
                     printf abc | "$CC_SHA1"; printf abc | "$CC_SHA256"' _ "$REPO"
   [ "$status" -eq 0 ]
-  [ "${lines[0]}" = "none" ]
+  [ "${lines[0]}" != "function" ]     # no perl shim left (`file` is /usr/bin/shasum on PATH)
   [ "${lines[1]}" = /sbin/sha1sum ]
   [ "${lines[2]}" = /sbin/sha256sum ]
   if [ -x /usr/bin/shasum ]; then

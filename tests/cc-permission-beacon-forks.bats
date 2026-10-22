@@ -120,7 +120,10 @@ pair() {
   echo "# clear: $(shf_census o1)-> $(shf_census n1)" >&3
   [ "$(shf_calls o1 cat)" -eq 1 ]
   [ "$(shf_calls n1 cat)" -eq 0 ]
-  [ "$(shf_total n1)" -eq $(( $(shf_total o1) - 1 )) ]
+  # The hasher now runs as /sbin/sha256sum by absolute path (not a #! exec), which this PATH-stub
+  # census cannot see: the old arm's shasum calls drop out of the count, not out of the code.
+  [ "$(shf_calls n1 shasum)" -eq 0 ]
+  [ "$(shf_total n1)" -eq $(( $(shf_total o1) - 1 - $(shf_calls o1 shasum) )) ]
   pair 2 - clear "$(big "$cmd")"
   [ "$(shf_calls n2 cat)" -eq 0 ]
   [ "$(shf_total n2)" -eq $(( $(shf_total o2) - 1 )) ]
