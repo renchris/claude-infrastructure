@@ -648,6 +648,35 @@ check_one "bin/claude-accounts" "$BINDIR/claude-accounts"
 for d in hooks hooks/lib commands scripts scripts/limit-recover bin; do sweep_orphans "$CFG/$d"; done
 for d in "$CFG"/skills/*/; do [ -d "$d" ] && sweep_orphans "$d"; done
 
+# cc-shim links (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4). install.sh puts it2 and the
+# qos-shim names behind the compiled trampoline: bin/<name> → libexec/cc-shim, which runs
+# .bin-real/<name>. The link itself resolves outside the checkout, so every leg above skips it, and a
+# missing .bin-real/<name> is a name that exits 126 on every call while each leg reads clean.
+sweep_shim_links() {
+  local l name
+  $STRAY_ONLY && return 0
+  [ -e "$CFG/libexec/cc-shim" ] || return 0
+  for l in "$CFG/bin"/*; do
+    [ -L "$l" ] && [ "$l" -ef "$CFG/libexec/cc-shim" ] || continue
+    name="${l##*/}"
+    [ -e "$CFG/.bin-real/$name" ] && continue
+    note "SHIMMISS" "bin/$name" "cc-shim link, but .bin-real/$name is missing — the name cannot run"
+    fix "bash \"$REPO/install.sh\""
+    findings=$((findings + 1))
+  done
+  # Claude Code reaches it2 as shims/it2 → bin/it2, and cc-shim resolves from the UNRESOLVED path,
+  # so that route runs .shims-real/it2, which must be the same copy. Judged in the shim layout only.
+  if [ -L "$CFG/bin/it2" ] && [ "$CFG/bin/it2" -ef "$CFG/libexec/cc-shim" ] \
+     && ! { [ -L "$CFG/.shims-real/it2" ] && [ -e "$CFG/.bin-real/it2" ] \
+            && [ "$CFG/.shims-real/it2" -ef "$CFG/.bin-real/it2" ]; }; then
+    note "SHIMMISS" ".shims-real/it2" "missing, or not resolving to .bin-real/it2 — shims/it2 cannot run through cc-shim"
+    fix "bash \"$REPO/install.sh\""
+    findings=$((findings + 1))
+  fi
+  return 0
+}
+sweep_shim_links
+
 # The EXECUTED surfaces only — see STRAY SCOPE in the header. Until 2026-08-31 this comment read
 # "scripts/lib and lib are swept here but are not in the forward walk above; that asymmetry is
 # deliberate, not an oversight". Both halves have to be corrected, and the second is the instructive
@@ -699,7 +728,8 @@ for d in "$CFG"/skills/*/; do [ -d "$d" ] && sweep_orphans "$d"; done
 # leg it copies line for line (ensure_real_dir + per-file link_file/copy_file, install.sh:759-770):
 # it is an EXECUTED surface — evaluate.mjs and pilot.sh both run — so an unversioned real file
 # appearing there is the bin/cc-mail defect class, not the normal path that exempts commands/.
-for d in bin hooks hooks/lib scripts scripts/lib scripts/backlog-consolidation scripts/limit-recover scripts/jev lib; do sweep_strays "$d"; done
+# .bin-real holds the cc-shim layout's real files (W4 above): the it2 copy moves there from bin/.
+for d in bin .bin-real hooks hooks/lib scripts scripts/lib scripts/backlog-consolidation scripts/limit-recover scripts/jev lib; do sweep_strays "$d"; done
 
 # PROMPT-DOCUMENT surfaces. skills/ is NESTED where every executed surface is flat, so the sweep is
 # driven one level down — sweep_strays lists a single directory and skips subdirectories, so passing

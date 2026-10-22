@@ -295,6 +295,65 @@ witness() {  # $1 = repo-relative path · $2 = the line that must name the artif
   has "bin/it2"
 }
 
+# The cc-shim layout (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4): bin/<name> → libexec/
+# cc-shim, which runs .bin-real/<name> — the it2 copy, or a link to bin/cc-qos-exec. /usr/bin/true
+# stands in for the trampoline: only its inode is compared, it is never run.
+_shim_layout() {
+  mkdir -p "$CC_LINKPARITY_CONFIG/libexec" "$CC_LINKPARITY_CONFIG/.bin-real"
+  ln -s /usr/bin/true "$CC_LINKPARITY_CONFIG/libexec/cc-shim"
+  printf 'wrapper\n' > "$CC_LINKPARITY_REPO/bin/it2-wrapper"
+  printf 'wrapper\n' > "$CC_LINKPARITY_CONFIG/.bin-real/it2"
+  ln -s "$CC_LINKPARITY_CONFIG/libexec/cc-shim" "$CC_LINKPARITY_CONFIG/bin/it2"
+  printf 'qos\n' > "$CC_LINKPARITY_REPO/bin/cc-qos-exec"
+  ln -s "$CC_LINKPARITY_REPO/bin/cc-qos-exec" "$CC_LINKPARITY_CONFIG/bin/cc-qos-exec"
+  ln -s "$CC_LINKPARITY_REPO/bin/cc-qos-exec" "$CC_LINKPARITY_CONFIG/.bin-real/ffmpeg"
+  ln -s "$CC_LINKPARITY_CONFIG/libexec/cc-shim" "$CC_LINKPARITY_CONFIG/bin/ffmpeg"
+  # shims/it2 → bin/it2 reaches cc-shim as shims/it2, so it runs .shims-real/it2: the same copy.
+  mkdir -p "$CC_LINKPARITY_CONFIG/.shims-real"
+  ln -s "$CC_LINKPARITY_CONFIG/.bin-real/it2" "$CC_LINKPARITY_CONFIG/.shims-real/it2"
+}
+
+@test "cc-shim layout: .shims-real/it2 missing or resolving elsewhere is SHIMMISS" {
+  _shim_layout
+  rm "$CC_LINKPARITY_CONFIG/.shims-real/it2"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "SHIMMISS"
+  has ".shims-real/it2"
+  printf 'wrapper\n' > "$BATS_TEST_TMPDIR/elsewhere"
+  ln -s "$BATS_TEST_TMPDIR/elsewhere" "$CC_LINKPARITY_CONFIG/.shims-real/it2"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has ".shims-real/it2"
+}
+
+@test "cc-shim layout: trampoline links plus their .bin-real targets read clean" {
+  _shim_layout
+  run "$LP"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  lacks "STRAY"
+  lacks "SHIMMISS"
+  lacks "ORPHAN"
+  has "1 live-extra"          # the it2 copy, matched by content from its new home
+}
+
+@test "cc-shim layout: a missing .bin-real target is SHIMMISS, a stale it2 copy is a STRAY" {
+  _shim_layout
+  rm "$CC_LINKPARITY_CONFIG/.bin-real/ffmpeg"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "SHIMMISS"
+  has "bin/ffmpeg"
+  lacks "bin/it2 "
+  printf 'wrapperX\n' > "$CC_LINKPARITY_CONFIG/.bin-real/it2"
+  ln -s "$CC_LINKPARITY_REPO/bin/cc-qos-exec" "$CC_LINKPARITY_CONFIG/.bin-real/ffmpeg"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STRAY"
+  has ".bin-real/it2"
+  lacks "SHIMMISS"
+}
+
 @test "CONTROL: content-matching still holds under a REAL git checkout, not just the fixtures" {
   # The leg has two hash paths — `git hash-object` + `git ls-files -s` for a real checkout, shasum for
   # a bare directory. A git blob hash carries a header and can NEVER equal a bare content digest, so
