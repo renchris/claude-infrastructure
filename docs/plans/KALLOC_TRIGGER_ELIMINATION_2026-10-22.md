@@ -55,4 +55,23 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
 ### W2 agent-context-sync harness — routed
 ### W3 infra test suites — waiting on T-1
 ### W4 call sites — waiting on W3
-### W5 loop — waiting on W1
+### W5 keep-it-fixed loop — built 2026-10-22 (session kte-w5)
+
+- **SLO check** `scripts/kalloc-slo.sh` (`tests/kalloc-slo.bats`), ticked by `capacity-alarm.sh`'s launchd
+  run (fail-soft, bounded 120 s, after the zone state; damped to once an hour; `CC_CAP_KALLOC_SLO=off`).
+  Breach: this boot's trailing-24 h slope > 0.45 GiB/day, or growth per Bash call > 1.5x the previous
+  boot's last 24 h (`kalloc-leak-rate.sh --span`, new, on both sides). Target reported, never filed: the
+  median of the last 7 days' per-boot-day fits (each ≥ 12 h, ≥ 4 days) ≤ 0.30. Boot segments come from
+  the series itself (a reboot halves the zone). Abstain (exit 3, stored with its reason) under ~22 h of
+  boot or an unreadable series. State `~/.claude/autonomy/kalloc-slo.state`, history `logs/kalloc-slo.log`;
+  the hand-run report prints the stored line. No new launchd job, no plist edit.
+- **Operator row:** one `cc-backlog needs … --class needs-human --run "bash <abs>/kalloc-exec-census.sh 600"`,
+  constant title; none while the filed row is live, none for 7 d after it closes. The `--run` path is
+  absolute, not the brief's `scripts/…`: cc-do runs a row's command with `bash -c` in the operator's cwd.
+- **Census ranking:** `ranking.tsv` (every script, per 10 min, class, top caller) and `lint-drafts.txt`
+  (paths above N that the previous census in the same dir did not have above N), drafts only. N = 50
+  per 10 min: ~2.5% of the 0.30 GiB/day budget (~1,990 execs per 10 min at 1.1 KiB); on REPORT §7 it
+  flags the two paths W1 fixed (282, 124) and none of the 31-41 tail W4 covers.
+- **First live read (2026-10-22 08:13Z):** abstain, boot 11.7 h old; trailing slope 0.95 GiB/day,
+  previous boot 40.5 elements per Bash call. Unless W2-W4 land first, it breaches and files the census
+  row once this boot passes ~22 h.
