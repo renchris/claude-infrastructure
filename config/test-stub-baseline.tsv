@@ -596,6 +596,7 @@ tests/session-start-mcp-probe.bats	6
 tests/session-start-mission-gate.bats	2
 tests/session-writes.bats	1
 tests/settings-drift.bats	1
+tests/shasum-direct.bats	2
 tests/ship-land-converge-edge.bats	2
 tests/ship-land.bats	98
 tests/spawn-lineage.bats	1
