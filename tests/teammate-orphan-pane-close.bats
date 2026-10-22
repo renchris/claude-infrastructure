@@ -122,6 +122,19 @@ await_args() { local i=0; while [ ! -s "$BATS_TEST_TMPDIR/closer.args" ] && [ "$
     || { cat "$BATS_TEST_TMPDIR/closer.args" 2>/dev/null; false; }
 }
 
+@test "7b cc-in-kitty runs through /bin/sh, never as a #! exec by path (kalloc REPORT §3 Phase 1)" {
+  hook_env
+  unset CC_TERM
+  # Its #! names no real interpreter, so only an explicit /bin/sh can run it; rc 0 means kitty.
+  export CC_IN_KITTY_BIN="$STUBS/cc-in-kitty"
+  printf '#!/nonexistent/sh\nexit 0\n' > "$CC_IN_KITTY_BIN"; chmod +x "$CC_IN_KITTY_BIN"
+  printf '#!/bin/bash\necho "term=${CC_TERM:-}" > %s/closer.args\n' "$BATS_TEST_TMPDIR" > "$SE_TOPC_BIN"
+  ITERM_SESSION_ID=w0t0p0:545 SE_TEAMMATE_ARGV="/x/claude --resume s1 --agent-id m@session-aaaa1111 --agent-name m" end_hook
+  await_args
+  [ "$(cat "$BATS_TEST_TMPDIR/closer.args" 2>/dev/null)" = "term=kitty" ] \
+    || { cat "$BATS_TEST_TMPDIR/closer.args" 2>/dev/null; false; }
+}
+
 @test "8 identity is the PANE: a non-member pane whose argv QUOTES the id detaches nothing" {
   hook_env
   ITERM_SESSION_ID=w0t0p0:579 SE_TEAMMATE_ARGV="/x/claude 'brief: --agent-id m@session-aaaa1111 --agent-name m'" end_hook

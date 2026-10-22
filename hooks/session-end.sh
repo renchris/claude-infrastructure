@@ -101,7 +101,8 @@ if [ "${CC_TEAMMATE_ORPHAN_CLOSE:-on}" != off ] && command -v jq >/dev/null 2>&1
         if [ -f "$_se_closer" ] && [ -f "$_se_detach" ]; then
           _se_term="${CC_TERM:-}"
           if [ -z "$_se_term" ] && [ -x "${CC_IN_KITTY_BIN:-$HOME/.claude/bin/cc-in-kitty}" ]; then
-            _se_rc=0; "${CC_IN_KITTY_BIN:-$HOME/.claude/bin/cc-in-kitty}" >/dev/null 2>&1 || _se_rc=$?
+            # /bin/sh is its own #! line: a by-path #! exec keeps ~1.1 KiB of kernel memory (macOS 15.8.1).
+            _se_rc=0; /bin/sh "${CC_IN_KITTY_BIN:-$HOME/.claude/bin/cc-in-kitty}" >/dev/null 2>&1 || _se_rc=$?
             case "$_se_rc" in 0) _se_term=kitty ;; 1) _se_term=iterm2 ;; esac
           fi
           # shellcheck disable=SC1090  # runtime-resolved library
