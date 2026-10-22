@@ -402,6 +402,8 @@ kq_tree() {
   cp "$AWAIT" "$1/bin/cc-await-ping"
   if [ "${2:-}" = unavailable ]; then
     printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\necho "unavailable test"\nexit 4\n' "$1/kq.log" > "$1/bin/cc-kqwait"
+  elif [ "${2:-}" = badshebang ]; then   # runnable only through an interpreter, never by path
+    printf '#!/nonexistent/kalloc-interp\nprintf "%%s\\n" "$*" >> %q\nexec %q "$@"\n' "$1/kq.log" "$REPO/bin/cc-kqwait" > "$1/bin/cc-kqwait"
   else
     printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexec %q "$@"\n' "$1/kq.log" "$REPO/bin/cc-kqwait" > "$1/bin/cc-kqwait"
   fi
@@ -421,6 +423,18 @@ kq_tree() {
   [ "$status" -eq 2 ]                                     # watched its whole term, never exit 5
   [ "$(grep -c '' "$t/kq.log")" -le 3 ]                   # a spin is hundreds in 8 s
   [ "$(grep -c -- "--pid $d" "$t/kq.log")" -eq 1 ]        # the dead pid was passed exactly once
+}
+
+@test "kalloc: the helper runs through its interpreter, never as a #! exec by path" {
+  # A #! exec by path keeps ~1.1 KiB of kernel memory per call on macOS 15.8.1 (REPORT §3 Phase 1).
+  # The wrapper's shebang names no real interpreter, so a by-path exec fails (126) and the watcher
+  # falls back to the poll with an empty log; through `env bash` it runs and logs every wait.
+  local t="$BATS_TEST_TMPDIR/kq"
+  kq_tree "$t" badshebang
+  run "$t/bin/cc-await-ping" "$UUID" --interval 1 --timeout 3
+  echo "helper calls:"; cat "$t/kq.log" 2>/dev/null || true
+  [ "$status" -eq 2 ]
+  [ "$(grep -c -- '--timeout' "$t/kq.log")" -ge 1 ]
 }
 
 @test "keyset: the .watching marker is written under EVERY key (either hook's check answers true)" {

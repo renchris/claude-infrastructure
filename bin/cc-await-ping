@@ -910,7 +910,10 @@ $p @"}"; b="${b%%
   t0=$SECONDS
   # `& wait`, never a foreground call or `$( )`: bash runs a trap only between commands, so a TERM
   # would otherwise wait out the helper's whole timeout before the verdict could print.
-  "$KQ_BIN" "${args[@]}" --timeout "$to" > "$KQ_OUT" 2>/dev/null &
+  # Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory per call on
+  # macOS 15.8.1, and this one ran 1,780 times an hour (docs/research/kalloc-longterm-2026-10-21/
+  # REPORT.md §7). The wrapper, not its cached binary, so cc-kqwait's stale-binary guard still runs.
+  /usr/bin/env bash "$KQ_BIN" "${args[@]}" --timeout "$to" > "$KQ_OUT" 2>/dev/null &
   KQ_PID=$!
   wait "$KQ_PID"; rc=$?
   KQ_PID=""
