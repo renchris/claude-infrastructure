@@ -54,12 +54,18 @@ fi
 
 # ── the real tool: first PATH entry that is not this shim ─────────────────────────────────────
 real=""
+# Behind cc-shim (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4) this file runs as
+# $CFG/.bin-real/<name> and $CFG/bin/<name> is a link to the compiled trampoline, which neither test
+# below recognises: execing it would land straight back here. Any candidate that IS cc-shim is skipped.
+_shim1="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/libexec/cc-shim"
+_shim2="$HOME/.claude/libexec/cc-shim"
 IFS=: read -r -a _dirs <<< "$PATH"
 for _d in "${_dirs[@]}"; do
   [ -n "$_d" ] || continue
   _c="$_d/$name"
   [ -f "$_c" ] && [ -x "$_c" ] || continue
   [ "$_c" -ef "$self" ] && continue          # -ef follows symlinks: every link to this file is skipped
+  { [ "$_c" -ef "$_shim1" ] || [ "$_c" -ef "$_shim2" ]; } && continue
   # A link to ANOTHER checkout's copy of this shim (a worktree's bin on PATH) is skipped too, or two
   # shims would exec each other forever.
   if [ -L "$_c" ]; then _l="$(readlink "$_c" 2>/dev/null)"; [ "${_l##*/}" = cc-qos-exec ] && continue; fi

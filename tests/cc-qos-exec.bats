@@ -77,6 +77,31 @@ tp_log() { cat "$BATS_TEST_TMPDIR/tp.log" 2>/dev/null; }
   [ "$output" = "REAL $R/ffmpeg 1:-y" ]
 }
 
+# The cc-shim layout (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4): <cfg>/bin/<name> is a
+# link to <cfg>/libexec/cc-shim, which runs <cfg>/.bin-real/<name> → this shim. The bin/ link is first
+# on PATH and is neither this file nor a cc-qos-exec link, so pre-fix the walk exec'd it and cc-shim's
+# hop guard ended the loop at 126. A REAL cc-shim, because a stub would not reproduce the loop.
+@test "cc-shim layout: the bin/ trampoline link is skipped, the real tool runs demoted, no loop" {
+  [ -n "${CC_SHIM:-}" ] && [ -x "$CC_SHIM" ] || skip "no compiled cc-shim (CC_SHIM unset)"
+  for cfg in "$HOME/.claude" "$BATS_TEST_TMPDIR/cfg2"; do
+    mkdir -p "$cfg/bin" "$cfg/.bin-real" "$cfg/libexec"
+    ln -s "$CC_SHIM" "$cfg/libexec/cc-shim"
+    ln -s "$cfg/libexec/cc-shim" "$cfg/bin/ffmpeg"
+    ln -s "$SHIM" "$cfg/.bin-real/ffmpeg"
+  done
+  # $HOME/.claude with CLAUDE_CONFIG_DIR unset, then a config dir CLAUDE_CONFIG_DIR names.
+  unset CLAUDE_CONFIG_DIR
+  PATH="$HOME/.claude/bin:$R:/usr/bin:/bin" run ffmpeg -y
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "REAL $R/ffmpeg 1:-y" ]
+  [ "$(tp_log)" = "TP -c utility" ]
+  : > "$BATS_TEST_TMPDIR/tp.log"
+  CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg2" PATH="$BATS_TEST_TMPDIR/cfg2/bin:$R:/usr/bin:/bin" run ffmpeg -y
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "REAL $R/ffmpeg 1:-y" ]
+  [ "$(tp_log)" = "TP -c utility" ]
+}
+
 @test "the explicit form: cc-qos-exec <tool> args" {
   run "$SHIM" ffmpeg -y
   [ "$output" = "REAL $R/ffmpeg 1:-y" ]
