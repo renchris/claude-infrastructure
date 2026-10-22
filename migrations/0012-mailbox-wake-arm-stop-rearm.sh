@@ -101,6 +101,10 @@ REWAKE_SUM='📬 peer mail'
 command -v jq >/dev/null 2>&1 || { printf '0012: jq required\n' >&2; exit 1; }
 f="${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 # shellcheck disable=SC2016  # jq programs, not shell
 DEFS='def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); def mine: ((.command // "") | cmd_bare) == $c;'
 if [ "$mode" = verify ]; then
@@ -171,7 +175,7 @@ if jq -e --arg c "$HOOK_CMD" "$DEFS"' [.hooks.Stop[].hooks[]? | select(mine)] | 
   printf '0012: %s — already registered\n' "$real"
   exit 0
 fi
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '0012: REFUSED — accounts do not all share %s (%s check failed). Converge with 0037 first.\n' "$f" "$parity" >&2
   exit 3
 }
@@ -203,5 +207,5 @@ if ! jq -e --arg c "$HOOK_CMD" "$DEFS"' [.hooks.Stop[].hooks[]? | select(mine)] 
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '0012: write FAILED — nothing written\n' >&2; exit 1; }
 printf '0012: registered asyncRewake on Stop for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$bdir"
-"$parity" check >/dev/null 2>&1 || printf '0012: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$bdir" "$real" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '0012: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$bdir" "$real" >&2
 exit 0

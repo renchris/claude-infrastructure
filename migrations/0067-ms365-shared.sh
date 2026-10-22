@@ -29,6 +29,10 @@ REPO="${CC_MIGRATION_REPO:-$(cd "$here/.." && pwd)}"
 LC="${CC_0067_LAUNCHCTL:-launchctl}"
 LA="${CC_MIGRATION_LA_DIR:-$HOME/Library/LaunchAgents}"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 LABEL="com.claude.mcp-ms365"; DOMAIN="gui/$(id -u)"
 src="$REPO/launchd/staged/$LABEL.plist"; dst="$LA/$LABEL.plist"
 KEY="$HOME/.claude/state/ms365-proxy.key"; MARKER="$HOME/.claude/state/ms365-shared.active"
@@ -69,7 +73,7 @@ if [ "$mode" = dry ]; then
   say "dry run — nothing changed; act with: bash $REPO/migrations/0067-ms365-shared.sh --confirm ms365-shared"
   exit 0
 fi
-"$parity" check >/dev/null 2>&1 || die "REFUSED — accounts do not all share $f ($parity check failed); converge with 0037 first" 3
+"${parity_cmd[@]}" check >/dev/null 2>&1 || die "REFUSED — accounts do not all share $f ($parity check failed); converge with 0037 first" 3
 
 # 1. mcp-proxy beside ms-365-mcp-server, under the same node the job's PATH names.
 if [ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$BIN/../lib/node_modules/mcp-proxy/package.json" 2>/dev/null)" != "$PVER" ]; then

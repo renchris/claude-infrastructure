@@ -75,6 +75,10 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${CC_MIGRATION_REPO:-$(cd "$here/.." && pwd)}"
 f="$HOME/.claude/settings.json"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 LC="${CC_0055_LAUNCHCTL:-launchctl}"
 LA="${CC_MIGRATION_LA_DIR:-$HOME/Library/LaunchAgents}"
 DOMAIN="gui/$(id -u)"
@@ -204,7 +208,7 @@ fi
 
 if [ "$mode" = verify ]; then
   bad=0
-  "$parity" check >/dev/null 2>&1 || { err "NOT live — accounts do not all share $f ($parity check failed)"; bad=1; }
+  "${parity_cmd[@]}" check >/dev/null 2>&1 || { err "NOT live — accounts do not all share $f ($parity check failed)"; bad=1; }
   settings_live "$f" || { err "NOT live — $f lacks env CLAUDE_CODE_CERT_STORE=$CERT, env AGENT_BROWSER_IDLE_TIMEOUT_MS=$IDLE, or a timeout on net-context-stamp.sh"; bad=1; }
   verify_job() {
     job_loaded "$1" || return 0          # not loaded ⇒ nothing runs in a wrong band; the file applies at its next load
@@ -229,7 +233,7 @@ for k in CLAUDE_CODE_CERT_STORE:$CERT AGENT_BROWSER_IDLE_TIMEOUT_MS:$IDLE; do
   esac
 done
 jq -e '(.env // {}) | type == "object"' "$real" >/dev/null 2>&1 || { err "env is not an object — left unchanged"; exit 1; }
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   err "REFUSED — accounts do not all share $f ($parity check failed), so the change would reach some accounts and not others. Converge with 0037 first."
   exit 3
 }
@@ -271,7 +275,7 @@ if [ "$need_settings" = 1 ]; then
   fi
   mv "$tmp" "$real" || { rm -f "$tmp"; err "write FAILED — nothing written"; exit 1; }
   say "settings written. Backup: $bdir/settings.json (restore: cp -p $bdir/settings.json $real)"
-  "$parity" check >/dev/null 2>&1 || err "WARNING — cc-settings-parity check now fails; restore with the line above"
+  "${parity_cmd[@]}" check >/dev/null 2>&1 || err "WARNING — cc-settings-parity check now fails; restore with the line above"
   settings_live "$f" || { err "did NOT verify through $f"; exit 1; }
   say "verified — $f carries both env keys and the hook timeout. Takes effect in NEW sessions."
   say "check the launch fix once: start one session with CLAUDE_CODE_DEBUG_LOGS set and grep its debug log for 'CA certs: stores=bundled'"

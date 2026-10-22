@@ -52,6 +52,10 @@ PR_IFS='["Bash(*gh pr create*)","Bash(*gh pr edit*)"]'
 RV_IFS='["Bash(*claude-accounts*--readout*)","Bash(*operator-readout.sh --render*)","Bash(*cc-do --list*)"]'
 f="$HOME/.claude/settings.json"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 command -v jq >/dev/null 2>&1 || { printf '%s: jq required — nothing written\n' "$N" >&2; exit 1; }
 
 mode=""
@@ -202,7 +206,7 @@ esac
   || { printf '%s: no PreToolUse hook ends in pr-gate.sh in %s — nothing written\n' "$N" "$real" >&2; exit 1; }
 [ "$(hooks_of PostToolUse "$RV_RE" "$real" | jq 'length')" -gt 0 ] 2>/dev/null \
   || { printf '%s: no PostToolUse hook ends in relay-verbatim.sh in %s — nothing written\n' "$N" "$real" >&2; exit 1; }
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '%s: REFUSED — accounts do not all share %s (%s check failed). Converge with 0037 first.\n' "$N" "$f" "$parity" >&2
   exit 3
 }
@@ -253,7 +257,7 @@ if [ "$same_rest" != true ] || ! applied "$tmp"; then
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '%s: write FAILED — nothing written\n' "$N" >&2; exit 1; }
 printf '%s: filters set. Backup: %s/settings.json (restore: cp -p %s/settings.json %s)\n' "$N" "$bdir" "$bdir" "$real"
-"$parity" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with the line above\n' "$N" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with the line above\n' "$N" >&2
 applied "$f" || { printf '%s: did NOT verify through %s\n' "$N" "$f" >&2; exit 1; }
 printf '%s: verified — %s filters pr-gate and relay-verbatim with `if` and no longer registers ship-rail-push-allow. New sessions pick it up.\n' "$N" "$f"
 exit 0

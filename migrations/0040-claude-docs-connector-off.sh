@@ -2,7 +2,7 @@
 # migration-class: c10
 # migration-step: turn off the claude.ai "Claude Docs" connector in Claude Code for ALL accounts: add {"serverName":"claude.ai Claude Docs"} to deniedMcpServers and "anthropic-skills:docs":"off" to skillOverrides in the ONE shared ~/.claude/settings.json every account links to since 0037. Only that connector is removed (exact-name match); Google Drive, Gmail, Google Calendar and uidotsh stay connected. The anthropic-skills:docs skill needs this connector, so it is switched off with it and Claude Docs is no longer usable from Claude Code (claude.ai itself is unchanged). It refuses unless cc-settings-parity reports every account linked. It writes settings.json, which is C10.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0040-claude-docs-connector-off.sh --confirm settings.json
-# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e '((.deniedMcpServers // []) | any(.[]; .serverName? == "claude.ai Claude Docs")) and ((.skillOverrides // {})["anthropic-skills:docs"] == "off")' "$HOME/.claude/settings.json" >/dev/null
+# migration-verify: /usr/bin/env python3 "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e '((.deniedMcpServers // []) | any(.[]; .serverName? == "claude.ai Claude Docs")) and ((.skillOverrides // {})["anthropic-skills:docs"] == "off")' "$HOME/.claude/settings.json" >/dev/null
 #
 # The verifier is config-dir-INVARIANT (as 0036-0039): one shared file, one answer from every dir.
 #
@@ -37,6 +37,10 @@ NAME='claude.ai Claude Docs'
 SKILL='anthropic-skills:docs'
 f="$HOME/.claude/settings.json"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 command -v jq >/dev/null 2>&1 || { printf '0040: jq required — nothing written\n' >&2; exit 1; }
 
 mode=""
@@ -58,7 +62,7 @@ applied='((.deniedMcpServers // []) | any(.[]; .serverName? == $n)) and ((.skill
 if jq -e --arg n "$NAME" --arg s "$SKILL" "$applied" "$real" >/dev/null 2>&1; then
   printf '0040: already applied — %s denies %s and has %s off\n' "$real" "$NAME" "$SKILL"; exit 0
 fi
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '0040: REFUSED — accounts do not all share %s (%s check failed); the deny would reach some accounts and not others. Converge with 0037 first.\n' "$f" "$parity" >&2
   exit 1
 }
@@ -89,5 +93,5 @@ if [ "$same_rest" != true ] || [ "$kept" != true ] || ! jq -e --arg n "$NAME" --
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '0040: write FAILED — nothing written\n' >&2; exit 1; }
 printf '0040: Claude Docs connector off for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$bdir"
-"$parity" check >/dev/null 2>&1 || printf '0040: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$bdir" "$real" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '0040: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$bdir" "$real" >&2
 jq -e --arg n "$NAME" --arg s "$SKILL" "$applied" "$f" >/dev/null && printf '0040: verified — %s carries the deny and the skill override.\n' "$f"

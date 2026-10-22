@@ -2,7 +2,7 @@
 # migration-class: c10
 # migration-step: add the claudeMdExcludes glob "**/.claude/rules/agent-operating-lessons-situational.md" to the ONE shared ~/.claude/settings.json that every account's settings.json links to since 0037 — so it changes ALL accounts at once (operator ruling 2026-09-23: accounts are interchangeable, config is all-or-nothing), and every session on every account stops loading the situational rules half. The glob drops the situational file in EVERY repo, and only claude-infrastructure's resident file points at it, so lessons the memory rotor routes into other repos' situational files stop loading. It refuses to run unless `cc-settings-parity check` reports every account linked (else it would reach some accounts and not others). It edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0036-rules-situational-exclude.sh
-# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e --arg g '**/.claude/rules/agent-operating-lessons-situational.md' '(.claudeMdExcludes // []) | any(.[]; . == $g)' "$HOME/.claude/settings.json" >/dev/null
+# migration-verify: /usr/bin/env python3 "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e --arg g '**/.claude/rules/agent-operating-lessons-situational.md' '(.claudeMdExcludes // []) | any(.[]; . == $g)' "$HOME/.claude/settings.json" >/dev/null
 #
 # The verifier is config-dir-INVARIANT on purpose (as in 0037): registration-state.sh re-runs it once
 # per config dir with CC_CLAUDE_DIR re-aimed, and this effect is a fact about the whole fleet — the
@@ -50,12 +50,16 @@ GLOB='**/.claude/rules/agent-operating-lessons-situational.md'
 dir="$HOME/.claude"
 f="$dir/settings.json"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 
 command -v jq >/dev/null 2>&1 || { printf '0036: jq required\n' >&2; exit 1; }
 [ -f "$f" ] || { printf '0036: %s — no settings.json there; not creating one\n' "$f" >&2; exit 1; }
 # All accounts or none: every account's settings.json must link to this one file, or the edit would
 # reach some accounts and not others (the per-account arm the 2026-09-23 ruling withdrew).
-if ! "$parity" check >/dev/null 2>&1; then
+if ! "${parity_cmd[@]}" check >/dev/null 2>&1; then
   printf '0036: accounts do not all share %s (%s check failed) — refusing, the glob would not reach every account. Converge with migration 0037 first.\n' "$f" "$parity" >&2
   exit 1
 fi
@@ -91,7 +95,7 @@ same_excl=$(jq -n --slurpfile a "$f" --slurpfile b "$tmp" --arg g "$GLOB" \
   '(($a[0].claudeMdExcludes // []) + [$g]) == $b[0].claudeMdExcludes')
 if [ "$same_rest" = true ] && [ "$same_excl" = true ]; then
   mv "$tmp" "$f" || { rm -f "$tmp"; printf '0036: %s — replace FAILED; left unchanged\n' "$f" >&2; exit 1; }
-  if ! "$parity" check >/dev/null 2>&1; then
+  if ! "${parity_cmd[@]}" check >/dev/null 2>&1; then
     printf '0036: %s — glob added, but %s check now FAILS: an account no longer shares the file. Restore with: cp -p %s %s\n' "$f" "$parity" "$bak" "$f" >&2
     exit 1
   fi

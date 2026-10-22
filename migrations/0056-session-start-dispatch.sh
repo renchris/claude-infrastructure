@@ -3,7 +3,7 @@
 # migration-step: migration 0056 — regroup the 18 SessionStart hooks in ~/.claude/settings.json (every account links to it since 0037, so ALL accounts at once): fold the nine context and banner hooks into ONE registration of hooks/session-start-dispatch.sh, and mark the five pure side-effect hooks "async": true. 18 registrations become 10. It is fix row 17 of docs/research/concurrency-scale-2026-10-04 (startup span p95 10.1 s, max 35.5 s). It writes settings.json, which is C10.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0056-session-start-dispatch.sh --confirm settings.json
 # migration-subject: hooks/session-start-dispatch.sh
-# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0056-session-start-dispatch.sh" --verify
+# migration-verify: /usr/bin/env python3 "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0056-session-start-dispatch.sh" --verify
 #
 # ══ 0056 — SessionStart: one dispatcher for the nine folded hooks, async for the five side effects ══
 # docs/plans/CONCURRENCY_PROGRAM.md stage 1 wave B; docs/research/concurrency-scale-2026-10-04/README.md
@@ -48,6 +48,10 @@ ASYNC='["~/.claude/hooks/pre-session-validate.sh","~/.claude/hooks/lead-crash-wa
 f="$HOME/.claude/settings.json"
 hook="$HOME/.claude/hooks/session-start-dispatch.sh"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 command -v jq >/dev/null 2>&1 || { printf '%s: jq required — nothing written\n' "$N" >&2; exit 1; }
 
 mode=""
@@ -93,7 +97,7 @@ jq -e . "$real" >/dev/null 2>&1 || { printf '%s: %s is not valid JSON — nothin
 if registered "$real"; then
   printf '%s: already applied — %s carries the dispatcher, none of the nine folded hooks, and async on the five\n' "$N" "$real"; exit 0
 fi
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '%s: REFUSED — accounts do not all share %s (%s check failed); the regrouping would reach some accounts and not others. Converge with 0037 first.\n' "$N" "$f" "$parity" >&2
   exit 3
 }
@@ -125,6 +129,6 @@ if [ "$same_rest" != y ] || [ "$same_kept" != y ] || ! registered "$tmp"; then
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '%s: write FAILED — nothing written\n' "$N" >&2; exit 1; }
 printf '%s: regrouped for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$N" "$bdir"
-"$parity" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
 registered "$f" || { printf '%s: did NOT verify — %s is not in the regrouped shape\n' "$N" "$f" >&2; exit 1; }
 printf '%s: verified — %s carries the dispatcher and the async side effects.\n' "$N" "$f"

@@ -36,6 +36,10 @@ CMDS='["~/.claude/hooks/completion-assert.sh","~/.claude/hooks/session-continue.
 TO=10
 f="$HOME/.claude/settings.json"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 _src="${BASH_SOURCE[0]}"
 while [ -L "$_src" ]; do
   _d="$(cd "$(dirname "$_src")" && pwd)"; _src="$(readlink "$_src")"
@@ -79,7 +83,7 @@ jq -e . "$real" >/dev/null 2>&1 || { printf '%s: %s is not valid JSON — nothin
 gone="$(missing "$real")" || { printf '%s: could not read the %s registrations of %s — nothing written\n' "$N" "$EVENT" "$real" >&2; exit 1; }
 [ -z "$gone" ] || { printf '%s: REFUSED — not registered on %s in %s: %s; nothing raised\n' "$N" "$EVENT" "$real" "$(printf '%s' "$gone" | tr '\n' ' ')" >&2; exit 4; }
 if applied "$real"; then printf '%s: already applied — the three %s close gates have timeout >= %s\n' "$N" "$EVENT" "$TO"; exit 0; fi
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '%s: REFUSED — accounts do not all share %s (%s check failed). Converge with 0037 first.\n' "$N" "$f" "$parity" >&2
   exit 3
 }
@@ -101,6 +105,6 @@ if [ "$(norm "$real")" != "$(norm "$tmp")" ] || ! applied "$tmp"; then
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '%s: write FAILED — nothing written\n' "$N" >&2; exit 1; }
 printf '%s: raised for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$N" "$bdir"
-"$parity" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
 applied "$f" || { printf '%s: did NOT verify — the three %s close gates are not all at %s s\n' "$N" "$EVENT" "$TO" >&2; exit 1; }
 printf '%s: verified — completion-assert.sh, session-continue.sh and boundary-handoff.sh on %s now have timeout %s s.\n' "$N" "$EVENT" "$TO"

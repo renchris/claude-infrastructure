@@ -46,6 +46,10 @@ RULE='Bash(git push:*)'
 f="$HOME/.claude/settings.json"
 hook="${CC_0075_LIVE_HOOK:-$HOME/.claude/hooks/validate-bash.sh}"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 command -v jq >/dev/null 2>&1 || { printf '%s: jq required — nothing written\n' "$N" >&2; exit 1; }
 
 mode=""
@@ -74,7 +78,7 @@ hook_live || {
   printf '%s: removing the rule now would leave pushes to other people'\''s repositories unasked. Converge first: CC_DEPLOY_MAX_LAG_COMMITS=0 bash ~/Development/claude-infrastructure/scripts/deploy-live.sh\n' "$N" >&2
   exit 4
 }
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '%s: REFUSED — accounts do not all share %s (%s check failed). Converge with 0037 first.\n' "$N" "$f" "$parity" >&2
   exit 3
 }
@@ -101,7 +105,7 @@ if [ "$same_rest" != y ] || [ "$want_ask" != "$got_ask" ]; then
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '%s: write FAILED — nothing written\n' "$N" >&2; exit 1; }
 printf '%s: removed for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$N" "$bdir"
-"$parity" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
 # Read the effect back through the verifier, never through the writer's own claim.
 absent "$f" || { printf '%s: did NOT verify — %s is still in %s\n' "$N" "$RULE" "$f" >&2; exit 1; }
 printf '%s: verified — %s is gone and the live validate-bash.sh owns the push decision.\n' "$N" "$RULE"

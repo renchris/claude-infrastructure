@@ -4,7 +4,7 @@
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0061-rm-prompt-preempt-registration.sh --confirm settings.json
 # migration-subject: hooks/rm-prompt-preempt.sh
 # migration-batch-hold: manual run scripts/rm-preempt-probe.sh first; register only on its verdict=PASS
-# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e '[.hooks.PermissionRequest[]? | select(.matcher == "Bash") | .hooks[]?.command] | any(. == "~/.claude/hooks/rm-prompt-preempt.sh")' "$HOME/.claude/settings.json" >/dev/null
+# migration-verify: /usr/bin/env python3 "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e '[.hooks.PermissionRequest[]? | select(.matcher == "Bash") | .hooks[]?.command] | any(. == "~/.claude/hooks/rm-prompt-preempt.sh")' "$HOME/.claude/settings.json" >/dev/null
 #
 # The verifier is config-dir-INVARIANT (as 0036-0041, 0047): one shared file, one answer from every dir.
 #
@@ -53,6 +53,10 @@ f="$HOME/.claude/settings.json"
 hook="$HOME/.claude/hooks/rm-prompt-preempt.sh"
 lib="$HOME/.claude/hooks/lib/rm_prompt_shape.py"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 command -v jq >/dev/null 2>&1 || { printf '%s: jq required — nothing written\n' "$N" >&2; exit 1; }
 
 mode=""
@@ -72,7 +76,7 @@ registered() {
 }
 
 if [ "$mode" = verify ]; then
-  "$parity" check >/dev/null 2>&1 && registered "$f"; exit $?
+  "${parity_cmd[@]}" check >/dev/null 2>&1 && registered "$f"; exit $?
 fi
 
 [ -f "$f" ] || { printf '%s: %s not found — nothing written\n' "$N" "$f" >&2; exit 1; }
@@ -83,7 +87,7 @@ jq -e . "$real" >/dev/null 2>&1 || { printf '%s: %s is not valid JSON — nothin
 if registered "$real"; then
   printf '%s: already applied — %s is registered in %s\n' "$N" "$CMD" "$real"; exit 0
 fi
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '%s: REFUSED — accounts do not all share %s (%s check failed); the hook would reach some accounts and not others. Converge with 0037 first.\n' "$N" "$f" "$parity" >&2
   exit 3
 }
@@ -116,6 +120,6 @@ if [ "$same_rest" != y ] || [ "$want" != "$got" ]; then
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '%s: write FAILED — nothing written\n' "$N" >&2; exit 1; }
 printf '%s: registered for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$N" "$bdir"
-"$parity" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
 registered "$f" || { printf '%s: did NOT verify — %s lacks the entry\n' "$N" "$f" >&2; exit 1; }
 printf '%s: verified — %s carries the hook.\n' "$N" "$f"

@@ -3,7 +3,7 @@
 # migration-step: register hooks/research-block.sh as a PreToolUse hook on its own "*" entry (every tool, Workflow included) and raise hooks/research-precognition-nudge.sh's UserPromptSubmit timeout from 5 s to 10 s, in ~/.claude/settings.json, which every account links to since 0037 — so ALL accounts at once. It is the research program's tool block (REPORT.md §4.2, §8 item 6): it denies only inside a program the registry shows certifying or certified, so with no program it is inert. It writes settings.json, which is C10.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0050-research-block-registration.sh --confirm settings.json
 # migration-subject: hooks/research-block.sh
-# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0050-research-block-registration.sh" --verify
+# migration-verify: /usr/bin/env python3 "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0050-research-block-registration.sh" --verify
 #
 # ══ 0050 — the research block and the router's longer timeout (wave B1, backlog 83fb0ff00849) ════
 # docs/plans/RESEARCH_PROGRAM_BUILD.md wave B1; docs/research/upfront-research-exhaustion-2026-09-30/
@@ -44,6 +44,10 @@ ROUTER_TIMEOUT=10
 f="$HOME/.claude/settings.json"
 hook="$HOME/.claude/hooks/research-block.sh"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 command -v jq >/dev/null 2>&1 || { printf '%s: jq required — nothing written\n' "$N" >&2; exit 1; }
 
 mode=""
@@ -90,7 +94,7 @@ jq -e --arg rc "$ROUTER_CMD" '[.hooks.UserPromptSubmit[]?.hooks[]? | select(.com
   printf '%s: REFUSED — %s is not registered as a UserPromptSubmit hook in %s, so there is no router timeout to raise and no router to label turns; the block would read every turn as unlabeled. Restore that registration first.\n' "$N" "$ROUTER_CMD" "$real" >&2
   exit 1
 }
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '%s: REFUSED — accounts do not all share %s (%s check failed); the block would reach some accounts and not others. Converge with 0037 first.\n' "$N" "$f" "$parity" >&2
   exit 3
 }
@@ -125,6 +129,6 @@ if [ "$same_rest" != y ] || [ "$same_ups" != y ] || [ "$want_pre" != "$got_pre" 
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '%s: write FAILED — nothing written\n' "$N" >&2; exit 1; }
 printf '%s: registered for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$N" "$bdir"
-"$parity" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
 registered "$f" || { printf '%s: did NOT verify — %s lacks the entry or the timeout\n' "$N" "$f" >&2; exit 1; }
 printf '%s: verified — %s carries the block and the router timeout.\n' "$N" "$f"

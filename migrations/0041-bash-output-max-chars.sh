@@ -2,7 +2,7 @@
 # migration-class: c10
 # migration-step: set "bashOutputMaxChars": 16000 in the ONE shared ~/.claude/settings.json every account links to since 0037 — so ALL accounts at once. A Bash result over 16,000 chars (today 30,000) is saved to a file and the model gets a ~2 KB preview and the path. Replay over 14.96 days: +$309-424 net list-weighted, +0.3% turns, band re-read rate 25-35% (conviction 70%). It refuses unless cc-settings-parity reports every account linked, and leaves an operator-set value other than 16000 alone. It writes settings.json, which is C10.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0041-bash-output-max-chars.sh --confirm settings.json
-# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e '.bashOutputMaxChars == 16000' "$HOME/.claude/settings.json" >/dev/null
+# migration-verify: /usr/bin/env python3 "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e '.bashOutputMaxChars == 16000' "$HOME/.claude/settings.json" >/dev/null
 #
 # The verifier is config-dir-INVARIANT (as 0036-0040): one shared file, one answer from every dir.
 #
@@ -32,6 +32,10 @@ set -uo pipefail
 VAL=16000
 f="$HOME/.claude/settings.json"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 command -v jq >/dev/null 2>&1 || { printf '0041: jq required — nothing written\n' >&2; exit 1; }
 
 mode=""
@@ -51,7 +55,7 @@ jq -e . "$real" >/dev/null 2>&1 || { printf '0041: %s is not valid JSON — noth
 cur=$(jq -r '.bashOutputMaxChars // "unset"' "$real")
 [ "$cur" = "$VAL" ] && { printf '0041: already applied — %s has bashOutputMaxChars %s\n' "$real" "$VAL"; exit 0; }
 [ "$cur" = unset ] || { printf '0041: %s already sets bashOutputMaxChars to %s — an operator value, left unchanged\n' "$real" "$cur" >&2; exit 1; }
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '0041: REFUSED — accounts do not all share %s (%s check failed); the cap would reach some accounts and not others. Converge with 0037 first.\n' "$f" "$parity" >&2
   exit 1
 }
@@ -71,5 +75,5 @@ if [ "$same_rest" != true ] || ! jq -e --argjson v "$VAL" '.bashOutputMaxChars =
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '0041: write FAILED — nothing written\n' >&2; exit 1; }
 printf '0041: bashOutputMaxChars %s for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$VAL" "$bdir"
-"$parity" check >/dev/null 2>&1 || printf '0041: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$bdir" "$real" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '0041: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$bdir" "$real" >&2
 jq -e --argjson v "$VAL" '.bashOutputMaxChars == $v' "$f" >/dev/null && printf '0041: verified — %s carries bashOutputMaxChars %s.\n' "$f" "$VAL"

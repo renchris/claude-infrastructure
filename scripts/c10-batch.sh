@@ -134,7 +134,8 @@ run_step() {
       HOME="$2" CC_MIGRATION_REPO="$REPO" timeout 300 bash -c "$run" </dev/null 2>&1 )
 }
 
-parity_ok() { HOME="$1" "$1/.claude/bin/cc-settings-parity" check >/dev/null 2>&1; }
+# Through python3, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1.
+parity_ok() { HOME="$1" /usr/bin/env python3 "$1/.claude/bin/cc-settings-parity" check >/dev/null 2>&1; }
 
 # run_batch <home> <label> — every step in order; stop at the first failure. Prints PASS/FAIL lines.
 run_batch() {

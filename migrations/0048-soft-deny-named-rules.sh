@@ -3,7 +3,7 @@
 # migration-step: add 17 named shipped safety rules (Secret-Store Writes, Credential Materialization, Instruction Poisoning, Auto-Mode Bypass, Session Transcript Tampering, Tmux Self Drive, Unverifiable Deletion Target, Public Data-Sharing Upload, External Ingress Tunnel, Traffic Redirection, Sensitive-Source Provenance, Code That Leaks When Run, and the 5 Browser exfil rules) to autoMode.soft_deny in ~/.claude/settings.json, replacing our Memory Poisoning with Instruction Poisoning — ALL accounts at once. Measured cost about 1 to 2 extra classifier blocks a day. HELD until the operator rules yes on its decision packet. It writes the auto-mode classifier's rules, which is C10.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0048-soft-deny-named-rules.sh --confirm settings.json
 # migration-batch-hold: decision 6b0e8ec5c970
-# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0048-soft-deny-named-rules.sh" --verify
+# migration-verify: /usr/bin/env python3 "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0048-soft-deny-named-rules.sh" --verify
 #
 # ══ 0048 — the shipped soft_deny rules worth having, by name (backlog b19974f7ba82, follow-on) ═════
 # "$defaults" in autoMode.soft_deny was measured and ruled NO (0046's header; docs/research/
@@ -36,6 +36,10 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 data="$here/data/0048-soft-deny-named-rules.json"
 f="$HOME/.claude/settings.json"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 command -v jq >/dev/null 2>&1 || { printf '%s: jq required — nothing written\n' "$N" >&2; exit 1; }
 [ -f "$data" ] || { printf '%s: rule data %s missing — nothing written\n' "$N" "$data" >&2; exit 1; }
 
@@ -74,7 +78,7 @@ jq -e . "$real" >/dev/null 2>&1 || { printf '%s: %s is not valid JSON — nothin
 if applied "$real"; then
   printf '%s: already applied — autoMode.soft_deny in %s carries the named rules\n' "$N" "$real"; exit 0
 fi
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '%s: REFUSED — accounts do not all share %s (%s check failed). Converge with 0037 first.\n' "$N" "$f" "$parity" >&2
   exit 3
 }
@@ -99,6 +103,6 @@ if [ "$same_rest" != y ] || [ "$want" != "$(jq -c '.autoMode.soft_deny' "$tmp")"
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '%s: write FAILED — nothing written\n' "$N" >&2; exit 1; }
 printf '%s: applied for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$N" "$bdir"
-"$parity" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
 applied "$f" || { printf '%s: did NOT verify\n' "$N" >&2; exit 1; }
 printf '%s: verified.\n' "$N"

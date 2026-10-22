@@ -3,7 +3,7 @@
 # migration-step: register hooks/bash-output-offload.sh as a PostToolUse hook (its own "^Bash$" entry) in ~/.claude/settings.json, which every account links to since 0037 — so ALL accounts at once. A Bash result over 8,000 chars from a command that is not a deliberate read (cat/sed/grep/git show…) is saved to a file and the model gets its head, tail, the failure-looking lines from the hidden middle, and the path. It refuses unless cc-settings-parity reports every account linked and the LIVE hook file exists. It writes settings.json, which is C10.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0039-bash-output-offload.sh --confirm settings.json
 # migration-subject: hooks/bash-output-offload.sh
-# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e '[.hooks.PostToolUse[]? | select(.matcher == "^Bash$") | .hooks[]?.command] | any(. == "~/.claude/hooks/bash-output-offload.sh")' "$HOME/.claude/settings.json" >/dev/null
+# migration-verify: /usr/bin/env python3 "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e '[.hooks.PostToolUse[]? | select(.matcher == "^Bash$") | .hooks[]?.command] | any(. == "~/.claude/hooks/bash-output-offload.sh")' "$HOME/.claude/settings.json" >/dev/null
 #
 # The verifier is config-dir-INVARIANT (as 0036-0038): one shared file, one answer from every dir.
 #
@@ -36,6 +36,10 @@ CMD='~/.claude/hooks/bash-output-offload.sh'
 f="$HOME/.claude/settings.json"
 hook="$HOME/.claude/hooks/bash-output-offload.sh"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 command -v jq >/dev/null 2>&1 || { printf '0039: jq required — nothing written\n' >&2; exit 1; }
 
 mode=""
@@ -55,7 +59,7 @@ jq -e . "$real" >/dev/null 2>&1 || { printf '0039: %s is not valid JSON — noth
 if jq -e --arg c "$CMD" '[.hooks.PostToolUse[]? | select(.matcher == "^Bash$") | .hooks[]?.command] | any(. == $c)' "$real" >/dev/null 2>&1; then
   printf '0039: already applied — %s is registered in %s\n' "$CMD" "$real"; exit 0
 fi
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '0039: REFUSED — accounts do not all share %s (%s check failed); the hook would reach some accounts and not others. Converge with 0037 first.\n' "$f" "$parity" >&2
   exit 1
 }
@@ -85,6 +89,6 @@ if [ "$same_rest" != y ] || [ "$want" != "$got" ]; then
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '0039: write FAILED — nothing written\n' >&2; exit 1; }
 printf '0039: registered for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$bdir"
-"$parity" check >/dev/null 2>&1 || printf '0039: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$bdir" "$real" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '0039: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$bdir" "$real" >&2
 jq -e --arg c "$CMD" '[.hooks.PostToolUse[]? | select(.matcher == "^Bash$") | .hooks[]?.command] | any(. == $c)' "$f" >/dev/null \
   && printf '0039: verified — %s carries the hook.\n' "$f"

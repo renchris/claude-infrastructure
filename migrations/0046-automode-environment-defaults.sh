@@ -2,7 +2,7 @@
 # migration-class: c10
 # migration-step: put the literal "$defaults" first in autoMode.environment in ~/.claude/settings.json, which every account links to since 0037 — so ALL accounts at once. Our 7 reso entries REPLACED the classifier's shipped environment list (21 entries on 2.1.284), dropping "Trusted repo" and the definitions the shipped soft_deny rules lean on; "$defaults" inherits them and keeps our 7 after it. It refuses unless cc-settings-parity reports every account linked. It writes the auto-mode classifier's trust configuration, which is C10.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0046-automode-environment-defaults.sh --confirm settings.json
-# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e '(.autoMode.environment // []) | index("$defaults") != null' "$HOME/.claude/settings.json" >/dev/null
+# migration-verify: /usr/bin/env python3 "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e '(.autoMode.environment // []) | index("$defaults") != null' "$HOME/.claude/settings.json" >/dev/null
 #
 # The verifier is config-dir-INVARIANT (as 0036-0041): one shared file, one answer from every dir.
 #
@@ -42,6 +42,10 @@ N=0046
 DEF='"$defaults"'
 f="$HOME/.claude/settings.json"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# Through its interpreter, never by path: a #! exec keeps ~1.1 KiB of kernel memory on macOS 15.8.1
+# (docs/research/kalloc-longterm-2026-10-21/REPORT.md). Read from its own #! line, so a stub still runs.
+_pl=""; IFS= read -r _pl < "$parity" 2>/dev/null || true
+case "$_pl" in *python3*) parity_cmd=(/usr/bin/env python3 "$parity") ;; *) parity_cmd=("$parity") ;; esac
 command -v jq >/dev/null 2>&1 || { printf '%s: jq required — nothing written\n' "$N" >&2; exit 1; }
 
 mode=""
@@ -59,7 +63,7 @@ esac
 has_defaults() { jq -e '(.autoMode.environment // []) | index("$defaults") != null' "$1" >/dev/null 2>&1; }
 
 if [ "$mode" = verify ]; then
-  "$parity" check >/dev/null 2>&1 && has_defaults "$f"; exit $?
+  "${parity_cmd[@]}" check >/dev/null 2>&1 && has_defaults "$f"; exit $?
 fi
 
 [ -f "$f" ] || { printf '%s: %s not found — nothing written\n' "$N" "$f" >&2; exit 1; }
@@ -70,7 +74,7 @@ jq -e . "$real" >/dev/null 2>&1 || { printf '%s: %s is not valid JSON — nothin
 if has_defaults "$real"; then
   printf '%s: already applied — autoMode.environment in %s carries %s\n' "$N" "$real" "$DEF"; exit 0
 fi
-"$parity" check >/dev/null 2>&1 || {
+"${parity_cmd[@]}" check >/dev/null 2>&1 || {
   printf '%s: REFUSED — accounts do not all share %s (%s check failed); the change would reach some accounts and not others. Converge with 0037 first.\n' "$N" "$f" "$parity" >&2
   exit 3
 }
@@ -101,6 +105,6 @@ if [ "$same_rest" != y ] || [ "$want" != "$got" ]; then
 fi
 mv "$tmp" "$real" || { rm -f "$tmp"; printf '%s: write FAILED — nothing written\n' "$N" >&2; exit 1; }
 printf '%s: applied for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$N" "$bdir"
-"$parity" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
+"${parity_cmd[@]}" check >/dev/null 2>&1 || printf '%s: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$N" "$bdir" "$real" >&2
 has_defaults "$f" || { printf '%s: did NOT verify — %s lacks %s\n' "$N" "$f" "$DEF" >&2; exit 1; }
 printf '%s: verified — autoMode.environment in %s starts with %s.\n' "$N" "$f" "$DEF"

@@ -3,7 +3,7 @@
 # migration-step: make every Claude account run ONE settings.json — back up the four account copies, fold the ruled differences into ~/.claude/settings.json, and replace each account's settings.json with a symlink to it (operator ruling 2026-09-23: accounts are interchangeable). It writes settings.json, which is C10. Read the --dry-run first.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0037-settings-parity.sh
 # migration-subject: bin/cc-settings-parity
-# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1
+# migration-verify: /usr/bin/env python3 "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1
 #
 # The verifier is spelled config-dir-INVARIANT on purpose: registration-state.sh re-runs each
 # verifier once per config dir with CC_CLAUDE_DIR re-aimed, and this effect is SINGULAR — a fact
