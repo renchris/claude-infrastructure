@@ -777,8 +777,10 @@ alive() { kill -0 "$1" 2>/dev/null; }
 
 @test "16b [RED] rest NOT proven: the typed /exit runs, no signal, and the reason is said" {
   sig_world
+  # Since e2d0cee07 a REMOTE last read that passes proves rest itself (hf_recycle_last_read sets
+  # RCY_REST_PROVEN), so "not proven" is reachable only on the local path, which returns before it.
   # shellcheck disable=SC2034
-  RCY_REST_PROVEN=0
+  RCY_REST_PROVEN=0 RCY_REMOTE=0
   printf '%s\n' "" "/exit" > "$READS"
   run recycle_fire_commit "$SESS"
   [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
