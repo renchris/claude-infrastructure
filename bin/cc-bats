@@ -313,10 +313,20 @@ _cellar_sweep() {
   return 1
 }
 
+# The bats-core vendored beside this checkout (vendor/bats-core/VENDORED.md). Parameter expansion, not
+# dirname, for the reason self_phys gives. A copy of this file relocated without vendor/ has none.
+VENDORED_BATS="${self_phys%/*/*}/vendor/bats-core/bin/bats"
+
 resolve_real_bats() {
   # 1 — explicit pin (tests, and any caller that knows better). Honoured even if non-executable
   #     so a test can assert the failure path.
   if [ -n "${CC_BATS_REAL+set}" ]; then printf '%s' "$CC_BATS_REAL"; return 0; fi
+  # 1a — the vendored bats-core. Its libexec runs through "$BASH", so a run makes no kernel #! exec
+  #      per file or test (macOS 15.x keeps ~1.1 KiB of kernel memory per such exec until reboot).
+  #      It is not a shim, so it cannot cycle. CC_BATS_VENDORED=0 falls through to the search below.
+  if [ "${CC_BATS_VENDORED:-1}" != "0" ] && [ -x "$VENDORED_BATS" ] && [ ! -d "$VENDORED_BATS" ]; then
+    printf '%s' "$VENDORED_BATS"; return 0
+  fi
   # 1.1 — CYCLE DETECTED (see SELF-REVISIT above): every branch a shim can occupy is skipped. The
   #       notice is unconditional — CC_BATS_QUIET may not reach it — because an exec cycle survived
   #       in silence is precisely the looks-applied-but-is-not failure this file exists to prevent.
@@ -387,6 +397,19 @@ if [ -z "$REAL_BATS" ] || [ ! -x "$REAL_BATS" ]; then
   exit 127
 fi
 
+# The vendored bats is run as `bash <path>`: its shebang is `#!/usr/bin/env bash`, so the first bash
+# on PATH is the interpreter it would get anyway, minus the kernel #! exec. Any other bats runs by path.
+BATS_CMD=("$REAL_BATS")
+if [ "$REAL_BATS" = "$VENDORED_BATS" ]; then
+  _bash="$(command -v bash 2>/dev/null || true)"
+  case "$_bash" in /*) BATS_CMD=("$_bash" "$REAL_BATS") ;; esac
+fi
+
+# Test helpers build #!-free stubs with cc-shim when CC_SHIM names it; set-but-empty is left alone.
+if [ -z "${CC_SHIM+set}" ] && [ -x "${HOME:-}/.claude/libexec/cc-shim" ]; then
+  export CC_SHIM="$HOME/.claude/libexec/cc-shim"
+fi
+
 # ── a test run is never a BACKGROUNDED session (2026-09-25) ────────────────────────────────────
 # Claude Code 2.1.280 marks a session it backgrounded into its daemon with CLAUDE_CODE_SESSION_KIND=bg,
 # and every process it starts inherits the mark. scripts/handoff-fire.sh --recycle refuses a bg session
@@ -426,7 +449,7 @@ fi
 
 # ── kill switch ───────────────────────────────────────────────────────────────────────────────
 if [ "${CC_BATS_QOS:-on}" = "off" ]; then
-  exec "$REAL_BATS" "$@"
+  exec "${BATS_CMD[@]}" "$@"
 fi
 
 # ── re-entrancy guard ─────────────────────────────────────────────────────────────────────────
@@ -435,7 +458,7 @@ fi
 # be HARMLESS but not FREE: it costs an extra fork+exec pair per nested call, and this file exists
 # to reduce load, not add it. Once we are inside the band, hand straight off to the real binary.
 if [ "${CC_BATS_ACTIVE:-0}" = "1" ]; then
-  exec "$REAL_BATS" "$@"
+  exec "${BATS_CMD[@]}" "$@"
 fi
 export CC_BATS_ACTIVE=1
 
@@ -794,7 +817,7 @@ export CC_BATS_QOS_MODE="$QOS_MODE"
 export CC_BATS_QOS_BAND="$BAND"
 
 if [ "$QOS_MODE" = "FULL" ]; then
-  exec "$TP" -c "$BAND" "$REAL_BATS" "$@"
+  exec "$TP" -c "$BAND" "${BATS_CMD[@]}" "$@"
 else
-  exec "$REAL_BATS" "$@"
+  exec "${BATS_CMD[@]}" "$@"
 fi

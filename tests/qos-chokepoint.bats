@@ -48,6 +48,9 @@ setup() {
   # without the guard ever firing.
   unset CC_BATS_ACTIVE CC_BATS_QOS CC_BATS_QOS_MODE CC_BATS_QOS_BAND CC_BATS_QUIET \
         CC_BATS_REAL CC_BATS_BAND CC_BATS_TASKPOLICY CC_BATS_SEEN
+  # The vendored bats-core beside $SHIM would pre-empt the seed and PATH walk every resolver test
+  # below exercises, so it is off by default here; (vend-a)/(vend-b) turn it back on to test it.
+  export CC_BATS_VENDORED=0
   # Used by (xiii)/(xiv). A here-doc-free one-liner so this helper cannot itself contain the tokens
   # the guard greps for.
   strip_comments() { sed -e 's/[[:space:]]*#.*$//' "$1"; }
@@ -808,6 +811,34 @@ _fake_bats() {
   [ "$status" -eq 0 ] || false
   [[ "$output" =~ CC-PIN-MARKER ]] || false             # the env pin ran
   [[ ! "$output" =~ CC-SEED-MARKER ]] || false          # the seed did not
+}
+
+@test "(vend-a) the VENDORED bats-core outranks a valid seed, and runs through the first bash on PATH" {
+  # vendor/bats-core runs its libexec through "$BASH" (no kernel #! exec per test). Two-sided: the
+  # seed marker is absent, BATS_ROOT names vendor/, and a logging `bash` first on PATH proves the
+  # shim exec'd `bash <vendored bats>` rather than the file by path.
+  [ -x "$REPO/vendor/bats-core/bin/bats" ] || false
+  _fake_bats "$TMP/fake/bats" "CC-SEED-MARKER"
+  _seed "$TMP/seed" "$TMP/fake/bats"
+  mkdir -p "$TMP/fakebin" "$TMP/w"
+  printf '#!/bin/bash\necho CC-VIA-PATH-BASH >&2\nexec /bin/bash "$@"\n' > "$TMP/fakebin/bash"
+  chmod +x "$TMP/fakebin/bash"
+  # shellcheck disable=SC2016  # $BATS_ROOT expands inside the generated test, not here
+  printf '@test "w" {\n  echo "ROOT=$BATS_ROOT" >&3\n}\n' > "$TMP/w/where.bats"
+  run timeout 60 env -u CC_BATS_VENDORED CC_BATS_SEED="$TMP/seed" CC_BATS_MAX_ROOTS=0 \
+      CC_BATS_WAIVER_REASON='qos-chokepoint (xxviii) nested run' PATH="$TMP/fakebin:$PATH" \
+      /bin/bash "$SHIM" "$TMP/w/where.bats"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"ROOT=$REPO/vendor/bats-core"* ]] || false
+  [[ "$output" == *CC-VIA-PATH-BASH* ]] || false
+  [[ ! "$output" =~ CC-SEED-MARKER ]] || false
+}
+
+@test "(vend-b) CC_BATS_REAL still OUTRANKS the vendored bats-core" {
+  _fake_bats "$TMP/fake/pin" "CC-PIN-MARKER"
+  run timeout 20 env -u CC_BATS_VENDORED CC_BATS_REAL="$TMP/fake/pin" /bin/bash "$SHIM" --version
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ CC-PIN-MARKER ]] || false
 }
 
 # (seed helpers _cellar_bats / _seed / _fake_bats are defined above (xvi), ahead of their callers —
