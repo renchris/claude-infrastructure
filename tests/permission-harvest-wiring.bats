@@ -329,7 +329,7 @@ title() { argval needs; }
   [ "$(/usr/bin/plutil -extract RunAtLoad raw -o - "$PLIST")" = false ]
   [ "$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "$PLIST")" = /bin/bash ]
   [ "$(/usr/bin/plutil -extract ProgramArguments.1 raw -o - "$PLIST")" = -c ]
-  [ "$(/usr/bin/plutil -extract ProgramArguments.2 raw -o - "$PLIST")" = 'exec "$HOME/.claude/scripts/permission-harvest-run.sh"' ]
+  [ "$(/usr/bin/plutil -extract ProgramArguments.2 raw -o - "$PLIST")" = 'exec /usr/bin/env bash "$HOME/.claude/scripts/permission-harvest-run.sh"' ]
   [ "$(/usr/bin/plutil -extract StandardOutPath raw -o - "$PLIST")" = /Users/chrisren/.claude/logs/permission-harvest.out.log ]
   [ "$(/usr/bin/plutil -extract StandardErrorPath raw -o - "$PLIST")" = /Users/chrisren/.claude/logs/permission-harvest.err.log ]
   ! grep -q '<key>ProcessType</key>' "$PLIST" || false
