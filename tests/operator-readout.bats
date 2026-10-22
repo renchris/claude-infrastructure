@@ -10,6 +10,8 @@
 #   · compose-guard (continue-armed), kill-switch, cap+footer counts, B ≤24h veto summary
 #   · IDL B-3: one {fired|abstained} line per hook invocation
 
+load helpers/cc-stub
+
 setup() {
   # Project labels in this suite are FIXTURES, not projects — and `cc-backlog add` now WARNS on an
   # explicit --project outside the dispatch set (df2b6a40a5dc), which bats folds into $output. Off
@@ -439,11 +441,10 @@ _legacy_pkt() {  # $1=id  [$2=extra jq object]
   # renderer's contract seam is `cc-backlog list --blocked --json` output — stub that binary
   # with the board branch's emission shape and prove the ▶ path is already wired.
   stub="$BATS_TEST_TMPDIR/cc-backlog-stub"
-  cat > "$stub" <<'EOS'
+  cc_stub "$BATS_TEST_TMPDIR" cc-backlog-stub - <<'EOS'
 #!/bin/bash
 printf '[{"id":"abc123def456","title":"Load the dispatcher","needs":"run the loader","run":"launchctl load ~/L/dispatcher.plist","status":"blocked"}]\n'
 EOS
-  chmod +x "$stub"
   CC_BACKLOG_BIN="$stub" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   echo "$output" | grep -q '▶ launchctl load ~/L/dispatcher.plist   \[backlog abc123def456: Load the dispatcher\]'
 }
@@ -868,7 +869,7 @@ _stub_backlog() {  # $1 = the JSON array `list --blocked --json` must emit
   # stub whose OUTPUT changes while the store stands still is a state production cannot reach;
   # append a byte here so every stub change is a store change, exactly as in the real ledger.
   printf '\n' >> "$CC_BACKLOG_FILE"
-  cat > "$BATS_TEST_TMPDIR/cc-backlog-stub" <<'EOS'
+  cc_stub "$BATS_TEST_TMPDIR" cc-backlog-stub - <<'EOS'
 #!/bin/bash
 # only two reads exist in the renderer: the blocked fold and the open-queue count.
 case "$*" in
@@ -876,7 +877,6 @@ case "$*" in
   *)           printf '[]\n' ;;
 esac
 EOS
-  chmod +x "$BATS_TEST_TMPDIR/cc-backlog-stub"
   export CC_BACKLOG_BIN="$BATS_TEST_TMPDIR/cc-backlog-stub"
 }
 
@@ -1361,8 +1361,7 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   sed -n '/^blg_list_cached()/,/^}/p' "$HOOK" > "$fn"
   [ -s "$fn" ]   # extraction anchor still present — renames must update this test
   stub="$BATS_TEST_TMPDIR/blg-stub"
-  printf '#!/bin/bash\necho x >> "$COUNT_FILE"\necho "[{\\"id\\":\\"i1\\"}]"\n' > "$stub"
-  chmod +x "$stub"
+  cc_stub "${stub%/*}" "${stub##*/}" "$(printf '#!/bin/bash\necho x >> "$COUNT_FILE"\necho "[{\\"id\\":\\"i1\\"}]"\n')"
   export COUNT_FILE="$BATS_TEST_TMPDIR/count"; : > "$COUNT_FILE"
   store="$BATS_TEST_TMPDIR/blg-cache-store.jsonl"; printf '{"a":1}\n' > "$store"
   run bash -c "BLG_FILE='$store'; . '$fn'; blg_list_cached '$stub' --blocked --json; blg_list_cached '$stub' --blocked --json"
@@ -1379,7 +1378,7 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   fn="$BATS_TEST_TMPDIR/fn.sh"
   sed -n '/^blg_list_cached()/,/^}/p' "$HOOK" > "$fn"
   stub="$BATS_TEST_TMPDIR/blg-stub2"
-  printf '#!/bin/bash\nshift\necho "ARGS:$*"\n' > "$stub"; chmod +x "$stub"
+  cc_stub "${stub%/*}" "${stub##*/}" "$(printf '#!/bin/bash\nshift\necho "ARGS:$*"\n')"
   store="$BATS_TEST_TMPDIR/blg-args-store.jsonl"; printf '{"a":1}\n' > "$store"
   run bash -c "BLG_FILE='$store'; . '$fn'; blg_list_cached '$stub' --blocked --json; blg_list_cached '$stub' --open --json"
   [ "$status" -eq 0 ]
@@ -1391,7 +1390,7 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   fn="$BATS_TEST_TMPDIR/fn.sh"
   sed -n '/^blg_list_cached()/,/^}/p' "$HOOK" > "$fn"
   stub="$BATS_TEST_TMPDIR/blg-stub3"
-  printf '#!/bin/bash\nexit 1\n' > "$stub"; chmod +x "$stub"
+  cc_stub "${stub%/*}" "${stub##*/}" "$(printf '#!/bin/bash\nexit 1\n')"
   store="$BATS_TEST_TMPDIR/blg-fail-store.jsonl"; printf '{"a":1}\n' > "$store"
   run bash -c "BLG_FILE='$store'; . '$fn'; blg_list_cached '$stub' --blocked --json"
   [ "$status" -eq 0 ]
@@ -1590,11 +1589,11 @@ CC_READOUT_CUSTODY_PREFIX_SHA="${CC_READOUT_CUSTODY_PREFIX_SHA:-73ceb76aa}"
 
 ph_stub() { # $1 = the `run` value the store would hold → path to a cc-backlog stub emitting it
   local stub="$BATS_TEST_TMPDIR/cc-backlog-ph-stub-$BATS_TEST_NUMBER"
-  cat > "$stub" <<EOS
+  cc_stub "${stub%/*}" "${stub##*/}" - <<EOS
 #!/bin/bash
 printf '[{"id":"ph0000000001","title":"Subscribe to the alert topic","needs":"the email address alarms should go to","run":"$1","status":"blocked"}]\n'
 EOS
-  chmod +x "$stub"; printf '%s' "$stub"
+  printf '%s' "$stub"
 }
 
 @test "✎: a stored command carrying a placeholder must NOT render as ▶" {
@@ -1911,10 +1910,8 @@ cvf_research() {
     "$BATS_TEST_TMPDIR/program-root" > "$BATS_TEST_TMPDIR/registry/programs.json"
   export CC_RESEARCH_REGISTRY="$BATS_TEST_TMPDIR/registry/programs.json"
   export CC_RESEARCH_BIN="$BATS_TEST_TMPDIR/bin/cc-research"
-  printf '%s\n' '#!/usr/bin/env bash' \
-    'case "$1" in pending) printf '"'"'{"programs":[{"program":"alpha","state":"certifying","pending_concerns":2,"waiting_since":"2026-10-01T00:00:00Z","menu":[]}]}\n'"'"' ;; *) exit 2 ;; esac' \
-    > "$CC_RESEARCH_BIN"
-  chmod +x "$CC_RESEARCH_BIN"
+  cc_stub "${CC_RESEARCH_BIN%/*}" "${CC_RESEARCH_BIN##*/}" "$(printf '%s\n' '#!/usr/bin/env bash' \
+    'case "$1" in pending) printf '"'"'{"programs":[{"program":"alpha","state":"certifying","pending_concerns":2,"waiting_since":"2026-10-01T00:00:00Z","menu":[]}]}\n'"'"' ;; *) exit 2 ;; esac')"
 }
 
 CVF_NO=$'✅ Complete & live on trunk — x.\nGood to close: no — two steps remain.'
@@ -2124,11 +2121,10 @@ mk_wave_h() { # the incident's shape, scaled: standing pile + escalations + 3 st
   dl="$(date -u -r $(( CC_OPREADOUT_NOW - 3600 )) +%Y-%m-%dT%H:%M:%SZ)"     # NOW − 1 h
   "$DECIDE" open --class B --what "overdue default" --conviction 60 --receipt "x => y" \
     --default "no change" --deadline "$dl" >/dev/null
-  cat > "$BATS_TEST_TMPDIR/rd" <<'R'
+  cc_stub "$BATS_TEST_TMPDIR" rd - <<'R'
 #!/bin/bash
 printf '[{"sid":"11111111-aaaa","cwd":"/x/reso","account":"next3","backlog_id":"bl0000000001"},{"sid":"22222222-bbbb","cwd":"/x/claude-infrastructure","account":"next4","backlog_id":"bl0000000002"},{"sid":"33333333-cccc","cwd":"/x/personal","account":"next2"}]\n'
 R
-  chmod +x "$BATS_TEST_TMPDIR/rd"
   export CC_RESUME_DEBT_BIN="$BATS_TEST_TMPDIR/rd"
 }
 
