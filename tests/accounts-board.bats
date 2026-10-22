@@ -781,7 +781,7 @@ same_as_control() {  # [source] → the subject's bytes equal the control's, and
 @test "29d band: a STALE or HARD board keeps its labelled static text — never an unlabelled band" {
   band_setup; age_board 900; touch -r "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD.ladder.json"
   same_as_control
-  [[ "$(jqv '.systemMessage')" == *"STALE"* ]]
+  [[ "$(jqv '.systemMessage')" == *"STALE"* ]] || false
   band_setup; age_board 7200; touch -r "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD.ladder.json"
   same_as_control
 }
