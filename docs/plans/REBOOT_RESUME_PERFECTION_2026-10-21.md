@@ -62,7 +62,22 @@ report names, run its suites (assert the `1..N` plan line), land through the pro
 content-verify on origin/main, converge with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`,
 then ping the lead.
 
-### T1 classify — open
-### T2 boot-resume — open
+### T1 classify — DONE (1d9c25e83, 7c59a11e9, c79df4865, b259a9a14)
+All six fixes built. Replay of boot-1792609590 at the true cut: 2 INTERRUPTED / 11 WAKE-LOST / 12
+AT-REST / 0 UNKNOWN / 1 RETIRED; 5d19ef73 RETIRED, 551eb39b woken (owner, promise), 9240c6a9 woken
+(mail). Learning: mail must be carried before the classify step, not merely before the layout, and the
+sender filter must strip the `[forwarded:<8>]` prefix.
+
+### T2 boot-resume — DONE (af5eda439, 160bd4cb3)
+R1, R3, R4, R5, R7, R8, R9, R10, R12, R18, R20, RETIRED, --owner and R22's boot half. Landed before
+T3 by the lead's call (its owner-file read tolerates absence). The new plist needed a launchd reload,
+done by the lead 2026-10-21 (row a34be1057707): no Nice, no low-priority I/O, logs in ~/.claude/logs.
+Not built: the optional separate restore-heartbeat launchd agent (the in-run heartbeat calls cover it).
+
 ### T3 prep and land — open
-### T4 layout and heartbeat — open
+
+### T4 layout and heartbeat — DONE (8519389c7)
+R6, R9, R17, R19 (census 31 rows in ~1 s at load 322), R21, R23. Not built: a pane-close caller of
+the tree refresh, since no owned file sees a pane close (a SessionEnd hook would, which is a
+settings.json change). Two cc-resume-layout-desktops cases (20, 21) fail on 20 s wall-clock bounds
+under load, identically before T4.

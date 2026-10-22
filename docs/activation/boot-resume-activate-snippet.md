@@ -104,7 +104,7 @@ first load the machine has **not** rebooted since the sessions started, so it ab
 
 ```sh
 tail -5 ~/.claude/autonomy/idl.jsonl | jq -c 'select(.tool=="boot-resume")'   # run records
-tail -20 /tmp/claude-boot-resume.stderr.log                                   # any exit-3/4 LOUD fail
+tail -20 ~/.claude/logs/boot-resume.stderr.log                                # any exit-3/4 LOUD fail
 launchctl print gui/$(id -u)/com.claude.boot-resume >/dev/null && echo loaded
 ```
 
