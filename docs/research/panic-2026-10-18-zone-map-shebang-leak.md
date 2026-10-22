@@ -340,3 +340,56 @@ the fit: `~/.cache/kalloc-158-ab/` (`rows-n3000.tsv`, `fit.py`).
 
 So 15.8.1 carries no fix: the hook-interpreter mitigation and forecast reboots stay the bridge, and
 the only reported fix is macOS 27 (decision `a172a41d0d79`, "upgrade to 27.0.1 now or wait for 27.2").
+
+## Migration 0070 result (24 h, 2026-10-20 21:23 → 2026-10-21 21:23 CDT)
+
+A second, independent read of the same cutover, beside the per-Bash-call fit in "Post-0070 fleet
+measurement" above: a dedicated sampler (one `zprint` row per ~60 s, `~/.cache/kalloc-0070/`)
+fitting Δ(data.kalloc.1024 − cred)/s by least squares, per boot, binned by load. Its pre-0070
+baseline, 20.35/s, matches that section's 20.2/s.
+
+**Verdict (90%): the leak halves; it does not stop.** At matched load the post-migration rate is
+45-55% below the same-boot baseline, and it settles at about 9-12 elements/s (0.75-1.0 GiB/day).
+Converting the hook commands (80 of 104 now start `/bin/bash`) and the status line therefore removed
+about half the leak, not the dominant ~all of it that Answer §2 put at 70%. The remaining half is
+not unmigrated sessions: after the reboot every session was new, and the rate stayed where it was.
+
+| Arm | Span | Mean load | Rate | GiB/day |
+|---|---|---|---|---|
+| pre, boot DF7FC1FF (10-19 10:16 → 10-20 21:23) | 35.1 h | 152 | 20.35/s | 1.68 |
+| post, same boot (21:23 → 10-21 14:01) | 16.6 h | 122 | 10.82/s | 0.89 |
+| — first half (old sessions still running bare hooks) | 8.7 h | 159 | 11.62/s | 0.96 |
+| — second half | 7.9 h | 84 | 9.42/s | 0.78 |
+| post, boot DBDBC472 (15:10 → 21:23, every session new) | 6.2 h | 257 | 11.79/s | 0.97 |
+
+Hourly slopes binned by load, pre vs post (elements/s): load 0-99 16.2 vs 9.0 (−45%); 100-199
+22.4 vs 10.3 (−54%); 200-299 24.8 vs 14.3 on the new boot (−42%, and the new boot's figure
+includes the restore surge). For scale: last boot's mean was 13.4/s (1.06-1.11 GiB/day), and a quiet
+hour on 10-19 08:22-09:20 read about 0.75 GiB/day. The 44-53/s peaks in Answer §6 came at load
+300+; the new boot ran 5-10/s at load 330-530.
+
+What it changes:
+- Forecast at ~1 GiB/day from the 10-21 14:06 boot: 14 GiB (the reboot line in improvement 4) about
+  **11-04**, the ~20 GiB ceiling about **11-11**. Re-forecast from the trailing slope; a heavy week
+  moves both earlier.
+- The remaining half is not on the per-Bash hook path: the census in "Implementation of improvement
+  1" found no nested `#!` exec there. Candidates, none measured: the 24 hook commands still run by
+  bare path, `#!` scripts that sessions and daemons run directly (`cc-*` tools in Bash tool calls,
+  launchd jobs, the ~570 `#!` executables in `hooks/ bin/ scripts/` calling each other off the hook
+  path), and other processes on the box. An `eslogger exec` census of `exec.script != null`
+  (untested item 3) would rank them.
+- Untested item 1 is settled as "about half", not "dominant".
+
+Method caveats:
+- Detector. The sampler counts the migration as applied when `0070 --verify` exits 0 (or 0070's
+  ledger row exists). The first brief's check (count of `/bin/bash|/usr/bin/env` hook commands
+  > 0) was a false positive: at 10-19 18:36 migrations 0071 and 0012 registered two `/bin/bash`
+  hooks while 100 of 102 stayed bare. Those rows were reset before any analysis.
+- Gaps. 10-19 16:57-17:05 (the first detached sampler died; pre-migration only). 10-21 14:01-15:10:
+  the planned reboot into macOS 15.8.1 at 14:06 (not a panic). 15.8.1 keeps the per-exec leak (section
+  above), so the new-boot arm compares like with like. The sampler's launchd job does not survive a
+  reboot and was relaunched. No slope is fitted across the reboot (the zone
+  counter resets), so post-migration coverage is 22.9 h of the 24 h window, in two per-boot fits.
+- 0070 reaches only sessions started after it, so the first post-migration hours mix bare and
+  migrated hooks; the first-half/second-half split and the new boot bound that effect.
+- Load is not controlled, only binned; the hourly bins hold n = 1-16 hours each.
