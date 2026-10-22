@@ -339,13 +339,26 @@ launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "
   [ "$(kv launched)" = 2 ]; [ "$(kv shed)" = 0 ]; [ "$(kv verdict)" = ok ]
 }
 
+# "Never waits" is read from a sleep spy, not a stopwatch: the only waiting path prints `WAIT <n>s`
+# and calls `sleep $CC_RESTORE_WAIT`, so a wait is a 37 in the spy's log whatever the box's load. The
+# old `< 20 s` bound failed at load ~250 against the pre-change script as well (2026-10-21).
+sleep_spy() {
+  mkdir -p "$BATS_TEST_TMPDIR/sleepbin"
+  printf '#!/bin/sh\necho "$*" >> "%s/sleep.log"\n' "$BATS_TEST_TMPDIR" > "$BATS_TEST_TMPDIR/sleepbin/sleep"
+  chmod +x "$BATS_TEST_TMPDIR/sleepbin/sleep"; : > "$BATS_TEST_TMPDIR/sleep.log"
+  export PATH="$BATS_TEST_TMPDIR/sleepbin:$PATH" CC_RESTORE_WAIT=37
+}
+never_waited() {
+  ! grep -qx 37 "$BATS_TEST_TMPDIR/sleep.log" || { echo "slept: $(tr '\n' ' ' < "$BATS_TEST_TMPDIR/sleep.log")"; false; }
+  ! printf '%s\n' "$stderr" | grep -q 'WAIT 37s' || false
+}
+
 @test "restore: a library without cc_capacity_probe falls back to the admit, loudly, and never waits" {
   row repo-a 1
-  export CC_RESTORE_FS_GAP=0 CC_RESTORE_WAIT=30
-  local t0=$SECONDS
+  export CC_RESTORE_FS_GAP=0; sleep_spy
   run --separate-stderr bash "$LAYOUT" --desktops --restore --to unix:/tmp/fake --file "$ROWS"
-  [ $((SECONDS - t0)) -lt 20 ]
   [ "$status" -eq 0 ]
+  never_waited
   printf '%s\n' "$stderr" | grep -q 'has no cc_capacity_probe'
   [ "$(cat "$BATS_TEST_TMPDIR/admits")" = 1 ]
   [ "$(kv launched)" = 1 ]
@@ -355,10 +368,9 @@ launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "
   restore_setup
   row repo-a 1
   printf 'cc_capacity_probe() { return 1; }\n' >> "$FIX/scripts/lib/capacity-admit.sh"
-  export CC_RESTORE_WAIT=30
-  local t0=$SECONDS
+  sleep_spy
   restore
-  [ $((SECONDS - t0)) -lt 20 ]
+  never_waited
   printf '%s\n' "$stderr" | grep -q 'capacity probe failed (rc 1) for sid-repo-a-1 — launching it UNGATED'
   [ "$(kv launched)" = 1 ]
 }
