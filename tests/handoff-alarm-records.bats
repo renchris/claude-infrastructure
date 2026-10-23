@@ -539,5 +539,8 @@ site_is_converted() { # $1=file $2=class-token $3=hf_alarm class
   # NINTH added 2026-10-04 by b9c269850 (background-job recycle), class recycle-bgjob-stop-failed:
   # the predecessor job could not be stopped after its successor engaged. It moved this count
   # without raising it and left the suite red on trunk; recorded 2026-10-05 by the land it blocked.
-  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 9 ]
+  # TENTH added 2026-10-19 by e2d0cee07 (lr-wake Wave S), class recycle-held-fold: lr-transplant
+  # refused to fold the re-created source stub after the /exit, so a live copy may exist and nothing
+  # was typed. It moved this count silently; recorded 2026-10-23 by the pane end-of-life lead.
+  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 10 ]
 }
