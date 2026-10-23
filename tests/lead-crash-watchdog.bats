@@ -745,3 +745,62 @@ kitty_ips_at() { # $1=mtime offset from HUP_NOW (s)
   [[ "$output" == *"died with its terminal"* ]] || { echo "$output"; false; }
   [[ "$output" == *"2 sibling HUPs within 15s"* ]] || { echo "$output"; false; }
 }
+
+# ── husk-panes-2026-10-22 F7c: who ended a session that did not end itself ─────────────────────────
+# Both arms read the registration lines in the watchdog's own log and (closed-by-other) the it2-kitty
+# pane-keys log, so both are pinned under a temp HOME here.
+f7c_env() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/logs"
+  export CC_PANE_KEYS_LOG="$BATS_TEST_TMPDIR/pane-keys.jsonl"
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+}
+reg_line() { # sid pid tty pane
+  printf '[%s] registered session=%s pid=%s tty=%s pane=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$2" "$3" "$4" \
+    >> "$HOME/.claude/logs/lead-crash-watchdog.log"
+}
+typed() { # sid pane head40 secs-ago
+  printf '{"ts":"%s","pane":"%s","sid":"%s","head40":"%s","verb":"send","rc":0}\n' \
+    "$(TZ=UTC date -j -v-"$4"S +%Y-%m-%dT%H:%M:%SZ)" "$2" "$1" "$3" >> "$CC_PANE_KEYS_LOG"
+}
+LEAD_SID=666022fd-aaaa-bbbb-cccc-000000000001
+CHILD_SID=570d3917-aaaa-bbbb-cccc-000000000002
+
+@test "F7c: a tty=none run with no close record ends as headless-ended, not suspected OOM (RED before F7c)" {
+  f7c_env; mk_tx "$CHILD_SID" "working" 5000; reg_line "$CHILD_SID" 23549 none 16
+  run classify_at "$CHILD_SID" 23549 "$(date +%s)"
+  [ "$(cut -f1 <<<"$output")" = RECYCLE ] || { echo "$output"; false; }
+  [ "$(cut -f2 <<<"$output")" = headless-ended ] || { echo "$output"; false; }
+}
+
+@test "F7c CONTROL: the same death of a session WITH a tty keeps the large-context guess" {
+  f7c_env; mk_tx "$CHILD_SID" "working" 5000; reg_line "$CHILD_SID" 23549 ttys004 85
+  [ "$(cause_at "$CHILD_SID" 23549 "$(date +%s)")" = suspected-oom-large-context ]
+}
+
+@test "F7c: /exit typed into its pane by a session NESTED in it is closed-by-other-session, over a clean close record" {
+  f7c_env; mk_tx "$LEAD_SID" "mid-write-up"
+  reg_line "$LEAD_SID" 65517 ttys010 16; reg_line "$CHILD_SID" 23549 none 16
+  printf '{"exit_code":"0","signal":"","ended_at":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > "$CC_CLOSE_RECORDS_DIR/65517-$(( $(date +%s) - 3600 )).json"
+  typed "$CHILD_SID" 16 '/exit\r' 30
+  run classify_at "$LEAD_SID" 65517 "$(date +%s)"
+  [ "$(cut -f1 <<<"$output")" = CRASH ] || { echo "$output"; false; }
+  [ "$(cut -f2 <<<"$output")" = closed-by-other-session ] || { echo "$output"; false; }
+  run bash "$HOOK" --surface-death "$LEAD_SID" 65517 CRASH closed-by-other-session "" "" "$CC_ACCOUNT_BASES/projects/proj/$LEAD_SID.jsonl"
+  [[ "$output" == *"CLOSED by another session (570d3917)"* ]] || { echo "$output"; false; }
+}
+
+@test "F7c CONTROL: /exit from a session in its OWN pane (a remote retire) is not closed-by-other-session" {
+  f7c_env; mk_tx "$LEAD_SID" "done"
+  reg_line "$LEAD_SID" 65517 ttys010 16; reg_line "$CHILD_SID" 23549 ttys020 85
+  typed "$CHILD_SID" 16 '/exit\r' 30
+  [ "$(cause_at "$LEAD_SID" 65517 "$(date +%s)")" != closed-by-other-session ]
+}
+
+@test "F7c CONTROL: text that merely mentions /exit, or a typed /exit long before the death, does not count" {
+  f7c_env; mk_tx "$LEAD_SID" "done"
+  reg_line "$LEAD_SID" 65517 ttys010 16; reg_line "$CHILD_SID" 23549 none 16
+  typed "$CHILD_SID" 16 'please do not run /exit yet' 30
+  typed "$CHILD_SID" 16 '/exit\r' 3600
+  [ "$(cause_at "$LEAD_SID" 65517 "$(date +%s)")" != closed-by-other-session ]
+}

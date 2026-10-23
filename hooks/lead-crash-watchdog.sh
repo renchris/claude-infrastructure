@@ -742,6 +742,45 @@ resolve_death_epoch() { # $1=sid  $2=pid  → epoch on stdout
   date +%s
 }
 
+# ── WHO ENDED THIS SESSION, WHEN IT WAS NOT ITSELF (husk-panes-2026-10-22 F7c) ─────────────────────
+# Two deaths the ladder below misread on 2026-10-22, both from one misdirected self-close:
+#   · lead 666022fd was closed by ANOTHER session typing /exit into its pane (pane-keys.jsonl rows
+#     from sid 570d3917) and was logged RECYCLE clean-exit with no page — the one real loss of the
+#     day produced no signal. A typed /exit ends with exit 0 and a self-close teardown marker, so
+#     every arm below absolves it.
+#   · that other session was a headless `claude -p --resume` (registered tty=none, inside the lead's
+#     pane), and its ordinary end, with no close record, was paged as suspected-oom-large-context.
+# The typer is judged by its OWN registration: a session that types /exit into a pane while it has
+# no pane of its own (tty=none) or is registered IN that very pane is nested inside its victim. A
+# legitimate remote retire (a firer closing its peer) comes from a session with its own pane and
+# tty, and is not this arm's business — so this under-reports rather than paging every retire.
+# Seams: CC_PANE_KEYS_LOG · CC_CLOSED_BY_OTHER_WINDOW_S (180).
+last_registration() { # $1=sid → "<tty> <pane>" from its newest `registered session=` line, or nothing
+  local line
+  line=$(grep -F "registered session=$1 " "$LOG_FILE" 2>/dev/null | tail -1) || true
+  [[ -n "$line" ]] || return 0
+  printf '%s %s' "$(sed -n 's/.* tty=\([^ ]*\).*/\1/p' <<<"$line")" "$(sed -n 's/.* pane=\([^ ]*\).*/\1/p' <<<"$line")"
+}
+closed_by_other() { # $1=sid $2=death epoch → prints the typer's sid iff a nested session typed /exit into this pane
+  local sid="$1" death="$2" reg pane keys win typer ttyq paneq ep row
+  reg=$(last_registration "$sid"); pane="${reg#* }"
+  [[ "$pane" =~ ^[0-9]+$ ]] || return 1
+  keys="${CC_PANE_KEYS_LOG:-$HOME/.claude/logs/pane-keys.jsonl}"
+  [[ -f "$keys" ]] || return 1
+  win="${CC_CLOSED_BY_OTHER_WINDOW_S:-180}"
+  while IFS=$'\t' read -r typer ep; do
+    [[ -n "$typer" && "$typer" != "$sid" && "$ep" =~ ^[0-9]+$ ]] || continue
+    (( ep <= death + 5 && ep >= death - win )) || continue
+    row=$(last_registration "$typer"); ttyq="${row%% *}"; paneq="${row#* }"
+    if [[ "$ttyq" == none || "$paneq" == "$pane" ]]; then printf '%s' "$typer"; return 0; fi
+  done < <(grep -F "\"pane\":\"$pane\"" "$keys" 2>/dev/null | grep -F '/exit' \
+             | jq -r 'def cell(ph): (if . == null then "" else . end) | tostring
+                                    | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
+                      select((.head40 // "") | test("^(\u001b\\[200~)?/exit"))
+                      | [(.sid | cell("-")), ((.ts // "") | (try fromdateiso8601 catch 0) | tostring)] | @tsv' 2>/dev/null | tail -20)
+  return 1
+}
+
 classify_death() {
   # prints: CLASS<TAB>CAUSE<TAB>transcript_kb<TAB>records   (CLASS = RECYCLE|CRASH)
   # $3 = when this session died, for jetsam attribution: an EPOCH, the literal `auto` (derive from disk —
@@ -750,6 +789,13 @@ classify_death() {
   local sid="$1" pid="${2:-}" death="${3:-}" t body kb=0 recs=0 ec="" cr_open=""
   if [[ "$death" == "auto" ]]; then death=$(resolve_death_epoch "$sid" "$pid"); fi
   case "$death" in ''|*[!0-9]*) death=$(date +%s) ;; esac
+  # -1) CLOSED BY ANOTHER SESSION outranks even the close record: a typed /exit ends with exit 0 and
+  #     looks clean to every arm below (lead 666022fd, 2026-10-22). See closed_by_other.
+  if closed_by_other "$sid" "$death" >/dev/null; then
+    t=$(find_transcript "$sid" 2>/dev/null || true)
+    if [[ -n "$t" ]]; then kb=$(( $(stat -f%z "$t" 2>/dev/null || echo 0) / 1024 )); recs=$(wc -l < "$t" 2>/dev/null | tr -d ' '); fi
+    printf 'CRASH\tclosed-by-other-session\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
+  fi
   # 0) CLOSE-RECORD FIRST — per-pid ground truth OUTRANKS every heuristic below (incl. jetsam:
   #    137 already IS the SIGKILL/OOM case; a clean exit for THIS pid is clean even if some other
   #    process tripped a JetsamEvent). Absent record ⇒ fall through to the existing ladder.
@@ -891,6 +937,15 @@ classify_death() {
   # the largest feed of the thirteen — and inversion misreads a deliberate self-close as a CRASH.
   if printf '%s' "$body" | grep -iE 'DISPOSITION: *CLOSE|Firing as the last action|the recycle IS the continuation|retiring this pane|becomes the successor|a recycle keeps|recycle keeps (this|the) pane|recycled at [0-9]+%|— recycled|Context Stewardship free-win' >/dev/null; then
     printf 'RECYCLE\tdeliberate-self-close\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
+  fi
+  # 2.5) HEADLESS END — a session registered with no tty is a `claude -p` run whose CALLER sees its
+  #      exit directly; with no close record there is no evidence of a crash, and the transcript-size
+  #      guess below paged an ordinary headless end as suspected-oom-large-context (2026-10-22).
+  if [[ -z "$cr_open" ]] && [[ -z "$(find_close_record "$pid" 2>/dev/null || true)" ]]; then
+    local reg_now; reg_now=$(last_registration "$sid")
+    if [[ "${reg_now%% *}" == none ]]; then
+      printf 'RECYCLE\theadless-ended\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
+    fi
   fi
   # 3) otherwise a genuine but un-attributed crash (large context ⇒ likely OOM)
   local cause="abrupt-unknown"
@@ -1416,6 +1471,10 @@ death_page_line() {
     retired-teammate) what="was a teammate SHUT DOWN by its lead, its work already handed to the lead — this is NOT a crash" ;;
     # The one thing this cause DOES say is that the launcher wrapper was alive and was destroyed
     # with it, so the exit status was never written — which is why no exit code appears here.
+    closed-by-other-session)
+      local cbo; cbo=$(closed_by_other "$sid" "$(date +%s)" 2>/dev/null || true)
+      [[ -n "$cbo" ]] || cbo=$(closed_by_other "$sid" "$(resolve_death_epoch "$sid" "$pid" 2>/dev/null)" 2>/dev/null || true)
+      what="was CLOSED by another session (${cbo:0:8}) that typed /exit into its pane from inside it — it did NOT choose to exit" ;;
     killed-before-report) what="was DESTROYED before its launcher could record an exit status (its close-record is still open) — it did NOT exit" ;;
     *)                what="died abruptly (cause: $cause${ec:+, exit $ec}${sig:+, signal $sig})" ;;
   esac
@@ -1433,6 +1492,7 @@ death_page_line() {
   local recover="Its pane is still open at a live shell and looks EXACTLY like a clean /exit, so nothing on screen says this happened. Recover with cc-husk-sweep --resume (it resolves the session AND its account; the pane's own printed claude --resume line uses the default account and cannot see another store's transcript)."
   case "$cause" in
     retired-by-desk) recover="Its pane was closed by that retirement and its work was landed before the kill — there is NOTHING to recover here and it must NOT be resumed." ;;
+    closed-by-other-session) recover="Its pane is gone with it. Resume it in a pane of its own with its account's launcher (cc-find ${sid:0:8} names the store): <launcher> --resume $sid. Not cc-husk-sweep: its registry row may already name another session's pane." ;;
     retired-teammate) recover="Its lead ordered this end (shutdown_request or TaskStop) — there is nothing to recover or re-spawn. Close its pane." ;;
   esac
   # THE EVIDENCE CLAUSE IS CONDITIONAL, because the close-record it names is frequently ABSENT and
