@@ -163,7 +163,9 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     const b = await read($, board)
-    if (b && (await $.clock.now()) - b.raisedMs >= b.graceS * 1000) {
+    // Written as "not inside the grace": a band an older build raised (kept in $.state across a
+    // plugin hot reload) has no raisedMs, and NaN must clear it, not hold it forever.
+    if (b && !((await $.clock.now()) - b.raisedMs < b.graceS * 1000)) {
       stopTick()
       await update($, board, () => null)
     }
