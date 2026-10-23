@@ -1004,7 +1004,8 @@ CMD_NOQ=$(vb_strip_quotes "$CMD_NOHD")$'\n'$(printf '%s' "$CMD_NOHD" | sed -e "s
 # MENTIONS the command is not running it (lesson: research-block-matches-verb-names-in-any-command-
 # text). Path forms count (`…/node_modules/.bin/claude`, `claude4`). Silent when this session has no
 # pane id to leak. Kill switch CC_HEADLESS_RESUME_GATE=off. Tests: tests/validate-bash-headless-resume.bats.
-if [[ "${CC_HEADLESS_RESUME_GATE:-on}" != off && -n "${KITTY_WINDOW_ID:-}${ITERM_SESSION_ID:-}" \
+_hr_ids="${KITTY_WINDOW_ID:-}${ITERM_SESSION_ID:-}"  # cc-pane-id-lint:allow — a LEAK test (is any pane id set?), not a pane read
+if [[ "${CC_HEADLESS_RESUME_GATE:-on}" != off && -n "$_hr_ids" \
       && "$CMD_NOQ" == *claude* && ( "$CMD_NOQ" == *--resume* || "$CMD_NOQ" == *' -r'* ) ]]; then
   _hr_flat="${CMD_NOQ//&&/$'\n'}"; _hr_flat="${_hr_flat//||/$'\n'}"
   _hr_flat="${_hr_flat//;/$'\n'}"; _hr_flat="${_hr_flat//|/$'\n'}"; _hr_flat="${_hr_flat//&/$'\n'}"
@@ -1045,7 +1046,7 @@ if [[ "${CC_HEADLESS_RESUME_GATE:-on}" != off && -n "${KITTY_WINDOW_ID:-}${ITERM
     [[ $_hr_p == 1 && $_hr_r == 1 && $_hr_envi == 0 ]] || continue
     _hr_leak=""
     [[ -n "${KITTY_WINDOW_ID:-}" && "$_hr_scrub" != *" KITTY_WINDOW_ID "* ]] && _hr_leak="KITTY_WINDOW_ID"
-    [[ -n "${ITERM_SESSION_ID:-}" && "$_hr_scrub" != *" ITERM_SESSION_ID "* ]] && _hr_leak="${_hr_leak:+$_hr_leak and }ITERM_SESSION_ID"
+    [[ -n "${ITERM_SESSION_ID:-}" && "$_hr_scrub" != *" ITERM_SESSION_ID "* ]] && _hr_leak="${_hr_leak:+$_hr_leak and }ITERM_SESSION_ID"  # cc-pane-id-lint:allow — leak test
     [[ -n "$_hr_leak" ]] || continue
     deny "BLOCKED: a headless resume (claude -p --resume) run from this pane inherits $_hr_leak, so the resumed session believes it lives in YOUR pane — on 2026-10-22 such a run's self-close typed /exit into lead 666022fd's pane 16 and closed it mid-turn. Resume the session in its own pane when kitty answers: cc-husk-sweep --resume --yes --pane <N>. If it must run headless, scrub the pane identity first: env -u KITTY_WINDOW_ID -u ITERM_SESSION_ID <the same claude -p --resume command>."
   done <<<"$_hr_flat"
