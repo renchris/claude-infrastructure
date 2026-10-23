@@ -2497,14 +2497,19 @@ pane_ownership() { # $1=pane id → prints mine|not-mine|unknown · ALWAYS exits
     # here-string, never `printf … | grep -q`: grep exits on the match, SIGPIPEs the producer, and
     # pipefail promotes 141 — so the probe would read FALSE precisely WHEN IT MATCHES (memory:
     # pipefail-inverts-early-exit-probe). Same reason pane_proof uses one at :1331.
-    if grep -qxF -- "$kpid" <<<"$(own_ancestry_pids)"; then printf 'mine'; else printf 'not-mine'; fi
+    if grep -qxF -- "$kpid" <<<"$(own_ancestry_pids)"; then
+      # In this pane's tree is necessary, not sufficient: a claude nested inside the tenant is too.
+      if [ -n "$(pane_nested_holder "$pane")" ]; then printf 'not-mine'; else printf 'mine'; fi
+    else printf 'not-mine'; fi
     return 0
   fi
   ptty="$(as_tty "$pane")" || ptty=""
   [ -n "$ptty" ] || { printf 'unknown'; return 0; }
   mine="$(own_ancestry_ttys)" || mine=""
   [ -n "$mine" ] || { printf 'unknown'; return 0; }
-  if grep -qxF -- "${ptty##*/}" <<<"$mine"; then printf 'mine'; else printf 'not-mine'; fi
+  if grep -qxF -- "${ptty##*/}" <<<"$mine"; then
+    if [ -n "$(pane_nested_holder "$pane")" ]; then printf 'not-mine'; else printf 'mine'; fi
+  else printf 'not-mine'; fi
 }
 
 own_pane_id() { # → the pane id this process ACTUALLY lives in, or empty when unresolvable
@@ -2544,6 +2549,115 @@ sys.exit(0)' 2>/dev/null || true
     NF >= 2 { t = $2; sub(/^.*\//, "", t); if (t in want) { print $1; exit } }' || true
 }
 
+# ── A CLAUDE NESTED INSIDE THE PANE'S TENANT IS NOT THE TENANT (2026-10-22, pane 16) ───────────────
+# The process tree cannot tell a session apart from a `claude -p` that session started from its own
+# Bash tool: the child sits below the pane's launched pid exactly as its parent does, and inherits
+# $KITTY_WINDOW_ID with it. On 2026-10-22 a headless resume of lane K (570d3917), run from lead
+# 666022fd's Bash tool, called `self-close --terminal`; ancestry said "mine", and /exit was typed into
+# the lead's pane 16, closing it mid-turn (docs/research/husk-panes-2026-10-22/REPORT.md, cause 1).
+# The disproof is the pane's registry row, read by the rule hooks/session-register.sh already applies
+# to itself: a row naming a LIVE claude that is a STRICT ANCESTOR of this process's own claude is the
+# tenant, and this process is a session nested inside it. Keyed on the pid, never the session id, so a
+# /clear (same process, new session id) still reads as the tenant. Anything unprovable abstains: no
+# row, no pid, a dead pid, no claude anywhere in this ancestry.
+own_claude_pid() { # → the pid of the nearest `claude` process above this one, or empty
+  local p c
+  while IFS= read -r p; do
+    [ -n "$p" ] && [ "$p" != "$$" ] || continue
+    c="$(ps -o comm= -p "$p" 2>/dev/null)" || c=""
+    c="${c##*/}"
+    case "$c" in claude|claude.exe|claude-*) printf '%s' "$p"; return 0 ;; esac
+  done <<<"$(own_ancestry_pids)"
+  return 0
+}
+
+pane_nested_holder() { # $1=pane id → "<tenant sid> <tenant pid> <own claude pid>" iff nested in a live tenant · else empty
+  local pane="${1:-}" row pid sid mine p seen=0
+  case "$pane" in ''|.*|*/*) return 0 ;; esac
+  row="$REG_DIR/$pane.json"
+  [ -s "$row" ] && command -v jq >/dev/null 2>&1 || return 0
+  pid="$(jq -r '.pid // empty' "$row" 2>/dev/null)" || pid=""
+  case "$pid" in ''|*[!0-9]*) return 0 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 0
+  mine="$(own_claude_pid)"
+  [ -n "$mine" ] && [ "$pid" != "$mine" ] || return 0
+  while IFS= read -r p; do
+    if [ "$seen" = 1 ] && [ "$p" = "$pid" ]; then
+      sid="$(jq -r '.session_id // .sessionId // empty' "$row" 2>/dev/null)" || sid=""
+      printf '%s %s %s' "${sid:-unknown}" "$pid" "$mine"
+      return 0
+    fi
+    [ "$p" = "$mine" ] && seen=1
+  done <<<"$(own_ancestry_pids)"
+  return 0
+}
+
+# pane_tenant_mismatch — the same registry row, asked at the last moment by the party about to type
+# into the pane: does it now hold a LIVE session other than the one this close is about? The expected
+# session is the caller's own (or, for the remote forms, SC_SOURCE_SESSION, the subject — never the
+# armer). Pid first: a matching pid is the same process whatever its session id says (a /clear), and
+# a dead pid is evidence of nothing. rc 0 + "<sid> <pid>" on stdout only for a proven mismatch.
+pane_tenant_mismatch() { # $1=pane $2=expected sid (may be empty) $3=expected claude pid (may be empty)
+  local pane="${1:-}" esid="${2:-}" epid="${3:-}" row pid sid
+  case "$pane" in ''|.*|*/*) return 1 ;; esac
+  row="$REG_DIR/$pane.json"
+  [ -s "$row" ] && command -v jq >/dev/null 2>&1 || return 1
+  pid="$(jq -r '.pid // empty' "$row" 2>/dev/null)" || pid=""
+  sid="$(jq -r '.session_id // .sessionId // empty' "$row" 2>/dev/null)" || sid=""
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ -n "$epid" ] && [ "$pid" = "$epid" ] && return 1
+  [ -n "$esid" ] && [ "$sid" = "$esid" ] && return 1
+  { [ -n "$epid" ] || { [ -n "$esid" ] && [ -n "$sid" ]; }; } || return 1
+  printf '%s %s' "${sid:-unknown}" "$pid"
+  return 0
+}
+
+# pane_tenant_line — one line, printed on every arm: who the registry says is in the pane, and who is
+# asking. The 2026-10-22 run saw only "self-close armed for 16" and had no cue that 16 was not its
+# pane; this puts the two session ids side by side whether or not they differ.
+pane_tenant_line() { # $1=pane $2=caller sid → "pane N holds session X; you are Y"
+  local pane="${1:-}" me="${2:-}" row sid=""
+  row="$REG_DIR/$pane.json"
+  [ -s "$row" ] && command -v jq >/dev/null 2>&1 \
+    && sid="$(jq -r '.session_id // .sessionId // empty' "$row" 2>/dev/null)"
+  printf 'pane %s holds session %s; you are %s' "$pane" "${sid:-<unregistered>}" "${me:-<no session id>}"
+}
+
+# ── A HEADLESS RUN HAS NO PANE OF ITS OWN (2026-10-22, pane 16) ─────────────────────────────────────
+# `claude -p` (and any SDK run) has no terminal, so whatever pane its environment names belongs to the
+# process that started it. Headless = this process's nearest claude has no controlling tty (`??`);
+# only when no claude is found at all does CLAUDE_CODE_ENTRYPOINT=sdk-* decide, because an inherited
+# env var is a claim and a tty is a fact. An interactive claude always has a tty, so it never reads
+# headless however its environment is polluted.
+hf_self_headless() { # → 0 iff this process runs under a claude with no terminal
+  local cp t
+  cp="$(own_claude_pid)"
+  if [ -n "$cp" ]; then
+    t="$(ps -o tty= -p "$cp" 2>/dev/null | tr -d '[:space:]')" || t=""
+    [ "$t" = '??' ]
+    return
+  fi
+  case "${CLAUDE_CODE_ENTRYPOINT:-}" in sdk-*) return 0 ;; esac
+  return 1
+}
+
+# hf_headless_own_stamp — the pane a headless run belongs to, from its own fire stamp: the ONE open
+# stamp whose transcript is this session's <sid>.jsonl. Zero or several ⇒ empty, and the caller refuses.
+hf_headless_own_stamp() { # $1=fired-dir $2=session id → pane id | empty
+  local dir="${1:-}" sid="${2:-}" hits
+  [ -d "$dir" ] && [ -n "$sid" ] || return 0
+  case "$sid" in *[!A-Za-z0-9_-]*) return 0 ;; esac
+  command -v jq >/dev/null 2>&1 || return 0
+  # shellcheck disable=SC2016  # $t is a jq variable, not a shell one
+  hits="$(find "$dir" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null \
+          | xargs -0 jq -r --arg t "/$sid.jsonl" \
+              'select(.closedAt == null and ((.transcript // "") | endswith($t)))
+               | input_filename | sub(".*/"; "") | sub("\\.json$"; "")' 2>/dev/null)" || true
+  [ -n "$hits" ] && [ "$(printf '%s\n' "$hits" | wc -l | tr -d ' ')" = 1 ] && printf '%s' "$hits"
+  return 0
+}
+
 # THE GATE ITSELF, ONE COPY FOR BOTH ACTUATORS. self-close and --recycle resolve their pane through
 # the same self_pane_id and are exposed to the same wrong-pane hazard; --recycle's is strictly
 # WORSE, because it does not merely close the pane it names — it types /exit AND a launcher command
@@ -2553,7 +2667,7 @@ sys.exit(0)' 2>/dev/null || true
 # there is one, and both call sites consume its verdict.
 # Sets $HF_VERIFIED_PANE to the id the caller should ACT ON. Returns 0 = proceed · 2 = refuse.
 verify_self_pane() { # $1=claimed pane id  $2=1 if the caller stated it explicitly  $3=mode label
-  local claimed="$1" explicit="$2" mode="$3" verdict true_pane why consequence
+  local claimed="$1" explicit="$2" mode="$3" verdict true_pane why consequence holder
   HF_VERIFIED_PANE="$claimed"
   verdict="$(pane_ownership "$claimed")"
   HF_SELF_VERDICT="$verdict"   # read by recycle_fire's ancestry tty (item 4a): only a PROVEN mine may skip the resolver
@@ -2567,7 +2681,23 @@ verify_self_pane() { # $1=claimed pane id  $2=1 if the caller stated it explicit
       echo "⚠ self-identity UNPROVEN for pane $claimed (the terminal API returned no owner) — proceeding on the environment's claim, as before this gate existed" >&2
       return 0 ;;
   esac
+  # NESTED: the pane is in our tree, but it is the tenant's, not ours (pane_nested_holder's header).
+  # Neither repaired nor retargeted: own_pane_id walks the same tree and would name the same pane.
+  holder="$(pane_nested_holder "$claimed")"
+  if [ -n "$holder" ]; then
+    # shellcheck disable=SC2086  # deliberate split: "<tenant sid> <tenant pid> <own claude pid>"
+    set -- $holder
+    cat >&2 <<USAGE
+!! $mode REFUSED: pane $claimed holds live session ${1:0:8} (claude pid $2); you are ${CLAUDE_CODE_SESSION_ID:-<no session id>} (claude pid $3), a session NESTED inside it.
+!!   A claude started from another session's Bash tool inherits that session's pane id, so the
+!!   pane named here belongs to the session that started this one. Acting on it would end that
+!!   session mid-turn (2026-10-22: a headless resume closed lead 666022fd's pane 16 this way).
+!!   Nothing was typed and nothing was closed. A nested or headless run retires by ending.
+USAGE
+    return 2
+  fi
   true_pane="$(own_pane_id)" || true_pane=""
+  [ -n "$true_pane" ] && [ -n "$(pane_nested_holder "$true_pane")" ] && true_pane=""
   if [ "$explicit" = 0 ] && [ -n "$true_pane" ] && [ "$true_pane" != "$claimed" ]; then
     # ADOPT — the DoD's prescribed repair (reverse-map pid→tty→pane), and what turns the defect from
     # "acts on the wrong pane" into "acts on the right one". Only for a DEFAULTED id: the tool chose
@@ -11652,6 +11782,14 @@ if [ "${1:-}" = "__selfclose" ]; then
   # refusal (it2-kitty exit 70, refused-fs only), and the loop stops on it; the arm after the loop
   # raises husk-fs, which names the cause and the remedy (⌘W leaves fullscreen first). Any other
   # guard refusal still returns 1 and is retried, because under load it can be transient.
+  # CLOSE-INSTANT TENANT CHECK (2026-10-22, pane 16). The foreground proved the pane up to ~180s ago;
+  # the registry is read once more before the close. A different LIVE session there now ⇒ not ours.
+  # The expected session came down the environment from the foreground (HF_SC_EXPECT_*): the subject
+  # on the remote forms, the caller otherwise. A dead tenant pid is the normal post-/exit state.
+  if _sc_mm="$(pane_tenant_mismatch "$SID" "${HF_SC_EXPECT_SID:-}" "${HF_SC_EXPECT_PID:-}")"; then
+    echo "!! self-close ABORTED at close-instant: pane $SID now holds session ${_sc_mm%% *} (claude pid ${_sc_mm##* }); this close was for ${HF_SC_EXPECT_SID:-pid ${HF_SC_EXPECT_PID:-?}} — not closing it" >&2
+    exit 1
+  fi
   _close_ok=0 _close_rc=0
   for _try in 1 2 3 4; do
     # CLOSED FROM INSIDE IS CLOSED (husk panes 2026-09-30, fix F-a). bin/cc-pane-runner now exits
@@ -14681,6 +14819,25 @@ if [ "${1:-}" = "self-close" ]; then
     SC_SID="$SC_FIRED_PEER" SC_SOURCE_PANE="$SC_FIRED_PEER" SC_SOURCE_SESSION="$SC_FP_SESS" SC_SUBJ_CWD="$HF_REMOTE_CWD"
     echo "→ firer-retire AUTHORIZED: pane $SC_FIRED_PEER was fired by THIS pane $SC_FIRER (its stamp's firedBy), holds live session ${SC_FP_SESS:0:8} in $SC_SUBJ_CWD, and is at rest. Every peer-side guard below still runs against that session and worktree." >&2
   fi
+  # ---- HEADLESS: a `claude -p` never takes its pane from the environment (2026-10-22, pane 16) ----
+  # Its pane is the one its OWN fire stamp names (the stamp whose transcript is this session's), and
+  # it is closed by nobody here: the close writes that stamp's records and types nothing. No stamp ⇒
+  # refuse. See hf_self_headless. CC_SELFCLOSE_HEADLESS=0 restores the environment read.
+  SC_HEADLESS=0
+  if [ -z "$SC_SID" ] && [ "$SC_REMOTE_SOURCE" = 0 ] && [ "${CC_SELFCLOSE_HEADLESS:-1}" != 0 ] && hf_self_headless; then
+    SC_SID="$(hf_headless_own_stamp "$FIRED_DIR" "${CLAUDE_CODE_SESSION_ID:-}")"
+    if [ -z "$SC_SID" ]; then
+      { echo "!! self-close REFUSED: a headless run has no pane of its own."
+        echo "!!   Session ${CLAUDE_CODE_SESSION_ID:-<no session id>} runs under a claude with no terminal (claude -p or an SDK run),"
+        echo "!!   so the pane its environment names (${KITTY_WINDOW_ID:-${ITERM_SESSION_ID:-none}}) belongs to whoever started it,"
+        echo "!!   and no single open fire stamp in $FIRED_DIR names this session's transcript."
+        echo "!!   Nothing was typed and no pane was closed. A headless run retires by ending."
+      } >&2
+      exit 2
+    fi
+    SC_HEADLESS=1
+    echo "→ headless session: its pane is $SC_SID (its fire stamp names this session's transcript); the environment's pane ${KITTY_WINDOW_ID:-${ITERM_SESSION_ID:-none}} is not used, and nothing will be typed" >&2
+  fi
   SC_SID="${SC_SID:-$(self_pane_id)}"
   # THE TARGET IS RE-ASSERTED AFTER RESOLUTION, not merely assigned before it. Everything below acts
   # on $SC_SID — the watcher types /exit into that pane and the close closes it — and the default
@@ -14704,10 +14861,19 @@ if [ "${1:-}" = "self-close" ]; then
   # and the process tree cannot answer about a pane the caller merely names. Leaving it in place
   # would not merely be redundant — on a DEFAULTED id it ADOPTS, so it would rewrite the target from
   # the husk to the pane THIS process lives in and close the driver: the defect inverted.
-  if [ "$SC_REMOTE_SOURCE" = 0 ]; then
+  # A HEADLESS close is replaced too: its pane came from its own stamp, never from this process tree.
+  if [ "$SC_REMOTE_SOURCE" = 0 ] && [ "$SC_HEADLESS" = 0 ]; then
     verify_self_pane "$SC_SID" "$SC_SID_EXPLICIT" self-close || exit 2
     SC_SID="$HF_VERIFIED_PANE"
   fi
+  # THE SESSION THIS CLOSE IS ABOUT, for the last-moment tenant checks below and in the watcher
+  # (pane_tenant_mismatch): the subject on the remote forms, never the armer; ourselves otherwise.
+  if [ "$SC_REMOTE_SOURCE" = 1 ]; then
+    HF_SC_EXPECT_SID="${SC_SOURCE_SESSION:-}" HF_SC_EXPECT_PID="${HF_REMOTE_ROW_PID:-}"
+  else
+    HF_SC_EXPECT_SID="${CLAUDE_CODE_SESSION_ID:-}" HF_SC_EXPECT_PID="$(own_claude_pid)"
+  fi
+  export HF_SC_EXPECT_SID HF_SC_EXPECT_PID
   # SUCCESSION STATEMENT (mandatory). A pane close is operator-visible surface: 3× on 2026-07-13
   # a close with no declared continuation read as "the handoff killed our session" — twice a real
   # stranding (pre-setsid recycle watcher), once a PERFECT succession whose successor was simply
@@ -15438,6 +15604,11 @@ MSG
   if [ "$SC_DRY" = 1 ]; then
     echo "── dry run (self-close) ─────────────────────────"
     echo "pane:      $SC_SID"
+    echo "tenant:    $(pane_tenant_line "$SC_SID" "${HF_SC_EXPECT_SID:-}")"
+    if [ "$SC_HEADLESS" = 1 ]; then
+      echo "headless:  yes — records only (closedAt + custody return on fire stamp $SC_SID); nothing typed, no pane closed"
+      exit 0
+    fi
     [ "$SC_FIRER_RETIRE" = 1 ] && echo "retired by: its firer, pane $SC_FIRER (stamp firedBy) — peer session ${SC_SOURCE_SESSION:0:8} at rest in $SC_SUBJ_CWD"
     if [ -n "$SC_SUCCESSOR" ]; then
       if [ -n "$SUC_PIN" ]; then
@@ -15588,6 +15759,21 @@ MSG
       echo "⚠ cc-notify unavailable — succession carried by post-close focus only" >&2
     fi
   fi
+  # HEADLESS: the records are the whole close. Nothing is typed and no pane is closed here.
+  if [ "$SC_HEADLESS" = 1 ]; then
+    sc_commit_close_records
+    echo "→ headless session: closedAt and the custody return are written on fire stamp $SC_SID — nothing typed, no pane closed; pane $SC_SID is left to the pane closer"
+    exit 0
+  fi
+  # LAST-MOMENT TENANT CHECK (2026-10-22, pane 16): the registry is read again right before anything
+  # is typed or closed. The gate at entry proved the pane; seconds to minutes may have passed since.
+  sc_tenant_gate() { # $1=watcher pid to disarm (may be empty) → returns only when the pane is still ours
+    local mm
+    mm="$(pane_tenant_mismatch "$SC_SID" "$HF_SC_EXPECT_SID" "$HF_SC_EXPECT_PID")" || return 0
+    [ -n "${1:-}" ] && kill "$1" 2>/dev/null
+    echo "!! self-close ABORTED: pane $SC_SID now holds session ${mm%% *} (claude pid ${mm##* }); you are ${HF_SC_EXPECT_SID:-pid ${HF_SC_EXPECT_PID:-?}} — nothing typed, nothing closed" >&2
+    exit 2
+  }
   # Keystrokes FOREGROUND (detached osascript AppleEvents fail silently — see __selfclose header).
   # ORDER IS LOAD-BEARING: watcher FIRST, /exit LAST — a typed /exit INTERRUPTS the in-flight
   # turn and exits within seconds (E2E 2026-07-03; it does NOT enqueue-to-turn-end like /clear),
@@ -15600,6 +15786,7 @@ MSG
   # watcher's routing. (stage 1 of item 191d1fc4143c)
   pin_term_verdict_for_watcher
   SC_TTY="$(as_tty "$SC_SID")"
+  sc_tenant_gate ""
   # AFFIRMATIVE, not "I could not find CC" (pane_cc_state's header). Skipping the /exit is a
   # decision to kill a pane WITHOUT letting the session end gracefully, so a tty-only read that
   # cannot see a CC under `expect` would take it on exactly the panes the resume path creates.
@@ -15659,9 +15846,11 @@ MSG
       exit 1
     fi
     done
+    sc_tenant_gate "$SC_WATCHER"
     sc_commit_close_records
     sc_noanswer_clear "$SC_PCQ_ROW"
     echo "→ self-close armed for $SC_SID: watcher pid $SC_WATCHER session-detached, heartbeat verified (log: $SC_LOG)"
+    echo "→ $(pane_tenant_line "$SC_SID" "$HF_SC_EXPECT_SID")"
     [ -n "$SC_SUCCESSOR" ] && echo "→ post-close: operator focus hands to successor $SC_SUCCESSOR" || echo "→ post-close: terminal (nothing continues this session's work)"
     # Teardown marker BEFORE the first /exit — the crash watchdog must read a planned self-close,
     # not a CRASH (the /exit interrupt kills this pane mid-Bash). Guarded: never blocks the close.
