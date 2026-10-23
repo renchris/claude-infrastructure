@@ -1943,7 +1943,8 @@ i = next(n for n,l in enumerate(L) if l.startswith('_drift="$_SWEEP_DIR/settings
 j = next(n for n,l in enumerate(L) if n > i and 'note:"rc 0 = the 5 config dirs agree' in l)
 blk = L[i:j+1]
 del L[i:j+1]
-k = next(n for n,l in enumerate(L) if l.strip() == 'sweep_yield 2e-custody-deathwatch')
+# §2e's own checkpoint left with §2e (hoisted to §0a-ii, 2026-10-22); 2f is the same position.
+k = next(n for n,l in enumerate(L) if l.strip() == 'sweep_yield 2f-unfired-briefs')
 L[k:k] = blk + ['']
 open(dst,'w').write('\n'.join(L))
 PY
@@ -1981,6 +1982,51 @@ PY
   [ "$status" -eq 0 ]
   ! grep -q '"disposition":"self-bound"' "$CC_IDL" || false
   grep -q '"disposition":"config-parity"' "$CC_IDL"
+}
+
+# ── 0a-ii: custody deathwatch hoisted (2026-10-22). At §2e it journalled ZERO rows that day: every
+# tick self-bounded at the first two checkpoints. Same shape as the 0a-i pair above.
+@test "0a-ii: a maximally TRUNCATED tick still journals a custody-deathwatch row" {
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=400 "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.disposition=="self-bound")|.stopped_before' "$CC_IDL" | tail -1)" = "0b-author-death-join" ]
+  grep -q '"disposition":"custody-deathwatch"' "$CC_IDL"
+}
+
+# build_dw_preorder_mutant <dst> — the sweep with the deathwatch block MOVED back to the old §2e spot.
+build_dw_preorder_mutant() {
+  ln -sfn "$REPO/scripts/lib" "$BATS_TEST_TMPDIR/lib"
+  SRC="$SWEEP" DST="$1" python3 - <<'PY'
+import os
+src, dst = os.environ['SRC'], os.environ['DST']
+L = open(src).read().split('\n')
+i = next(n for n,l in enumerate(L) if l.startswith('_custdw="$_SWEEP_DIR/custody-deathwatch.sh"'))
+j = next(n for n,l in enumerate(L) if n > i and 'note:"0 = pass completed (per-peer verdicts' in l)
+blk = L[i:j+1]
+del L[i:j+1]
+k = next(n for n,l in enumerate(L) if l.strip() == 'sweep_yield 2f-unfired-briefs')
+L[k:k] = blk + ['']
+open(dst,'w').write('\n'.join(L))
+PY
+}
+
+@test "0a-ii CONTROL: the pre-fix ORDER journals NO custody-deathwatch on a truncated tick, and does untruncated" {
+  local mutant="$BATS_TEST_TMPDIR/sweep-dw-preorder.sh"
+  build_dw_preorder_mutant "$mutant"
+  [ "$(grep -n '^_custdw=' "$mutant" | head -1 | cut -d: -f1)" -gt "$(grep -n '^sweep_yield 0b-author-death-join$' "$mutant" | cut -d: -f1)" ]
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=400 "${SWEEP_TO[@]}" bash "$mutant"
+  [ "$status" -eq 0 ]
+  grep -q '"disposition":"self-bound"' "$CC_IDL"
+  ! grep -q '"disposition":"custody-deathwatch"' "$CC_IDL" || false
+  # …and the same mutant, uncut, still reaches the block: the delta is ORDER, not a dead block.
+  : > "$CC_IDL"
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run "${SWEEP_TO[@]}" bash "$mutant"
+  [ "$status" -eq 0 ]
+  ! grep -q '"disposition":"self-bound"' "$CC_IDL" || false
+  grep -q '"disposition":"custody-deathwatch"' "$CC_IDL"
 }
 
 # ── the two bound ladders, and their ORDER ─────────────────────────────────────────────────────────

@@ -418,12 +418,13 @@ case "$SWEEP_T0" in ''|*[!0-9]*) SWEEP_T0=0 ;; esac
 # row whose elapsed_s exceeds its own cumulative_s delta across consecutive rows is the tell.
 SWEEP_CP_LAST="$SWEEP_T0"
 # The first segment holds the strand rung (§0-strand, 2026-10-10), §0a-i (the ~4 s config-parity
-# read, hoisted 2026-09-09) AND §0a, because the first checkpoint is `sweep_yield
-# 0b-author-death-join`. The label names all three rather than only the last, so their cost is not
-# silently attributed to the cloud-return pass — a per-phase meter whose first bucket is mislabelled
+# read, hoisted 2026-09-09), §0a-ii (custody deathwatch, hoisted 2026-10-22) AND §0a, because the
+# first checkpoint is `sweep_yield 0b-author-death-join`. The label names them all rather than only
+# the last, so their cost is not silently attributed to the cloud-return pass — a per-phase meter
+# whose first bucket is mislabelled
 # would misdirect exactly the re-measurement this meter exists to inform (the arms above the first
 # checkpoint are what the self-bound keeps hitting).
-SWEEP_CP_PHASE="${CC_SWEEP_CP_PHASE0:-0-strand-page+0-classb-actuate+0a-i-config-parity+0a-cloud-return}"
+SWEEP_CP_PHASE="${CC_SWEEP_CP_PHASE0:-0-strand-page+0-classb-actuate+0a-i-config-parity+0a-ii-custody-deathwatch+0a-cloud-return}"
 SWEEP_PHASE_LOG_MIN_S="${CC_SWEEP_PHASE_LOG_MIN_S:-5}"
 case "$SWEEP_PHASE_LOG_MIN_S" in ''|*[!0-9]*) SWEEP_PHASE_LOG_MIN_S=5 ;; esac
 
@@ -641,7 +642,7 @@ class_b_actuate
 #
 # ⚠️ WHAT THIS DOES NOT FIX, stated here because the numbers above are the evidence for it and a
 # reader will otherwise take this hoist for a cure: §2 (hoisted on its own 2026-10-19, see
-# class_b_actuate), §2b, §2b-i..vi, §2e, §2f and §3 are STILL
+# class_b_actuate; §2e hoisted to §0a-ii on 2026-10-22), §2b, §2b-i..vi, §2f and §3 are STILL
 # starved — including §3, the summary + desk notify, whose last `fired` row is 2026-09-07T21:14:23Z.
 # Hoisting one block cures one block; the general repair is not row 6's surface and is filed.
 #
@@ -753,6 +754,51 @@ if [ -x "$_flow" ]; then
   # ticks the week stays red — see the subject's header for why that is not a cosmetic choice.
   [ "$_flow_verdict" = "net-positive" ] && _bounded bash "$_flow" --file >/dev/null 2>&1
 fi
+
+# ── 0a-ii. CUSTODY DEATHWATCH — the arm that runs when NOBODY IS HOME (was §2e) ────────────────────
+# 🚨 HOISTED 2026-10-22 on §0a-i's argument, with §0a-i's numbers repeated on a new day: at §2e it
+# journalled ZERO rows on 10-22 — every tick stopped at `0b-author-death-join` (56x) or
+# `1-collect-pages-alarms` (33x). It must be REACHED on a maximally truncated tick, so it sits above
+# §0a and the first sweep_yield. Its cost is its own 120 s bound, worst case; a quiet store is a
+# single `cc-custody list` and a `cc-pane list`.
+#
+# The cloud return + refusal blocks (§0a) only ever speak to an address the FIRE recorded. Measured
+# 2026-08-23: 1055 of cloud-return's 1116 wake attempts resolved to "the declaration names no
+# notify-back target — nothing to wake", because a launchd-dispatched fire has no ITERM_SESSION_ID
+# and its cwd is `/`. So the news existed 1116 times and reached someone 61 times, and the 175
+# undischarged cloud debts sit in a shard keyed on `/` that no `--cwd .` consumer can see.
+# Separately, a peer killed by SIGKILL runs no EXIT trap and no self-close, so the local lane's two
+# discharge routes both miss it (panes 377 and 552 are the surviving proof).
+#
+# This pass closes both by reading the custody store STORE-WIDE and reporting gone/stale peers to an
+# address that exists by construction — the originator's inbox when its pane is alive, else ONE
+# aggregated `cc-backlog needs` row. It NEVER discharges a debt, so its worst failure is operator
+# noise, never a debt closed over live work. Full rationale in the script header.
+#
+# It carries its OWN deployed-copy guard keyed the same way this file's is, so the call here is
+# unconditional and a suite copy is inert on the far side rather than by omission here — one guard,
+# in the file that does the writing.
+#
+# CORRECTED (2026-09-30): "keyed the same way" was only half true, and the false half kept this pass
+# inert for its whole life — 1,710 of 1,710 ledger rows read `skipped-not-deployed`. Its guard tests
+# its UNRESOLVED $0 against `$CLAUDE_CONFIG_DIR/scripts/custody-deathwatch.sh`, but this call handed it
+# `$_SWEEP_DIR`, which is resolved THROUGH the deployed symlink back into the checkout, so the deployed
+# sweep always invoked the checkout path. The fix keeps the discriminator in the callee: the deployed
+# sweep calls the deployed (unresolved) path; any other copy still calls its sibling and is refused there.
+# `_cc_cfg` is computed here because §0a, which owns it (and `_cloudret_deployed`), now runs after
+# this block; the test is the same exact-path one, assigned identically there.
+_cc_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _cc_cfg="${_cc_cfg%/}"
+_custdw="$_SWEEP_DIR/custody-deathwatch.sh"
+[ "$0" = "$_cc_cfg/scripts/autonomy-sweep.sh" ] && [ -x "$_cc_cfg/scripts/custody-deathwatch.sh" ] && _custdw="$_cc_cfg/scripts/custody-deathwatch.sh"
+_custdw_rc="skipped"
+if [ -x "$_custdw" ]; then
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 120 bash "$_custdw" --sweep >/dev/null 2>&1
+  else bash "$_custdw" --sweep >/dev/null 2>&1; fi
+  _custdw_rc=$?
+fi
+log_idl custody-deathwatch "$(jq -cn --arg c "$_custdw_rc" \
+  '{custody_deathwatch_rc:$c,
+    note:"0 = pass completed (per-peer verdicts in ~/.claude/autonomy/custody-deathwatch/deathwatch.jsonl, which also records whether each oracle could run); 124 = the bound cut the pass, next tick resumes (the pass is latched per marker, so nothing is double-reported); skipped = tool absent (NOT clean). A checkout copy self-reports skipped-not-deployed in its own ledger rather than here."}')"
 
 
 # ── 0a. CLOUD RETURN — FIRST OF THE SUBSTANTIVE ARMS, because a block this sweep never REACHES
@@ -2286,44 +2332,11 @@ log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
     venue_write_failed:($vwf|tonumber),
     note:"semantics: the comment above this emit (W3-B17)"}')"
 
-sweep_yield 2e-custody-deathwatch
-
-# ── 2e. CUSTODY DEATHWATCH — the arm that runs when NOBODY IS HOME ────────────────────────────────
-# The cloud return + refusal blocks (now §0a, hoisted to the top of the pass) only ever speak to an
-# address the FIRE recorded. Measured 2026-08-23: 1055 of
-# cloud-return's 1116 wake attempts resolved to "the declaration names no notify-back target —
-# nothing to wake", because a launchd-dispatched fire has no ITERM_SESSION_ID and its cwd is `/`.
-# So the news existed 1116 times and reached someone 61 times, and the 175 undischarged cloud debts
-# sit in a shard keyed on `/` that no `--cwd .` consumer can see. Separately, a peer killed by
-# SIGKILL runs no EXIT trap and no self-close, so the local lane's two discharge routes both miss it
-# (panes 377 and 552 are the surviving proof).
-#
-# This pass closes both by reading the custody store STORE-WIDE and reporting gone/stale peers to an
-# address that exists by construction — the originator's inbox when its pane is alive, else ONE
-# aggregated `cc-backlog needs` row. It NEVER discharges a debt, so its worst failure is operator
-# noise, never a debt closed over live work. Full rationale in the script header.
-#
-# It carries its OWN deployed-copy guard keyed the same way this file's is, so the call here is
-# unconditional and a suite copy is inert on the far side rather than by omission here — one guard,
-# in the file that does the writing.
-#
-# CORRECTED (2026-09-30): "keyed the same way" was only half true, and the false half kept this pass
-# inert for its whole life — 1,710 of 1,710 ledger rows read `skipped-not-deployed`. Its guard tests
-# its UNRESOLVED $0 against `$CLAUDE_CONFIG_DIR/scripts/custody-deathwatch.sh`, but this call handed it
-# `$_SWEEP_DIR`, which is resolved THROUGH the deployed symlink back into the checkout, so the deployed
-# sweep always invoked the checkout path. The fix keeps the discriminator in the callee: the deployed
-# sweep calls the deployed (unresolved) path; any other copy still calls its sibling and is refused there.
-_custdw="$_SWEEP_DIR/custody-deathwatch.sh"
-[ "$_cloudret_deployed" = 1 ] && [ -x "$_cc_cfg/scripts/custody-deathwatch.sh" ] && _custdw="$_cc_cfg/scripts/custody-deathwatch.sh"
-_custdw_rc="skipped"
-if [ -x "$_custdw" ]; then
-  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 120 bash "$_custdw" --sweep >/dev/null 2>&1
-  else bash "$_custdw" --sweep >/dev/null 2>&1; fi
-  _custdw_rc=$?
-fi
-log_idl custody-deathwatch "$(jq -cn --arg c "$_custdw_rc" \
-  '{custody_deathwatch_rc:$c,
-    note:"0 = pass completed (per-peer verdicts in ~/.claude/autonomy/custody-deathwatch/deathwatch.jsonl, which also records whether each oracle could run); 124 = the bound cut the pass, next tick resumes (the pass is latched per marker, so nothing is double-reported); skipped = tool absent (NOT clean). A checkout copy self-reports skipped-not-deployed in its own ledger rather than here."}')"
+# ── 2e. CUSTODY DEATHWATCH — MOVED to §0a-ii (2026-10-22), above §0a and the first checkpoint ─────
+# Down here it never ran: on 2026-10-22 idl.jsonl held ZERO custody-deathwatch rows, because every
+# tick self-bounded at 400 s with `stopped_before` = `0b-author-death-join` (56x) or
+# `1-collect-pages-alarms` (33x), the two earliest checkpoints — the §0a-i measurement again. The
+# channel that tells a lead its fired peer died was silent all day. Rationale now sits with the call.
 
 sweep_yield 2f-unfired-briefs
 
