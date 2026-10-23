@@ -119,3 +119,7 @@ B7. After Wave A has landed, on a rebased branch: the husk-row producer in hando
   rows from an older kitty are dropped (5fe7685c3) · tests/pane-close-queue.bats.
 - Known red, not wave B's: tests/handoff-alarm-records.bats #28 pins 9 `hf_alarm` sites; trunk has had 10
   for at least the last 12 handoff-fire commits.
+- B4 (wave B, teammate b4-deathwatch): custody-deathwatch is hoisted above §0a in autonomy-sweep, so a
+  truncated tick still reaches it; a listed pane whose registry pid is dead (a husk) reads GONE, and the
+  page names `cc-husk-sweep --resume --yes --pane N` once per marker (215a84175 + 53b6a62fb, landed as
+  cherry-picks) · tests/custody-deathwatch.bats, tests/autonomy-sweep.bats (0a-ii).
