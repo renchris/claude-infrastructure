@@ -51,6 +51,9 @@ setup() {
 
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
+  # The subject sources cc-run.sh at load (handoff-fire.sh ~:408); extracted functions do not get it,
+  # and an undefined cc_run is a 127 that pin_term_verdict_for_watcher reads as "pin nothing".
+  . "$REPO/scripts/lib/cc-run.sh"
 
   # hf_bounded is the script's timeout(1) wrapper; extracted functions do not get it in scope. A
   # passthrough keeps the extracted behaviour byte-identical. Its own semantics are covered by
