@@ -228,3 +228,29 @@ the plugin-panel `[-]` cannot be hidden per mod, and the collapse state is per p
   window minimize? The answer settles symptom 4.
 - In symptom 3, which block disappears? The lower board (our mod clears it), or the top `says:`
   row (which only scrolls)?
+
+## Fix status (2026-10-23, landed 64f907abe)
+
+Options 3 and 4 are done. Option 1 stays open as operator decision `9ee7197568c1`; options 2, 5
+and 6 were not attempted.
+
+- **Option 3, resumed sessions load the mod.** `lib/cc-mod-argv.sh` builds the `--plugin-dir`
+  argv for all three start paths: the launcher, `bin/reso-resume-one` and
+  `scripts/limit-recover/lr-fire-resume.sh`. It also supplies `CLAUDE_CODE_NO_FLICKER`, which the
+  launcher's shell gets from `~/.zshrc`. There is one bats case per wrapper, and both went red on
+  the pre-fix files.
+- **Option 4a, the fleet fold.** CORRECTION to "Other findings": the 30 s bound was the instrument,
+  not the cause.
+  - `sh_settle` tested `flushed` with `tail | grep -q`. Every caller runs under pipefail, so the
+    pipeline read 141 (3 of 3 runs on a 1.2 MB transcript), and no proof could go unproven.
+  - `fold_dir` caches only a dir that has no `proof.*` file, so no dir cached. Each tick re-folded
+    ~419 dirs and was SIGKILLed at 30 s, leaving 1,353 orphaned `.fold-rows.<pid>` files.
+  - After the fix, the first fold ran in 27.9 s and the second in 4.2 s (390 of 420 dirs cached).
+    `fleet.stamp` went from 2026-10-21 15:09 to 2026-10-23 17:47.
+- **Option 4b, the banner latch.**
+  - `fit()` re-flows the banner to the pane width. Once `a3c8f40f5` moved the latch write behind
+    proof of delivery, the banner's one-line needle could never match the delivered text. Result:
+    381 open `proof.dl-banner` files and 0 settled.
+  - `sh_delivered` now collapses whitespace on both sides of the match.
+  - The backlog was drained oldest-first, so the latch now reads today's value
+    (`2026-10-23 cc70579ca7b42ef2`, written 17:47).
