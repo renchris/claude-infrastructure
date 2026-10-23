@@ -64,6 +64,14 @@ verdict() { "$SWEEP" --json | jq -r 'select(.pane == "332") | .verdict'; }
   [ "$output" = "MOVED→pane 442" ] || { echo "got: $output"; false; }
 }
 
+# Wave C2 (husk-panes round 2, RC2): the later registration is a teammate's, so its line ends
+# ` teammate=<id>`; the `pane=([0-9]+)\s*$` regex never saw it. RED on 67b74ef87 (reads RESUME).
+@test "wave C2: the sid registered later in another pane AS A TEAMMATE (trailing ' teammate=<id>') — MOVED→pane" {
+  printf '[%s] registered session=%s pid=1 tty=ttys0442 pane=442 teammate=tm2-H11@session-x\n' "$(date -r $((R0 + 30000)) '+%Y-%m-%d %H:%M:%S')" "$SID" >> "$T/watchdog.log"
+  run verdict
+  [ "$output" = "MOVED→pane 442" ] || { echo "got: $output"; false; }
+}
+
 @test "pane-end-of-life A5: a later tty=none registration (a headless resume) is NOT a move — pane 85's MOVED→pane 16" {
   # lane K's `claude -p --resume 570d3917`, run from lead 666022fd's Bash tool, registered as
   # `tty=none pane=16` because it inherited the lead's KITTY_WINDOW_ID. The session never left 85.

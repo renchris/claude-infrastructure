@@ -100,6 +100,12 @@ command -v jq >/dev/null 2>&1 || { echo "cc-husk-sweep: jq is required" >&2; exi
 # and the fatal arm below untestable.
 _HS_SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 _HS_BIN="$(cd "$(dirname "$_HS_SELF")" && pwd)"
+# The registration line's one reader (a teammate's line ends ` teammate=<id>`, husk-panes round 2 RC2).
+for _wr in "$_HS_BIN/../hooks/lib/watchdog-registration.sh" "$HOME/.claude/hooks/lib/watchdog-registration.sh"; do
+  # shellcheck source=/dev/null  # resolved at run time (checkout, else the live layer)
+  [ -f "$_wr" ] && . "$_wr" && break
+done
+declare -F wd_reg_norm >/dev/null || wd_reg_norm() { sed -E 's/ teammate=[^ ]*[[:space:]]*$//'; }
 if [ -n "${CC_HUSK_LR_LIB:-}" ]; then _hs_libs="$CC_HUSK_LR_LIB"
 else _hs_libs="$_HS_BIN/../scripts/limit-recover/lr-lib.sh
 ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-lib.sh
@@ -249,10 +255,11 @@ watchdog_sid() {  # <pane> → the sid of the LAST registration naming exactly p
   [ -n "$KSTART_TS" ] && [ -f "$WDLOG" ] || return 1
   # A `tty=none` registration is a headless run (claude -p from some session's Bash tool) that
   # inherited the pane id from its starter: it never was the pane's tenant (2026-10-22, pane 16).
-  LC_ALL=C awk -v p="pane=$1" -v since="$KSTART_TS" '
+  # A teammate's line ends ` teammate=<id>`; wd_reg_norm strips it so `$NF == p` still anchors.
+  wd_reg_norm < "$WDLOG" | LC_ALL=C awk -v p="pane=$1" -v since="$KSTART_TS" '
     index($0, " registered session=") && !index($0, " tty=none ") && $NF == p && substr($0, 2, 19) >= since {
       s = $0; sub(/.* registered session=/, "", s); sub(/[[:space:]].*/, "", s); last = s; at = substr($0, 2, 19) }
-    END { if (last ~ /^[0-9a-f-]+$/ && length(last) == 36) print last "|" at; else exit 1 }' "$WDLOG"
+    END { if (last ~ /^[0-9a-f-]+$/ && length(last) == 36) print last "|" at; else exit 1 }'
 }
 # ── LINEAGE: a session that RECYCLED is not this pane's to resume (lr-wake 2026-10-18, h defect 2) ──
 # Pane 332 read `2e9ed9f2 … dirty RESUME`, but 2e9ed9f2 had re-registered in pane 442 and recycled
@@ -282,7 +289,8 @@ def utc_ep(s):
     except Exception: return None
 since = local_ep(since_s) if since_s else 0.0
 since = since or 0.0
-REG = re.compile(r"^\[([0-9-]+ [0-9:]+)\] registered session=([0-9a-f-]{36}) .* pane=([0-9]+)\s*$")
+# The optional ` teammate=<id>` is hooks/lib/watchdog-registration.sh's wd_reg_norm, spelled in Python.
+REG = re.compile(r"^\[([0-9-]+ [0-9:]+)\] registered session=([0-9a-f-]{36}) .* pane=([0-9]+)(\s+teammate=\S+)?\s*$")
 regs = []
 try:
     with open(wdlog, "r", errors="replace") as fh:

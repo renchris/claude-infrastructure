@@ -91,6 +91,22 @@ sb() { # <pane> <line>... — that pane's scrollback
   [[ "$output" == *'"source":"scrollback"'* ]] || { echo "$output"; false; }
 }
 
+# Wave C2 (husk-panes round 2, RC2): a teammate's registration ends ` teammate=<id>`; `$NF == p`
+# never matched it, so pane 144's identity fell to the scrollback. RED on 67b74ef87.
+@test "wave C2: a teammate registration (trailing ' teammate=<id>') names the session; pane=100's does not name pane 10" {
+  jl "$T/.claude-tertiary"  "$CWD_A" "$SA" "$(said no)"
+  jl "$T/.claude-secondary" "$CWD_A" "$SB" "$(said no)"
+  sb 10 '$ claude2 --strict-mcp-config' 'Resume this session with:' "claude --resume $SB"
+  printf '[%s] registered session=%s pid=4242 tty=ttys004 pane=10 teammate=tm2-H11@session-x\n' \
+    "$(date -r $((KSTART + 60)) '+%Y-%m-%d %H:%M:%S')" "$SA" >> "$CC_HUSK_WATCHDOG_LOG"
+  printf '[%s] registered session=cccccccc-3333-0000-0000-000000000003 pid=4242 tty=ttys004 pane=100 teammate=tm-x@s\n' \
+    "$(date -r $((KSTART + 90)) '+%Y-%m-%d %H:%M:%S')" >> "$CC_HUSK_WATCHDOG_LOG"
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"\"sid\":\"$SA\""* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"source":"watchdog"'* ]] || { echo "$output"; false; }
+}
+
 @test "C2: it2-kitty 'session read -n N' reads the WHOLE scrollback and keeps its last N lines" {
   unset CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
   export CC_TERM_KITTY_TO="unix:$T/sock" CC_TERM_KITTY="$T/fake-kitty" KARGV="$T/kitty-argv"
