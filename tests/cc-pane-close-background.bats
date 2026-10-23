@@ -14,6 +14,8 @@
 # (b6bf10c0c); readers anchored on `pane=N` at end of line never saw a teammate's registration.
 # shellcheck disable=SC2030,SC2031,SC2016  # per-test env exports are deliberate; stub bodies are literal
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   CLOSE="${CC_PANE_CLOSE_UNDER_TEST:-$REPO/bin/cc-pane-close}"
@@ -26,16 +28,31 @@ setup() {
   export CC_PANE_CLOSE_PS_BIN="$S/ps" CC_PANE_CLOSE_KILL_BIN="$S/kill" CC_PANE_CLOSE_IT2="$S/it2"
   export CC_PANE_CLOSE_EXIT_DIR="$F/pane-exit" CC_PANE_CLOSE_FIND_BIN="$S/cc-find"
   export CC_PANE_CLOSE_HANDOFFS_LOG="$F/handoffs.jsonl" CC_KITTY_FS_GUARD="$S/fs-guard"
-  printf '#!/bin/bash\nfor a; do prev="$a"; done\ncase "$2" in lstart=) cat "$FIX/lstart.$prev" 2>/dev/null ;; stat=) if [ -f "$FIX/lstart.$prev" ]; then echo Ss; fi ;; tty=) cat "$FIX/ttyof.$prev" 2>/dev/null ;; *) cat "$FIX/tty.$prev" 2>/dev/null ;; esac\nexit 0\n' > "$S/ps"
-  printf '#!/bin/bash\necho "$*" >> "$FIX/kill.log"\nrm -f "$FIX/lstart.$ROOT"\n' > "$S/kill"
-  printf '#!/bin/bash\ncat "$FIX/custody.tsv" 2>/dev/null\n' > "$S/custody"
-  printf '#!/bin/bash\nexit 0\n' > "$S/cc-find"
+  cc_stub "$S" ps '#!/bin/bash
+for a; do prev="$a"; done
+case "$2" in lstart=) cat "$FIX/lstart.$prev" 2>/dev/null ;; stat=) if [ -f "$FIX/lstart.$prev" ]; then echo Ss; fi ;; tty=) cat "$FIX/ttyof.$prev" 2>/dev/null ;; *) cat "$FIX/tty.$prev" 2>/dev/null ;; esac
+exit 0'
+  cc_stub "$S" kill '#!/bin/bash
+echo "$*" >> "$FIX/kill.log"
+rm -f "$FIX/lstart.$ROOT"'
+  cc_stub "$S" custody '#!/bin/bash
+cat "$FIX/custody.tsv" 2>/dev/null'
+  cc_stub "$S" cc-find '#!/bin/bash
+exit 0'
   # it2, as the real shim behaves for a caller outside kitty: an UNPINNED call goes to the iTerm2 CLI
   # and fails; a pinned one reaches kitty. KITTY_DEAF=1 makes kitty itself not answer.
-  printf '#!/bin/bash\necho "it2 CC_TERM=${CC_TERM:-} TO=${CC_TERM_KITTY_TO:-} $*" >> "$FIX/it2.log"\nif [ "${CC_TERM:-}" != kitty ]; then echo "Not running inside iTerm2 or Python API not enabled" >&2; exit 2; fi\nif [ "${KITTY_DEAF:-0}" = 1 ]; then echo "Error: Failed to connect to unix:/tmp/kitty-610: connection refused" >&2; exit 1; fi\ncase "$1 $2" in "session list") cat "$FIX/klist.json"; exit 0 ;; "session close") rm -f "$FIX/lstart.$ROOT"; exit 0 ;; esac\nexit 1\n' > "$S/it2"
+  cc_stub "$S" it2 '#!/bin/bash
+echo "it2 CC_TERM=${CC_TERM:-} TO=${CC_TERM_KITTY_TO:-} $*" >> "$FIX/it2.log"
+if [ "${CC_TERM:-}" != kitty ]; then echo "Not running inside iTerm2 or Python API not enabled" >&2; exit 2; fi
+if [ "${KITTY_DEAF:-0}" = 1 ]; then echo "Error: Failed to connect to unix:/tmp/kitty-610: connection refused" >&2; exit 1; fi
+case "$1 $2" in "session list") cat "$FIX/klist.json"; exit 0 ;; "session close") rm -f "$FIX/lstart.$ROOT"; exit 0 ;; esac
+exit 1'
   # the fullscreen guard: argv to guard.log; GUARD_MSG on stderr; rc GUARD_RC (the --any-fs arm: ANYFS_RC)
-  printf '#!/bin/bash\necho "$*" >> "$FIX/guard.log"\ncase "$1" in --any-fs) exit "${ANYFS_RC:-3}" ;; esac\n[ -z "${GUARD_MSG:-}" ] || echo "$GUARD_MSG" >&2\nexit "${GUARD_RC:-0}"\n' > "$S/fs-guard"
-  chmod +x "$S"/*
+  cc_stub "$S" fs-guard '#!/bin/bash
+echo "$*" >> "$FIX/guard.log"
+case "$1" in --any-fs) exit "${ANYFS_RC:-3}" ;; esac
+[ -z "${GUARD_MSG:-}" ] || echo "$GUARD_MSG" >&2
+exit "${GUARD_RC:-0}"'
   NOW=$(date +%s); K=$((NOW - 36000)); REG=$((NOW - 7200))
   lst 610 "$K"
   SID="aaaaaaaa-1111-2222-3333-444444444444"
