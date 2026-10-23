@@ -9052,7 +9052,13 @@ fired_marker_is_mine() { # $1=marker $2=self-pane → 0 proven mine / 1 not prov
   [ -n "$mysid" ] || return 1
   tj="$(transcript_for_sid "$mysid")"
   [ -n "$tj" ] || return 1
-  grep -qF -- "$marker" "$tj" 2>/dev/null && return 0
+  # INBOUND, never a bare grep (2026-10-22, pane 16; skeptics.md RC2). Both callers AUTHORISE on this
+  # answer — adoption of an orphan stamp, and the spent-stamp retry — and a bare grep also matches the
+  # FIRER, whose transcript carries the marker as tool_use input and tool_result output. Lead
+  # 666022fd held lane K's marker twice that way, so lane K's open stamp would have been adopted onto
+  # the lead's pane. oi_marker_inbound (hooks/lib/origin-identity.sh) counts only a marker that
+  # ARRIVED in a user prompt.
+  oi_marker_inbound "$marker" "$tj" && return 0
   return 1
 }
 

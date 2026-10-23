@@ -99,6 +99,44 @@ asides() { find "$CC_FIRED_DIR" -name "$PANE.json.superseded-*" | wc -l | tr -d 
   [ "$(asides)" = 1 ] || { echo "the stale stamp was overwritten, not set aside"; false; }
 }
 
+# ── pane-end-of-life A4 (2026-10-22, pane 16): a marker the session only EMITTED proves nothing ────
+# The real shape: lead 666022fd fired lane K into its own cwd, so its transcript carries lane K's
+# marker twice — as the Bash tool_use input and as the tool_result that came back — and lane K's
+# stamp is open for that same cwd. A bare grep read that as "this session was fired with it".
+outgoing_transcript() { # <marker> — the FIRER's view: the marker only as tool_use input and tool_result output
+  local d="$CC_PROJECTS_DIRS/-fixture"; mkdir -p "$d"
+  { jq -nc '{type:"user", timestamp:"2026-10-01T00:00:00Z", message:{content:"operator: run the wave"}}'
+    jq -nc --arg m "$1" '{type:"assistant", message:{content:[{type:"tool_use", name:"Bash", input:{command:("handoff-fire.sh --prompt-file x # " + $m)}}]}}'
+    jq -nc --arg m "$1" '{type:"user", toolUseResult:{stdout:$m}, message:{content:[{type:"tool_result", content:("fired, marker " + $m)}]}}'
+  } > "$d/$SID.jsonl"
+}
+
+@test "A4 adoption: an open stamp whose marker this session only EMITTED (tool output) is NOT adopted" {
+  stamp "$PANE" "$OLD" "$M_OLD"
+  stamp "LANE-K-PANE-85" "$NEW" "$M_NEW"
+  outgoing_transcript "$M_NEW"
+  run selfclose
+  [ "$status" -eq 2 ] || { echo "pre-fix: the firer adopted its peer's stamp"; echo "$output"; false; }
+  [[ "$output" != *"stamp ADOPTED"* ]] || { echo "$output"; false; }
+  [ "$(jq -r .closedAt "$CC_FIRED_DIR/LANE-K-PANE-85.json")" = null ] || { echo "the peer's stamp was spent"; false; }
+}
+
+@test "A4 spent retry: a SPENT stamp whose marker this session only EMITTED is refused, not retried" {
+  stamp "$PANE" "$NEW" "$M_NEW" "2026-10-22T23:16:36Z"
+  outgoing_transcript "$M_NEW"
+  run selfclose
+  [ "$status" -eq 2 ] || { echo "pre-fix: the spent stamp was accepted for retry"; echo "$output"; false; }
+  [[ "$output" == *"is SPENT"* ]] || { echo "$output"; false; }
+}
+
+@test "A4 CONTROL: a SPENT stamp whose marker ARRIVED in this session's brief is still accepted for retry" {
+  stamp "$PANE" "$NEW" "$M_NEW" "2026-10-22T23:16:36Z"
+  transcript "$(fired_brief "$M_NEW")"
+  run selfclose
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"accepted for RETRY"* ]] || { echo "$output"; false; }
+}
+
 @test "M1 CONTROL: a STALE stamp and NO proof ⇒ still refused, and the stamp is put back untouched" {
   stamp "$PANE" "$OLD" "$M_OLD"; cp "$CC_FIRED_DIR/$PANE.json" "$BATS_TEST_TMPDIR/orig.json"
   transcript "an operator's own session, no contract"
