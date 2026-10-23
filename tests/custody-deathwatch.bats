@@ -384,7 +384,7 @@ STUB
 # Pre-fix, ALIVE was exact membership in `cc-pane list`, so a husk pane read ALIVE and its death
 # was never reported. The registry row's pid is the session; the pane is only its container.
 teardown() {
-  [ -n "${LIVE_PID:-}" ] && kill "$LIVE_PID" 2>/dev/null
+  [ -n "${LIVE_PID:-}" ] && kill "$LIVE_PID" 2>/dev/null || true
   return 0
 }
 
