@@ -170,7 +170,7 @@ husk_setup() {
   cc_stub "$BATS_TEST_TMPDIR/stubs" drain "$(printf '#!/bin/bash\n: > %q\n' "$BATS_TEST_TMPDIR/drained")"
   CC_CUSTODY_HUSK_DRAIN_BIN="$(cc_stub_body "$BATS_TEST_TMPDIR/stubs" drain)"; export CC_CUSTODY_HUSK_DRAIN_BIN
 }
-wait_drained() { local i; for i in $(seq 1 50); do [ -e "$BATS_TEST_TMPDIR/drained" ] && return 0; sleep 0.1; done; return 1; }
+wait_drained() { local _i; for _i in $(seq 1 50); do [ -e "$BATS_TEST_TMPDIR/drained" ] && return 0; sleep 0.1; done; return 1; }
 
 @test "return of a debt whose pane has a husk row detaches one pane-close-retry run" {
   husk_setup; echo '{"kind":"husk","pane":"85"}' > "$CC_PANE_CLOSE_QUEUE_DIR/husk-85.json"
