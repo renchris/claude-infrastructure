@@ -215,6 +215,8 @@ $HEADING
   eval "$(sed -n '/^cc_sid_for_pane() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^transcript_for_sid() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^fired_marker_is_mine() {/,/^}/p' "$HF")"
+  # its proof is oi_marker_inbound since pane-end-of-life A4 (the marker must have ARRIVED)
+  eval "$(sed -n '/^oi_marker_inbound() {/,/^}/p' "$REPO_SRC/hooks/lib/origin-identity.sh")"
   write_transcript "TASK.
 
 <!-- handoff-fire engagement marker: $MARKER (ignore) -->"
