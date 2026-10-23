@@ -94,3 +94,15 @@ B7. After Wave A has landed, on a rebased branch: the husk-row producer in hando
 - A7 (wave A): the 09:12Z SIGTERM sender is still unresolved after 40+ stores; lane K sat 55 min at an
   unanswered permission dialog, not mid-pytest. Landed d0b3a043a · REPORT.md Open line, a7-sigterm.md.
 - Wave A converged: live checkout at 2ba830035 (deploy-live degraded tier).
+- B1 (wave B): the guard's kitten-failed carries its error (row + stderr, no placeholder state); the
+  runner keeps guard output out of the pane and says "kitty didn't answer" unless the verdict is
+  refused-fs. Landed f9e50608f (in 262781d14) · tests/kitty-fullscreen-guard.bats #39,
+  tests/cc-pane-runner-no-command-closes.bats.
+- B2 (wave B): `husk` rows in the pane-close queue from the runner's keep sites and the watchdog's
+  paint; `_no_command` writes its exit record first; `drain_husk` closes through cc-pane-close (holds:
+  kitty generation, pane gone/in use, tty typed in, open custody); cc-custody return/abandon detaches
+  a drain. Landed c15d60c3b (+ dd88ffec1 5e8601f45 262781d14) · tests/pane-close-queue.bats,
+  tests/cc-pane-runner-exit75-closes.bats, tests/cc-custody.bats, tests/lead-crash-pane-verdict.bats.
+- B6 (wave B): it2-kitty split honours IT2_SPLIT_CWD (an existing dir) over --cwd=current ·
+  tests/it2-kitty-operator-safety.bats. Scope (grown): +cc-pane-close polls a zombie root up to
+  CC_PANE_CLOSE_REAP_S before calling kitty wedged (lead report, 2026-10-23) · tests/cc-pane-close.bats.
