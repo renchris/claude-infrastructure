@@ -29,6 +29,7 @@ setup() {
   export CC_DEATHWATCH_STATE="$BATS_TEST_TMPDIR/dw"
   export CC_DEATHWATCH_DEPLOYED=1           # the guard is pinned separately, below
   export CC_DEATHWATCH_CUSTODY_BIN="$CUSTODY"
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/registry"; mkdir -p "$CC_REGISTRY_DIR"
 
   BINS="$BATS_TEST_TMPDIR/bin"; mkdir -p "$BINS"
   NOTIFIED="$BATS_TEST_TMPDIR/notified.log"
@@ -377,4 +378,46 @@ STUB
   run bash "$SUBJ" --selftest
   [ "$status" -eq 0 ]
   [[ "$output" == *"selftest: PASS"* ]]
+}
+
+# ── husk: the pane lives, its claude exited (2026-10-22, plan pane-end-of-life B4) ────────────────
+# Pre-fix, ALIVE was exact membership in `cc-pane list`, so a husk pane read ALIVE and its death
+# was never reported. The registry row's pid is the session; the pane is only its container.
+teardown() {
+  [ -n "${LIVE_PID:-}" ] && kill "$LIVE_PID" 2>/dev/null
+  return 0
+}
+
+@test "a HUSK peer (listed pane, registry pid dead) is GONE and named with the in-pane resume" {
+  pane_oracle 100 777
+  sleep 0 & dead=$!; wait "$dead"
+  printf '{"pid":%s}\n' "$dead" > "$CC_REGISTRY_DIR/777.json"
+  "$CUSTODY" open --cwd "$WT" --target 777 --marker M-HUSK --slug fire-husk --originator-pane 100
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"gone=1"* ]] || false
+  [ "$(grep -c '^100	' "$NOTIFIED")" -eq 1 ]
+  grep -q 'cc-husk-sweep --resume --yes --pane 777' "$NOTIFIED"
+  grep -q 'Do not run claude -p --resume from your Bash tool' "$NOTIFIED"
+}
+
+@test "CONTROL: the same listed pane with a LIVE registry pid is ALIVE and not reported" {
+  pane_oracle 100 777
+  sleep 30 & LIVE_PID=$!
+  printf '{"pid":%s}\n' "$LIVE_PID" > "$CC_REGISTRY_DIR/777.json"
+  "$CUSTODY" open --cwd "$WT" --target 777 --marker M-LIVEPID --slug fire-live --originator-pane 100
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"alive=1"* ]] || false
+  [ "$(grep -c . "$NOTIFIED")" -eq 0 ]
+  [ "$(grep -c . "$FILED")" -eq 0 ]
+}
+
+@test "a plain GONE (pane not listed) carries no husk resume line" {
+  pane_oracle 100
+  "$CUSTODY" open --cwd "$WT" --target 777 --marker M-NOPANE --slug fire-nopane --originator-pane 100
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^100	' "$NOTIFIED")" -eq 1 ]
+  ! grep -q 'cc-husk-sweep' "$NOTIFIED"
 }

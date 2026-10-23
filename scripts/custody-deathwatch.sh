@@ -91,10 +91,12 @@
 #
 # Env seams (tests): CC_CUSTODY_DIR · CC_CUSTODY_TTL_HOURS · CC_DEATHWATCH_STATE ·
 #   CC_DEATHWATCH_CUSTODY_BIN · CC_DEATHWATCH_NOTIFY_BIN · CC_DEATHWATCH_BACKLOG_BIN ·
-#   CC_DEATHWATCH_PANE_BIN · CC_DEATHWATCH_CLOUD_BIN · CC_DEATHWATCH_DEPLOYED (guard override)
+#   CC_DEATHWATCH_PANE_BIN · CC_DEATHWATCH_CLOUD_BIN · CC_DEATHWATCH_DEPLOYED (guard override) ·
+#   CC_REGISTRY_DIR (session registry, read for the husk check)
 set -uo pipefail
 
 STATE="${CC_DEATHWATCH_STATE:-$HOME/.claude/autonomy/custody-deathwatch}"
+REGISTRY_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 LEDGER="$STATE/deathwatch.jsonl"
 TTL_HOURS="${CC_CUSTODY_TTL_HOURS:-24}"
 case "$TTL_HOURS" in ''|*[!0-9]*) TTL_HOURS=24 ;; esac
@@ -191,9 +193,27 @@ load_cloud_oracle() {
   [ "$with_state" -gt 0 ] && CLOUD_OK=1 || CLOUD_OK=0
 }
 
-# peer_disposition <targetPane> → prints ALIVE | GONE | UNKNOWN
+# pane_husk <pane> — rc 0 iff the pane's registry row names a claude pid that is DEAD.
+# A HUSK is a pane that outlived its session: claude exited, the bare shell stayed, and `cc-pane list`
+# still enumerates it. Membership alone read every husk as ALIVE (2026-10-22: the deathwatch's
+# local oracle could not tell a dead peer from a live one while its pane lingered). No row, no pid,
+# or an unparseable row is NOT a husk — that is the pre-registry reading, and a false death is the
+# worse direction (header § FAILURE DIRECTION). pid reuse can only read a husk as ALIVE, never the
+# reverse.
+pane_husk() {
+  local row="$REGISTRY_DIR/$1.json" pid
+  [ -f "$row" ] || return 1
+  pid="$(jq -r '.pid // empty' "$row" 2>/dev/null)"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" -gt 0 ] || return 1
+  ! kill -0 "$pid" 2>/dev/null
+}
+
+# peer_disposition <targetPane> [membership] → prints ALIVE | GONE | UNKNOWN
+# `membership` judges a local pane on `cc-pane list` alone, skipping the husk check: the originator
+# lookup uses it, because an inbox write to a husk originator is harmless and its ALIVE only routes.
 peer_disposition() {
-  local tp="$1"
+  local tp="$1" mode="${2:-session}"
   case "$tp" in
     cloud:*)
       [ "$CLOUD_OK" -eq 1 ] || { printf 'UNKNOWN'; return 0; }
@@ -218,7 +238,9 @@ peer_disposition() {
       # answer ALIVE for a pane that never existed. Trim first: the enumerator's rows may carry
       # surrounding whitespace, and `$1` alone would drop a multi-field row's identity.
       hit="$(printf '%s\n' "$PANE_LIST" | awk -v want="$tp" '{gsub(/^[ \t]+|[ \t]+$/,"")} $0==want {n++} END{print n+0}')"
-      [ "$hit" -gt 0 ] && printf 'ALIVE' || printf 'GONE' ;;
+      [ "$hit" -gt 0 ] || { printf 'GONE'; return 0; }
+      # Listed is pane existence, not session liveness: a listed husk is GONE.
+      if [ "$mode" != membership ] && pane_husk "$tp"; then printf 'GONE'; else printf 'ALIVE'; fi ;;
   esac
 }
 
@@ -242,6 +264,9 @@ ledger_row() { # <json>
 if [ "$SELFTEST" -eq 1 ]; then
   fails=0
   chk() { if [ "$2" = "$3" ]; then printf 'ok   %s\n' "$1"; else printf 'FAIL %s (got %s want %s)\n' "$1" "$2" "$3"; fails=$((fails+1)); fi; }
+  # A scratch registry for the whole selftest: the live one would make pane 101 a real husk or not.
+  REGISTRY_DIR="$(mktemp -d 2>/dev/null)" || REGISTRY_DIR="/tmp/cdw-selftest.$$"
+  mkdir -p "$REGISTRY_DIR"
   PANE_OK=1; PANE_LIST=$'101\n102'
   chk "live pane is ALIVE"            "$(peer_disposition 101)"                 ALIVE
   chk "absent pane is GONE"           "$(peer_disposition 999)"                 GONE
@@ -253,6 +278,17 @@ if [ "$SELFTEST" -eq 1 ]; then
   chk "cloud id not carried = UNKNOWN" "$(peer_disposition cloud:session_ZZZ)"  UNKNOWN
   CLOUD_OK=0
   chk "blind cloud oracle is UNKNOWN" "$(peer_disposition cloud:session_A)"     UNKNOWN
+  # Husk: listed pane whose registry pid is dead.
+  sleep 0 & _dead=$!; wait "$_dead" 2>/dev/null
+  printf '{"pid":%s}\n' "$_dead" > "$REGISTRY_DIR/101.json"
+  printf '{"pid":%s}\n' "$$"     > "$REGISTRY_DIR/102.json"
+  PANE_OK=1
+  chk "listed husk (dead pid) is GONE"   "$(peer_disposition 101)"            GONE
+  chk "listed husk, membership = ALIVE"  "$(peer_disposition 101 membership)" ALIVE
+  chk "listed pane, live pid is ALIVE"   "$(peer_disposition 102)"            ALIVE
+  PANE_LIST=$'101\n102\n103'
+  chk "listed pane, no row is ALIVE"     "$(peer_disposition 103)"            ALIVE
+  rm -f "$REGISTRY_DIR/101.json" "$REGISTRY_DIR/102.json"; rmdir "$REGISTRY_DIR" 2>/dev/null
   [ "$fails" -eq 0 ] && { printf 'selftest: PASS\n'; exit 0; }
   printf 'selftest: %d FAILURE(S)\n' "$fails"; exit 1
 fi
@@ -316,6 +352,9 @@ while IFS= read -r _asn; do
   key="${marker:-$slug}"
 
   disp="$(peer_disposition "$target")"
+  # A GONE from a pane that is still listed came from the husk arm: name the in-pane resume.
+  husk=0
+  if [ "$disp" = GONE ] && [ "$(peer_disposition "$target" membership)" = ALIVE ]; then husk=1; fi
   case "$disp" in
     ALIVE)   n_alive=$((n_alive+1));   continue ;;
     GONE)    n_gone=$((n_gone+1)) ;;
@@ -349,8 +388,10 @@ while IFS= read -r _asn; do
   delivered=0
   for cand in "$opane" "$nb"; do
     [ -n "$cand" ] && [ "$cand" != "-" ] && [ -n "$NOTIFY_BIN" ] || continue
-    [ "$(peer_disposition "$cand")" = ALIVE ] || continue
+    [ "$(peer_disposition "$cand" membership)" = ALIVE ] || continue
     msg="CUSTODY-DEATHWATCH: the peer you fired (${slug:-$marker}, target ${target:-?}) is ${disp} and has NOT returned — its custody debt has been open ${age}h. Collect+land its work, then \`cc-custody return ${key}\`; if it is superseded, \`cc-custody abandon ${key} --why …\`."
+    # The latch below keeps this to once per marker; the husk clause needs no latch of its own.
+    [ "$husk" -eq 1 ] && msg="$msg Its pane ${target} is a husk (the pane lives, its claude exited). Resume it in its own pane: cc-husk-sweep --resume --yes --pane ${target}. Do not run claude -p --resume from your Bash tool."
     if [ "$DRY" -eq 1 ]; then say "  would notify pane $cand about $key"; delivered=1
     elif "$NOTIFY_BIN" "$cand" "$msg" >/dev/null 2>&1; then delivered=1; DIRECT=$((DIRECT+1)); fi
     # Record WHICH address carried it — the latch and the ledger below both name `$opane`, and a
@@ -361,8 +402,8 @@ while IFS= read -r _asn; do
   if [ "$delivered" -eq 1 ]; then
     [ "$DRY" -eq 0 ] && mark_reported "$key" "notified:$opane"
     n_reported=$((n_reported+1))
-    ledger_row "$(jq -nc --arg ts "$(now_iso)" --arg k "$key" --arg d "$disp" --arg p "$opane" \
-                    '{ts:$ts, marker:$k, disposition:$d, delivery:"pane", pane:$p}')"
+    ledger_row "$(jq -nc --arg ts "$(now_iso)" --arg k "$key" --arg d "$disp" --arg p "$opane" --argjson h "$husk" \
+                    '{ts:$ts, marker:$k, disposition:$d, delivery:"pane", pane:$p, husk:($h==1)}')"
   else
     # ADDRESS 2 — no reachable originator. Aggregate; filed once below.
     ORPHANS="${ORPHANS}${key}"$'\037'"${disp}"$'\037'"${age}h"$'\037'"${slug:--}"$'\037'"${target:--}"$'\037'"${cwd:--}"$'\n'
