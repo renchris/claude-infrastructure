@@ -53,6 +53,12 @@
 #     pane it re-registered in (handoffs.jsonl `recycle-engaged`, prev_sid + target_pane). Its work
 #     belongs to that copy, so gate 4 is skipped. A tombstone with no LIVE copy is STRANDED: refused,
 #     naming lr-fleet --one.
+#   RUN FROM ANYWHERE (2026-10-23, docs/research/husk-panes-2026-10-22/round2-2026-10-23/). The
+#     callers that matter run outside kitty (the launchd drainer, the watchdog daemons), so every
+#     it2 call here is pinned to the running kitty's socket. A listing that answers and does not hold
+#     the pane means the pane is GONE (ALREADY CLOSED, rc 0); one that did not answer says so, with
+#     it2's own error, instead of "does not name this pane". A guard refusal names its verdict:
+#     refused-fs (only the operator can close it) apart from an unreadable window (a later tick can).
 #   THE GUARD FIRST. Every close by remote control first asks kitty-fullscreen-guard --scope pane
 #     --mode refuse, and acts only on rc 0: a raw close of the last pane of a fullscreen OS window is
 #     the 2026-10-15 crash trigger (pane 428, h defect 7). `--scope os-window` would read "last" for
@@ -83,6 +89,12 @@ FIRED="${CC_PANE_CLOSE_FIRED_DIR:-$HOME/.claude/cc-fired}"
 SELF_DIR="$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")"
 FIND="${CC_PANE_CLOSE_FIND_BIN:-$SELF_DIR/cc-find}"
 [ -x "$FIND" ] || FIND="$HOME/.claude/bin/cc-find"
+# The registration line's one reader (a teammate's line ends ` teammate=<id>`, husk-panes round 2 RC2).
+for _wr in "$SELF_DIR/../hooks/lib/watchdog-registration.sh" "$HOME/.claude/hooks/lib/watchdog-registration.sh"; do
+  # shellcheck source=/dev/null  # resolved at run time (checkout, else the live layer)
+  [ -f "$_wr" ] && . "$_wr" && break
+done
+declare -F wd_reg_norm >/dev/null || wd_reg_norm() { sed -E 's/ teammate=[^ ]*[[:space:]]*$//'; }
 DRY=0; PANES=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -158,12 +170,34 @@ fs_guard_any_clear() {
 # rc 0 = removing THIS pane cannot empty a fullscreen OS window (h defect 7). `--scope pane` asks
 # whether the pane is its OS window's last one; `os-window` is always last and would refuse every
 # close (REPORT §4 K3 CORRECTED, lib/kitty-fs-kitten.py:101-105). Any other answer keeps the pane.
-fs_guard_pane() { # $1=pane → rc 0 only on the guard's own rc 0
-  local g rc=0
+# Its verdict is kept for the refusal line (husk-panes round 2, RC3/RC4): `refused-fs` means only the
+# operator can close the pane (the last one of a native-fullscreen window, which no tick changes),
+# while any other refusal means the guard could not read the window, which a later tick can.
+GUARD_VERDICT=""
+fs_guard_pane() { # $1=pane → rc 0 only on the guard's own rc 0; GUARD_VERDICT says why not
+  local g rc=0 ef
+  GUARD_VERDICT=""
   g="$(fs_guard_path)" || rc=$?
   [ "$rc" = 2 ] && return 0
-  [ "$rc" = 0 ] || return 1
-  cc_run "$g" --window "$1" --to "unix:/tmp/kitty-$KPID" --scope pane --mode refuse --tool cc-pane-close >&2
+  [ "$rc" = 0 ] || { GUARD_VERDICT="guard-missing"; return 1; }
+  ef="$(mktemp "${TMPDIR:-/tmp}/cc-pane-close-guard.XXXXXX" 2>/dev/null)" || ef=/dev/null
+  cc_run "$g" --window "$1" --to "unix:/tmp/kitty-$KPID" --scope pane --mode refuse --tool cc-pane-close 2>"$ef" >&2 || rc=$?
+  if [ "$ef" != /dev/null ]; then
+    cat "$ef" >&2
+    GUARD_VERDICT="$(sed -n 's/.*refused (\([a-z-]*\)).*/\1/p' "$ef" | head -1)"
+    rm -f "$ef"
+  fi
+  [ "$rc" = 0 ] && return 0
+  [ -n "$GUARD_VERDICT" ] || GUARD_VERDICT="rc $rc"
+  return 1
+}
+guard_refusal() { # → the refusal reason for GUARD_VERDICT
+  local head="the fullscreen guard refused (--scope pane --mode refuse)"
+  case "$GUARD_VERDICT" in
+    refused-fs) printf '%s: refused-fs — this is the last pane of a fullscreen OS window; only the operator can close it (⌘W)' "$head" ;;
+    guard-missing) printf 'the fullscreen guard is missing, so nothing can prove this pane is not the last one of a fullscreen window' ;;
+    *) printf '%s: %s — it could not read this pane'"'"'s window (kitty did not answer it)' "$head" "$GUARD_VERDICT" ;;
+  esac
 }
 
 same_store() { # cfg a, cfg b → 0 iff one store (~/.claude-next's projects is a symlink to ~/.claude's)
@@ -207,14 +241,33 @@ bounded() { # secs cmd… — the command under a kill bound when a timeout bina
 }
 # kitty's own listing, read once: the window pid it holds for a pane is the pane's identity when a
 # registration names a pty that is not the pane's (expect's inner pty, a reused device).
-KLIST=""
+# PINNED TO THIS KITTY (husk-panes round 2, RC1). The it2 shim sends a call to kitty only when the
+# caller is a kitty descendant or says CC_TERM=kitty; the launchd drainer, the setsid'd watchdog
+# daemons and the detached SessionEnd drain are none of those, so an unpinned listing went to the
+# iTerm2 CLI (rc 2), read as "[]", and every background run refused panes an in-kitty run closed.
+# The pin is an env PREFIX on the bounded call: bounded/timeout exec their argument, so a shell
+# function in its place fails rc 127 (skeptics.md FX1). KLIST_OK=1 only for a real array, so "kitty
+# answered and the pane is not listed" (gone) can never be confused with "kitty did not answer".
+KLIST="" KLIST_OK=0 KLIST_ERR=""
 kitty_list_once() {
   [ -z "$KLIST" ] || return 0
   KLIST="[]"
-  [ "${CC_PANE_CLOSE_REMOTE:-on}" != off ] && [ -x "$IT2" ] || return 0
-  local j; j="$(bounded 10 "$IT2" session list --json 2>/dev/null)" || return 0
-  printf '%s' "$j" | jq -e 'type == "array"' >/dev/null 2>&1 && KLIST="$j"
+  if [ "${CC_PANE_CLOSE_REMOTE:-on}" = off ]; then KLIST_ERR="remote control not asked: CC_PANE_CLOSE_REMOTE=off"; return 0; fi
+  [ -x "$IT2" ] || { KLIST_ERR="it2 not executable at $IT2"; return 0; }
+  local j rc=0 ef
+  ef="$(mktemp "${TMPDIR:-/tmp}/cc-pane-close.XXXXXX" 2>/dev/null)" || ef=/dev/null
+  j="$(CC_TERM=kitty CC_TERM_KITTY_TO="unix:/tmp/kitty-$KPID" bounded 10 "$IT2" session list --json 2>"$ef")" || rc=$?
+  if [ "$rc" = 0 ] && printf '%s' "$j" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    KLIST="$j"; KLIST_OK=1
+  else
+    KLIST_ERR="$(sed -n '/[^[:space:]]/{p;q;}' "$ef" 2>/dev/null | cut -c1-160)"
+    [ -n "$KLIST_ERR" ] || KLIST_ERR="it2 session list rc $rc"
+  fi
+  [ "$ef" = /dev/null ] || rm -f "$ef"
   return 0
+}
+kitty_lists_pane() { # pane → 0 iff the listing (KLIST_OK=1) holds this window id
+  printf '%s' "$KLIST" | jq -e --arg p "$1" 'any(.[]; (.id | tostring) == $p)' >/dev/null 2>&1
 }
 kitty_pane_tty() { # pane → "<window pid> <tty>" from kitty's listing + ps, or nothing
   local kp kt
@@ -260,7 +313,7 @@ moved_live() { # sid pane since
     [ "$lsid" = "$sid" ] && [ "$lpane" != "$pane" ] && { LIVE_SID="$lsid"; LIVE_PANE="$lpane"; return 0; }
   done < <(find_live "$sid")
   # later registrations of this sid in OTHER panes, inside this kitty's lifetime, newest first
-  rows="$(grep -F "session=$sid " "$WLOG" 2>/dev/null | sed -n 's/^\[\([^]]*\)\].* pane=\([0-9][0-9]*\)$/\1|\2/p' \
+  rows="$(grep -F "session=$sid " "$WLOG" 2>/dev/null | wd_reg_norm | sed -n 's/^\[\([^]]*\)\].* pane=\([0-9][0-9]*\)$/\1|\2/p' \
           | awk '{ a[NR] = $0 } END { for (i = NR; i > 0; i--) print a[i] }')"
   while IFS='|' read -r ts p2; do
     [ -n "$p2" ] && [ "$p2" != "$pane" ] || continue
@@ -335,10 +388,9 @@ self_closed() { # pane sid since-epoch → 0 iff the pane's fired record says TH
   [ "$ep" -ge "$3" ] || return 1
   SC_AT="$at"
 }
-remote_answers() { # → 0 iff kitty remote control answers a listing now
-  [ "${CC_PANE_CLOSE_REMOTE:-on}" != off ] && [ -x "$IT2" ] || return 1
-  local to=""; for to in /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout; do [ -x "$to" ] && break; to=""; done
-  if [ -n "$to" ]; then "$to" -k 2 10 "$IT2" session list --json >/dev/null 2>&1; else "$IT2" session list --json >/dev/null 2>&1; fi
+remote_answers() { # → 0 iff kitty remote control answered this run's (pinned) listing
+  kitty_list_once
+  [ "$KLIST_OK" = 1 ]
 }
 
 KPID="$(kitty_pid)" || KPID=""
@@ -351,13 +403,22 @@ close_one() { # pane — one verdict line on stdout, one log row; RC=1 on a refu
   local pane="$1" reg="" reg_ep=0 line ts ep sid="" cpid="" tty="" kt="" kroot="" ktty="" since never=0
   local rows root rst tree shell live pid comm b team close cwd="" why="" skipwork=0 d how who cst
   case "$pane" in ''|*[!0-9]*) refuse "$pane" "not a kitty window id"; return ;; esac
-  # 1. IDENTITY — the pane's last registration inside this kitty's lifetime.
+  # 0. GONE — kitty answered its listing and this window id is not in it. kitty never reuses a window
+  # id within one process, so the pane is closed (by us earlier, by hand, by anyone): nothing to prove
+  # and nothing to send. A listing that did not answer proves nothing and falls through to the gates.
+  kitty_list_once
+  if [ "$KLIST_OK" = 1 ] && ! kitty_lists_pane "$pane"; then
+    printf "pane %s: ALREADY CLOSED — kitty's window list (kitty pid %s) does not hold this pane; it is gone\n" "$pane" "$KPID"
+    log_row "$pane" gone "not in kitty $KPID's window list"; return
+  fi
+  # 1. IDENTITY — the pane's last registration inside this kitty's lifetime. A teammate's line ends
+  # ` teammate=<id>`; wd_reg_norm strips it so the end-of-line anchor (pane=14 ≠ pane=144) holds.
   while IFS= read -r line; do
     case "$line" in *"registered session="*" pane=$pane") ;; *) continue ;; esac
     ts="${line#[}"; ts="${ts%%]*}"
     ep="$(date -j -f '%Y-%m-%d %H:%M:%S' "$ts" +%s 2>/dev/null || echo 0)"
     [ "$ep" -ge "$KSTART" ] && { reg="$line"; reg_ep="$ep"; }
-  done < <(grep -F "pane=$pane" "$WLOG" 2>/dev/null)
+  done < <(grep -F "pane=$pane" "$WLOG" 2>/dev/null | wd_reg_norm)
   # NEVER LAUNCHED (header) — the exit record is the newest fact about this pane when it post-dates
   # the registration, and it says no claude ever started for that launch.
   if exit_record "$pane" && [ "$XR_STARTED" = false ] && [ "$XR_RC" != 0 ] \
@@ -369,7 +430,10 @@ close_one() { # pane — one verdict line on stdout, one log row; RC=1 on a refu
   fi
   kt="$(kitty_pane_tty "$pane")"; kroot="${kt%% *}"; ktty="${kt#* }"
   if [ "$never" = 1 ]; then
-    [ -n "$kt" ] || { refuse "$pane" "its launch never started claude (exit record rc $XR_RC), but kitty remote control does not name this pane's window, so its tty is unknown"; return; }
+    if [ -z "$kt" ] && [ "$KLIST_OK" != 1 ]; then
+      refuse "$pane" "its launch never started claude (exit record rc $XR_RC), but kitty's window list did not answer ($KLIST_ERR), so this pane's window cannot be named"; return
+    fi
+    [ -n "$kt" ] || { refuse "$pane" "its launch never started claude (exit record rc $XR_RC); kitty lists this pane, but its window process has no readable tty"; return; }
     tty="$ktty"; since="$XR_TS"
   else
     sid="$(printf '%s' "$reg" | sed -n 's/.*session=\([^ ]*\).*/\1/p')"
@@ -453,7 +517,7 @@ close_one() { # pane — one verdict line on stdout, one log row; RC=1 on a refu
   # Either way the fullscreen guard is asked FIRST, and --dry-run asks it too (header).
   how=""; who="no session"; [ -z "$sid" ] || who="session ${sid:0:8}"
   if remote_answers; then
-    fs_guard_pane "$pane" || { refuse "$pane" "the fullscreen guard refused (--scope pane --mode refuse): this is the last pane of a fullscreen OS window, or the guard could not read it" "$sid"; return; }
+    fs_guard_pane "$pane" || { refuse "$pane" "$(guard_refusal)" "$sid"; return; }
     if [ "$DRY" = 1 ]; then
       printf 'pane %s: WOULD CLOSE — %s, %s; via kitty remote control\n' "$pane" "$who" "$why"
       log_row "$pane" would-close "$why" "$sid"; return

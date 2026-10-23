@@ -80,7 +80,8 @@ plain_no()  { transcript '{"type":"user","cwd":"CWD","message":{"role":"user","c
 @test "remote control UP but refusing the close: refused, and no SIGHUP is sent past the refusal" {
   teammate
   # an it2 that answers the listing (remote is up) and refuses the close, as its fullscreen guard does
-  printf '#!/bin/bash\necho "it2 $*" >> "$FIX/it2.log"\ncase "$1 $2" in "session list") echo "[]"; exit 0 ;; esac\nexit 1\n' > "$S/it2"
+  # (it lists pane 69: a listing that answers WITHOUT the pane now reads ALREADY CLOSED, wave C1)
+  printf '#!/bin/bash\necho "it2 $*" >> "$FIX/it2.log"\ncase "$1 $2" in "session list") echo "[{\\"id\\":69,\\"pid\\":5000}]"; exit 0 ;; esac\nexit 1\n' > "$S/it2"
   chmod +x "$S/it2"
   CC_PANE_CLOSE_REMOTE=on CC_PANE_CLOSE_IT2="$S/it2" STUB_RC=0 run "$CLOSE" --pane 69
   [ "$status" -eq 1 ]

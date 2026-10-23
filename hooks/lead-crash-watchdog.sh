@@ -2168,9 +2168,12 @@ pane_close_predicate() { # $1=sid
   local bin out rc=0 why
   [[ "${CC_PANE_VERDICT_CLOSE:-on}" != off && "${LEAD_PANE:-}" =~ ^[0-9]+$ ]] || return 0
   bin=$(pane_closer_bin) || return 0
-  out=$(lcw_bounded 60 "$bin" --pane "$LEAD_PANE" --dry-run 2>/dev/null </dev/null) || rc=$?
+  # stderr is kept (husk-panes round 2, FX1): it carries the guard's and it2's own words, and a
+  # refusal with no REFUSED line used to reach the log as a bare "answered rc N".
+  out=$(lcw_bounded 60 "$bin" --pane "$LEAD_PANE" --dry-run 2>&1 </dev/null) || rc=$?
   (( rc == 0 )) && return 0
   why=$(sed -n 's/.*REFUSED — //p' <<<"$out" | head -1 || true)
+  [[ -n "$why" ]] || why=$(sed -n '/[^[:space:]]/{p;q;}' <<<"$out" || true)
   printf '%s' "${why:-cc-pane-close --dry-run answered rc $rc}"
   return 1
 }

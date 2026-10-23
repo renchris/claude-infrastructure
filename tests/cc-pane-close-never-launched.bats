@@ -116,7 +116,7 @@ tombstone() { # source storeA → storeB
   window 77 6000 ttys070 $((NOW - 600)); exit_rec 77 9 false $((NOW - 300))
   CC_PANE_CLOSE_REMOTE=off run "$CLOSE" --pane 77
   [ "$status" -eq 1 ]
-  [[ "$output" == *"does not name this pane's window"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"kitty's window list did not answer (remote control not asked"* ]] || { echo "$output"; false; }
   [ ! -e "$FIX/kill.log" ]
 }
 
