@@ -8,6 +8,8 @@
 # ps answers from fixture files, kill only records its argv, nothing touches a real process.
 # shellcheck disable=SC2030,SC2031,SC2016  # per-test env exports are deliberate; stub bodies are literal
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   CLOSE="$REPO/bin/cc-pane-close"
@@ -20,7 +22,7 @@ setup() {
   export CC_PANE_CLOSE_PS_BIN="$S/ps" CC_PANE_CLOSE_KILL_BIN="$S/kill"
   # ps: `-o lstart= -p <pid>` → $FIX/lstart.<pid>; `-o pid=,ppid=,comm= -t <tty>` → $FIX/tty.<tty>
   # shellcheck disable=SC2016  # stub bodies expand when the STUB runs
-  printf '#!/bin/bash\nfor a; do prev2="$prev"; prev="$a"; done\ncase "$2" in lstart=) cat "$FIX/lstart.$prev" 2>/dev/null ;; stat=) if [ -f "$FIX/stat.$prev" ]; then cat "$FIX/stat.$prev"; elif [ -f "$FIX/lstart.$prev" ]; then echo Ss; fi ;; *) cat "$FIX/tty.$prev" 2>/dev/null ;; esac\nexit 0\n' > "$S/ps"
+  printf '#!/bin/bash\nfor a; do prev2="$prev"; prev="$a"; done\ncase "$2" in lstart=) cat "$FIX/lstart.$prev" 2>/dev/null ;; stat=) if [ -e "$FIX/gone.$prev" ]; then :; elif [ -f "$FIX/zreads.$prev" ]; then n=$(cat "$FIX/zreads.$prev"); if [ "$n" -gt 0 ]; then echo Z; echo $((n - 1)) > "$FIX/zreads.$prev"; else : > "$FIX/gone.$prev"; fi; elif [ -f "$FIX/stat.$prev" ]; then cat "$FIX/stat.$prev"; elif [ -f "$FIX/lstart.$prev" ]; then echo Ss; fi ;; *) cat "$FIX/tty.$prev" 2>/dev/null ;; esac\nexit 0\n' > "$S/ps"
   # kill: records its argv, and the window then goes away (its root process loses its lstart)
   # shellcheck disable=SC2016
   printf '#!/bin/bash\necho "$*" >> "$FIX/kill.log"\nrm -f "$FIX/lstart.$ROOT"\n' > "$S/kill"
@@ -213,7 +215,7 @@ fired() { # $1 = closedAt epoch  $2 = transcript sid
 @test "a window root left a ZOMBIE by a wedged kitty is CLOSED (with the kitty note), not FAILED" {
   teammate
   printf '#!/bin/bash\necho "$*" >> "$FIX/kill.log"\necho Z > "$FIX/stat.$ROOT"\n' > "$S/kill"
-  run "$CLOSE" --pane 69
+  CC_PANE_CLOSE_REAP_S=1 run "$CLOSE" --pane 69
   [ "$status" -eq 0 ]
   [[ "$output" == *"pane 69: CLOSED"*"kitty has not reaped it"* ]] || false
   grep -q '"verdict":"closed-kitty-unreaped"' "$FIX/close.jsonl"
@@ -221,9 +223,33 @@ fired() { # $1 = closedAt epoch  $2 = transcript sid
 
 @test "a pane whose window root is ALREADY a zombie reports already closed and signals nothing" {
   teammate; echo Z > "$FIX/stat.5000"
-  run "$CLOSE" --pane 69
+  CC_PANE_CLOSE_REAP_S=1 run "$CLOSE" --pane 69
   [ "$status" -eq 0 ]
   [[ "$output" == *"pane 69: ALREADY CLOSED"* ]] || false
+  [ ! -e "$FIX/kill.log" ]
+}
+
+@test "a zombie that kitty reaps a moment later is plainly CLOSED — never called a wedge (2026-10-23)" {
+  # The operator's close of panes 85 and 42 printed "kitty is wedged" for both; kitty @ ls showed
+  # them gone ~20 s later. RED before the fix: two zombie reads were enough to say wedged; here the
+  # root stays a zombie for 3 reads, then is gone.
+  teammate
+  cc_stub "$S" kill '#!/bin/bash
+echo "$*" >> "$FIX/kill.log"
+echo 3 > "$FIX/zreads.$ROOT"'
+  CC_PANE_CLOSE_REAP_S=3 run "$CLOSE" --pane 69
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pane 69: CLOSED"* ]] || false
+  [[ "$output" != *"wedged"* ]] || false
+  grep -q '"verdict":"closed"' "$FIX/close.jsonl"
+}
+
+@test "an already-zombie root that kitty then reaps is ALREADY CLOSED without the wedge note" {
+  teammate; echo 2 > "$FIX/zreads.5000"            # zombie for 2 reads, then gone
+  CC_PANE_CLOSE_REAP_S=3 run "$CLOSE" --pane 69
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pane 69: ALREADY CLOSED"* ]] || false
+  [[ "$output" != *"wedged"* ]] || false
   [ ! -e "$FIX/kill.log" ]
 }
 

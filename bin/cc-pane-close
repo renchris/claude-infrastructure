@@ -63,7 +63,7 @@
 # 2 usage. One line per pane on stdout; a JSON row per pane to $CC_PANE_CLOSE_LOG.
 # Seams (tests): CC_PANE_CLOSE_WATCHDOG_LOG · CC_PANE_CLOSE_KITTY_PID · CC_PANE_CLOSE_PS_BIN ·
 # CC_PANE_CLOSE_KILL_BIN · CC_PANE_CLOSE_IT2 · CC_PANE_CLOSE_STORES · CC_PANE_CLOSE_CUSTODY_BIN ·
-# CC_PANE_CLOSE_LOG · CC_PANE_CLOSE_REMOTE (off = skip remote control) · CC_PANE_CLOSE_SETTLE_S ·
+# CC_PANE_CLOSE_LOG · CC_PANE_CLOSE_REMOTE (off = skip remote control) · CC_PANE_CLOSE_SETTLE_S · CC_PANE_CLOSE_REAP_S ·
 # CC_PANE_CLOSE_EXIT_DIR · CC_PANE_CLOSE_FIND_BIN · CC_PANE_CLOSE_HANDOFFS_LOG · CC_PANE_CLOSE_FIRED_DIR.
 set -u
 # shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
@@ -111,6 +111,18 @@ kitty_pid() {
 win_state() { # $1=pid → gone | zombie | alive
   local st; st="$("$PS" -o stat= -p "$1" 2>/dev/null | tr -d ' ')"
   case "$st" in '') printf gone ;; Z*) printf zombie ;; *) printf alive ;; esac
+}
+# A ZOMBIE IS NOT YET A WEDGE (2026-10-23). kitty reaps a window a few seconds after its process
+# exits, so a root read as a zombie the moment after the close is usually just not reaped YET: the
+# operator's `cc-pane-close --pane 85 --pane 42` printed "kitty is wedged" for both, and kitty @ ls
+# showed both gone ~20 s later. So a zombie is re-read for up to CC_PANE_CLOSE_REAP_S (10) seconds,
+# and "wedged" is said only of one that outlives that.
+REAP_S="${CC_PANE_CLOSE_REAP_S:-10}"; case "$REAP_S" in ''|*[!0-9]*) REAP_S=10 ;; esac
+reap_wait() { # $1=pid → its state once it is no longer a zombie, or `zombie` after REAP_S seconds
+  local i=0 st
+  st="$(win_state "$1")"
+  while [ "$st" = zombie ] && [ "$i" -lt "$REAP_S" ]; do sleep 1; i=$((i + 1)); st="$(win_state "$1")"; done
+  printf '%s' "$st"
 }
 lstart_epoch() { # $1=pid → start epoch (UTC parse of ps lstart), empty if gone
   local l; l="$(TZ=UTC LC_ALL=C "$PS" -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//; s/ *$//')"
@@ -384,8 +396,12 @@ close_one() { # pane — one verdict line on stdout, one log row; RC=1 on a refu
   fi
   if [ -n "$kroot" ] && [ "$root" != "$kroot" ]; then refuse "$pane" "kitty names window process $kroot for this pane, but $tty's window process is $root" "$sid"; return; fi
   if [ "$(win_state "$root")" = zombie ]; then
-    printf 'pane %s: ALREADY CLOSED — its window process %s has exited but kitty has not reaped it (kitty is wedged; the pane clears when kitty recovers or restarts)\n' "$pane" "$root"
-    log_row "$pane" closed-kitty-unreaped "window root $root already a zombie of kitty" "$sid"; return
+    if [ "$(reap_wait "$root")" = zombie ]; then
+      printf 'pane %s: ALREADY CLOSED — its window process %s has exited but kitty has not reaped it in %ss (kitty is wedged; the pane clears when kitty recovers or restarts)\n' "$pane" "$root" "$REAP_S"
+      log_row "$pane" closed-kitty-unreaped "window root $root already a zombie of kitty" "$sid"; return
+    fi
+    printf 'pane %s: ALREADY CLOSED — its window process %s had exited, and kitty has now removed the pane\n' "$pane" "$root"
+    log_row "$pane" closed "window root $root had exited; reaped by kitty" "$sid"; return
   fi
   rst="$(lstart_epoch "$root")"
   if [ -z "$rst" ] || [ "$rst" -gt "$since" ]; then refuse "$pane" "the window on $tty started after the session registered — a different window" "$sid"; return; fi
@@ -462,12 +478,12 @@ close_one() { # pane — one verdict line on stdout, one log row; RC=1 on a refu
   fi
   # VERIFY by effect: the window's root process has exited (gone, or a zombie kitty has not reaped).
   local i=0; while [ "$i" -lt "$SETTLE" ] && [ "$(win_state "$root")" = alive ]; do sleep 1; i=$((i + 1)); done
-  case "$(win_state "$root")" in
+  case "$(reap_wait "$root")" in
     alive)
       printf 'pane %s: FAILED — %s sent, but the window process %s is still there\n' "$pane" "$how" "$root"
       log_row "$pane" failed "$how sent; window process still present" "$sid"; RC=1; return ;;
     zombie)
-      printf 'pane %s: CLOSED — %s, %s; via %s. Its window process %s exited but kitty has not reaped it: kitty is wedged, and the pane stays drawn until kitty recovers or restarts\n' "$pane" "$who" "$why" "$how" "$root"
+      printf 'pane %s: CLOSED — %s, %s; via %s. Its window process %s exited but kitty has not reaped it in %ss: kitty is wedged, and the pane stays drawn until kitty recovers or restarts\n' "$pane" "$who" "$why" "$how" "$root" "$REAP_S"
       log_row "$pane" closed-kitty-unreaped "$why; via $how; window root $root is a zombie of kitty" "$sid"; return ;;
   esac
   printf 'pane %s: CLOSED — %s, %s; via %s\n' "$pane" "$who" "$why" "$how"
