@@ -163,6 +163,10 @@ make_lib() {
   local src="$1" out="$2" f
   {
     echo 'set -uo pipefail'
+    # cc_run: ready_paths and ready_relabel run cc-venue through its interpreter (eef500138). The
+    # dispatcher sources this at module level, which no function extraction reaches; without it
+    # every `cc_run` is rc 127 and the path set reads UNKNOWN (paths-unreadable), never void.
+    cat "$REPO/scripts/lib/cc-run.sh"
     for f in now_iso die3 is_uint resolve_bin conf_repo project_repo \
              ready_trunk_sha ready_last_sha ready_paths ready_moved ready_rule_moved ready_relabel \
              readiness_verdict idl idl_readiness ready_rate_pct venue_label_new; do
