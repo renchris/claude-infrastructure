@@ -472,6 +472,32 @@ echo closed'
   grep -qF $'\033]2;✓ done 88e2c2b1\007' "$T/dev/ttys099" || { cat -v "$T/dev/ttys099"; false; }
 }
 
+# Wave C3 (husk-panes round 2, RC4): the refusal's class picks row 2. Pre-change, any line naming the
+# "fullscreen guard" painted "last pane of a fullscreen window" (an identity-pin refusal included),
+# and the closer's new "did not answer" wording fell to "can't tell".
+@test "wave C3: a close the remote side refused is STUCK — ⌘W, won't close by itself; never 'closes when it does'" {
+  rm -f "$T/cwd/scratch.txt"
+  cc_stub "$(dirname "$CC_PANE_CLOSE_BIN")" "$(basename "$CC_PANE_CLOSE_BIN")" \
+    '#!/bin/bash
+case "$*" in *--dry-run*) echo "pane 330: REFUSED — kitty remote control refused the close (fullscreen guard, composer guard or identity pin); not falling back to SIGHUP"; exit 1 ;; esac
+echo closed'
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  painted | grep -qF "won't close by itself" || { painted; false; }
+  ! painted | grep -qF 'closes when it does' || { painted; false; }
+  ! painted | grep -qF 'last pane of a fullscreen window' || { painted; false; }
+}
+
+@test "wave C3: the closer's 'window list did not answer' is TRANSIENT — kitty didn't answer, closes when it does" {
+  rm -f "$T/cwd/scratch.txt"
+  cc_stub "$(dirname "$CC_PANE_CLOSE_BIN")" "$(basename "$CC_PANE_CLOSE_BIN")" \
+    '#!/bin/bash
+case "$*" in *--dry-run*) echo "pane 330: REFUSED — its launch never started claude (exit record rc 124), but kitty'"'"'s window list did not answer (connection refused), so this pane'"'"'s window cannot be named"; exit 1 ;; esac
+echo closed'
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  painted | grep -qF "kitty didn't answer" || { painted; false; }
+  ! painted | grep -q "can't tell" || { painted; false; }
+}
+
 # ── F5: the watchdog hands its verdict to bin/cc-pane-verdict, the one writer (contract wording) ────
 @test "F5: a CRASH paints RESUME through cc-pane-verdict — no cause class, no exit code on screen" {
   export CC_PANE_VERDICT_TOOL=on

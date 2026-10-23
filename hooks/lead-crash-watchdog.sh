@@ -2064,16 +2064,23 @@ paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath
       # read "✅ closed" over "ended, reason unknown" while the closer's reason was on record: kitty
       # did not answer. A refusal about the CLOSE ITSELF (remote control down, the fullscreen guard)
       # means the session is done and only the act failed; anything else is "can't tell".
+      # The refusal's CLASS picks row 2, as bin/cc-pane-verdict's does (wave C3): only kitty not
+      # answering may promise "closes when it does"; refused-fs is the operator's ⌘W; any other
+      # refusal about the close act (a guard that is missing, remote control refusing) is stuck.
       local r1 r2
       case "$kept" in
-        *"remote control is down"*)
+        *refused-fs*)
+          pvs=DONE; pvg=fullscreen
+          title="✓ done ${sid:0:8}"; r1=$(_lcw_say ok "${sid:0:8} finished" "nothing to resume")
+          r2=$(_lcw_say warn "⌘W closes it" "last pane of a fullscreen window") ;;
+        *"remote control is down"*|*"did not answer"*)
           pvs=DONE; pvg=unreadable
           title="✓ done ${sid:0:8}"; r1=$(_lcw_say ok "${sid:0:8} finished" "nothing to resume")
           r2=$(_lcw_say wait "kitty didn't answer" "closes when it does") ;;
-        *"fullscreen guard"*)
-          pvs=DONE; pvg=fullscreen
+        *"fullscreen guard"*|*"remote control refused the close"*)
+          pvs=DONE; pvg=stuck
           title="✓ done ${sid:0:8}"; r1=$(_lcw_say ok "${sid:0:8} finished" "nothing to resume")
-          r2=$(_lcw_say warn "last pane of a fullscreen window" "⌘W closes it") ;;
+          r2=$(_lcw_say warn "⌘W closes it" "won't close by itself") ;;
         *)
           pvs=CANTTELL
           title="◆ check ${sid:0:8}"; r2=""
