@@ -29,6 +29,7 @@ setup() {
   # Darwin, and the fire path compares paths it has already resolved.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/logs"
   HOME="$(cd "$HOME" && pwd -P)"
+  export CC_PANE_CLOSE_QUEUE_DIR="$BATS_TEST_TMPDIR/pcq"
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/registry"; mkdir -p "$CC_REGISTRY_DIR"
   export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired"; mkdir -p "$CC_FIRED_DIR"
   export CC_PROJECTS_DIRS="$BATS_TEST_TMPDIR/projects"; mkdir -p "$CC_PROJECTS_DIRS"

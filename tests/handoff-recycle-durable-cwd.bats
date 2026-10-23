@@ -50,6 +50,8 @@ setup() {
   local real_home="$HOME"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   [ -e "$real_home/.claude" ] && ln -s "$real_home/.claude" "$HOME/.claude"
+  # The symlink makes the pane-close queue's default the LIVE one; a held recycle writes a row there.
+  export CC_PANE_CLOSE_QUEUE_DIR="$BATS_TEST_TMPDIR/pcq"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   PF="$BATS_TEST_TMPDIR/payload.txt"; echo "resume the work" > "$PF"

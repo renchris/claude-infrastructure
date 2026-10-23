@@ -658,7 +658,6 @@ handoff-fire-focus.bats
 handoff-fire-inject.bats
 handoff-fire-payload-lint.bats
 handoff-fire-tab-window-typing.bats
-handoff-fire-validate.bats
 handoff-selfclose.bats
 handoff-splitright.bats
 install-wire-hooks.bats
