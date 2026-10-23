@@ -63,6 +63,19 @@ folded in below. Conviction is per cause.
 
 Open: who sent the 09:12:40Z SIGTERM to 570d3917 (`sig_reached_wrapper=TERM`). It is in neither cc-reaper
 nor kill-gate logs, and bash-commands.log for that day starts at 10:24Z.
+Wave A item A7, 2026-10-22 (read-only, 40+ stores searched): still **unresolved**. What it established:
+- The TERM reached the wrapper (cc-close-attrib, pid 53818) and was forwarded to claude (54386) by its trap,
+  at 09:12:33Z (SessionEnd rows idl.jsonl:41883-41888). It was the only death in 08:50-09:29Z, which
+  rules out a broad pkill.
+- **Correction:** lane K was not stalled mid-pytest. validate-bash asked for permission on an `rm -r` at
+  08:17:17Z (validate-bash-decisions.jsonl:4180), and lead-supervisor logged `permission_pending` for it
+  until 09:11:10Z. It sat at an unanswered dialog for 55 minutes.
+- The rotated bash-commands.log.20261022T101550Z.gz covers the window. No command in it targets
+  53818/54386, and none of the reapers, gates, launchd logs or the unified log records a signal to it.
+- Leads, none proven: lane P's `cc-await-ping --stand-down` at 09:11:48Z, 45 s before the end (~15%).
+  It TERMs pids from claim files whose argv matches `cc-await-ping`, and lane K's argv carries its brief,
+  which contains that string. Also teammate dd3c29b5's full bats run, which stopped at test 691 at
+  09:06:52Z (~20%). Evidence, stores searched and next checks: `a7-sigterm.md` beside this file.
 
 ## Fixes
 
