@@ -109,7 +109,7 @@ SH
   stamp PANE16 ""                        # pane 16 has a stamp too (the stale 16.json of the incident)
 }
 
-teardown() { [ -n "${LEADPID:-}" ] && kill "$LEADPID" 2>/dev/null; return 0; }
+teardown() { if [ -n "${LEADPID:-}" ]; then kill "$LEADPID" 2>/dev/null || true; fi; return 0; }
 
 reg() { jq -n --arg p "$1" --arg s "$2" --argjson pid "$3" '{paneUUID:$p, session_id:$s, pid:$pid}' > "$CC_REGISTRY_DIR/$1.json"; }
 stamp() { # <pane> <transcript>

@@ -15782,7 +15782,7 @@ MSG
   sc_tenant_gate() { # $1=watcher pid to disarm (may be empty) → returns only when the pane is still ours
     local mm
     mm="$(pane_tenant_mismatch "$SC_SID" "$HF_SC_EXPECT_SID" "$HF_SC_EXPECT_PID")" || return 0
-    [ -n "${1:-}" ] && kill "$1" 2>/dev/null
+    if [ -n "${1:-}" ]; then kill "$1" 2>/dev/null || true; fi
     echo "!! self-close ABORTED: pane $SC_SID now holds session ${mm%% *} (claude pid ${mm##* }); you are ${HF_SC_EXPECT_SID:-pid ${HF_SC_EXPECT_PID:-?}} — nothing typed, nothing closed" >&2
     exit 2
   }
