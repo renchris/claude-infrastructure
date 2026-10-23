@@ -96,30 +96,33 @@ B7. After Wave A has landed, on a rebased branch: the husk-row producer in hando
 - Wave A converged: live checkout at 2ba830035 (deploy-live degraded tier).
 - B1 (wave B): the guard's kitten-failed carries its error (row + stderr, no placeholder state); the
   runner keeps guard output out of the pane and says "kitty didn't answer" unless the verdict is
-  refused-fs. Landed f9e50608f (in 262781d14) · tests/kitty-fullscreen-guard.bats #39,
+  refused-fs. Landed c820e86f1 (in 262781d14) · tests/kitty-fullscreen-guard.bats #39,
   tests/cc-pane-runner-no-command-closes.bats.
 - B2 (wave B): `husk` rows in the pane-close queue from the runner's keep sites and the watchdog's
   paint; `_no_command` writes its exit record first; `drain_husk` closes through cc-pane-close (holds:
   kitty generation, pane gone/in use, tty typed in, open custody); cc-custody return/abandon detaches
-  a drain. Landed c15d60c3b (+ dd88ffec1 5e8601f45 262781d14) · tests/pane-close-queue.bats,
+  a drain. Landed 5d0be0366 (+ 564a9ab49 7a2becf81 262781d14) · tests/pane-close-queue.bats,
   tests/cc-pane-runner-exit75-closes.bats, tests/cc-custody.bats, tests/lead-crash-pane-verdict.bats.
-- B6 (wave B): it2-kitty split honours IT2_SPLIT_CWD (an existing dir) over --cwd=current ·
+- B6 (wave B): it2-kitty split honours IT2_SPLIT_CWD (an existing dir) over --cwd=current (d0ef0fcbd) ·
   tests/it2-kitty-operator-safety.bats. Scope (grown): +cc-pane-close polls a zombie root up to
-  CC_PANE_CLOSE_REAP_S before calling kitty wedged (lead report, 2026-10-23) · tests/cc-pane-close.bats.
+  CC_PANE_CLOSE_REAP_S before calling kitty wedged (lead report, 2026-10-23; ab7e82e9f) · tests/cc-pane-close.bats.
 - B3 (wave B): interim — a refused close paints its reason (✓ done / ◆ check), never ✅ closed or
-  "reason unknown" (90968e105). Then bin/cc-pane-verdict, the one writer: contract states, width-fit,
+  "reason unknown" (2c94cf6d8). Then bin/cc-pane-verdict, the one writer: contract states, width-fit,
   `set-window-title --temporary`, repaint only on change; watchdog, runner and drain_husk paint through
-  it (98639e603) · tests/cc-pane-verdict.bats, tests/lead-crash-pane-verdict.bats.
+  it (99acf1d9f) · tests/cc-pane-verdict.bats, tests/lead-crash-pane-verdict.bats.
 - B5 (wave B): classify_death names closed-by-other-session (an /exit typed by a session nested in the
-  pane; pages) and headless-ended (tty=none, no close record; no page) (a96e52bdc) ·
+  pane; pages) and headless-ended (tty=none, no close record; no page) (21ea2a872) ·
   tests/lead-crash-watchdog.bats F7c.
 - B7 (wave B, after A): husk-pane/husk-fs and the headless self-close write husk rows; splits and
-  os-windows start in LAUNCH_DIR (764745e6d) · tests/handoff-selfclose.bats,
+  os-windows start in LAUNCH_DIR (d82aa7860) · tests/handoff-selfclose.bats,
   tests/handoff-selfclose-nested-claude.bats, tests/handoff-fire-kitty.bats. Scope (grown): +self-close
-  rows from an older kitty are dropped (5fe7685c3) · tests/pane-close-queue.bats.
+  rows from an older kitty are dropped (85b1d7131) · tests/pane-close-queue.bats.
 - Known red, not wave B's: tests/handoff-alarm-records.bats #28 pins 9 `hf_alarm` sites; trunk has had 10
   for at least the last 12 handoff-fire commits.
 - B4 (wave B, teammate b4-deathwatch): custody-deathwatch is hoisted above §0a in autonomy-sweep, so a
   truncated tick still reaches it; a listed pane whose registry pid is dead (a husk) reads GONE, and the
-  page names `cc-husk-sweep --resume --yes --pane N` once per marker (215a84175 + 53b6a62fb, landed as
-  cherry-picks) · tests/custody-deathwatch.bats, tests/autonomy-sweep.bats (0a-ii).
+  page names `cc-husk-sweep --resume --yes --pane N` once per marker (6ad98363a + b5e155596) · tests/custody-deathwatch.bats, tests/autonomy-sweep.bats (0a-ii).
+- Wave B landed and live at 29198dcea (also f3466586f: validate-bash's headless-resume gate takes the
+  cc-pane-id-lint allow marker, clearing trunk's red tests/cc-pane.bats #27 from 8d69845a0). The land
+  smoke's autonomy-sweep.bats reds were load (~300): a same-moment A/B failed the identical tests on
+  trunk and on wave B.
