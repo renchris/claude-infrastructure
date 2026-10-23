@@ -353,7 +353,8 @@ fi
 # Everything here is static text, hard-wrapped at the width the pane had at startup, and Claude
 # Code has no render component for a SessionStart message, so a pane widened later keeps a ~45-cell
 # board. mods/accounts-readout draws the board instead, as a band above the prompt that re-lays out
-# at every width change and goes away at the first prompt. HANDSHAKE, measured in a pty: the mod's
+# at every width change and goes away at the first prompt (not a fired pane's brief, which claude
+# submits at launch: the mod's grace window, 2026-10-23). HANDSHAKE, measured in a pty: the mod's
 # `classic.SessionStart` hook runs ABOVE the settings hooks (chain: managed, modules, settings), so
 # it stamps `<sid>.board-band.req` with this session's id BEFORE this hook runs, and after it returns
 # reads the snapshot this hook leaves. Only on the fresh and STALE paths (a hard, empty or

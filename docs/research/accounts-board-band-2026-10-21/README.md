@@ -103,3 +103,35 @@ Each run starts one Haiku session with `--setting-sources project` and its own `
 fleet hook runs and no shared settings file is touched; no slash command is typed. The trunk arm
 needs a pre-band `TRUNK_REF` once this has landed. `order-probe/probe.py` expects its mod and hook at
 /tmp/abb-order/.
+
+## Fired panes (2026-10-23)
+
+**Defect.** The band cleared on the first `prompt.submit`, and a pane fired by `handoff-fire.sh`
+(normal fire, `--recycle`, self-close successor) or started by `desk.zsh` passes its brief as
+claude's positional prompt, which the engine submits as soon as the SessionStart hooks settle. So
+the band was armed and cleared within a second, and with the grid already moved out of the static
+message, those panes showed no board at all (operator screenshot: session #159, `af1b16c0`, brief
+0.12 s after the board). The auto-submitted case was never raised when "band until 1st prompt" was
+chosen; the build session was itself such a pane.
+
+**Measured** (dispatcher ledger + transcripts, 2026-10-22T06:02Z to 2026-10-23T05:21Z, 85 band-armed
+starts): 72 had a first prompt within 5 s of SessionStart, including all 41 handoff fires (0.11 /
+0.95 / 3.33 s min / median / max). 6 manual starts waited 45.5 to 601 s. Agent-team teammates
+(37) get their teammate-message before SessionStart, so it never cleared their band. No other loss
+mode occurred in 409 dispatcher runs: the board child was `ok` 409/409, with no harness-term, cap cut,
+`printed=false` or hard-stale row.
+
+**Why timing, not origin.** In CC 2.1.293 the argv prompt goes through the composer's own submit
+path (`submitInitial` → `onSubmit` stamps `origin:{kind:"human"}` → `composer`), so `prompt.submit`
+carries `origin.kind === 'composer'`, `wait:false`, no `turnId`, the same as a typed Enter.
+`classic.UserPromptSubmit.source` reads `typed` for both. `$.session` exposes no launch args.
+The engine's `isStartInput` flag never reaches plugins. Detecting the positional in the hook from the
+parent's argv works for fires but misses typed and teammate prompts and needs claude's flag arity.
+
+**Fix.** `mods/accounts-readout/hooks/register.tsx`: the band records when it went up (`raisedMs`).
+A `prompt.submit` within `CC_BOARD_BAND_GRACE_S` (default 20 s: 6x the slowest fired brief, under
+half the quickest manual prompt) leaves the band standing, and the next prompt takes it away. A human
+who sends a first prompt inside 20 s keeps the band for one more prompt, which is harmless. A
+launch so loaded that the brief lands after 20 s loses the band, as before. Tests: "a brief
+submitted at launch leaves the band up; the next prompt takes it away" and "the launch grace is the
+CC_BOARD_BAND_GRACE_S knob", both red against the pre-fix mod.

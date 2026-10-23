@@ -121,7 +121,7 @@ const NOW = 2_000_000_000
 const bandWorld = (on: On, opts: { hookWrites?: string; ageS?: number; env?: Record<string, string> } = {}) => {
   const files: Record<string, string> = {}
   const seen: { reqAtHook?: string } = {}
-  mock.clock(on, { now: NOW })
+  const clock = mock.clock(on, { now: NOW })
   mock.store(on)
   mock.env(on, opts.env ?? {})
   on('session.surfaces', () => ({ value: ['terminal'] }) as never)
@@ -143,7 +143,7 @@ const bandWorld = (on: On, opts: { hookWrites?: string; ageS?: number; env?: Rec
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { files, seen }
+  return { files, seen, clock }
 }
 
 const band = ($: Engine, columns: number, extra: { hasSurvey?: boolean; maxRows?: number } = {}) =>
@@ -443,13 +443,36 @@ describe('the SessionStart band', () => {
   })
 
   test('the first prompt takes the band away', async ($, on) => {
-    bandWorld(on, { hookWrites: JSON.stringify(LADDER) })
+    const { clock } = bandWorld(on, { hookWrites: JSON.stringify(LADDER) })
     await $.classic.SessionStart({ source: 'startup', session_id: SID } as never)
     expect(await (await band($, 160)).find({ text: /account live/ })).toBeDefined()
+    await clock.advance(45_000)                  // the quickest manual first prompt measured
     await $.prompt.submit({ text: 'hello' } as never)
     const after = await band($, 160)
     expect(await after.find({ text: /account live/ })).toBeUndefined()
     expect(await after.find({ text: /engine band/ })).toBeDefined()
+  })
+
+  test('a brief submitted at launch leaves the band up; the next prompt takes it away', async ($, on) => {
+    const { clock } = bandWorld(on, { hookWrites: JSON.stringify(LADDER) })
+    await $.classic.SessionStart({ source: 'startup', session_id: SID } as never)
+    await clock.advance(3_400)                   // the slowest handoff brief measured: 3.3 s
+    await $.prompt.submit({ text: '[locate] cd /repo …' } as never)
+    expect(await (await band($, 160)).find({ text: /account live/ })).toBeDefined()
+    await clock.advance(60_000)
+    await $.prompt.submit({ text: 'status?' } as never)
+    expect(await (await band($, 160)).find({ text: /account live/ })).toBeUndefined()
+  })
+
+  test('the launch grace is the CC_BOARD_BAND_GRACE_S knob', async ($, on) => {
+    const { clock } = bandWorld(on, { hookWrites: JSON.stringify(LADDER), env: { CC_BOARD_BAND_GRACE_S: '60' } })
+    await $.classic.SessionStart({ source: 'startup', session_id: SID } as never)
+    await clock.advance(45_000)                  // past the default 20 s, inside this 60 s
+    await $.prompt.submit({ text: 'hello' } as never)
+    expect(await (await band($, 160)).find({ text: /account live/ })).toBeDefined()
+    await clock.advance(15_000)
+    await $.prompt.submit({ text: 'hello' } as never)
+    expect(await (await band($, 160)).find({ text: /account live/ })).toBeUndefined()
   })
 
   test('no snapshot (the hook printed its grid) draws no band', async ($, on) => {

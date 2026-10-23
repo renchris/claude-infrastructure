@@ -22,8 +22,12 @@ export type Budget = { from: number; cells: number[] }
 export type Ladder = { v: 1; written_ms: number; gutter: number; budget: Budget; variants: Variant[] }
 
 /** The SessionStart board as the band draws it: the ladder hooks/accounts-board.sh handed over,
- *  its board's mtime, and the hook's two staleness bands (CC_BOARD_STALE_S, CC_BOARD_HARD_S). */
-export type BoardBand = { ladder: Ladder; mtimeMs: number; staleS: number; hardS: number }
+ *  its board's mtime, and the hook's two staleness bands (CC_BOARD_STALE_S, CC_BOARD_HARD_S).
+ *  `raisedMs` is when the band went up and `graceS` (CC_BOARD_BAND_GRACE_S) how long after it a
+ *  prompt.submit is taken for a brief submitted at launch, which leaves the band standing. */
+export type BoardBand = {
+  ladder: Ladder; mtimeMs: number; staleS: number; hardS: number; raisedMs: number; graceS: number
+}
 
 declare module 'claude-code' {
   interface PluginState {

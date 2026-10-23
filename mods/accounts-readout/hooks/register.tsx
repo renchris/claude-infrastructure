@@ -24,6 +24,15 @@ import { bandLayout, isLadder, isReadoutCommand, pickVariant, spans } from './la
 // 2026-10-21/): `classic.SessionStart` runs above the settings hooks, so this mod stamps
 // `<sid>.board-band.req` with the session id, runs them, and takes the snapshot the hook leaves at
 // `<sid>.board-band.json` ONLY when it printed no grid. No snapshot, no band: the hook's text stands.
+//
+// A BRIEF SUBMITTED AT LAUNCH IS NOT THE OPERATOR'S FIRST PROMPT (2026-10-23). handoff-fire.sh,
+// --recycle and desk.zsh pass the brief as claude's positional prompt, which the engine submits the
+// moment the SessionStart hooks settle, as a `composer` prompt.submit byte-identical to a typed
+// Enter (no origin, field or event tells them apart). So every fired pane armed the band and lost it
+// within a second, with no static grid left (session #159; 72 of 85 band-era starts, every one of
+// the 41 handoff fires: 0.08-3.3 s from board to prompt, against 45 s and up for a manual start;
+// docs/research/accounts-board-band-2026-10-21/README.md § Fired panes). A submit inside the grace
+// window after the band goes up leaves it standing; the next prompt takes it away.
 const board = atom({ plugin: 'accounts-readout', key: 'board' } as const, null)
 
 const LADDERS = { plugin: 'accounts-readout', key: 'ladders' } as const
@@ -136,6 +145,8 @@ export const register: Register = on => {
               ladder, mtimeMs,
               staleS: seconds(await $.env.get('CC_BOARD_STALE_S'), 300),
               hardS: seconds(await $.env.get('CC_BOARD_HARD_S'), 3600),
+              raisedMs: await $.clock.now(),
+              graceS: seconds(await $.env.get('CC_BOARD_BAND_GRACE_S'), 20),
             }
             await update($, board, () => snap)
             stopTick()
@@ -151,7 +162,8 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))          // replay-safe: a fault here never costs a hook's output
 
   on('prompt.submit', async ($, e, next) => {
-    if (await read($, board)) {
+    const b = await read($, board)
+    if (b && (await $.clock.now()) - b.raisedMs >= b.graceS * 1000) {
       stopTick()
       await update($, board, () => null)
     }
