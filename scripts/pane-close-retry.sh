@@ -225,6 +225,12 @@ drain_husk() { # uses $LS when kitty answered; LS="" means deaf (no pane/foregro
       pcq_remove "$row"; log "husk pane=$pane ✓ ${out//$'\n'/ }"; return ;;
   esac
   bump "$row" "$pane" "cc-pane-close rc=$rc: ${out//$'\n'/ }" husk
+  # The pane's screen follows the facts (F5): cc-pane-verdict re-derives its state from the closer's
+  # answer and repaints only when that state changed since the last paint.
+  local pv="${CC_PCQ_VERDICT_BIN:-$HERE/../bin/cc-pane-verdict}"
+  [[ -x "$pv" ]] && TIMEOUT_S=15 bounded "$pv" --pane "$pane" --recompute --reason "$(pcq_get "$row" reason)" \
+    --closer-out "$out" --sid "$(pcq_get "$row" sid)" --tty "$t" --kitty-pid "$kpid" >/dev/null 2>&1 </dev/null
+  return 0
 }
 
 N_TEAM=0 N_RCY=0 N_HUSK=0

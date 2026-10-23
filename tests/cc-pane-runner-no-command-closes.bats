@@ -103,3 +103,16 @@ exit 7'
   [ "$(jq -r .reason "$T/q/husk-42.json")" = guard-unreadable ]
   [ "$(jq -r .what "$T/q/husk-42.json")" = "this armed agent pane" ]
 }
+
+@test "F5: with a tty, the kept no-command pane is painted by cc-pane-verdict (NOTHING RAN) and the runner adds no line" {
+  # RED before F5: the runner printed its own two lines (the guard's and "pane is an ordinary shell").
+  export CC_PANE_RUNNER_TTY="$T/ttys042" CC_PANE_EXIT_DIR="$T/pane-exit" CC_PANE_CLOSE_QUEUE_DIR="$T/q"
+  export CC_PANE_VERDICT_DIR="$T/pv" CC_PANE_VERDICT_KITTY_BIN="$T/no-kitty" CC_SAY_LOG="$T/say.jsonl"
+  : > "$CC_PANE_RUNNER_TTY"
+  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: x' run "$RUNNER"
+  [ "$status" -eq 7 ]
+  grep -qF '✗ no session started in this pane' "$CC_PANE_RUNNER_TTY" || { cat -v "$CC_PANE_RUNNER_TTY"; false; }
+  grep -qF "kitty didn't answer · closes when it does" "$CC_PANE_RUNNER_TTY"
+  [[ "$output" != *"pane is an ordinary shell"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"kitty didn't answer"* ]] || { echo "$output"; false; }
+}

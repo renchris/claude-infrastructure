@@ -48,6 +48,9 @@ setup() {
   # cc-custody stub: `list --open --json` prints $D/custody.json (default: no open rows).
   cc_stub "$D/bin" custody "$(printf '#!/bin/bash\ncat "%s/custody.json" 2>/dev/null || echo "[]"\n' "$D")"
   export CC_PCQ_CUSTODY_BIN="$D/bin/custody" CC_PCQ_KITTY_START_EPOCH=1000
+  # cc-pane-verdict (F5) is a recorder here: the real one would ask kitty to retitle a window.
+  cc_stub "$D/bin" pane-verdict "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\n' "$D/verdict-calls.log")"
+  export CC_PCQ_VERDICT_BIN="$D/bin/pane-verdict"
   printf '#!/bin/bash\nexit 4\n' > "$D/bin/nosock"
   chmod +x "$D/bin/kitty" "$D/bin/it2" "$D/bin/page" "$D/bin/pcqnotify" "$D/bin/nosock"
 }
@@ -528,4 +531,17 @@ closer() {
   run "$DRAIN"
   [ -e "$D/q/self-close-85.json" ]
   [ "$(grep -c 'page ' "$D/page-calls.log")" -eq 1 ]
+}
+
+@test "F5: a husk the closer refuses is handed to cc-pane-verdict to repaint from the closer's answer" {
+  husk42 610 "$D/tty42"; : > "$D/tty42"; lsjson 42 ls.json /bin/zsh; closer REFUSED
+  run "$DRAIN"
+  grep -qF -- '--pane 42 --recompute --reason guard-unreadable --closer-out pane 42: REFUSED — stub' "$D/verdict-calls.log" || { cat "$D/verdict-calls.log"; false; }
+  grep -qF -- "--tty $D/tty42 --kitty-pid 610" "$D/verdict-calls.log"
+}
+
+@test "F5 CONTROL: a husk that closes is not repainted" {
+  husk42; lsjson 42 ls.json /bin/zsh; closer
+  run "$DRAIN"
+  [ ! -e "$D/verdict-calls.log" ]
 }

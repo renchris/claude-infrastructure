@@ -170,6 +170,27 @@ _husk_row() { # $1=reason [key=value …]
   return 0
 }
 
+# ── THE PANE'S FINAL WORDS COME FROM ONE WRITER (husk-panes-2026-10-22 F5) ─────────────────────────
+# A kept pane's screen and title are painted by bin/cc-pane-verdict, which renders the contract's
+# states and repaints only on a change; this runner hands it facts. Returns 0 only when the tool ran
+# against a real tty: with none (a test, a pipe) the caller keeps its one-line _say instead.
+# CC_PANE_RUNNER_TTY is the test seam for the pane's tty.
+_PV_PAINTED=0
+_verdict() { # cc-pane-verdict arguments after --pane/--sid/--tty
+  local _sd _v _t _reg _sid=""
+  [ -n "${KITTY_WINDOW_ID:-}" ] || return 1
+  _t="${CC_PANE_RUNNER_TTY:-$(tty 2>/dev/null)}" || _t=""
+  [ -n "$_t" ] && [ -w "$_t" ] || return 1
+  _sd="$(_self_dir)"
+  _v="${_sd:+$_sd/cc-pane-verdict}"
+  [ -n "$_v" ] && [ -x "$_v" ] || _v="${HOME:-}/.claude/bin/cc-pane-verdict"
+  [ -x "$_v" ] || return 1
+  _reg="${CC_REGISTRY_DIR:-${HOME:-}/.claude/cc-registry}/$KITTY_WINDOW_ID.json"
+  if [ -n "$_PANE_EXIT_DIR" ] && _since_launch "$_reg"; then _sid="$(jq -r '.session_id // empty' "$_reg" 2>/dev/null)"; fi
+  cc_run "$_v" --pane "$KITTY_WINDOW_ID" ${_sid:+--sid "$_sid"} --tty "$_t" "$@" >/dev/null 2>&1 || return 1
+  _PV_PAINTED=1
+}
+
 # The launch VERB, iff the command starts a Claude session: strip a leading `nocorrect`, take the
 # first word, then its basename. rc 1 (and no output) for any other command. ONE list, read by both
 # the wedge watch and the close-on-exit decision, so the two cannot drift on what "a claude pane" is.
@@ -309,12 +330,14 @@ _close_pane() { # $1=what exited $2=why it may close
         case "$_gout" in
           *"refused (refused-fs)"*)
             _husk_row guard-fullscreen what="$_v"
-            CC_SAY_DETAIL="$_v $_why — guard: ${_gout:-no output}" \
-              _say warn "last pane of a fullscreen window" "⌘W closes it" ;;
+            _verdict --state "${_PV_STATE:-DONE}" --guard fullscreen \
+              || CC_SAY_DETAIL="$_v $_why — guard: ${_gout:-no output}" _say warn "last pane of a fullscreen window" "⌘W closes it"
+            _detail "$_v $_why — guard: ${_gout:-no output}" "kept: last pane of a fullscreen window" ;;
           *)
             _husk_row guard-unreadable what="$_v"
-            CC_SAY_DETAIL="$_v $_why — guard: ${_gout:-no output}" \
-              _say wait "kitty didn't answer" "closes when it does" ;;
+            _verdict --state "${_PV_STATE:-DONE}" --guard unreadable \
+              || CC_SAY_DETAIL="$_v $_why — guard: ${_gout:-no output}" _say wait "kitty didn't answer" "closes when it does"
+            _detail "$_v $_why — guard: ${_gout:-no output}" "kept: kitty did not answer" ;;
         esac
         return 0
       fi
@@ -340,7 +363,9 @@ _kept_line() { # $1=verb $2=rc $3=1 iff fleet launch line $4=claude_started
     # claude ran and died: the row lets the closer retry once the session is ruled done (custody
     # returned, Good to close, landed elsewhere) — cc-pane-close's gate 3 refuses it until then.
     [ "$4" = true ] && _husk_row crash what="$1" rc="$2"
-    CC_SAY_DETAIL="$_s" _say warn "${1#the } exited $2" "shell kept for resume"
+    # No pane line: "resume" is not established yet, and an exit code is not for the screen (the
+    # F5 contract). The crash watchdog decides RESUME, OWNED or DONE and paints it via cc-pane-verdict.
+    _detail "$_s" "kept; the crash watchdog paints the verdict"
   else
     # With a pane id the command takes the fact's room (cc_say drops a fact before it moves a command).
     _s="$_s (claude never started)"
@@ -590,8 +615,10 @@ _no_command() {
   _pane_exit_prepare
   _pane_exit_record '<none>' 124 false
   if [ "${CC_PANE_CLOSE_ON_EXIT:-1}" != 0 ]; then
-    _close_pane "this armed agent pane" "received no command within ${_wait}s"
+    _PV_STATE=NOTHING _close_pane "this armed agent pane" "received no command within ${_wait}s"
   fi
+  # One writer: when the verdict was painted, the fallback adds no line of its own.
+  if [ "$_PV_PAINTED" = 1 ]; then _detail "no command arrived within ${_wait}s" "pane kept, verdict painted"; _fallback ""; fi
   _fallback "no command arrived within ${_wait}s"
 }
 

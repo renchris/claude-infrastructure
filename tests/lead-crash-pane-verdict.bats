@@ -31,6 +31,9 @@ setup() {
   export CC_PANE_VERDICT_CWD="$T/cwd"
   # the closer a "holds nothing" verdict hands the pane to: a recorder, never the real cc-pane-close
   export CC_PANE_CLOSE_BIN="$T/stub-pane-close" CC_PANE_VERDICT_CLOSE_GRACE_S=0
+  # The legacy paint is the FALLBACK when bin/cc-pane-verdict is absent; these cases pin it. The F5
+  # cases at the end turn the tool on and pin the contract wording it paints instead.
+  export CC_PANE_VERDICT_TOOL=off CC_PANE_VERDICT_DIR="$T/pv" CC_PANE_VERDICT_KITTY_BIN="$T/no-kitty"
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\necho "closed"\n' "$T/closed.txt" > "$CC_PANE_CLOSE_BIN"; chmod +x "$CC_PANE_CLOSE_BIN"
   : > "$T/dev/ttys099"; printf 'Ss+ /bin/zsh -l\n' > "$T/procs"; printf '999\n' > "$T/roles/desk"
   # the session's cwd: a git repo, dirty by default (an untracked file); tests make it clean as needed
@@ -467,4 +470,32 @@ echo closed'
   painted | grep -qF "kitty didn't answer" || { painted; false; }
   painted | grep -qF '✓ 88e2c2b1 finished' || { painted; false; }
   grep -qF $'\033]2;✓ done 88e2c2b1\007' "$T/dev/ttys099" || { cat -v "$T/dev/ttys099"; false; }
+}
+
+# ── F5: the watchdog hands its verdict to bin/cc-pane-verdict, the one writer (contract wording) ────
+@test "F5: a CRASH paints RESUME through cc-pane-verdict — no cause class, no exit code on screen" {
+  export CC_PANE_VERDICT_TOOL=on
+  run verdict_with "$HOOK" CRASH external-sigterm 143 15
+  [ "$status" -eq 0 ]
+  painted | grep -qF '✗ 88e2c2b1 stopped mid-task · 1 unsaved files' || { painted; false; }
+  painted | grep -qF '▶ cc-husk-sweep --resume --yes --pane 330' || { painted; false; }
+  ! painted | grep -qE 'external-sigterm|143|KILLED' || { painted; false; }
+  grep -qF $'\033]2;⛔ resume 88e2c2b1\007' "$T/dev/ttys099" || { cat -v "$T/dev/ttys099"; false; }
+}
+
+@test "F5: a CRASH whose custody is still open paints OWNED, naming the pane that holds it" {
+  export CC_PANE_VERDICT_TOOL=on
+  custody_row open 2026-10-01T00:35:50Z
+  run verdict_with "$HOOK" CRASH external-sigterm 143 15
+  painted | grep -qF "⏸ pane 38 is handling 88e2c2b1 · don't resume" || { painted; false; }
+  ! painted | grep -q -- '--resume' || { painted; false; }
+}
+
+@test "F5: a clean exit over clean work paints DONE and is still handed to the closer" {
+  export CC_PANE_VERDICT_TOOL=on
+  rm -f "$T/cwd/scratch.txt"
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  painted | grep -qF '✓ 88e2c2b1 finished · nothing to resume' || { painted; false; }
+  painted | grep -qF 'closing now · Ctrl-D closes it' || { painted; false; }
+  grep -qx -- '--pane 330' "$T/closed.txt" || { cat "$T/closed.txt"; false; }
 }

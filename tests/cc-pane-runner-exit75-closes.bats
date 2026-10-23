@@ -158,3 +158,10 @@ husk() { jq -r ".$1" "$CC_PANE_CLOSE_QUEUE_DIR/husk-42.json"; }
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$output" = "keeps=4" ] || { echo "$output"; false; }
 }
+
+@test "F5: a crash keep prints no resume line and no exit code — the watchdog paints that verdict" {
+  LAUNCH_RC=143 LAUNCH_STARTED=1 run_fleet "bash $S/lr-launch"
+  [ "$status" -eq 7 ]
+  [[ "$output" != *"shell kept for resume"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"143"* ]] || { echo "$output"; false; }
+}

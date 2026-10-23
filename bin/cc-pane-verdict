@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# cc-pane-verdict — the ONE writer of a dead pane's screen and title.
+#
+#   cc-pane-verdict --pane N --state DONE|RESUME|OWNED|NOTHING|CANTTELL [--sid S]
+#                   [--guard safe|fullscreen|unreadable] [--owner M] [--unsaved K] [--moved-to M]
+#                   [--stranded] [--tty PATH] [--kitty-pid P] [--dry-run]
+#   cc-pane-verdict --pane N --recompute [--reason R] [--closer-out TEXT] [--sid S] [--tty PATH] …
+#
+# WHY (docs/research/husk-panes-2026-10-22/, RC5 and § CONTRACT in synthesis.md). Up to four writers
+# painted a dead pane at different moments from different facts, the title was picked before the
+# close was decided, and nothing repainted: pane 42's title said "✅ closed" over "⚠ ended, reason
+# unknown" when the reason (kitty did not answer) was known, and pane 85 kept a "KILLED … custody"
+# paint that had gone false hours before. The runner, the watchdog and the pane-close reconciler now
+# write FACTS and call this; it renders one of the contract's states and repaints only when the
+# rendered state changes, so a re-run over unchanged facts writes nothing.
+#
+# HOW IT PAINTS: the visible screen is cleared (scrollback keeps history), at most two rows, each
+# fitted to the pane's real width (`stty size`, else 56 cells), row 2 carrying the one action. The
+# title goes through `kitty @ set-window-title --temporary`: a permanent title would outlive an
+# in-pane resume and block claude's own titles (skeptics.md F5). OSC-2 to the tty is the fallback.
+# Nothing from the contract's banned list reaches the screen: no exit codes or signals, no cause
+# classes, no guard output, no internal terms, never "closed" or ✅ in an open pane's title.
+#
+# --recompute is the reconciler's entry: it derives the state from the pane's exit record and from
+# one bin/cc-pane-close line (--closer-out), which already carries every fact the close gates read.
+#
+# Exit: 0 painted, unchanged, or dry-run · 2 usage. Never fails its caller otherwise.
+# Seams: CC_PANE_VERDICT_DIR (the state store) · CC_PANE_VERDICT_KITTY_BIN · CC_PANE_VERDICT_COLS ·
+#        CC_PANE_EXIT_DIR · CC_SAY_LOG.
+set -u
+
+PANE="" STATE="" SID="" GUARD="safe" OWNER="" UNSAVED="" MOVED="" STRANDED=0 TTYP="" DRY=0
+RECOMPUTE=0 REASON="" CLOSER_OUT="" KPID="${KITTY_PID:-}"
+usage() { sed -n '3,7p' "$0" >&2; exit 2; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pane) PANE="${2:-}"; shift 2 ;;
+    --state) STATE="${2:-}"; shift 2 ;;
+    --sid) SID="${2:-}"; shift 2 ;;
+    --guard) GUARD="${2:-safe}"; shift 2 ;;
+    --owner) OWNER="${2:-}"; shift 2 ;;
+    --unsaved) UNSAVED="${2:-}"; shift 2 ;;
+    --moved-to) MOVED="${2:-}"; shift 2 ;;
+    --stranded) STRANDED=1; shift ;;
+    --tty) TTYP="${2:-}"; shift 2 ;;
+    --kitty-pid) KPID="${2:-}"; shift 2 ;;
+    --recompute) RECOMPUTE=1; shift ;;
+    --reason) REASON="${2:-}"; shift 2 ;;
+    --closer-out) CLOSER_OUT="${2:-}"; shift 2 ;;
+    --dry-run) DRY=1; shift ;;
+    -h|--help) usage ;;
+    *) echo "cc-pane-verdict: unknown argument '$1'" >&2; usage ;;
+  esac
+done
+case "$PANE" in ''|*[!0-9]*) echo "cc-pane-verdict: --pane needs a kitty window id" >&2; exit 2 ;; esac
+case "$UNSAVED" in *[!0-9]*) UNSAVED="" ;; esac
+
+# ── recompute: the state from the facts ─────────────────────────────────────────────────────────
+if [ "$RECOMPUTE" = 1 ]; then
+  case "$REASON" in guard-fullscreen) GUARD=fullscreen ;; guard-unreadable) GUARD=unreadable ;; esac
+  xr="${CC_PANE_EXIT_DIR:-${HOME:-}/.claude/run/pane-exit}/$PANE.json"
+  if [ -f "$xr" ] && [ "$(jq -r 'if .claude_started == false and .rc != 0 then "never" else "" end' "$xr" 2>/dev/null)" = never ]; then
+    STATE=NOTHING
+  else
+    case "$CLOSER_OUT" in
+      *"WOULD CLOSE"*|*": CLOSED"*|*"ALREADY CLOSED"*|*"NOTHING TO CLOSE"*) STATE=DONE ;;
+      *"remote control is down"*) STATE=DONE; GUARD=unreadable ;;
+      *"fullscreen guard"*) STATE=DONE; [ "$GUARD" = unreadable ] || GUARD=fullscreen ;;
+      *"uncommitted change"*)
+        STATE=RESUME; UNSAVED="$(printf '%s' "$CLOSER_OUT" | sed -n 's/.* holds \([0-9][0-9]*\) uncommitted.*/\1/p' | head -1)" ;;
+      *STRANDED*) STATE=RESUME; STRANDED=1 ;;
+      *"nothing says session"*) if [ "$REASON" = crash ]; then STATE=RESUME; else STATE=CANTTELL; fi ;;
+      *) STATE=CANTTELL ;;
+    esac
+  fi
+fi
+
+# ── render: the contract's title and two rows ──────────────────────────────────────────────────
+s8="${SID:0:8}"; who="${s8:-the session}"
+case "$GUARD" in
+  fullscreen) g2="last pane of a fullscreen window · ⌘W closes it" ;;
+  unreadable) g2="kitty didn't answer · closes when it does" ;;
+  *)          g2="closing now · Ctrl-D closes it" ;;
+esac
+case "$STATE" in
+  DONE)
+    TITLE="✓ done${s8:+ $s8}"
+    if [ -n "$MOVED" ]; then R1="✓ $who runs in pane $MOVED now · nothing here"; else R1="✓ $who finished · nothing to resume"; fi
+    R2="$g2" ;;
+  RESUME)
+    TITLE="⛔ resume${s8:+ $s8}"
+    R1="✗ $who stopped mid-task${UNSAVED:+ · $UNSAVED unsaved files}"
+    if [ "$STRANDED" = 1 ] && [ -n "$s8" ]; then R2="▶ cc-lr recover $s8"; else R2="▶ cc-husk-sweep --resume --yes --pane $PANE"; fi ;;
+  OWNED)
+    case "$OWNER" in ''|*[!0-9]*) echo "cc-pane-verdict: OWNED needs --owner <pane>" >&2; exit 2 ;; esac
+    TITLE="⏸${s8:+ $s8} → pane $OWNER"
+    R1="⏸ pane $OWNER is handling $who · don't resume"
+    R2="closes when pane $OWNER hands it back" ;;
+  NOTHING)
+    TITLE="✗ nothing ran here"; R1="✗ no session started in this pane"; R2="$g2" ;;
+  CANTTELL)
+    TITLE="◆ check${s8:+ $s8}"; R1="◆ can't tell if $who finished"; R2="▶ cc-husk-sweep --pane $PANE" ;;
+  *) echo "cc-pane-verdict: --state must be DONE|RESUME|OWNED|NOTHING|CANTTELL (or --recompute)" >&2; exit 2 ;;
+esac
+
+# ── fit to the pane's real width ─────────────────────────────────────────────────────────────────
+cols="${CC_PANE_VERDICT_COLS:-}"
+if [ -z "$cols" ] && [ -n "$TTYP" ] && [ -c "$TTYP" ]; then cols="$(stty size < "$TTYP" 2>/dev/null | awk '{print $2}')"; fi
+case "$cols" in ''|*[!0-9]*|0) cols=56 ;; esac
+_sd="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")" 2>/dev/null && pwd)"
+for _c in "${_sd:+$_sd/../lib/cc-say.sh}" "${HOME:-}/.claude/lib/cc-say.sh"; do
+  # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+  [ -n "$_c" ] && [ -r "$_c" ] && { . "$_c" 2>/dev/null; break; }
+done
+fit() { # $1=row → the row cut to $cols cells
+  if command -v cc_say_cut >/dev/null 2>&1; then cc_say_cut "$1" "$cols"; printf '%s' "$CC_SAY_CUT"
+  else printf '%s' "$1" | cut -c1-"$cols"; fi
+}
+R1="$(fit "$R1")"; R2="$(fit "$R2")"
+
+if [ "$DRY" = 1 ]; then printf 'state=%s\ntitle=%s\n%s\n%s\n' "$STATE" "$TITLE" "$R1" "$R2"; exit 0; fi
+
+# ── idempotence: the last painted render for this pane in this kitty ─────────────────────────────
+store="${CC_PANE_VERDICT_DIR:-${HOME:-}/.claude/run/pane-verdict}"
+mkdir -p "$store" 2>/dev/null || true
+rec="$store/${KPID:-0}-$PANE.json"
+now="$(jq -cn --arg s "$STATE" --arg t "$TITLE" --arg a "$R1" --arg b "$R2" '{state:$s,title:$t,rows:[$a,$b]}' 2>/dev/null)"
+if [ -n "$now" ] && [ -f "$rec" ] && [ "$(cat "$rec" 2>/dev/null)" = "$now" ]; then
+  echo "cc-pane-verdict: pane $PANE unchanged ($STATE)"; exit 0
+fi
+
+# ── paint ────────────────────────────────────────────────────────────────────────────────────────
+painted=0
+if [ -n "$TTYP" ] && [ -w "$TTYP" ]; then
+  printf '\033[H\033[2J%s\n%s\n' "$R1" "$R2" >> "$TTYP" 2>/dev/null && painted=1
+fi
+kbin="${CC_PANE_VERDICT_KITTY_BIN:-}"
+if [ -z "$kbin" ] && [ -n "$_sd" ] && [ -x "$_sd/cc-kitty-bin" ]; then kbin="$(bash "$_sd/cc-kitty-bin" 2>/dev/null || true)"; fi
+sock="${KITTY_LISTEN_ON:-}"
+[ -n "$sock" ] || { [ -n "$KPID" ] && sock="unix:/tmp/kitty-$KPID"; }
+tdone=0
+if [ -n "$kbin" ] && [ -x "$kbin" ] && [ -n "$sock" ]; then
+  tmo="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+  if ${tmo:+"$tmo" 5} "$kbin" @ --to "$sock" set-window-title --temporary --match "id:$PANE" "$TITLE" >/dev/null 2>&1; then tdone=1; fi
+fi
+if [ "$tdone" = 0 ] && [ -n "$TTYP" ] && [ -w "$TTYP" ]; then printf '\033]2;%s\007' "$TITLE" >> "$TTYP" 2>/dev/null || true; fi
+[ -n "$now" ] && printf '%s\n' "$now" > "$rec" 2>/dev/null
+
+log="${CC_SAY_LOG:-${HOME:-}/.claude/logs/pane-say.jsonl}"
+if [ "$log" != off ] && [ -n "${HOME:-}${CC_SAY_LOG:-}" ]; then
+  mkdir -p "$(dirname "$log")" 2>/dev/null
+  jq -cn --argjson ts "$(date +%s)" --arg p "$PANE" --arg s "$STATE" --arg t "$TITLE" --arg a "$R1" --arg b "$R2" \
+    --argjson on "$painted" --argjson ti "$tdone" \
+    '{ts:$ts,tool:"cc-pane-verdict",kind:"painted",pane:$p,state:$s,title:$t,rows:[$a,$b],tty_written:($on==1),title_by_kitty:($ti==1)}' \
+    >> "$log" 2>/dev/null || true
+fi
+echo "cc-pane-verdict: pane $PANE painted $STATE — $TITLE"
+exit 0

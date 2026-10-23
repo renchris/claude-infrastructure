@@ -1913,12 +1913,15 @@ _pv_tm_row() {
 }
 _pv_out() { # the caller's verdict in paint_pane_verdict's framing; its detail goes to the log
   _lcw_say_detail "$headline" "$detail (painted $when)"
-  printf '%s\t%s\n\n%s\n' "$headline" "$title" "$body"
+  # Line 1 also carries the CONTRACT state for cc-pane-verdict (F5), after the title, \x1f-separated
+  # so an empty field stays empty: state, owner pane, moved-to pane, stranded, unsaved count.
+  printf '%s\t%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n\n%s\n' "$headline" "$title" "${pvs:-CANTTELL}" "${pvo:-}" "${pvm:-}" "${pvx:-0}" "${pvu:-}" "$body"
 }
 pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → line 1: headline<TAB>title; then a blank line and the block
   local sid="$1" class="$2" cause="$3" ec="${4:-}" sig="${5:-}" tpath="${6:-}"
   local launcher work close reason when role="" headline="" title="" body="" detail="" resume
   local tm tm_is tm_name tm_team tm_src tm_mid full_cfg f s8 pane closing nm
+  local pvs="" pvo="" pvm="" pvx=0 pvu=""   # the CONTRACT state (synthesis.md § CONTRACT), see _pv_out
   # The resume hint names the launcher of the store holding the FULL transcript (each HANDOFF.json hop
   # followed), never the registration's store: that printed `claude4` for a session living on next2.
   full_cfg="$LEAD_CFG"; [[ -z "$LEAD_CFG" ]] || full_cfg=$(pane_full_cfg "$sid" "$LEAD_CFG")
@@ -1949,13 +1952,13 @@ pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → lin
     stranded)
       # `cc-lr recover`, not `lr-fleet --one`: lr-fleet is not on PATH, so the painted command did not
       # run when pasted; cc-lr recover drives the same lr-fleet --one behind its guards.
-      title="✗ stranded $s8"
+      title="✗ stranded $s8"; pvs=RESUME; pvx=1
       _pv_add fail "$s8 moved ${LRF_SRC}→${LRF_DST}, relaunch failed" "" "cc-lr recover $s8"
       detail="$(pane_lr_enqueue "$sid" "$LRF_DST_CFG") Its full transcript is on $LRF_DST ($launcher); no copy runs anywhere · work in ${LEAD_CWD:-?}: $work · last close verdict: $close · lr facts: $LRF_FACTS"
       _pv_out
       return 0 ;;
     moved-live)
-      title="✅ moved $s8"
+      title="✅ moved $s8"; pvs=DONE; pvm="$LRF_LIVE_PANE"
       _pv_add ok "$s8 moved, runs in pane $LRF_LIVE_PANE" "$closing"
       detail="moved ${LRF_SRC}→${LRF_DST} and runs in pane $LRF_LIVE_PANE. Do NOT resume it here — a second copy would split it."
       _pv_out
@@ -1968,12 +1971,12 @@ pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → lin
       # to the lead); a lead source proves the order, not the member's state — so a member that died
       # with a tool call open is said to have been stopped MID-TASK, and the pane is NOT auto-closed
       # (the countdown is the closer's trigger), because the warning is the point of the paint.
-      title="✅ retired $s8"
+      title="✅ retired $s8"; pvs=DONE
       if [[ "${tm_src:-own}" == lead-* ]]; then
         local how="TaskStop"; [[ "$tm_src" == lead-request ]] && how="shutdown_request"
         detail="teammate $tm_name (session $s8) was stopped by its lead ($how); this was not a crash"
         if [[ "${tm_mid:-0}" == 1 ]]; then
-          title="⚠ retired mid-task $s8"
+          title="⚠ retired mid-task $s8"; pvs=CANTTELL
           _pv_add warn "$nm retired mid-task by lead" "$how"
           _pv_add warn "check its worktree for uncommitted work"
           detail="$detail. It was stopped MID-TASK (a tool call never returned): check its worktree before its lead (session ${tm_team#session-}) removes it. Nothing to resume."
@@ -1986,11 +1989,12 @@ pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → lin
         detail="teammate $tm_name (session $s8) was shut down by its lead; its work went to the lead. Nothing to resume."
       fi ;;
     RECYCLE:retired-by-desk)
-      title="✅ retired $s8"
+      title="✅ retired $s8"; pvs=DONE
       _pv_add ok "$s8 retired by desk" "$closing"
       detail="session $s8${role} was retired by the desk after its work was collected; the pane close that should have followed did not happen. Do NOT resume it — its work was landed before the retirement." ;;
     RECYCLE:*)
-      title="✅ closed $s8"
+      title="✅ closed $s8"; pvs=DONE
+      case "$work" in dirty:*|unlanded:*) pvs=CANTTELL ;; esac
       detail="exited on its own (reason: $reason); nothing relaunched here · work in ${LEAD_CWD:-?}: $work · last close verdict: $close"
       case "$work" in
         dirty:*|unlanded:*) _pv_add ok "$s8${role} ended cleanly" ;;
@@ -2007,15 +2011,17 @@ pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → lin
       IFS=$'\t' read -r c_state c_slug c_kind c_ts c_op <<< "$cust" || true
       detail="cause: ${cause}${ec:+ (exit $ec}${sig:+, signal $sig}${ec:+)} · work in ${LEAD_CWD:-?}: $work · last close verdict: $close"
       if [[ "$c_state" == collected ]]; then
-        title="✅ collected $s8"
+        title="✅ collected $s8"; pvs=DONE
         _pv_add ok "$s8 work collected by pane $c_op" "do not resume" "cc-husk-sweep --pane $pane"
         detail="$detail · killed here; its originator (pane $c_op) collected its work: custody $c_slug: $c_kind at $c_ts. A resume would re-arm its /goal over finished work."
       else
-        title="⛔ KILLED $s8"
+        title="⛔ KILLED $s8"; pvs=RESUME
+        case "$work" in dirty:*) pvu="${work#dirty:}" ;; esac
         # The pinned resume line (~85 cells) never fits a 56-cell row, so the row's ▶ is the triage
         # command and the resume line goes to the log.
         _pv_add fail "$s8${role} killed ($cause)" "" "cc-husk-sweep --pane $pane"
         if [[ "$c_state" == open ]]; then
+          pvs=OWNED; pvo="$c_op"
           _pv_add warn "pane $c_op holds custody of its work" "tell it"
           detail="$detail · not yours to resume: its originator (pane $c_op) holds custody of this work ($c_slug, opened $c_ts)"
         elif [[ "$tm_is" != 1 ]]; then
@@ -2023,7 +2029,7 @@ pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → lin
         fi
       fi
       _pv_work_row
-      [[ "$tm_is" != 1 ]] || _pv_tm_row ;;
+      [[ "$tm_is" != 1 ]] || { _pv_tm_row; pvs=CANTTELL; } ;;
   esac
   _pv_out
 }
@@ -2041,7 +2047,10 @@ paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath
   out=$(pane_verdict_text "$sid" "$class" "$cause" "$ec" "$sig" "$tpath")
   # first line = headline<TAB>title; the block follows a blank line. Parameter expansion, not
   # `| head -1`: this file runs under pipefail, and a producer cut off by head reads as a failure.
-  local first; first="${out%%$'\n'*}"; headline="${first%%$'\t'*}"; title="${first#*$'\t'}"
+  local first meta pvs pvo pvm pvx pvu pvg=safe
+  first="${out%%$'\n'*}"; headline="${first%%$'\t'*}"; title="${first#*$'\t'}"
+  meta="${title#*$'\x1f'}"; title="${title%%$'\x1f'*}"
+  IFS=$'\x1f' read -r pvs pvo pvm pvx pvu <<< "$meta" || true
   block="${out#*$'\n'}"; block="${block#$'\n'}"
   # THE CLOSER DECIDES BEFORE THE PAINT (lr-wake 2026-10-18, RC4). A row promising "closing in Ns"
   # over a pane the closer then refuses is a second false verdict, so a closable row is painted only
@@ -2058,12 +2067,15 @@ paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath
       local r1 r2
       case "$kept" in
         *"remote control is down"*)
+          pvs=DONE; pvg=unreadable
           title="✓ done ${sid:0:8}"; r1=$(_lcw_say ok "${sid:0:8} finished" "nothing to resume")
           r2=$(_lcw_say wait "kitty didn't answer" "closes when it does") ;;
         *"fullscreen guard"*)
+          pvs=DONE; pvg=fullscreen
           title="✓ done ${sid:0:8}"; r1=$(_lcw_say ok "${sid:0:8} finished" "nothing to resume")
           r2=$(_lcw_say warn "last pane of a fullscreen window" "⌘W closes it") ;;
         *)
+          pvs=CANTTELL
           title="◆ check ${sid:0:8}"; r2=""
           r1=$(_lcw_say judge "can't tell if ${sid:0:8} finished" "" "cc-husk-sweep --pane ${LEAD_PANE:-<pane>}") ;;
       esac
@@ -2078,7 +2090,22 @@ paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath
       log "[watchdog $sid] pane verdict: the closer keeps pane ${LEAD_PANE:-?} ($kept) — painted without the safe-to-close line"
     fi ;;
   esac
-  if { printf '\n%s\n' "$block"; printf '\033]2;%s\007' "$title"; } > "$PANE_VERDICT_DEV/$tty" 2>/dev/null; then
+  # THE ONE WRITER (F5): cc-pane-verdict paints the contract state and repaints only on a change; the
+  # block above stays the fallback (tool missing, or CC_PANE_VERDICT_TOOL=off) and the close trigger.
+  local pvbin="" pva=()
+  if [[ "${CC_PANE_VERDICT_TOOL:-on}" != off && "${LEAD_PANE:-}" =~ ^[0-9]+$ ]]; then
+    pvbin="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/../bin/cc-pane-verdict"
+    [[ -x "$pvbin" ]] || pvbin="$HOME/.claude/bin/cc-pane-verdict"
+    [[ -x "$pvbin" ]] || pvbin=""
+  fi
+  pva=(--pane "${LEAD_PANE:-}" --sid "$sid" --state "${pvs:-CANTTELL}" --guard "$pvg" --tty "$PANE_VERDICT_DEV/$tty")
+  [[ -z "$pvo" ]] || pva+=(--owner "$pvo")
+  [[ -z "$pvm" ]] || pva+=(--moved-to "$pvm")
+  [[ "$pvx" != 1 ]] || pva+=(--stranded)
+  [[ -z "$pvu" ]] || pva+=(--unsaved "$pvu")
+  if [[ -n "$pvbin" ]] && cc_run "$pvbin" "${pva[@]}" >/dev/null 2>&1; then
+    log "[watchdog $sid] pane verdict PAINTED by cc-pane-verdict on $tty (pane ${LEAD_PANE:-?}): ${pvs:-CANTTELL}"
+  elif { printf '\n%s\n' "$block"; printf '\033]2;%s\007' "$title"; } > "$PANE_VERDICT_DEV/$tty" 2>/dev/null; then
     log "[watchdog $sid] pane verdict PAINTED on $tty (pane ${LEAD_PANE:-?}): $headline"
   else
     log "[watchdog $sid] pane verdict WRITE FAILED on $tty (pane ${LEAD_PANE:-?}): $headline"
