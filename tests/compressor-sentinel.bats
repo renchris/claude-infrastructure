@@ -3263,6 +3263,12 @@ diff_setup() {
     SHF_BASE="$W4_BASE"
     mkdir -p "$BATS_RUN_TMPDIR/sentinel-jq"; ln -sf "$(command -v jq)" "$BATS_RUN_TMPDIR/sentinel-jq/jq"
     PATH="/usr/bin:/bin:/usr/sbin:/sbin:$BATS_RUN_TMPDIR/sentinel-jq" shf_build_stubs "$SHFSTUB.tmp"
+    # Under cc-shim each stub is a link whose body lives in <parent>/.<dirname>-real, keyed on the
+    # directory's NAME (tests/helpers/cc-stub.bash), so the rename must carry that dir too — first,
+    # so $SHFSTUB never exists without its targets. Without it the shim prints "no target" into stderr.
+    if [ -d "$BATS_RUN_TMPDIR/.sentinel-shf.tmp-real" ]; then
+      mv "$BATS_RUN_TMPDIR/.sentinel-shf.tmp-real" "$BATS_RUN_TMPDIR/.sentinel-shf-real"
+    fi
     mv "$SHFSTUB.tmp" "$SHFSTUB"
   fi
   dseq occ 800000; dseq swap 0.00M; dseq cbu 1000000; dseq lim 1000000; dseq buf 65536
