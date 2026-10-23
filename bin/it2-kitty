@@ -1291,7 +1291,14 @@ case "$verb" in
     # removes the window instead of the source: an armed pane runs no shell and has no line buffer to
     # land in. The flag stays regardless — it is correct on its own terms, and it is what protects the
     # legacy transport that CC_KITTY_ARGV_SPAWN=0 callers still use.
-    launch_args=(launch --type=window --location="$loc" --cwd=current --keep-focus)
+    # THE SESSION'S OWN DIRECTORY when the caller names one (husk-panes-2026-10-22 F8). With
+    # --cwd=current every fired pane started in its ORIGINATOR's tree and only cd'd inside the child
+    # command, so the shell kept after claude ended showed another session's branch and dirty marker
+    # (panes 42 and 85). IT2_SPLIT_CWD is set by the caller from the resolved --worktree/--cwd; an
+    # unset or missing directory keeps --cwd=current (kitty would fall back to $HOME otherwise).
+    _split_cwd="--cwd=current"
+    [ -n "${IT2_SPLIT_CWD:-}" ] && [ -d "$IT2_SPLIT_CWD" ] && _split_cwd="--cwd=$IT2_SPLIT_CWD"
+    launch_args=(launch --type=window --location="$loc" "$_split_cwd" --keep-focus)
     if [ -n "$SESSION" ]; then
       valid_id "$SESSION" || reject_id "$SESSION" split
       # --match window_id: is NOT redundant with --next-to. kitty's launch.py drops --next-to when

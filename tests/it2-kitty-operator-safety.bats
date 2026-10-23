@@ -150,6 +150,21 @@ kitty_argv() { cat "$KITTY_ARGV" 2>/dev/null; }
   kitty_argv | grep -q -- '--cwd=current'
 }
 
+@test "split with IT2_SPLIT_CWD launches IN that directory, not the source window's (husk-panes-2026-10-22 F8)" {
+  # RED before F8: the launch always carried --cwd=current, so a kept shell sat in the originator's tree.
+  mkdir -p "$BATS_TEST_TMPDIR/target wt"
+  IT2_SPLIT_CWD="$BATS_TEST_TMPDIR/target wt" run "$SHIM" session split -v -s 300
+  [ "$status" -eq 0 ]
+  kitty_argv | grep -qF -- "--cwd=$BATS_TEST_TMPDIR/target wt"
+  ! kitty_argv | grep -q -- '--cwd=current' || false
+}
+
+@test "CONTROL: an IT2_SPLIT_CWD that does not exist keeps --cwd=current" {
+  IT2_SPLIT_CWD="$BATS_TEST_TMPDIR/not-there" run "$SHIM" session split -v -s 300
+  [ "$status" -eq 0 ]
+  kitty_argv | grep -q -- '--cwd=current'
+}
+
 @test "CONTROL: --cwd=current with no --source-window is what kitty resolves against the ACTIVE window" {
   # The control is documentary rather than executable — kitty's own help is the oracle, and quoting
   # it here is what stops the assertion above from being a cargo-culted flag nobody can justify.
