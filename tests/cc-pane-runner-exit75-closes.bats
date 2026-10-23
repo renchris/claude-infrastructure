@@ -27,7 +27,7 @@ setup() {
   unset CC_PANE_RUNNER_OWNS_CLOSE KITTY_PID LR_RUN_DIR CC_PANE_STARTED_FILE CC_PANE_EXIT_OWED
   export PATH="$S:/usr/bin:/bin"
   # the guard records its argv and answers $GUARD_RC (0 = safe to close)
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexit "${GUARD_RC:-0}"\n' "$T/guard-log" > "$S/fsguard"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\n[ -n "${GUARD_ERR:-}" ] && printf "%%s\\n" "$GUARD_ERR" >&2\nexit "${GUARD_RC:-0}"\n' "$T/guard-log" > "$S/fsguard"
   export CC_KITTY_FS_GUARD="$S/fsguard"
   # the launch line: exits $LAUNCH_RC; LAUNCH_OWED=1 touches the owed-record path the runner exports,
   # LAUNCH_STARTED=1 the started path — the two facts only a launcher can supply
@@ -60,11 +60,11 @@ field() { jq -r ".$1" "$CC_PANE_EXIT_DIR/42.json"; }
 }
 
 @test "rc 75 with the guard REFUSING (last pane of a fullscreen window) keeps the shell — never a raw close" {
-  GUARD_RC=3 LAUNCH_RC=75 run_fleet "bash $S/lr-launch"
+  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 42 scope=pane mode=refuse: state=FS types=[4] onscreen=True' LAUNCH_RC=75 run_fleet "bash $S/lr-launch"
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
-  [[ "$output" == *"⚠ last pane of a fullscreen window · close it by hand"* ]] || { echo "$output"; false; }
-  said "last pane of a fullscreen (or unreadable) kitty window, keeping the shell"
+  [[ "$output" == *"⚠ last pane of a fullscreen window · ⌘W closes it"* ]] || { echo "$output"; false; }
+  said "guard: kitty-fullscreen-guard: refused (refused-fs)"
 }
 
 @test "an in-place shell survives: rc 75 while a recycle is pending for this pane keeps the shell, guard never asked" {

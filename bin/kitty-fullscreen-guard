@@ -751,14 +751,17 @@ def decide(
         info = kitten_query(addr, wid)
     except NotFound:
         return 4, "not-found", {}, none, None
-    except KittenFailed:
-        return 3, "kitten-failed", {}, none, None
+    except KittenFailed as e:
+        # The reason travels in the info dict's "error" key so the verdict row and the stderr line can
+        # say WHY kitty could not be read — dropped here before 2026-10-22, when pane 42's unreadable
+        # read surfaced as "last pane of a fullscreen window" (husk-panes-2026-10-22 RC5, F4).
+        return 3, "kitten-failed", {"error": str(e)}, none, None
     cache_fsfix(info)
     last_for = info.get("last_for") or {}
     if last_for.get(scope) is False:
         return 0, "safe-not-last", info, none, None
     if last_for.get(scope) is not True:
-        return 3, "kitten-failed", info, none, None
+        return 3, "kitten-failed", dict(info, error=f"kitten reply has no last_for[{scope}]"), none, None
     pwid = info.get("platform_window_id")
 
     reason = relax_reason(policy, info.get("fsfix"), mode)
@@ -787,8 +790,8 @@ def decide(
         toggled = kitten_query(addr, wid, toggle=True)
     except NotFound:
         return 4, "not-found", info, s, None
-    except KittenFailed:
-        return 3, "kitten-failed", info, s, None
+    except KittenFailed as e:
+        return 3, "kitten-failed", dict(info, error=str(e)), s, None
     entered = toggled.get("toggled_into_fullscreen")
     if entered is True:
         # It ENTERED fullscreen: our read said FS but kitty disagreed. The undo must NOT be sent
@@ -797,7 +800,7 @@ def decide(
         # wait for the transition to END, then undo at most once — or not at all if it never took.
         return (*_undo_entered(addr, wid, pwid, info), None)
     if entered is not False:
-        return 3, "kitten-failed", info, s, None
+        return 3, "kitten-failed", dict(info, error=f"toggle reply unusable: {entered!r}"), s, None
     verdict, s = _after_toggle(pwid)
     return (0 if verdict == "safe-after-toggle" else 3), verdict, info, s, None
 
@@ -985,13 +988,23 @@ def main(argv: list[str] | None = None) -> int:
         would_rc=3 if relaxed else None,
         relaxed=relaxed,
         enforced=False if relaxed else None,
+        error=info.get("error"),
     )
     if rc != 0:
-        print(
-            f"{TOOL}: refused ({verdict}) kitty window {wid} scope={scope} mode={mode}: "
-            f"state={last.state} types={last.types} onscreen={last.onscreen}",
-            file=sys.stderr,
-        )
+        if verdict == "kitten-failed":
+            # No window state was read, so a state line here would print placeholders
+            # (state=UNKNOWN types=None) that read as a measurement. Say what failed instead.
+            print(
+                f"{TOOL}: refused (kitten-failed) could not read kitty window {wid}: "
+                f"{info.get('error') or 'no reason recorded'}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"{TOOL}: refused ({verdict}) kitty window {wid} scope={scope} mode={mode}: "
+                f"state={last.state} types={last.types} onscreen={last.onscreen}",
+                file=sys.stderr,
+            )
         if rc == 3 and mode == "toggle":
             _alert(wid, verdict, last)
         return rc

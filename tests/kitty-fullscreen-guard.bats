@@ -548,3 +548,17 @@ for v, st in (("refused-timeout", g.WindowState("UNKNOWN", [0], False, None)),
   run drive 'kitten(); states(lambda t: FS if not toggles else g.WindowState("UNKNOWN", [0], False, (0.0, 0.0, 1200.0, 828.0))); run()'
   [[ "$output" == "rc=3 verdict=refused-timeout toggles=1 "* ]] || { echo "$output"; false; }
 }
+
+@test "39 kitten-failed says WHY: the verdict row carries the error, stderr names it and prints no placeholder state" {
+  bats_require_minimum_version 1.5.0
+  # husk-panes-2026-10-22 F4: pane 42's unreadable read logged no reason and printed
+  # `state=UNKNOWN types=None`, a placeholder that reads as a measurement. RED before the fix:
+  # the row had no error field and stderr carried the placeholder line.
+  KFG_KITTEN_RC=1 KFG_KITTEN_ERR='boom' KFG_KITTEN_OUT='' \
+    run --separate-stderr "$GUARD" --window 7 --to unix:/nowhere --mode refuse --tool t
+  [ "$status" -eq 3 ] || { echo "$output $stderr"; false; }
+  vrow | grep -q '"verdict":"kitten-failed"' || { vrow; false; }
+  vrow | grep -q '"error":"kitty @ kitten rc=1: boom"' || { vrow; false; }
+  [[ "$stderr" == *"refused (kitten-failed) could not read kitty window 7: kitty @ kitten rc=1: boom"* ]] || { echo "$stderr"; false; }
+  [[ "$stderr" != *"state="* ]] || { echo "$stderr"; false; }
+}

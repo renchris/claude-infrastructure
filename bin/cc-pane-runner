@@ -274,9 +274,21 @@ _close_pane() { # $1=what exited $2=why it may close
       # "last" across every tab of the OS window, so this refuses exactly the crash trigger (the
       # last pane of a fullscreen window) — os-window scope would refuse every pane of every
       # fullscreen window and keep the husks this decision exists to remove (K3 as amended).
-      if ! cc_run "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner >&2; then
-        CC_SAY_DETAIL="$_v $_why — last pane of a fullscreen (or unreadable) kitty window, keeping the shell" \
-          _say warn "last pane of a fullscreen window" "close it by hand"
+      # The guard's own words go to the cc-say log, never the pane (husk-panes-2026-10-22 F4): its
+      # rc is 3 for a fullscreen last pane AND for a kitty that did not answer, and pane 42 showed
+      # "last pane of a fullscreen window" plus the guard's raw `state=UNKNOWN types=None` line for
+      # an unreadable read in a 3-pane window. Only the verdict TEXT tells the two apart, as in
+      # bin/it2-kitty's close branch.
+      local _gout
+      if ! _gout="$(cc_run "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner 2>&1)"; then
+        case "$_gout" in
+          *"refused (refused-fs)"*)
+            CC_SAY_DETAIL="$_v $_why — guard: ${_gout:-no output}" \
+              _say warn "last pane of a fullscreen window" "⌘W closes it" ;;
+          *)
+            CC_SAY_DETAIL="$_v $_why — guard: ${_gout:-no output}" \
+              _say wait "kitty didn't answer" "closes when it does" ;;
+        esac
         return 0
       fi
     fi

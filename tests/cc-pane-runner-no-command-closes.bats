@@ -23,6 +23,7 @@ setup() {
   export PATH="$S:/usr/bin:/bin"
   cc_stub "$S" fsguard '#!/bin/bash
 printf "%s\n" "$*" >> "$GLOG"
+[ -n "${GUARD_ERR:-}" ] && printf "%s\n" "$GUARD_ERR" >&2
 exit "${GUARD_RC:-0}"'
   export CC_KITTY_FS_GUARD="$S/fsguard"
   cc_stub "$S" fakeshell '#!/bin/bash
@@ -71,4 +72,22 @@ exit 7'
   printf '%s' ": > $T/ran" > "$CC_PANE_CMD_DIR/42.cmd"
   CC_PANE_CMD_WAIT_S=5 run "$RUNNER"
   [ -e "$T/ran" ]
+}
+
+@test "an UNREADABLE guard read says kitty didn't answer — never 'last pane of a fullscreen window', never the guard's raw line" {
+  # husk-panes-2026-10-22 F4, pane 42: a kitten-failed read in a 3-pane window was painted as the
+  # last pane of a fullscreen window, with the guard's placeholder state line under it. RED before
+  # the fix: both forbidden strings reached the pane.
+  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: timed out' run "$RUNNER"
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"kitty didn't answer"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"last pane of a fullscreen window"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"kitty-fullscreen-guard: refused"* ]] || { echo "$output"; false; }
+}
+
+@test "a refused-fs guard verdict says last pane of a fullscreen window and names ⌘W, without the guard's raw line" {
+  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 42 scope=pane mode=refuse: state=FS types=[4] onscreen=True' run "$RUNNER"
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"last pane of a fullscreen window"*"⌘W closes it"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"kitty-fullscreen-guard: refused"* ]] || { echo "$output"; false; }
 }

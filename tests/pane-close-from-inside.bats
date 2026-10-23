@@ -27,7 +27,7 @@ setup() {
   # kitty and osascript on PATH are loggers.
   unset KITTY_PID
   # shellcheck disable=SC2016
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexit "${GUARD_RC:-0}"\n' "$T/guard-log" > "$S/fsguard"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\n[ -n "${GUARD_ERR:-}" ] && printf "%%s\\n" "$GUARD_ERR" >&2\nexit "${GUARD_RC:-0}"\n' "$T/guard-log" > "$S/fsguard"
   printf '#!/bin/bash\necho "$0 $*" >> %q\nexit 0\n' "$T/kitty-log" > "$S/kitty"
   cp "$S/kitty" "$S/osascript"
   export CC_KITTY_FS_GUARD="$S/fsguard" CC_TERM_KITTY="$S/kitty"
@@ -184,11 +184,11 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
 }
 
 @test "runner: the guard refusing (rc 3: last pane of a fullscreen window) keeps the shell" {
-  GUARD_RC=3 run_runner "claude"
+  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 42 scope=pane mode=refuse: state=FS types=[4] onscreen=True' run_runner "claude"
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
-  said "last pane of a fullscreen (or unreadable) kitty window, keeping the shell"
-  [[ "$output" == *"⚠ last pane of a fullscreen window · close it by hand"* ]] || { echo "$output"; false; }
+  said "guard: kitty-fullscreen-guard: refused (refused-fs)"
+  [[ "$output" == *"⚠ last pane of a fullscreen window · ⌘W closes it"* ]] || { echo "$output"; false; }
 }
 
 @test "runner: a guard that cannot be found keeps the shell (fail closed), naming the path" {
