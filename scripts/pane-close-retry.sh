@@ -62,6 +62,31 @@ done < <(find "$PCQ_DIR" -maxdepth 1 -name '*.json.tmp.*' -mmin +60 2>/dev/null)
 
 ROWS="$(pcq_list)"
 [[ -n "$ROWS" ]] || exit 0          # the common case: nothing queued, and kitty is never asked
+
+# One drainer at a time (C4f): the launchd job, SessionEnd's detached runs and manual runs overlap, and
+# pcq_add is a read-modify-write. A dead holder's lock is taken over; a lock dir with no pid yet is a
+# holder between its mkdir and its write, unless it is a minute old.
+LOCK="$PCQ_DIR/.drain.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  _h="$(cat "$LOCK/pid" 2>/dev/null)"
+  if [[ "$_h" =~ ^[0-9]+$ ]] && kill -0 "$_h" 2>/dev/null; then
+    log "another drainer (pid $_h) holds the lock — exiting"; exit 0
+  fi
+  _m="$(stat -f %m "$LOCK" 2>/dev/null || echo 0)"
+  if [[ -z "$_h" ]] && (( $(date +%s) - ${_m:-0} < 60 )); then
+    log "another drainer is taking the lock — exiting"; exit 0
+  fi
+  rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null
+  mkdir "$LOCK" 2>/dev/null || { log "drain lock contended while taking it over from dead pid ${_h:-?} — exiting"; exit 0; }
+  log "drain lock of dead pid ${_h:-?} taken over"
+fi
+echo "$$" > "$LOCK/pid" 2>/dev/null || true
+trap 'rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null' EXIT
+
+# The run's own budget (C4e): the launchd job bounds this script (timeout 270, budget 240), and a run
+# cut off by that bound drops whatever husk it was on. Husks stop being handed to the closer within
+# 30 s of it.
+BUDGET_S="${CC_PCQ_DRAIN_TIMEOUT_S:-240}"; [[ "$BUDGET_S" =~ ^[0-9]+$ ]] || BUDGET_S=240
 command -v jq >/dev/null 2>&1 || { log "jq missing — every row held"; exit 0; }
 
 # The live kitty, resolved BEFORE any row is judged: every kind is checked against its generation
@@ -220,8 +245,21 @@ custody_open_for() { # <pane> <floor epoch> → rc 0 iff an open custody row nam
   done <<<"$CUSTODY_OPEN"
   return 1
 }
+#   e. hold=operator (C4): the closer's fullscreen guard refused it as the LAST pane of its OS window
+#      (pane 165 on 2026-10-22). Only the operator's ⌘W can close that, so it is paged once and no
+#      longer asked or counted while that window holds the same number of panes; a change releases it.
+os_window_of() { # <pane> → "<os window id> <windows across its tabs>" from $LS, or nothing
+  jq -r --arg p "$1" '[.[]? | select([.tabs[]?.windows[]?.id | tostring] | index($p))
+                      | "\(.id) \([.tabs[]?.windows[]?] | length)"][0] // empty' <<<"$LS" 2>/dev/null
+}
+husk_rows_oldest_first() { # → husk row paths, least recently tried (oldest last_ts) first
+  local r
+  while IFS= read -r r; do
+    [[ "$(pcq_get "$r" kind)" == husk ]] && printf '%s\t%s\n' "$(pcq_get "$r" last_ts)" "$r"
+  done <<<"$ROWS" | LC_ALL=C sort | cut -f2-
+}
 drain_husk() { # uses $LS when kitty answered; LS="" means deaf (no pane/foreground read possible)
-  local row="$1" pane kpid win t at base floor first out rc pc
+  local row="$1" pane kpid win t at base floor first out rc pc ow hold
   pane="$(pcq_get "$row" pane)"; kpid="$(pcq_get "$row" kitty_pid)"
   [[ "$pane" =~ ^[0-9]+$ ]] || { pcq_remove "$row"; log "husk pane=$pane not a kitty window id — row removed"; return; }
   if [[ -n "$kpid" && -n "$LIVE_GEN" && "$kpid" != "$LIVE_GEN" ]]; then
@@ -241,6 +279,13 @@ drain_husk() { # uses $LS when kitty answered; LS="" means deaf (no pane/foregro
       pcq_remove "$row"; log "husk pane=$pane its tty was typed in since $(pcq_get "$row" first_ts) — the operator owns it; row removed, never closed"; return
     fi
   fi
+  if [[ "$(pcq_get "$row" hold)" == operator ]]; then
+    [[ -n "$LS" ]] || { log "husk pane=$pane held for the operator (⌘W) — kitty is deaf, its window unread"; return; }
+    ow="$(os_window_of "$pane")"; hold="$(pcq_get "$row" hold_os_window) $(pcq_get "$row" hold_windows)"
+    if [[ "$ow" == "$hold" ]]; then log "husk pane=$pane held for the operator (⌘W) — its window is unchanged"; return; fi
+    pcq_add husk "$pane" hold= >/dev/null 2>&1 || true
+    log "husk pane=$pane hold released — its window changed (os window + panes: $hold → ${ow:-?})"
+  fi
   floor="$(_kitty_start_epoch)"
   if [[ -z "$floor" ]]; then   # no kitty start: a day before the row, so a reused id's old debt is not read as this pane's
     first="$(pcq_get "$row" first_ts)"
@@ -249,15 +294,31 @@ drain_husk() { # uses $LS when kitty answered; LS="" means deaf (no pane/foregro
   if custody_open_for "$pane" "$floor"; then
     log "husk pane=$pane an open custody row names it — held until it is returned or abandoned"; return
   fi
+  if (( BUDGET_S - SECONDS < 30 )); then
+    log "husk pane=$pane deferred — within 30s of the run's ${BUDGET_S}s bound"; return
+  fi
   pc="${CC_PCQ_PANE_CLOSE_BIN:-$HERE/../bin/cc-pane-close}"
   [[ -x "$pc" ]] || { bump "$row" "$pane" "cc-pane-close not executable at $pc" husk; return; }
-  if [[ -n "$LS" ]]; then out="$(TIMEOUT_S="${CC_PCQ_CLOSE_TIMEOUT_S:-60}" bounded "$pc" --pane "$pane" 2>&1 </dev/null)"; rc=$?
-  else out="$(CC_PANE_CLOSE_REMOTE=off TIMEOUT_S="${CC_PCQ_CLOSE_TIMEOUT_S:-60}" bounded "$pc" --pane "$pane" 2>&1 </dev/null)"; rc=$?; fi
+  local ct="${CC_PCQ_CLOSE_TIMEOUT_S:-60}"
+  if [[ -n "$LS" ]]; then out="$(TIMEOUT_S="$ct" bounded "$pc" --pane "$pane" 2>&1 </dev/null)"; rc=$?
+  else out="$(CC_PANE_CLOSE_REMOTE=off TIMEOUT_S="$ct" bounded "$pc" --pane "$pane" 2>&1 </dev/null)"; rc=$?; fi
   case "$out" in
     *": CLOSED"*|*": NOTHING TO CLOSE"*|*": ALREADY CLOSED"*)
       pcq_remove "$row"; log "husk pane=$pane ✓ ${out//$'\n'/ }"; return ;;
   esac
-  bump "$row" "$pane" "cc-pane-close rc=$rc: ${out//$'\n'/ }" husk
+  # The closer was cut off and said nothing: there is no answer to repaint from (C4c).
+  if (( rc == 124 )) && [[ -z "$out" ]]; then
+    log "husk pane=$pane closer exceeded its ${ct}s bound"
+    bump "$row" "$pane" "cc-pane-close rc=124 with no output" husk; return
+  fi
+  # The last pane of a fullscreen OS window: operator-only, so held and paged once, never counted (C4a).
+  if [[ "$out" == *refused-fs* && -n "$LS" ]] && ow="$(os_window_of "$pane")" && [[ "$ow" == *" 1" ]]; then
+    pcq_add husk "$pane" hold=operator hold_windows=1 hold_os_window="${ow% *}" paged=1 >/dev/null 2>&1 || true
+    page "pane-close-retry: ⌘W pane $pane on its Desktop — the last pane of a fullscreen window; only the operator can close it. Row: $row"
+    log "husk pane=$pane the last pane of fullscreen OS window ${ow% *} — held for the operator (⌘W), paged once"
+  else
+    bump "$row" "$pane" "cc-pane-close rc=$rc: ${out//$'\n'/ }" husk
+  fi
   # The pane's screen follows the facts (F5): cc-pane-verdict re-derives its state from the closer's
   # answer and repaints only when that state changed since the last paint.
   local pv="${CC_PCQ_VERDICT_BIN:-$HERE/../bin/cc-pane-verdict}"
@@ -317,8 +378,8 @@ if ! _ls_fresh; then
   done 3<<<"$ROWS"
   # husk rows take the same no-socket path, through drain_husk's own holds (it reads LS="" as deaf).
   while IFS= read -r _row <&3; do
-    [[ "$(pcq_get "$_row" kind)" == husk ]] && drain_husk "$_row"
-  done 3<<<"$ROWS"
+    [[ -n "$_row" ]] && drain_husk "$_row"
+  done 3< <(husk_rows_oldest_first)
   (( N_RCY == 0 )) || log "kitty unresponsive — $N_RCY owed recycle(s) held until it answers"
   log "kitty unresponsive — $_held row(s) held (sock=${SOCK:-none})"
   exit 0
@@ -446,7 +507,11 @@ while IFS= read -r _row <&3; do
   case "$(pcq_get "$_row" kind)" in
     teammate) drain_teammate "$_row" ;;
     recycle)  drain_recycle "$_row" ;;
-    husk)     drain_husk "$_row" ;;
   esac
 done 3<<<"$ROWS"
+# Husks last and least recently tried first (C4d): a run cut off by its bound used to drop the same
+# alphabetically-last row every time.
+while IFS= read -r _row <&3; do
+  [[ -n "$_row" ]] && drain_husk "$_row"
+done 3< <(husk_rows_oldest_first)
 exit 0

@@ -607,3 +607,108 @@ reg() { mkdir -p "$D/reg"; printf '{"session_id":"%s"}\n' "$2" > "$D/reg/$1.json
   run "$DRAIN"
   [ ! -e "$D/verdict-calls.log" ]
 }
+
+# ══ operator-only husks and a bounded drainer (pane end of life wave C, C4) ══════════════════════
+# RED before: pane 165, the only pane of a native-fullscreen OS window, was handed to the closer every
+# tick, bumped an attempt each time, paged "Close it manually" with the wrong reason, and, always last
+# in the queue, was the row cut off when a run hit its bound.
+closer_fs() { # the closer's guard refusal for the last pane of a fullscreen window (wording contract)
+  cc_stub "$D/bin" cc-pane-close "$(printf '#!/bin/bash\necho "$* remote=${CC_PANE_CLOSE_REMOTE:-on}" >> %q\necho "pane ${2}: REFUSED — the fullscreen guard refused (--scope pane --mode refuse): refused-fs — this is the last pane of a fullscreen OS window; only the operator can close it (⌘W)"\nexit 1\n' \
+    "$D/pc-calls.log")"
+}
+ls2() { # OS window 1 holding panes 42 and 43 in two tabs, both bare shells
+  printf '[{"id":1,"tabs":[{"id":1,"windows":[{"id":42,"foreground_processes":[{"pid":9,"cmdline":["/bin/zsh"]}]}]},{"id":2,"windows":[{"id":43,"foreground_processes":[{"pid":9,"cmdline":["/bin/zsh"]}]}]}]}]\n' > "$D/ls.json"
+}
+held42() { q husk 42 reason=guard-refused kitty_pid=610 producer=cc-pane-runner hold=operator hold_windows=1 hold_os_window=1; }
+
+@test "C4: a refused-fs husk alone in its window is held for the operator — paged once, no attempt counted" {
+  husk42; lsjson 42 ls.json /bin/zsh; closer_fs
+  run "$DRAIN"
+  [ "$(qget "$(ROW42)" hold)" = operator ]
+  [ "$(qget "$(ROW42)" hold_windows)" = 1 ]
+  [ "$(qget "$(ROW42)" hold_os_window)" = 1 ]
+  [ "$(qget "$(ROW42)" attempts)" = 0 ]
+  [ "$(grep -c 'page ' "$D/page-calls.log")" -eq 1 ]
+  grep -q "⌘W pane 42 on its Desktop — the last pane of a fullscreen window; only the operator can close it. Row: $(ROW42)" "$D/page-calls.log"
+  run "$DRAIN"
+  [ "$(grep -c . "$D/pc-calls.log")" -eq 1 ]               # held: the closer is not asked again
+  [ "$(grep -c 'page ' "$D/page-calls.log")" -eq 1 ]
+  [ "$(qget "$(ROW42)" attempts)" = 0 ]
+  grep -q "husk pane=42 held for the operator (⌘W) — its window is unchanged" "$D/pcq.log"
+}
+
+@test "C4 CONTROL: refused-fs while the window holds two panes is an ordinary refusal — attempt counted, no hold" {
+  husk42; ls2; closer_fs
+  run "$DRAIN"
+  [ -z "$(qget "$(ROW42)" hold)" ]
+  [ "$(qget "$(ROW42)" attempts)" = 1 ]
+}
+
+@test "C4: a held husk is released when its window's pane count changes, and asked again" {
+  held42; ls2; closer REFUSED
+  run "$DRAIN"
+  [ "$(grep -c . "$D/pc-calls.log")" -eq 1 ]
+  [ -z "$(qget "$(ROW42)" hold)" ]
+  [ "$(qget "$(ROW42)" attempts)" = 1 ]
+}
+
+@test "C4: a held husk while kitty is deaf stays held — no close, no attempt" {
+  held42; echo 124 > "$D/kitty.rc"; closer
+  run "$DRAIN"
+  [ ! -e "$D/pc-calls.log" ]
+  [ "$(qget "$(ROW42)" attempts)" = 0 ]
+  grep -q "husk pane=42 held for the operator (⌘W)" "$D/pcq.log"
+}
+
+@test "C4: a closer that hits its bound with no output is logged as such and not repainted" {
+  husk42; lsjson 42 ls.json /bin/zsh
+  cc_stub "$D/bin" cc-pane-close "$(printf '#!/bin/bash\nexit 124\n')"
+  run "$DRAIN"
+  grep -q "husk pane=42 closer exceeded its 60s bound" "$D/pcq.log"
+  [ ! -e "$D/verdict-calls.log" ]
+}
+
+@test "C4: husk rows drain least recently tried first, with kitty answering and deaf" {
+  husk42; q husk 43 reason=guard-unreadable kitty_pid=610 producer=cc-pane-runner
+  jq '.last_ts = "2026-01-01T00:00:00Z"' "$D/q/husk-43.json" > "$D/h43" && mv "$D/h43" "$D/q/husk-43.json"
+  ls2; closer REFUSED
+  run "$DRAIN"
+  [ "$(sed -n 1p "$D/pc-calls.log")" = "--pane 43 remote=on" ] || { cat "$D/pc-calls.log"; false; }
+  [ "$(sed -n 2p "$D/pc-calls.log")" = "--pane 42 remote=on" ]
+  rm -f "$D/pc-calls.log"
+  jq '.last_ts = "2025-01-01T00:00:00Z"' "$(ROW42)" > "$D/h42" && mv "$D/h42" "$(ROW42)"
+  echo 124 > "$D/kitty.rc"
+  run "$DRAIN"
+  [ "$(sed -n 1p "$D/pc-calls.log")" = "--pane 42 remote=off" ] || { cat "$D/pc-calls.log"; false; }
+  [ "$(sed -n 2p "$D/pc-calls.log")" = "--pane 43 remote=off" ]
+}
+
+@test "C4: within 30 s of the run's bound every remaining husk is deferred, never handed to the closer" {
+  husk42; q husk 43 reason=guard-unreadable kitty_pid=610 producer=cc-pane-runner
+  ls2; closer REFUSED
+  CC_PCQ_DRAIN_TIMEOUT_S=29 run "$DRAIN"
+  [ ! -e "$D/pc-calls.log" ]
+  grep -q "husk pane=42 deferred — within 30s of the run's 29s bound" "$D/pcq.log"
+  grep -q "husk pane=43 deferred — within 30s of the run's 29s bound" "$D/pcq.log"
+  [ "$(qget "$(ROW42)" attempts)" = 0 ]
+}
+
+@test "C4: a drain lock held by a live pid makes the run exit without asking the closer" {
+  husk42; lsjson 42 ls.json /bin/zsh; closer
+  mkdir -p "$D/q/.drain.lock"; echo "$$" > "$D/q/.drain.lock/pid"
+  run "$DRAIN"
+  [ "$status" -eq 0 ]
+  [ ! -e "$D/pc-calls.log" ]
+  [ -e "$(ROW42)" ]
+  grep -q "another drainer (pid $$) holds the lock — exiting" "$D/pcq.log"
+  [ "$(cat "$D/q/.drain.lock/pid")" = "$$" ]           # somebody else's lock is never released by us
+}
+
+@test "C4: a drain lock naming a dead pid is taken over, and released when the run ends" {
+  husk42; lsjson 42 ls.json /bin/zsh; closer
+  mkdir -p "$D/q/.drain.lock"; echo 99999998 > "$D/q/.drain.lock/pid"
+  run "$DRAIN"
+  [ "$(cat "$D/pc-calls.log")" = "--pane 42 remote=on" ]
+  [ ! -e "$(ROW42)" ]
+  [ ! -e "$D/q/.drain.lock" ]
+}
