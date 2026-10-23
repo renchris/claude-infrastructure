@@ -205,8 +205,9 @@ lrp_act_done() { (( LRP_FENCE )) || return 0; lr_recon_act_done; }
 #   · SCOPE (F-A5, R4): kind limited only; a PARKED-REBOOT record and one whose wake failed
 #     (close.wake_failed: never retyped) are the reconciler's no longer. WAIT_RESET and HELD:team (its
 #     WAKE_SUBSTATES) take the eta window.
-# MODES: LR_POLLER_RECON_FIRST=shadow (the shipped default until packet 4ffc4e1e5f1c is ruled) logs
-# `RECON-FIRST would-defer <sid>` and dispatches exactly as today; on defers; off is today's code.
+# MODES: LR_POLLER_RECON_FIRST=on (the default since packet 4ffc4e1e5f1c's class-B default fired
+# 2026-10-23T17:29Z: reconciler first, poller after 10 min) defers; shadow logs
+# `RECON-FIRST would-defer <sid>` and dispatches exactly as before; off is the pre-A7 code.
 # Off also: $STATE/recon-first.off (takes effect next tick).
 # Any read that fails ⇒ act as before (our own failure is "unknown", never a reason to hold a session).
 LRP_RF_DIR="$STATE/recon-first"
@@ -221,7 +222,7 @@ lrp_rf_clamp() { # $1=value $2=default → seconds in [0, 900]
 }
 lrp_rf_init() { # the per-tick constants, read once (F-A4, R5: they were nine forks per sid)
   LRP_RF_INIT=1
-  LRP_RF_MODE="${LR_POLLER_RECON_FIRST:-shadow}"
+  LRP_RF_MODE="${LR_POLLER_RECON_FIRST:-on}"
   case "$LRP_RF_MODE" in on|shadow) : ;; *) LRP_RF_MODE=off ;; esac
   [[ "$LRP_RF_MODE" != off && ! -e "$STATE/recon-first.off" ]] || return 0
   (( LRP_FENCE )) || return 0

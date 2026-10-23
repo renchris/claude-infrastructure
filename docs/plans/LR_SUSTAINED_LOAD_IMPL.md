@@ -481,7 +481,7 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 
 ## W5: reconciler first, poller as a bounded backstop; the move lane lets go (A7 parts A and B; slot C)
 
-**Status**: IN PROGRESS — code LANDED `fef98e423` `1f1e42206` `a294d2bcb`, Part A in shadow; owed: the Part A flip, parked as `718ef4662d91` behind packet `4ffc4e1e5f1c`, and the live-wall reads
+**Status**: IN PROGRESS — code LANDED `fef98e423` `1f1e42206` `a294d2bcb`; Part A flipped to `on` 2026-10-23 (packet `4ffc4e1e5f1c`'s class-B default fired 17:29Z; row `fa97d2db22d1`, supersedes `718ef4662d91`; `shadow` stays as an explicit opt-in); owed: the live-wall reads
 
 - **Goal.** Hands-off recovery is on: the operator touched `recon/autorecover.on` at 17:10:31Z (A7 §0). Two changes follow:
   - the poller stops racing the reconciler for a record it is about to place, for a bounded time only;

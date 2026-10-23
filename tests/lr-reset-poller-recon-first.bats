@@ -34,7 +34,7 @@ setup() {
            "$S" "$CWD" "$TMPDIR"
   unset LR_RECORD_ID LR_LAUNCH_LOCK LR_RECON_FENCE_FRESH_S KITTY_WINDOW_ID CC_TERM_KITTY_TO CC_ACCOUNTS_BIN
   unset LR_POLLER_REROUTE LR_REROUTE_EVERY_MIN LR_POLLER_RECON_FIRST_S LR_POLLER_RECON_INGEST_S
-  # The suite pins the behaviour that ships at the flip; T-A18 unsets it to read the shipped shadow.
+  # The suite pins on explicitly; T-A18 sets shadow, T-A19 unsets it to read the code default.
   export LR_POLLER_RECON_FIRST=on
   NOW="$(date +%s)"; export LR_RECON_NOW="$NOW" LR_RECON_WAKETIME=0
   export LR_POLLER_NO_CENSUS=1 IT2_WRAPPER_NO_KITTY=1
@@ -410,14 +410,25 @@ no_shell_noise() {
   [ "$(acted tui)" -eq 0 ] || { plog; false; }
 }
 
-# ══ SHADOW, THE SHIPPED DEFAULT (packet 4ffc4e1e5f1c open) ═══════════════════════════════════════
-@test "T-A18 shadow (the code default): the would-defer line is logged and the request is dispatched as today" {
-  unset LR_POLLER_RECON_FIRST
+# ══ SHADOW, AND THE CODE DEFAULT (on since packet 4ffc4e1e5f1c's default fired) ══════════════════
+@test "T-A18 shadow: the would-defer line is logged and the request is dispatched as today" {
+  export LR_POLLER_RECON_FIRST=shadow
   handsoff_live; record "$SID"; hook_rq "$SID"
   tick
   dispatched || { plog; false; }
   grep -q "RECON-FIRST would-defer $SID — open DETECTED record" "$STATE/poller.log" || { plog; false; }
   [ "$(grep -c "RECON-FIRST would-defer $SID" "$STATE/poller.log")" -eq 1 ] || { plog; false; }
   ! grep -q 'RECON-FIRST [0-9]' "$STATE/poller.log" || { plog; false; }
+  no_shell_noise
+}
+
+@test "T-A19 the code default is on: with LR_POLLER_RECON_FIRST unset the request is left to the reconciler" {
+  unset LR_POLLER_RECON_FIRST
+  handsoff_live; record "$SID"; hook_rq "$SID"
+  tick
+  [ "$(acted fleet)" -eq 0 ] || { echo "DISPATCHED: $(cat "$ACT_LOG")"; plog; false; }
+  [ -f "$STATE/requests/$SID.json" ]
+  grep -q "RECON-FIRST 1 limited session(s) left to the live hands-off reconciler" "$STATE/poller.log" || { plog; false; }
+  ! grep -q 'would-defer' "$STATE/poller.log" || { plog; false; }
   no_shell_noise
 }

@@ -13,7 +13,7 @@ whichever session holds it. Fire kit (template + helper): `impl/lead-kit/` (copi
 | W1 | B | lrsl-w1 | `e6713c4da`..`2d99d8e93` (S5b hard `a12101b6c`) | none | — |
 | W2 | A | lrsl-w2 | `1eb5548ac` `45b8bbfa9`, `288b5f897` (wave_g test fix) | guarantee9 `--arms cure,red --red tree:c79df708d@31`; expect T4 PASS cure / FAIL red | — |
 | W3 | C | lrsl-w3 | `c79df708d` | none | — |
-| W5 | C | lrsl-w5 | `fef98e423` `1f1e42206` `a294d2bcb` | live-wall reads only (shadow would-defer lines; detect→PLANNED from telemetry) | L flip `LRP_RF_MODE` shadow→on in `lr-reset-poller.sh` `lrp_rf_init`, after packet `4ffc4e1e5f1c`, before W16 starts or riding W16 |
+| W5 | C | lrsl-w5 | `fef98e423` `1f1e42206` `a294d2bcb` | live-wall reads only (shadow would-defer lines; detect→PLANNED from telemetry) | flip shadow→on DONE 2026-10-23 (packet `4ffc4e1e5f1c` default fired; row `fa97d2db22d1`) |
 | W6 | A | lrsl-w6 | `8f4ab29f9` `748186142` | cure run: role_ms ≤3 ms, census cpu ≤20 ms, per load bin | — |
 | W7 | C | lrsl-w7 | `29fa7e597` | none | operator RK step `626ed25b243c` due |
 | W8 | A | lrsl-w8 | `72fc09748` | pair `--red tree:a294d2bcb@31`: cure H1-H9, c_rpc_fail_twice ENGAGED cure / ESCALATED red | target:W8 flip in `load-expect.json` after that run |
