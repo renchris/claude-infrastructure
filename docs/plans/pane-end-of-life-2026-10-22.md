@@ -1,5 +1,5 @@
 ---
-status: complete
+status: open
 ---
 
 # Pane end of life, 2026-10-22: every pane ends running Claude Code or closed, and says which
@@ -10,6 +10,12 @@ different live session, (2) a pane is never kept without either a live claude or
 reconciler retries, (3) one component writes a dead pane's final title and rows, following the message
 contract in synthesis.md § CONTRACT, and (4) a fired peer's death reaches the lead holding its custody.
 Each item needs a bats arm that fails on pre-fix trunk, one mutant, and a land through `/ship`.
+
+Scope (grown 2026-10-23): +Wave C. The reconciler from Waves A-B works only when it is run from
+inside kitty. Panes 144-147 and 165 sat refused 8-44 times under screens promising "closes when it
+does" (`docs/research/husk-panes-2026-10-22/round2-2026-10-23/`). Wave C makes the background closer
+see kitty, makes teammate panes closeable, and gives a pane only a person can close an honest
+"operator" state.
 
 ## Phase 0: Agent Team Orchestration
 
@@ -75,6 +81,54 @@ B5. F7(c): the watchdog classifies a `tty=none`/sdk-cli end with no close record
 B6. F8: the it2-kitty split uses the session's target directory when the caller supplies it.
 B7. After Wave A has landed, on a rebased branch: the husk-row producer in handoff-fire's husk-pane and
     husk-fs arms (~:11722), and the os-window `--cwd` (~:19661).
+
+## Wave C (2026-10-23): the background closer sees kitty, and a stuck pane says so
+
+**Locus:** S, one dispatched session in its own worktree. The lead (wt-cc-181959-2541) writes no code.
+Evidence: `round2-2026-10-23/synthesis.md` FX1-FX7, with the corrections in `skeptics.md` taking
+precedence. Every item needs a bats arm that fails on pre-fix trunk, one mutant, and a land.
+
+C1. FX1: `bin/cc-pane-close` pins kitty for its listing (`kitty_list_once` ~:211-219) and its
+    remote-control probe (`remote_answers` ~:338-342), as the close at ~:461 already does. Use an
+    env prefix on the bounded call, not a shell function: `bounded`/timeout execs its argument, so a
+    function name fails with rc 127 (skeptic). The refusal "does not name this pane's window" must
+    split into "the listing did not answer" and "listed, and the pane is absent" (treat absent as
+    already closed). Stop discarding the closer's stderr at `hooks/lead-crash-watchdog.sh` ~:2171.
+    The test runs the closer with KITTY_*/CC_TERM unset and a stub iTerm2 `it2` that fails. Pre-fix
+    it reads "remote control is down".
+C2. FX2: all four registration readers accept a trailing ` teammate=<id>` (`cc-pane-close` ~:263 and
+    ~:356, `cc-husk-sweep` ~:253 and ~:285), ideally through one shared parser in hooks/lib. Keep the
+    `tty=none` exclusion. Gate 3 (~:432) accepts any teamName transcript, so gate 4 (clean cwd) is
+    what protects a crashed teammate's work. Pin that with a test.
+C3. FX4: `bin/cc-pane-verdict` classifies the closer's refusal before choosing row 2:
+    - transient (kitty truly did not answer);
+    - operator-only (pane-scope refused-fs: the pane is the last one of a fullscreen window);
+    - stuck (anything no future tick can change).
+    Only the transient class may say "closes when it does". Every operator action names ⌘W (the
+    guarded kitty-confirm-close path), never Ctrl-D, unless the guard has said the pane is not last
+    (skeptic: Ctrl-D on the last pane of a fullscreen window is the 2026-10-15 crash trigger). The
+    NOTHING state must also read the closer line.
+C4. FX5: in `scripts/pane-close-retry.sh` `drain_husk`, a pane-scope refused-fs on a one-pane OS
+    window sets `hold=operator`. That row pages once ("⌘W pane N on its Desktop"), stops counting
+    attempts, and is re-checked only when its window's pane count changes. Drain oldest-first, and
+    defer with a logged line near the run's time bound. Add a single-instance lock: overlapping
+    drainers race pcq_add's read-modify-write.
+C5. FX3: the drainer gets its own launchd job at Standard priority, every 5 min, wrapped in
+    `/opt/homebrew/bin/timeout`, declared in `launchd/fleet.manifest` with expect=run. Remove the call
+    from `teammate-reap-alarm.sh` (~:429-439). Bound `assignee-pane-residency.sh` at both of its call
+    sites (`teammate-reap-alarm.sh` ~:169 and the plist). A plist edit does not apply while the old
+    job is running (install.sh ~:1437-1440): say so in Progress.
+C6. FX6: self-close rows can end.
+    - After a proven arm, handoff-fire clears the row for its own pane whose sid matches (~:15885).
+    - The drainer counts self-close rows toward its kitty gate, and drops a row whose pane is absent
+      from `$LS` within the same kitty. It drops, never acts on, a row whose pane now runs a different
+      sid.
+    - "Same kitty" falls back to first_ts vs kitty start when kitty_pid is null.
+    - A non-numeric pane id (`fake:UUID`) is dropped.
+    - Expected effect: the 7 dead rows (137, 17, 41, 57, 75, 79, 83), recycle-fake_UUID and the two
+      *.tmp.* leftovers clear on the first tick after landing; verify in pane-close-retry.log.
+C7. FX7: `tests/handoff-fire-validate.bats` and the other fake:UUID recycle suites isolate the queue dir
+    and must not reach the live kitty. Its test 3 ran a live `--recycle` against kitty 1881.
 
 ## Progress
 
