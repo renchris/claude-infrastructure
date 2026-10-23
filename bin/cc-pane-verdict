@@ -2,7 +2,7 @@
 # cc-pane-verdict — the ONE writer of a dead pane's screen and title.
 #
 #   cc-pane-verdict --pane N --state DONE|RESUME|OWNED|NOTHING|CANTTELL [--sid S]
-#                   [--guard safe|fullscreen|unreadable] [--owner M] [--unsaved K] [--moved-to M]
+#                   [--guard safe|fullscreen|unreadable|stuck] [--owner M] [--unsaved K] [--moved-to M]
 #                   [--stranded] [--tty PATH] [--kitty-pid P] [--dry-run]
 #   cc-pane-verdict --pane N --recompute [--reason R] [--closer-out TEXT] [--sid S] [--tty PATH] …
 #
@@ -23,6 +23,16 @@
 #
 # --recompute is the reconciler's entry: it derives the state from the pane's exit record and from
 # one bin/cc-pane-close line (--closer-out), which already carries every fact the close gates read.
+# An empty --closer-out paints nothing: no answer is not a fact, and repainting from it turned a true
+# screen false (skeptics.md FX4).
+#
+# ROW 2 FOLLOWS THE REFUSAL'S CLASS (round2-2026-10-23). Only a TRANSIENT refusal (kitty did not
+# answer, remote control is down) may promise "closes when it does": a later tick can change it.
+# OPERATOR-ONLY (`refused-fs`, the last pane of a fullscreen OS window) and STUCK (any other refusal,
+# e.g. an identity pin) are fixed facts no tick changes — pane 165 and pane 144 read "closes when it
+# does" for hours. Both name ⌘W, the guarded kitty-confirm-close path, never Ctrl-D: Ctrl-D on the
+# last pane of a fullscreen window is the 2026-10-15 crash trigger. A pane where nothing ran takes its
+# class from the closer's answer now, not from the reason recorded when it was kept.
 #
 # Exit: 0 painted, unchanged, or dry-run · 2 usage. Never fails its caller otherwise.
 # Seams: CC_PANE_VERDICT_DIR (the state store) · CC_PANE_VERDICT_KITTY_BIN · CC_PANE_VERDICT_COLS ·
@@ -57,15 +67,22 @@ case "$UNSAVED" in *[!0-9]*) UNSAVED="" ;; esac
 
 # ── recompute: the state from the facts ─────────────────────────────────────────────────────────
 if [ "$RECOMPUTE" = 1 ]; then
+  [ -n "$CLOSER_OUT" ] || { echo "cc-pane-verdict: pane $PANE no closer answer — not repainted"; exit 0; }
   case "$REASON" in guard-fullscreen) GUARD=fullscreen ;; guard-unreadable) GUARD=unreadable ;; esac
+  # The closer's refusal class picks row 2 (header); --reason only stands in for an unclassed line.
+  case "$CLOSER_OUT" in
+    *refused-fs*) GUARD=fullscreen ;;
+    *"did not answer"*|*"remote control is down"*) GUARD=unreadable ;;
+    *REFUSED*) GUARD=stuck ;;
+    *"WOULD CLOSE"*|*": CLOSED"*|*"ALREADY CLOSED"*|*"NOTHING TO CLOSE"*) GUARD=safe ;;
+  esac
   xr="${CC_PANE_EXIT_DIR:-${HOME:-}/.claude/run/pane-exit}/$PANE.json"
   if [ -f "$xr" ] && [ "$(jq -r 'if .claude_started == false and .rc != 0 then "never" else "" end' "$xr" 2>/dev/null)" = never ]; then
     STATE=NOTHING
   else
     case "$CLOSER_OUT" in
       *"WOULD CLOSE"*|*": CLOSED"*|*"ALREADY CLOSED"*|*"NOTHING TO CLOSE"*) STATE=DONE ;;
-      *"remote control is down"*) STATE=DONE; GUARD=unreadable ;;
-      *"fullscreen guard"*) STATE=DONE; [ "$GUARD" = unreadable ] || GUARD=fullscreen ;;
+      *"remote control is down"*|*"fullscreen guard"*) STATE=DONE ;;
       *"uncommitted change"*)
         STATE=RESUME; UNSAVED="$(printf '%s' "$CLOSER_OUT" | sed -n 's/.* holds \([0-9][0-9]*\) uncommitted.*/\1/p' | head -1)" ;;
       *STRANDED*) STATE=RESUME; STRANDED=1 ;;
@@ -78,8 +95,9 @@ fi
 # ── render: the contract's title and two rows ──────────────────────────────────────────────────
 s8="${SID:0:8}"; who="${s8:-the session}"
 case "$GUARD" in
-  fullscreen) g2="last pane of a fullscreen window · ⌘W closes it" ;;
+  fullscreen) g2="⌘W closes it · last pane of a fullscreen window" ;;
   unreadable) g2="kitty didn't answer · closes when it does" ;;
+  stuck)      g2="⌘W closes it · won't close by itself" ;;
   *)          g2="closing now · Ctrl-D closes it" ;;
 esac
 case "$STATE" in

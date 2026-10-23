@@ -79,6 +79,66 @@ SID=570d3917-79ac-4aa4-93d1-896b843b8b9f
   [ "$("$PV" --pane 101 --recompute --closer-out 'pane 101: REFUSED — anything' --dry-run | sed -n 1p)" = state=NOTHING ]
 }
 
+# ── C3: the closer's refusal class picks row 2 — only a transient refusal promises "closes when" ───
+FS_LINE='pane 165: REFUSED — the fullscreen guard refused (--scope pane --mode refuse): refused-fs — this is the last pane of a fullscreen OS window; only the operator can close it (⌘W)'
+STUCK_LINE='pane 9: REFUSED — kitty remote control refused the close (fullscreen guard, composer guard or identity pin); not falling back to SIGHUP'
+
+@test "C3: a refused-fs line on a DONE pane names ⌘W and the fullscreen window, never 'closes when it does' (pane 165)" {
+  run "$PV" --pane 165 --recompute --closer-out "$FS_LINE" --dry-run
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = state=DONE ]
+  [ "${lines[3]}" = '⌘W closes it · last pane of a fullscreen window' ] || { echo "$output"; false; }
+  [[ "$output" != *"closes when it does"* ]]
+}
+
+@test "C3: any other REFUSED line that lands in DONE is stuck: ⌘W, won't close by itself" {
+  run "$PV" --pane 9 --recompute --closer-out "$STUCK_LINE" --dry-run
+  [ "${lines[0]}" = state=DONE ]
+  [ "${lines[3]}" = "⌘W closes it · won't close by itself" ] || { echo "$output"; false; }
+  [[ "$output" != *"closes when"* ]] || false
+  run "$PV" --pane 9 --state DONE --guard stuck --dry-run
+  [ "$status" -eq 0 ]
+  [ "${lines[3]}" = "⌘W closes it · won't close by itself" ] || { echo "$output"; false; }
+}
+
+@test "C3: only a closer line where kitty did not answer promises 'closes when it does'" {
+  run "$PV" --pane 7 --recompute --closer-out "pane 7: REFUSED — the fullscreen guard refused (--scope pane --mode refuse): rc 124 — it could not read this pane's window (kitty did not answer it)" --dry-run
+  [ "${lines[0]}" = state=DONE ]
+  [ "${lines[3]}" = "kitty didn't answer · closes when it does" ] || { echo "$output"; false; }
+}
+
+@test "C3: a NOTHING pane takes row 2 from the closer's answer now, not the stale kept --reason" {
+  mkdir -p "$CC_PANE_EXIT_DIR"; printf '{"rc":124,"claude_started":false,"launch_sha":"","ts":1}\n' > "$CC_PANE_EXIT_DIR/165.json"
+  run "$PV" --pane 165 --recompute --reason guard-unreadable --closer-out "$FS_LINE" --dry-run
+  [ "${lines[0]}" = state=NOTHING ]
+  [ "${lines[3]}" = '⌘W closes it · last pane of a fullscreen window' ] || { echo "$output"; false; }
+  run "$PV" --pane 165 --recompute --reason guard-unreadable --closer-out 'pane 165: WOULD CLOSE — fine' --dry-run
+  [ "${lines[3]}" = 'closing now · Ctrl-D closes it' ] || { echo "$output"; false; }
+}
+
+@test "C3: --recompute with an empty closer answer repaints nothing and says so" {
+  run "$PV" --pane 42 --recompute --reason guard-unreadable --closer-out '' --tty "$TTYF"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pane 42 no closer answer — not repainted"* ]] || { echo "$output"; false; }
+  [ ! -s "$TTYF" ]
+  [ ! -e "$CC_PANE_VERDICT_DIR/610-42.json" ]
+}
+
+@test "C3: no fullscreen or stuck row 2 tells the operator Ctrl-D" {
+  local a out
+  for a in "--state DONE --guard fullscreen" "--state DONE --guard stuck" "--state NOTHING --guard fullscreen" \
+           "--state NOTHING --guard stuck" "--recompute --closer-out FS" "--recompute --closer-out STUCK"; do
+    # shellcheck disable=SC2086  # $a is the option list on purpose
+    case "$a" in
+      *FS) out="$("$PV" --pane 85 --recompute --closer-out "$FS_LINE" --dry-run)" ;;
+      *STUCK) out="$("$PV" --pane 85 --recompute --closer-out "$STUCK_LINE" --dry-run)" ;;
+      *) out="$("$PV" --pane 85 $a --dry-run)" ;;
+    esac
+    [[ "$(sed -n 4p <<<"$out")" != *Ctrl-D* ]] || { echo "$a: $out"; false; }
+    [[ "$(sed -n 4p <<<"$out")" == *"⌘W"* ]] || { echo "$a: $out"; false; }
+  done
+}
+
 @test "kitty unreachable: the title falls back to OSC-2 on the tty" {
   CC_PANE_VERDICT_KITTY_BIN="$BATS_TEST_TMPDIR/no-kitty" run "$PV" --pane 85 --sid "$SID" --state CANTTELL --tty "$TTYF"
   [ "$status" -eq 0 ]
