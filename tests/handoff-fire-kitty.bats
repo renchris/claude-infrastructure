@@ -484,6 +484,7 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   # RED before B7: always --cwd=current, so a kept shell sat in the originator's tree.
   pin_kitty; FOLLOW=1
   export KFAKE_LAUNCH_ID=88
+  # shellcheck disable=SC2034  # read by spawn_frontmost (sourced)
   LAUNCH_DIR="$BATS_TEST_TMPDIR"; run spawn_frontmost
   [ "$status" -eq 0 ]
   grep -qF -- "--cwd=$BATS_TEST_TMPDIR" "$KLOG" || { cat "$KLOG"; false; }
@@ -493,6 +494,7 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
 @test "CONTROL: spawn_frontmost with no LAUNCH_DIR (or a missing one) keeps --cwd=current" {
   pin_kitty; FOLLOW=1
   export KFAKE_LAUNCH_ID=88
+  # shellcheck disable=SC2034  # read by spawn_frontmost (sourced)
   LAUNCH_DIR="$BATS_TEST_TMPDIR/not-there"; run spawn_frontmost
   [ "$status" -eq 0 ]
   grep -q -- '--cwd=current' "$KLOG"
