@@ -54,6 +54,12 @@ PAGE_BIN="${CC_PCQ_PAGE_BIN:-$HERE/../bin/cc-desk-page}"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG" 2>/dev/null || true; }
 
+# pcq_add writes `<row>.tmp.<pid>` then mv; a writer killed in between leaves the tmp forever. pcq_list
+# never lists one, so an hour-old one is nobody's (pane end of life wave C, C6).
+while IFS= read -r _t; do
+  [[ -n "$_t" ]] && rm -f -- "$_t" && log "leftover ${_t##*/} (a killed writer's tmp) older than 60 min — removed"
+done < <(find "$PCQ_DIR" -maxdepth 1 -name '*.json.tmp.*' -mmin +60 2>/dev/null)
+
 ROWS="$(pcq_list)"
 [[ -n "$ROWS" ]] || exit 0          # the common case: nothing queued, and kitty is never asked
 command -v jq >/dev/null 2>&1 || { log "jq missing — every row held"; exit 0; }
@@ -100,13 +106,16 @@ _retrier_alive() { # <row> → rc 0 iff the recorded retrier pid is running with
   rpid="$(pcq_get "$1" retrier_pid)"; rlst="$(pcq_get "$1" retrier_lstart)"
   [[ "$rpid" =~ ^[0-9]+$ && -n "$rlst" ]] || return 1
   # pid AND start time: a recycled pid with a different lstart is somebody else, i.e. the retrier is gone.
-  cur="$(ps -p "$rpid" -o lstart= 2>/dev/null)"
+  # Read the producer's way (handoff-fire _hf_lstart writes UTC, C locale): a local-time read never
+  # matched, so a live retrier read dead (C6e).
+  cur="$(TZ=UTC LC_ALL=C ps -p "$rpid" -o lstart= 2>/dev/null)"
   [[ -n "$cur" && "$(_norm "$cur")" == "$(_norm "$rlst")" ]]
 }
 NOTIFY_ROWS=""
 drain_self_close() {
   local row="$1" pane kpid ks first
   pane="$(pcq_get "$row" pane)"
+  [[ "$pane" =~ ^[0-9]+$ ]] || { pcq_remove "$row"; log "self-close pane=$pane not a kitty window id — row removed"; return; }
   # A row from an older kitty is about a window that no longer exists (husk-panes-2026-10-22 F2c):
   # self-close-85.json from 2026-10-01 was logged 2,325 times against the pane 85 of a later kitty.
   # Rows now carry kitty_pid (wave A); a legacy row without it is judged by its first_ts against the
@@ -131,6 +140,30 @@ drain_self_close() {
     log "self-close pane=$pane retrier gone — paged once"
   fi
   [[ "$(pcq_get "$row" notified)" == 1 ]] || NOTIFY_ROWS="$NOTIFY_ROWS$row"$'\n'
+}
+# Once kitty answers, a row of THIS kitty is judged against its window list (C6): nothing else ever
+# spends a row whose session died with its pane, so 7 of 8 live rows named panes long gone.
+_sc_this_kitty() { # <row> → rc 0 iff the row was written in the running kitty
+  local kpid ks first
+  kpid="$(pcq_get "$1" kitty_pid)"
+  if [[ -n "$kpid" ]]; then [[ -n "$LIVE_GEN" && "$kpid" == "$LIVE_GEN" ]]; return; fi
+  ks="$(_kitty_start_epoch)"
+  first="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$(pcq_get "$1" first_ts)" +%s 2>/dev/null || echo "")"
+  [[ "$ks" =~ ^[0-9]+$ && "$first" =~ ^[0-9]+$ ]] && (( first >= ks ))
+}
+REG_DIR="${CC_PCQ_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+judge_self_close() { # <row> — uses $LS; removes the row when its pane is gone or another session holds it
+  local row="$1" pane sid rsid
+  [[ -f "$row" ]] && _sc_this_kitty "$row" || return 0
+  pane="$(pcq_get "$row" pane)"
+  if [[ -z "$(pane_window "$pane")" ]]; then
+    pcq_remove "$row"; log "self-close pane=$pane ✓ pane gone — row removed"; return
+  fi
+  sid="$(pcq_get "$row" sid)"
+  rsid="$(jq -r '.session_id // empty' "$REG_DIR/$pane.json" 2>/dev/null)"
+  if [[ -n "$sid" && -n "$rsid" && "$rsid" != "$sid" ]]; then
+    pcq_remove "$row"; log "self-close pane=$pane its registry names session $rsid, not the row's $sid — another session holds the pane; row removed, never acted on"
+  fi
 }
 
 # ── husk rows: a pane KEPT with no claude in it (husk-panes-2026-10-22 F3) ──────────────────────────
@@ -233,16 +266,19 @@ drain_husk() { # uses $LS when kitty answered; LS="" means deaf (no pane/foregro
   return 0
 }
 
-N_TEAM=0 N_RCY=0 N_HUSK=0
+N_TEAM=0 N_RCY=0 N_HUSK=0 N_SC=0
 while IFS= read -r _row <&3; do
   case "$(pcq_get "$_row" kind)" in
-    self-close) drain_self_close "$_row" ;;
+    # A surviving self-close row counts toward the gate: only kitty's list can say its pane is gone (C6).
+    self-close) drain_self_close "$_row"; [[ -f "$_row" ]] && N_SC=$((N_SC + 1)) ;;
     teammate)   N_TEAM=$((N_TEAM + 1)) ;;
-    recycle)    N_RCY=$((N_RCY + 1)) ;;
+    recycle)    _p="$(pcq_get "$_row" pane)"
+                if [[ "${_p##*:}" =~ ^[0-9]+$ ]]; then N_RCY=$((N_RCY + 1))
+                else pcq_remove "$_row"; log "recycle pane=$_p not a kitty window id — row removed"; fi ;;
     husk)       N_HUSK=$((N_HUSK + 1)) ;;
   esac
 done 3<<<"$ROWS"
-(( N_TEAM > 0 || N_RCY > 0 || N_HUSK > 0 )) || [[ -n "$NOTIFY_ROWS" ]] || exit 0
+(( N_TEAM > 0 || N_RCY > 0 || N_HUSK > 0 || N_SC > 0 )) || [[ -n "$NOTIFY_ROWS" ]] || exit 0
 
 # ── the gate: does kitty remote control answer? ────────────────────────────────────────────────
 # SOCK/LIVE_GEN were resolved near the top (the live socket first, then a row's recorded one).
@@ -255,6 +291,9 @@ _ls_fresh() {
   local out
   out="$(kls)" && jq -e 'type == "array"' >/dev/null 2>&1 <<<"$out" || return 1
   LS="$out"
+}
+pane_window() { # <pane> → that window's JSON from $LS, or nothing
+  jq -c --arg p "$1" '[.[]?.tabs[]?.windows[]? | select((.id | tostring) == $p)][0] // empty' <<<"$LS" 2>/dev/null
 }
 if ! _ls_fresh; then
   # ── A DEAF KITTY IS NOT A REASON TO HOLD A HUSK (2026-10-01) ─────────────────────────────────
@@ -291,7 +330,10 @@ fi
 NOTIFY_BIN="${CC_PCQ_NOTIFY_BIN:-$HERE/../bin/cc-notify}"
 [[ -x "$NOTIFY_BIN" ]] || NOTIFY_BIN="$HOME/.claude/bin/cc-notify"
 while IFS= read -r _row <&3; do
-  [[ -n "$_row" ]] || continue
+  [[ "$(pcq_get "$_row" kind)" == self-close ]] && judge_self_close "$_row"
+done 3<<<"$ROWS"
+while IFS= read -r _row <&3; do
+  [[ -n "$_row" && -f "$_row" ]] || continue
   _p="$(pcq_get "$_row" pane)"
   bounded "$NOTIFY_BIN" "$_p" "SELF-CLOSE RETRY: your self-close of pane $_p aborted at $(pcq_get "$_row" first_ts) because the terminal did not answer; it answers now — re-run: handoff-fire.sh self-close $(pcq_get "$_row" argv)" \
     >/dev/null 2>&1 </dev/null; _rc=$?
@@ -299,10 +341,6 @@ while IFS= read -r _row <&3; do
   log "self-close pane=$_p terminal answers — told the session to re-run its self-close (cc-notify rc=$_rc)"
 done 3<<<"$NOTIFY_ROWS"
 (( N_TEAM > 0 || N_RCY > 0 || N_HUSK > 0 )) || exit 0
-
-pane_window() { # <pane> → that window's JSON from $LS, or nothing
-  jq -c --arg p "$1" '[.[]?.tabs[]?.windows[]? | select((.id | tostring) == $p)][0] // empty' <<<"$LS" 2>/dev/null
-}
 
 # rc 0 running · 1 not · 2 cannot tell. The FIRST argv word must be claude/claude.exe and the id must
 # sit in a real `--agent-id <id>` pair: a brief that merely MENTIONS the id (memory:

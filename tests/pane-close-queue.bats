@@ -214,7 +214,7 @@ husk_row() { q teammate 33 agent_id=m1@session-t team=session-t kitty_pid="${1:-
 @test "self-close row, dead retrier, kitty answers: the session is told once to re-run its self-close" {
   q self-close 61 sid=abc reason=unreachable retrier_pid=99999998 retrier_lstart='Wed Sep 30 01:00:00 2026' \
     argv='--sid abc --pane 61'
-  echo '[]' > "$D/ls.json"
+  lsjson 61 ls.json claude                    # the pane is still there (C6: an absent pane's row is spent)
   run "$DRAIN"
   [ "$(grep -c '^notify ' "$D/pcqnotify-calls.log")" -eq 1 ]
   grep -q "^notify 61 SELF-CLOSE RETRY: your self-close of pane 61 aborted at .* because the terminal did not answer; it answers now — re-run: handoff-fire.sh self-close --sid abc --pane 61" "$D/pcqnotify-calls.log"
@@ -226,9 +226,11 @@ husk_row() { q teammate 33 agent_id=m1@session-t team=session-t kitty_pid="${1:-
 }
 
 @test "self-close row with a LIVE retrier: no page, no note" {
-  q self-close 61 sid=abc retrier_pid="$$" retrier_lstart="$(ps -p $$ -o lstart=)"
-  echo '[]' > "$D/ls.json"
-  run "$DRAIN"
+  # Built the producer's way (handoff-fire _hf_lstart: TZ=UTC LC_ALL=C); the drainer runs in a non-UTC
+  # zone so a local-time read of the same pid cannot match (C6e: a live retrier used to read dead).
+  q self-close 61 sid=abc retrier_pid="$$" retrier_lstart="$(TZ=UTC LC_ALL=C ps -p $$ -o lstart=)"
+  lsjson 61 ls.json claude
+  TZ=America/Toronto run "$DRAIN"
   [ ! -e "$D/page-calls.log" ]
   [ ! -e "$D/pcqnotify-calls.log" ]
 }
@@ -531,6 +533,66 @@ closer() {
   run "$DRAIN"
   [ -e "$D/q/self-close-85.json" ]
   [ "$(grep -c 'page ' "$D/page-calls.log")" -eq 1 ]
+}
+
+# ── self-close rows can end (pane end of life wave C, C6) ─────────────────────────────────────────
+# RED before: the kitty gate exited when only self-close rows were queued, so kitty was never asked and
+# 8 live rows (7 panes gone) sat forever. Rows of THIS kitty are now judged against its window list.
+reg() { mkdir -p "$D/reg"; printf '{"session_id":"%s"}\n' "$2" > "$D/reg/$1.json"; export CC_PCQ_REGISTRY_DIR="$D/reg"; }
+
+@test "C6: a self-close row of this kitty whose pane is gone is removed, nobody told" {
+  q self-close 61 sid=abc kitty_pid=610 retrier_pid=1 retrier_lstart=x
+  lsjson 99 ls.json /bin/zsh
+  run "$DRAIN"
+  [ ! -e "$D/q/self-close-61.json" ]
+  [ ! -e "$D/pcqnotify-calls.log" ]
+  grep -q "self-close pane=61 ✓ pane gone — row removed" "$D/pcq.log"
+}
+
+@test "C6: a self-close row whose pane now belongs to a DIFFERENT session is removed, never acted on" {
+  q self-close 61 sid=abc kitty_pid=610 retrier_pid=1 retrier_lstart=x
+  lsjson 61 ls.json claude; reg 61 xyz
+  run "$DRAIN"
+  [ ! -e "$D/q/self-close-61.json" ]
+  [ ! -e "$D/pcqnotify-calls.log" ]
+  grep -q "self-close pane=61 .*session xyz.*row removed" "$D/pcq.log"
+}
+
+@test "C6 CONTROL: same sid, pane alive — the row is kept and the session told as before" {
+  q self-close 61 sid=abc kitty_pid=610 retrier_pid=1 retrier_lstart=x argv=--terminal
+  lsjson 61 ls.json claude; reg 61 abc
+  run "$DRAIN"
+  [ -e "$D/q/self-close-61.json" ]
+  [ "$(grep -c '^notify 61 SELF-CLOSE RETRY' "$D/pcqnotify-calls.log")" -eq 1 ]
+}
+
+@test "C6: a row with no kitty_pid written after this kitty started is judged against its list too" {
+  q self-close 61 sid=abc retrier_pid=1 retrier_lstart=x       # first_ts is now; the kitty started at epoch 1000
+  lsjson 99 ls.json /bin/zsh
+  run "$DRAIN"
+  [ ! -e "$D/q/self-close-61.json" ]
+  grep -q "self-close pane=61 ✓ pane gone" "$D/pcq.log"
+}
+
+@test "C6: a non-numeric self-close pane and a recycle row with a non-numeric id are dropped" {
+  q self-close 'w0t0p0:AB-12' sid=abc retrier_pid=1 retrier_lstart=x
+  q recycle fake:UUID sid=s reason=unreachable argv=--recycle notified=1
+  echo '[]' > "$D/ls.json"
+  run "$DRAIN"
+  [ ! -e "$D/q/self-close-w0t0p0_AB-12.json" ]
+  [ ! -e "$D/q/recycle-fake_UUID.json" ]
+  [ ! -e "$D/page-calls.log" ]
+  grep -q "recycle pane=fake:UUID not a kitty window id — row removed" "$D/pcq.log"
+}
+
+@test "C6: a leftover tmp row older than 60 minutes is removed; a fresh one is left to its writer" {
+  mkdir -p "$D/q"
+  : > "$D/q/teammate-71.json.tmp.68546"; touch -t 202601010000 "$D/q/teammate-71.json.tmp.68546"
+  : > "$D/q/teammate-72.json.tmp.1"
+  run "$DRAIN"
+  [ ! -e "$D/q/teammate-71.json.tmp.68546" ]
+  [ -e "$D/q/teammate-72.json.tmp.1" ]
+  [ ! -e "$D/kitty-calls.log" ]                 # still an empty queue: kitty is not asked
 }
 
 @test "F5: a husk the closer refuses is handed to cc-pane-verdict to repaint from the closer's answer" {

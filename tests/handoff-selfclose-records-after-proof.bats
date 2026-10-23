@@ -67,6 +67,32 @@ selfclose() { ( cd "$WORK" && timeout 90 bash "$HF" self-close --terminal --sess
   [ "$(open_custody)" = 0 ] || { echo "custody still open after a proven arm"; echo "$output"; false; }
 }
 
+# C6(a), pane end of life wave C: a self-close row an EARLIER failed run left (SC_PCQ_ROW is reset per
+# run, so only this run's own row used to be cleared) is spent by the proven arm when its sid is this
+# session's; a row naming another session is somebody else's record and stays.
+sc_row() { # $1=sid → writes this pane's self-close row through the queue lib
+  bash -c '. "$0"; pcq_add self-close "$1" sid="$2" reason=earlier-run' \
+    "$REPO/scripts/lib/pane-close-queue.sh" "$PANE" "$1"
+}
+@test "proven pane: an earlier run's self-close row with this session's sid is removed" {
+  printf '{"session_id":"S-THIS"}\n' > "$CC_REGISTRY_DIR/$PANE.json"
+  sc_row S-THIS
+  [ -e "$CC_PANE_CLOSE_QUEUE_DIR/self-close-fake_RRRR-0001.json" ]
+  it2_stub 'case "$*" in *"session list"*) printf "[{\"id\":\"fake:RRRR-0001\"}]\n" ;; esac; exit 0'
+  run selfclose
+  [ "$(closed_at)" != null ] || { echo "the arm was not proven"; echo "$output"; false; }
+  [ ! -e "$CC_PANE_CLOSE_QUEUE_DIR/self-close-fake_RRRR-0001.json" ] || { echo "earlier run's row survived a proven arm"; false; }
+}
+
+@test "CONTROL: a self-close row naming ANOTHER session survives the proven arm" {
+  printf '{"session_id":"S-THIS"}\n' > "$CC_REGISTRY_DIR/$PANE.json"
+  sc_row S-OTHER
+  it2_stub 'case "$*" in *"session list"*) printf "[{\"id\":\"fake:RRRR-0001\"}]\n" ;; esac; exit 0'
+  run selfclose
+  [ "$(closed_at)" != null ] || { echo "$output"; false; }
+  [ -e "$CC_PANE_CLOSE_QUEUE_DIR/self-close-fake_RRRR-0001.json" ]
+}
+
 @test "--dry-run writes neither closedAt nor the custody return" {
   it2_stub 'exit 1'
   run selfclose --dry-run

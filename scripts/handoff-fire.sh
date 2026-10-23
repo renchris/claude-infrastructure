@@ -2325,6 +2325,18 @@ hf_recycle_owed_clear() { # $1=pane → removes this pane's owed-recycle row, if
   [ -n "$row" ] && pcq_remove "$row" >/dev/null 2>&1
   return 0
 }
+# A proven arm also spends a self-close row an EARLIER failed run left (SC_PCQ_ROW is reset per run, so
+# sc_noanswer_clear alone never reached it: pane end of life wave C, C6). Only when the row's sid is this
+# session's — a row naming another session is that session's record.
+hf_selfclose_row_clear() { # $1=pane → removes this pane's self-close row when its sid is this session's; always 0
+  local row sid
+  sc_pcq_load || return 0
+  row="$PCQ_DIR/self-close-$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_').json"
+  [ -f "$row" ] || return 0
+  sid="$(cc_sid_for_pane "$1" 2>/dev/null || true)"
+  [ -n "$sid" ] && [ "$(pcq_get "$row" sid)" = "$sid" ] && pcq_remove "$row" >/dev/null 2>&1
+  return 0
+}
 sc_noanswer_clear() { # $1=queue row → the wait ended in a proven arm; the row is spent
   [ -n "${1:-}" ] || return 0
   if sc_pcq_load && command -v pcq_remove >/dev/null 2>&1; then pcq_remove "$1" >/dev/null 2>&1 || true
@@ -15883,6 +15895,7 @@ MSG
     sc_tenant_gate "$SC_WATCHER"
     sc_commit_close_records
     sc_noanswer_clear "$SC_PCQ_ROW"
+    hf_selfclose_row_clear "$SC_SID"
     echo "→ self-close armed for $SC_SID: watcher pid $SC_WATCHER session-detached, heartbeat verified (log: $SC_LOG)"
     echo "→ $(pane_tenant_line "$SC_SID" "$HF_SC_EXPECT_SID")"
     [ -n "$SC_SUCCESSOR" ] && echo "→ post-close: operator focus hands to successor $SC_SUCCESSOR" || echo "→ post-close: terminal (nothing continues this session's work)"
