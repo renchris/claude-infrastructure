@@ -14,6 +14,8 @@
 #       the liveness-free channel, naming the restore command.
 # Every source is fixtured through the arm's seams; nothing here touches a live tty, pane or store.
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="${LCW_HOOK_UNDER_TEST:-$REPO/hooks/lead-crash-watchdog.sh}"
@@ -436,7 +438,10 @@ hrow() { jq -r ".$1" "$CC_PANE_CLOSE_QUEUE_DIR/husk-330.json"; }
 @test "the closer refusing a clean exit leaves a husk row carrying its refusal" {
   export CC_PANE_CLOSE_QUEUE_DIR="$T/q"
   rm -f "$T/cwd/scratch.txt"
-  printf '#!/bin/bash\ncase "$*" in *--dry-run*) echo "pane 330: REFUSED — kitty remote control is down"; exit 1 ;; esac\necho closed\n' > "$CC_PANE_CLOSE_BIN"
+  cc_stub "$(dirname "$CC_PANE_CLOSE_BIN")" "$(basename "$CC_PANE_CLOSE_BIN")" \
+    '#!/bin/bash
+case "$*" in *--dry-run*) echo "pane 330: REFUSED — kitty remote control is down"; exit 1 ;; esac
+echo closed'
   run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
   [ "$(hrow reason)" = closer-refused ]
   [ "$(hrow refusal)" = "kitty remote control is down" ]

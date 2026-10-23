@@ -8,6 +8,8 @@
 # $BATS_TEST_TMPDIR, PATH is <stubdir>:/usr/bin:/bin, HOME is a temp dir. Nothing here can reach a
 # live pane. Assertion style: `[ ]` — a non-final `[[ ]]` is errexit-exempt under bats.
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LIB="$REPO/scripts/lib/pane-close-queue.sh"
@@ -44,8 +46,7 @@ setup() {
   export CC_PCQ_NOTIFY_BIN="$D/bin/pcqnotify"
   # husk rows (F3): the custody store and the kitty start time are pinned, never this machine's.
   # cc-custody stub: `list --open --json` prints $D/custody.json (default: no open rows).
-  printf '#!/bin/bash\ncat "%s/custody.json" 2>/dev/null || echo "[]"\n' "$D" > "$D/bin/custody"
-  chmod +x "$D/bin/custody"
+  cc_stub "$D/bin" custody "$(printf '#!/bin/bash\ncat "%s/custody.json" 2>/dev/null || echo "[]"\n' "$D")"
   export CC_PCQ_CUSTODY_BIN="$D/bin/custody" CC_PCQ_KITTY_START_EPOCH=1000
   printf '#!/bin/bash\nexit 4\n' > "$D/bin/nosock"
   chmod +x "$D/bin/kitty" "$D/bin/it2" "$D/bin/page" "$D/bin/pcqnotify" "$D/bin/nosock"
@@ -426,8 +427,8 @@ ROW42() { printf '%s' "$D/q/husk-42.json"; }
 husk42() { q husk 42 reason=guard-unreadable kitty_pid="${1:-610}" producer=cc-pane-runner tty="${2:-}"; }
 # a closer stub that records argv + CC_PANE_CLOSE_REMOTE and answers $1 (default CLOSED)
 closer() {
-  printf '#!/bin/bash\necho "$* remote=${CC_PANE_CLOSE_REMOTE:-on}" >> %q\necho "pane 42: %s — stub"\n[ "%s" = REFUSED ] && exit 1\nexit 0\n' \
-    "$D/pc-calls.log" "${1:-CLOSED}" "${1:-CLOSED}" > "$CC_PCQ_PANE_CLOSE_BIN"
+  cc_stub "$D/bin" cc-pane-close "$(printf '#!/bin/bash\necho "$* remote=${CC_PANE_CLOSE_REMOTE:-on}" >> %q\necho "pane 42: %s — stub"\n[ "%s" = REFUSED ] && exit 1\nexit 0\n' \
+    "$D/pc-calls.log" "${1:-CLOSED}" "${1:-CLOSED}")"
 }
 
 @test "husk: a kept bare-shell pane is handed to cc-pane-close, and its CLOSED removes the row" {

@@ -7,6 +7,8 @@
 # the abandon --why requirement. The consumer contract is `count --open --cwd` printing a bare
 # integer — wrap-ledger's CUSTODY_OPEN term reads exactly that.
 
+load helpers/cc-stub
+
 setup() {
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   BIN="$REPO_ROOT/bin/cc-custody"
@@ -164,8 +166,9 @@ _backdate() { # <marker> <iso-ts> — fixture surgery: backdate the open row car
 # ── husk-panes-2026-10-22 F3d: a discharge re-runs the pane closer when a husk row names the pane ──
 husk_setup() {
   export CC_PANE_CLOSE_QUEUE_DIR="$BATS_TEST_TMPDIR/q"; mkdir -p "$CC_PANE_CLOSE_QUEUE_DIR"
-  export CC_CUSTODY_HUSK_DRAIN_BIN="$BATS_TEST_TMPDIR/drain"
-  printf '#!/bin/bash\n: > %q\n' "$BATS_TEST_TMPDIR/drained" > "$CC_CUSTODY_HUSK_DRAIN_BIN"
+  # cc-custody runs the drainer as `/bin/bash <script>`, so it is handed the stub's BODY path
+  cc_stub "$BATS_TEST_TMPDIR/stubs" drain "$(printf '#!/bin/bash\n: > %q\n' "$BATS_TEST_TMPDIR/drained")"
+  CC_CUSTODY_HUSK_DRAIN_BIN="$(cc_stub_body "$BATS_TEST_TMPDIR/stubs" drain)"; export CC_CUSTODY_HUSK_DRAIN_BIN
 }
 wait_drained() { local i; for i in $(seq 1 50); do [ -e "$BATS_TEST_TMPDIR/drained" ] && return 0; sleep 0.1; done; return 1; }
 
