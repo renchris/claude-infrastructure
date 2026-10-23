@@ -20,6 +20,8 @@
 # The ancestry is a ps shim; the one LIVE pid (the tenant) is a `sleep` this suite starts and stops.
 # Nothing here reaches a real pane: $HOME, the registry, the fired dir and the it2 shim are fixtured.
 
+load helpers/cc-stub
+
 setup() {
   command -v jq >/dev/null 2>&1 || { echo "jq required" >&2; return 1; }
   export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off
@@ -42,10 +44,10 @@ setup() {
   export HF_HANDOFFS_LOG="$BATS_TEST_TMPDIR/handoffs.jsonl"
   IT2LOG="$BATS_TEST_TMPDIR/it2.log"; export IT2LOG
   # The it2 shim: lists the one pane, records every other call (a close, a send) and succeeds.
-  printf '#!/bin/bash\nREAL_IT2="%s"\nif [ "$1 $2" = "session list" ]; then echo %s; exit 0; fi\necho "$*" >> "$IT2LOG"\nexit 0\n' \
-    "$HOME/.claude/bin/it2" "'[{\"id\":\"PANE16\"}]'" > "$HOME/.claude/bin/it2"
-  chmod +x "$HOME/.claude/bin/it2"
-  printf '#!/bin/bash\nexit 1\n' > "$HOME/.claude/bin/cc-in-kitty"; chmod +x "$HOME/.claude/bin/cc-in-kitty"
+  # CC_SHIM='' keeps it a plain file: handoff-fire reads the shim's own REAL_IT2= line as text.
+  CC_SHIM='' cc_stub "$HOME/.claude/bin" it2 "$(printf '#!/bin/bash\nREAL_IT2="%s"\nif [ "$1 $2" = "session list" ]; then echo %s; exit 0; fi\necho "$*" >> "$IT2LOG"\nexit 0' \
+    "$HOME/.claude/bin/it2" "'[{\"id\":\"PANE16\"}]'")"
+  cc_stub "$HOME/.claude/bin" cc-in-kitty $'#!/bin/bash\nexit 1'
 
   # THE ONE LIVE PROCESS: the pane's tenant claude. kill -0 must succeed on it, so it is real.
   sleep 600 & LEADPID=$!; export LEADPID
@@ -55,7 +57,7 @@ setup() {
   # THE ANCESTRY. NESTED=1: hf → 9001 bash → 9002 claude (the child) → 9003 bash → LEADPID claude.
   #               NESTED=0: hf → 9001 bash → LEADPID claude (the tenant's own Bash tool).
   # The pane's tty belongs to LEADPID; the child's tty is $CHILD_TTY (?? = headless).
-  cat > "$SHIM/ps" <<'SH'
+  cc_stub "$SHIM" ps - <<'SH'
 #!/usr/bin/env bash
 fmt="" pid="" seen_p=0 args=("$@")
 while [ $# -gt 0 ]; do
@@ -89,15 +91,14 @@ if [ "$seen_p" = 1 ] && [ "$fmt" = "comm=" ]; then
 fi
 exec /bin/ps "${args[@]}"
 SH
-  cat > "$SHIM/osascript" <<'SH'
+  cc_stub "$SHIM" osascript - <<'SH'
 #!/usr/bin/env bash
 uuid=""
 while [ $# -gt 0 ]; do case "$1" in -e) shift 2 2>/dev/null || shift ;; -) shift ;; *) uuid="$1"; shift ;; esac; done
 if [ -n "$uuid" ]; then [ "$uuid" = PANE16 ] && printf '/dev/ttysMINE'; exit 0; fi
 printf 'PANE16\t/dev/ttysMINE\n'
 SH
-  printf '#!/usr/bin/env bash\n[ "${1:-}" = rev-parse ] && exit 1\nexit 0\n' > "$SHIM/git"
-  chmod +x "$SHIM/ps" "$SHIM/osascript" "$SHIM/git"
+  cc_stub "$SHIM" git $'#!/usr/bin/env bash\n[ "${1:-}" = rev-parse ] && exit 1\nexit 0'
   export PATH="$SHIM:$PATH"
 
   WORK="$BATS_TEST_TMPDIR/work"; mkdir -p "$WORK"; WORK="$(cd "$WORK" && pwd -P)"
