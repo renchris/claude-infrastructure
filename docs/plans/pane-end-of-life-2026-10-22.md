@@ -185,3 +185,39 @@ C7. FX7: `tests/handoff-fire-validate.bats` and the other fake:UUID recycle suit
   tests/handoff-alarm-records.bats #28, predated both waves: e2d0cee07 (2026-10-19) added a tenth
   hf_alarm site, recycle-held-fold, without raising the pin. Recorded and raised in d4c496ad9. Open
   question carried in REPORT.md: the 09:12:40Z SIGTERM sender.
+- C1 (wave C): cc-pane-close pins its listing and probe to the running kitty (env prefix on the bounded
+  call); a listing without the pane reads ALREADY CLOSED; "did not answer (<it2 error>)" apart from
+  absent; guard refusals name refused-fs; the watchdog predicate keeps stderr. Landed 957279537
+  (+ d29d83843, stubs via cc_stub, by the re-land worker) · tests/cc-pane-close-background.bats.
+- C2 (wave C): hooks/lib/watchdog-registration.sh wd_reg_norm strips ` teammate=<id>` for all four
+  readers (cc-pane-close identity + moved_live, cc-husk-sweep watchdog_sid; lineage_of's regex carries
+  the group); gate 4 pinned for a crashed teammate. Landed 975dd4d94 (+ 957279537) ·
+  tests/cc-pane-close-background.bats, tests/cc-husk-sweep-identity.bats, tests/cc-husk-sweep-lineage.bats.
+- C3 (wave C): cc-pane-verdict classes the closer line — transient / operator-only (refused-fs, ⌘W) /
+  stuck (--guard stuck, ⌘W, "won't close by itself"); NOTHING reads the closer line; an empty
+  --closer-out paints nothing. The watchdog's kept-pane paint uses the same classes. Landed 03696fdd5,
+  7f7b9c293 · tests/cc-pane-verdict.bats, tests/lead-crash-pane-verdict.bats.
+- C6 (wave C): a proven self-close arm spends its pane's row when the sid matches; the drainer asks kitty
+  for self-close rows too, drops a same-kitty row whose pane is gone or whose registry names another sid,
+  drops non-numeric pane ids (recycle-fake_UUID), sweeps hour-old *.json.tmp.*, and reads the retrier's
+  lstart in UTC. Landed 3f1a77b71 · tests/pane-close-queue.bats, tests/handoff-selfclose-records-after-proof.bats.
+  The live rows (137, 17, 41, 57, 75, 79, 83, recycle-fake_UUID, two tmp files) clear on the drainer's
+  first tick after convergence: read ~/.claude/logs/pane-close-retry.log for "✓ pane gone".
+- C4 (wave C): drain_husk holds a refused-fs husk that is its OS window's only pane as hold=operator
+  (paged once, "⌘W pane N on its Desktop", no attempts, released when the window's pane count
+  changes); rc 124 with no output is logged, not repainted; husks drain oldest last_ts first and defer
+  within 30 s of CC_PCQ_DRAIN_TIMEOUT_S; a single-instance lock (.drain.lock). Landed 4cb749ceb ·
+  tests/pane-close-queue.bats.
+- C5 (wave C): com.claude.pane-close-drainer, its own launchd job (Standard, no Nice, every 300 s,
+  timeout -k 5 270, budget 240), declared `run` in launchd/fleet.manifest; the drainer call is gone from
+  teammate-reap-alarm.sh; assignee-pane-residency.sh bounded at 300 s at both call sites. A plist edit
+  does not apply while the old job is executing (install.sh never bounces a running job): the
+  teammate-reap-alarm change takes effect at its next load. Landed 0375891ac ·
+  tests/teammate-reap-alarm.bats, tests/cc-fleet.bats.
+- C7 (wave C): tests/handoff-fire-validate.bats runs hermetic (fixture HOME, its own queue dir, a stub
+  kitty socket, CC_FIRE_KITTY_PROBE=off); the three other fake:UUID suites export the queue dir. Landed
+  920c2dc72 · tests/handoff-fire-validate.bats.
+- Wave C method notes: the cc-bats governor deferred every run for 20+ min (both slots held by lints
+  from the shared checkout at load ~130); runs went through its recorded waiver. The land gate's
+  test-stub ratchet (R4) and dead-assertion ratchet each reddened one land; both were fixed as
+  their fixers prescribe.
