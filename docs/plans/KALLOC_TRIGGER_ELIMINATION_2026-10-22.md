@@ -76,6 +76,8 @@ clean-lineage window (`open -n -a kitty`); off-box CI (money); a root census Lau
   unchanged (editing it changes its source hash, which costs a TCC re-approval). REPORT's launchctl-poll
   premise refuted (18 getenv + 2 print calls per run, not polls). Its subset: 5,309 → 141 `#!` execs.
   Detail: that repo's CONTRACTS §16.170.
+- **Follow-up, 2026-10-23** (that repo's round 24 lane K, items B91, B92, B93, B103; through `7ed8f649` on
+  its main, lead-verified ancestry): the remaining test script execs, 4,762 → 315. Detail: CONTRACTS §16.177.
 ### W3 infra test suites — DONE 2026-10-22 (session kte-w3; landed through `a3ff099a4`, lead-verified by content)
 
 Scope (frozen): tools/cc-shim + tests/cc-shim.bats, vendored bats-core 1.13.0 with "$BASH" internal
