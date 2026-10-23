@@ -226,7 +226,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"'
   # grepping only for the call would no longer pin that a selftest happens at all.
   grep -q 'selftest_ok "$SELFPATH_LINT"' "$REPO/scripts/ship-land.sh" \
     || { echo "the gate runs the lint without its --selftest — an unverified detector's clean verdict means nothing"; false; }
-  grep -q -- '"$lint" --selftest' "$REPO/scripts/ship-land.sh" \
+  # Since eef500138 the helper runs the lint through its interpreter: an argv seeded from "$lint".
+  # shellcheck disable=SC2016  # literal grep pattern: the $ is the text being matched
+  grep -q 'local run=("$lint")' "$REPO/scripts/ship-land.sh" \
+    && grep -q -- '"${run\[@\]}" --selftest' "$REPO/scripts/ship-land.sh" \
     || { echo "selftest_ok no longer runs --selftest at all — the helper stopped being a selftest"; false; }
   # Anchored on the own_run ROUTING, not on the assignment spelling — see the note in
   # tests/test-hermeticity-lint.bats. `CC_SELFPATH_OWN=` was true until the P2 own-scope work made

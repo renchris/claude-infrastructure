@@ -324,7 +324,12 @@ EOF
   # this arm goes through the helper, AND the helper is the thing that runs `--selftest` — because
   # grepping only for the call would no longer pin that a selftest happens at all.
   grep -q 'selftest_ok "$KILL_GUARD_LINT"' "$REPO/scripts/ship-land.sh" || false
-  grep -q -- '"$lint" --selftest' "$REPO/scripts/ship-land.sh" || false
+  # The helper runs the lint through its interpreter since eef500138 (kalloc: tracked #! helpers go
+  # through cc-run), so the call is `"${run[@]}" --selftest` over an argv seeded from "$lint".
+  # shellcheck disable=SC2016  # literal grep pattern: the $ is the text being matched
+  grep -q 'local run=("$lint")' "$REPO/scripts/ship-land.sh" || false
+  # shellcheck disable=SC2016  # literal grep pattern: the $ is the text being matched
+  grep -q -- '"${run\[@\]}" --selftest' "$REPO/scripts/ship-land.sh" || false
   grep -q 'gate_red kill-guard' "$REPO/scripts/ship-land.sh" || false
 }
 
@@ -343,7 +348,8 @@ EOF
   # red for every author of every task — the same misattribution as the land arm, at an earlier
   # chokepoint. A remedy that reaches one consumer of an invariant and not the other has only moved
   # the failure (memory: new-nonverdict-state-strands-its-consumers).
-  grep -q 'CC_KILLGUARD_OWN="$kgown" scripts/bats-kill-guard-lint.sh' "$REPO/hooks/task-quality-gate.sh" || false
+  # shellcheck disable=SC2016  # literal grep pattern: the $ is the text being matched
+  grep -q 'CC_KILLGUARD_OWN="$kgown" cc_run scripts/bats-kill-guard-lint.sh' "$REPO/hooks/task-quality-gate.sh" || false
   # …and the own-set is the suites THIS WORK CHANGED, captured at the collection loop — NOT $batsfiles,
   # which the sibling mapping widens to suites the author never opened.
   grep -q 'kgown="${kgown}${p}"' "$REPO/hooks/task-quality-gate.sh" || false
