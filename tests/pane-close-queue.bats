@@ -506,3 +506,26 @@ closer() {
   grep -q "kept: guard-unreadable" "$D/page-calls.log"
   [ -e "$(ROW42)" ]
 }
+
+# ── self-close rows from an older kitty (husk-panes-2026-10-22 F2c; rows carry kitty_pid since wave A) ──
+@test "a self-close row from an older kitty is dropped, never paged or mailed (RED before: held forever)" {
+  q self-close 85 sid=s1 kitty_pid=500 retrier_pid=1 retrier_lstart=x
+  run "$DRAIN"
+  [ ! -e "$D/q/self-close-85.json" ]
+  [ ! -e "$D/page-calls.log" ]
+  grep -q "self-close pane=85 dropped: kitty restarted since (500 → 610)" "$D/pcq.log"
+}
+
+@test "a legacy self-close row (no kitty_pid) older than the running kitty is dropped" {
+  q self-close 85 sid=s1 retrier_pid=1 retrier_lstart=x
+  CC_PCQ_KITTY_START_EPOCH=4102444800 run "$DRAIN"     # kitty started 2100-01-01: the row predates it
+  [ ! -e "$D/q/self-close-85.json" ]
+  grep -q "self-close pane=85 dropped: the row predates the running kitty" "$D/pcq.log"
+}
+
+@test "CONTROL: a self-close row from THIS kitty is still paged once as before" {
+  q self-close 85 sid=s1 kitty_pid=610 retrier_pid=1 retrier_lstart=x
+  run "$DRAIN"
+  [ -e "$D/q/self-close-85.json" ]
+  [ "$(grep -c 'page ' "$D/page-calls.log")" -eq 1 ]
+}

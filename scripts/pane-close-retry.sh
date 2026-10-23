@@ -58,6 +58,22 @@ ROWS="$(pcq_list)"
 [[ -n "$ROWS" ]] || exit 0          # the common case: nothing queued, and kitty is never asked
 command -v jq >/dev/null 2>&1 || { log "jq missing — every row held"; exit 0; }
 
+# The live kitty, resolved BEFORE any row is judged: every kind is checked against its generation
+# (window ids restart at 1 per kitty process, so a row from an older kitty names a stranger). The
+# LIVE socket first, then a row's recorded one: a row's socket can name a kitty that has since
+# restarted, and comparing a row against its own socket could never notice that change.
+KITTY="${CC_PCQ_KITTY_BIN:-$(cc_run "$HERE/../bin/cc-kitty-bin" 2>/dev/null || command -v kitty 2>/dev/null || true)}"
+IT2="${CC_PCQ_IT2_BIN:-$(command -v it2 2>/dev/null || echo "$HOME/.claude/bin/it2")}"
+SOCK="${KITTY_LISTEN_ON:-}"
+[[ -n "$SOCK" ]] || SOCK="$(cc_run "${CC_PCQ_KITTY_SOCKET_BIN:-$HERE/../bin/cc-kitty-socket}" 2>/dev/null || true)"
+if [[ -z "$SOCK" ]]; then
+  while IFS= read -r _row <&3; do
+    SOCK="$(pcq_get "$_row" kitty_sock)"; [[ -n "$SOCK" ]] && break
+  done 3<<<"$ROWS"
+fi
+LIVE_GEN=""
+[[ "$SOCK" =~ .*kitty-([0-9]+) ]] && LIVE_GEN="${BASH_REMATCH[1]}"
+
 # Same bounding idiom as hooks/teammate-auto-shutdown.sh tas_bounded: a launchd PATH has no coreutils
 # `timeout`, so the absolute Homebrew paths are searched too; absent everywhere ⇒ unbounded, never
 # a refusal to run.
@@ -89,8 +105,23 @@ _retrier_alive() { # <row> → rc 0 iff the recorded retrier pid is running with
 }
 NOTIFY_ROWS=""
 drain_self_close() {
-  local row="$1" pane
+  local row="$1" pane kpid ks first
   pane="$(pcq_get "$row" pane)"
+  # A row from an older kitty is about a window that no longer exists (husk-panes-2026-10-22 F2c):
+  # self-close-85.json from 2026-10-01 was logged 2,325 times against the pane 85 of a later kitty.
+  # Rows now carry kitty_pid (wave A); a legacy row without it is judged by its first_ts against the
+  # running kitty's start. Either way it is dropped, never acted on.
+  kpid="$(pcq_get "$row" kitty_pid)"
+  if [[ -n "$kpid" && -n "$LIVE_GEN" && "$kpid" != "$LIVE_GEN" ]]; then
+    pcq_remove "$row"; log "self-close pane=$pane dropped: kitty restarted since ($kpid → $LIVE_GEN)"; return
+  fi
+  if [[ -z "$kpid" ]]; then
+    ks="$(_kitty_start_epoch)"; first="$(pcq_get "$row" first_ts)"
+    first="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$first" +%s 2>/dev/null || echo "")"
+    if [[ "$ks" =~ ^[0-9]+$ && "$first" =~ ^[0-9]+$ ]] && (( first < ks )); then
+      pcq_remove "$row"; log "self-close pane=$pane dropped: the row predates the running kitty"; return
+    fi
+  fi
   if _retrier_alive "$row"; then log "self-close pane=$pane retrier $(pcq_get "$row" retrier_pid) alive — skipped"; return; fi
   if [[ "$(pcq_get "$row" paged)" == 1 ]]; then
     log "self-close pane=$pane already paged — held for handoff-fire"
@@ -208,20 +239,7 @@ done 3<<<"$ROWS"
 (( N_TEAM > 0 || N_RCY > 0 || N_HUSK > 0 )) || [[ -n "$NOTIFY_ROWS" ]] || exit 0
 
 # ── the gate: does kitty remote control answer? ────────────────────────────────────────────────
-# The LIVE socket first, then a row's recorded one. A row's socket can name a kitty that has since
-# restarted: asking it would hold every row forever, and comparing a row against its own socket
-# could never notice the generation change in (b).
-KITTY="${CC_PCQ_KITTY_BIN:-$(cc_run "$HERE/../bin/cc-kitty-bin" 2>/dev/null || command -v kitty 2>/dev/null || true)}"
-IT2="${CC_PCQ_IT2_BIN:-$(command -v it2 2>/dev/null || echo "$HOME/.claude/bin/it2")}"
-SOCK="${KITTY_LISTEN_ON:-}"
-[[ -n "$SOCK" ]] || SOCK="$(cc_run "${CC_PCQ_KITTY_SOCKET_BIN:-$HERE/../bin/cc-kitty-socket}" 2>/dev/null || true)"
-if [[ -z "$SOCK" ]]; then
-  while IFS= read -r _row <&3; do
-    SOCK="$(pcq_get "$_row" kitty_sock)"; [[ -n "$SOCK" ]] && break
-  done 3<<<"$ROWS"
-fi
-LIVE_GEN=""
-[[ "$SOCK" =~ .*kitty-([0-9]+) ]] && LIVE_GEN="${BASH_REMATCH[1]}"
+# SOCK/LIVE_GEN were resolved near the top (the live socket first, then a row's recorded one).
 
 kls() { [[ -n "$KITTY" && -n "$SOCK" ]] || return 1; bounded "$KITTY" @ --to "$SOCK" ls 2>/dev/null; }
 LS=""
