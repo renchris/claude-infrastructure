@@ -394,8 +394,10 @@ lr_move_fixture() {
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\ncase "$*" in *--dry-run*) echo "pane 330: REFUSED — nothing says session 88e2c2b1 meant to end"; exit 1 ;; esac\necho closed\n' "$T/closed.txt" > "$CC_PANE_CLOSE_BIN"
   run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
   ! painted | grep -q 'safe to close\|closing in' || { painted; false; }
-  painted | grep -q '⚠ 88e2c2b1 ended, reason unknown' || { painted; false; }
+  painted | grep -q "◆ can't tell if 88e2c2b1 finished" || { painted; false; }
+  ! painted | grep -q 'reason unknown' || { painted; false; }
   painted | grep -q '▶ cc-husk-sweep --pane 330' || { painted; false; }
+  grep -qF $'\033]2;◆ check 88e2c2b1\007' "$T/dev/ttys099" || { cat -v "$T/dev/ttys099"; false; }
   said | grep -q 'the closer keeps this pane: nothing says session 88e2c2b1 meant to end' || { said; false; }
   [ "$(cat "$T/closed.txt")" = "--pane 330 --dry-run" ] || { cat "$T/closed.txt"; false; }
   assert_rows
@@ -451,4 +453,18 @@ echo closed'
   export CC_PANE_CLOSE_QUEUE_DIR="$T/q"
   CC_PANE_VERDICT_CLOSE=off run verdict_with "$HOOK" CRASH external-sigterm 143 15
   [ ! -e "$T/q/husk-330.json" ]
+}
+
+@test "F5 interim: a refusal because kitty did not answer paints done + kitty didn't answer — never ✅ closed or reason unknown (pane 42)" {
+  rm -f "$T/cwd/scratch.txt"
+  cc_stub "$(dirname "$CC_PANE_CLOSE_BIN")" "$(basename "$CC_PANE_CLOSE_BIN")" \
+    '#!/bin/bash
+case "$*" in *--dry-run*) echo "pane 330: REFUSED — kitty remote control is down and a kitty window is in native fullscreen"; exit 1 ;; esac
+echo closed'
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  ! grep -qF '✅ closed' "$T/dev/ttys099" || { cat -v "$T/dev/ttys099"; false; }
+  ! painted | grep -q 'reason unknown' || { painted; false; }
+  painted | grep -qF "kitty didn't answer" || { painted; false; }
+  painted | grep -qF '✓ 88e2c2b1 finished' || { painted; false; }
+  grep -qF $'\033]2;✓ done 88e2c2b1\007' "$T/dev/ttys099" || { cat -v "$T/dev/ttys099"; false; }
 }

@@ -2051,9 +2051,25 @@ paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath
   case "$block" in *"closing in "*|*"safe to close"*)
     if ! kept=$(pane_close_predicate "$sid"); then
       _lcw_say_load || true
+      # THE REFUSAL HAS A REASON, AND THE TITLE FOLLOWS IT (husk-panes-2026-10-22 F5 interim). Pane 42
+      # read "✅ closed" over "ended, reason unknown" while the closer's reason was on record: kitty
+      # did not answer. A refusal about the CLOSE ITSELF (remote control down, the fullscreen guard)
+      # means the session is done and only the act failed; anything else is "can't tell".
+      local r1 r2
+      case "$kept" in
+        *"remote control is down"*)
+          title="✓ done ${sid:0:8}"; r1=$(_lcw_say ok "${sid:0:8} finished" "nothing to resume")
+          r2=$(_lcw_say wait "kitty didn't answer" "closes when it does") ;;
+        *"fullscreen guard"*)
+          title="✓ done ${sid:0:8}"; r1=$(_lcw_say ok "${sid:0:8} finished" "nothing to resume")
+          r2=$(_lcw_say warn "last pane of a fullscreen window" "⌘W closes it") ;;
+        *)
+          title="◆ check ${sid:0:8}"; r2=""
+          r1=$(_lcw_say judge "can't tell if ${sid:0:8} finished" "" "cc-husk-sweep --pane ${LEAD_PANE:-<pane>}") ;;
+      esac
       while IFS= read -r line; do
         case "$line" in *"closing in "*|*"safe to close"*)
-          line=$(_lcw_say warn "${sid:0:8} ended, reason unknown" "" "cc-husk-sweep --pane ${LEAD_PANE:-<pane>}") ;;
+          line="$r1"; [[ -z "$r2" ]] || line="$line"$'\n'"$r2" ;;
         esac
         if [[ -z "$nb" ]]; then nb="$line"; else nb="$nb"$'\n'"$line"; fi
       done <<< "$block"
