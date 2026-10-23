@@ -68,6 +68,8 @@ Already landed and not redone: 31f4242e0, 20368fc85, c82a349ce, 58885750c, ed561
 
 ## Phase 0: agent team orchestration
 
+**Status**: IN PROGRESS — every buildable wave was fired and its code landed (`impl/PLAN-STATUS.md`); the lead still owes the Tier-L queue row `bbe7b5b1ba63` and the parked L flips `718ef4662d91` (W5 Part A) and `a76128229b2a` (W12 identity); re-read 2026-10-23, `docs/research/lr-sustained-load-plan-reread-2026-10-23.md`
+
 **Execution locus per wave (first field).**
 
 | Wave | Locus | Why (T/L only) |
@@ -218,7 +220,7 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
   - `cc-backlog list --open --json` shows the needs and backlog rows listed below.
 - **Kill switch / reload.** None (docs).
 
-## W0b: safety preconditions (S; dispatched alone, before any slot starts)
+## W0b: safety preconditions (S; dispatched alone, before any slot starts) — DONE (`3471aebea` `d8fb9210b` `79090c717` `9f005ae66`, grown `b24389ff7`)
 
 - **Goal.** Close three exposures before any wave runs suites or live rigs:
   - lr_recon tests that reach live state;
@@ -241,7 +243,7 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
   - `stat -f %m ~/.reso/limit-recover/recon.on` and `ls -la ~/.reso/limit-recover/locks/swap-slots` are recorded before and after the wave's own runs and are unchanged.
 - **Kill switch.** Revert. **Reload.** None. The reaper and the hook read their source on each run, so both are live at converge.
 
-## W1: load harness, hermetic tier (B1 part 1; slot B)
+## W1: load harness, hermetic tier (B1 part 1; slot B) — DONE (`e6713c4da`..`2d99d8e93`, S5b hard `a12101b6c`)
 
 - **Goal.** A seconds-long, land-gate tier that proves three things: the decision code never reads load; it never turns our timeout into a verdict; and it bounds first and retry attempts on a virtual clock. Plus the rig repaired and made safe.
 - **Levers (design §9.1-9.5 and §9.11, with every review change):**
@@ -295,6 +297,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Kill switch.** Tests only; revert. **Reload.** None.
 
 ## W2: restart safety (A6; slot A)
+
+**Status**: IN PROGRESS — code LANDED `1eb5548ac` `45b8bbfa9` `288b5f897`, live since reload R1 (2026-10-21 02:30Z); owed: the guarantee9 pair (tries `20261021T102850Z9471`, `20261021T120053Zdc2a` read NO-VERDICT on the premise; re-run after W14f `b8ce080ca`), Tier-L queue row `bbe7b5b1ba63`
 
 - **Goal.** A restart loses no exit code, never re-stamps an in-flight claim to the new daemon, and replays a killed pass exactly once. Every later reload is then safe mid-cohort.
   - About half of all restarts are watchdog TERM kills under load: `grep -c 'KILL -TERM' watchdog.log` => 28, 24 of 48 restarts (A6 efficacy review).
@@ -358,7 +362,7 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Kill switch.** `touch ~/.reso/limit-recover/recon/claim-keeper.off` and/or `recon/exit-files.off` (read every pass).
 - **Reload.** R1. The first restart still loses the codes of old-wrapper actuators in flight (accepted; design §10).
 
-## W3: cheap `--place`, client side, plus the arrival check (B4 C1-C3; slot C)
+## W3: cheap `--place`, client side, plus the arrival check (B4 C1-C3; slot C) — DONE (`c79df708d`)
 
 - **Goal.** Make `claude-accounts --place` cost a fraction of a CPU-second and stop growing with the corpus.
   - B4 measured at priority 31 with 9 movers: originally 4.75-11.7 s and 4.3-4.9 CPU-s; the prototype 0.15-0.56 s and 0.15 CPU-s.
@@ -383,6 +387,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Reload.** None (a per-call binary, live at converge).
 
 ## W4: load harness, live tier (B1 part 2; slot B)
+
+**Status**: IN PROGRESS — code LANDED `30cadb316` `354bd4c04` `da293caf2`; owed: its own guarantee9 pair (cure-only and pair read NO-VERDICT on load and containment), Tier-L queue row `bbe7b5b1ba63`
 
 - **Goal.** A two-arm live rig, run on demand from a priority-31 context. It measures every member's death → detect → first attempt → retries → engaged under the real band mix, with an honest verdict and a power control.
 - **Levers (design §3-§9 plus every review change):**
@@ -448,6 +454,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 
 ## W4b: rig completion for the later waves (B1 phase 2; slot B)
 
+**Status**: IN PROGRESS — code LANDED `1e52a4b3d` `d5850fc77` `c8a26b0d6` `0fd7ced3c`; owed: the move9 pair, then `load-expect.json` T5 to hard, Tier-L queue row `bbe7b5b1ba63`
+
 - **Goal.** The rig drives what W5, W11, W13, W14 and W16 must prove: the move lane, the D2a switch file, a deaf kitty, and a shed-shaped batch.
 - **Levers.**
   - **Move-lane driver.**
@@ -472,6 +480,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Kill switch.** Tests only. **Reload.** None.
 
 ## W5: reconciler first, poller as a bounded backstop; the move lane lets go (A7 parts A and B; slot C)
+
+**Status**: IN PROGRESS — code LANDED `fef98e423` `1f1e42206` `a294d2bcb`, Part A in shadow; owed: the Part A flip, parked as `718ef4662d91` behind packet `4ffc4e1e5f1c`, and the live-wall reads
 
 - **Goal.** Hands-off recovery is on: the operator touched `recon/autorecover.on` at 17:10:31Z (A7 §0). Two changes follow:
   - the poller stops racing the reconciler for a record it is about to place, for a bounded time only;
@@ -516,6 +526,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Kill switch.** `touch ~/.reso/limit-recover/recon-first.off` (next tick); the two switch files above. **Activation.** Part B and A′ at converge; Part A in shadow at converge, then live at the L flip. Poller ticks are fresh processes (StartInterval 600), so no reload.
 
 ## W6: telemetry (B6; slot A)
+
+**Status**: IN PROGRESS — code LANDED `8f4ab29f9` `748186142`, live since reload R2; owed: the Tier-L cure run, Tier-L queue row `bbe7b5b1ba63`
 
 - **Goal.** Make the following readable without forensics: pass phases, child costs, gate refusals (including the four silent paths), per-record dwell and latency, rail bands, kitty's band, thermal and memory pressure, and the runnable census by base priority. Telemetry is write-only, makes zero forks, and never raises.
 - **Levers (design §3-§6 plus correctness items 1-15 and efficacy RC-1..RC-14):**
@@ -577,7 +589,7 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Kill switch.** `touch ~/.reso/limit-recover/recon/telemetry.off` (read every pass).
 - **Reload.** R2. The activation precondition is `ls recon/owned/` empty, not an empty readout line (item 14: the four PARKED-REBOOT records keep it non-empty).
 
-## W7: kitty hygiene tools and the router-cache producers' band (B8 agent parts; slot C; after W2)
+## W7: kitty hygiene tools and the router-cache producers' band (B8 agent parts; slot C; after W2) — DONE (`2aef52ed4` + fixups to `29fa7e597`; operator RK ran 2026-10-21 ~08:07Z)
 
 - **Goal.** Read-only tooling for the operator's App Nap A/B, the fd-headroom kitten, and the planned kitty restart, fixed so it can neither give a false green nor cause the outage it watches for.
   - Plus the same band fix as waves 1 and 5, for the producers of the router cache that D1, G2, `cc-wave-plan` and `recycle_repick` read.
@@ -635,6 +647,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Activation.** The scripts at converge. The band fix is operator batch RK.
 
 ## W8: right clock per decision, retry instead of escalate, no actuator load term, every hold reason mapped (B7 + C2-lite + G1/G5 closure; slot A; after W1)
+
+**Status**: IN PROGRESS — code LANDED `72fc09748`, live since reload R2; owed: the pair, then the target:W8 flip in `load-expect.json`, Tier-L queue row `bbe7b5b1ba63`
 
 - **Goal.**
   - Evidence waits read the census instant, and actions read the wall clock, so no second prompt can be typed and nothing is stranded silently.
@@ -698,6 +712,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Reload.** R2.
 
 ## W9: a bounded pass, synchronous (B2 stage 1; slot A)
+
+**Status**: IN PROGRESS — code LANDED `784682330` `9700c6213`, live since reload R3; owed: the T2 run, then the T2 row to hard, Tier-L queue row `bbe7b5b1ba63`
 
 - **Goal.**
   - Every child the loop waits on is wall-bounded, including its kill-wait.
@@ -781,6 +797,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 
 ## W10: the holds map from the kept transcript index (B4 R1; slot A)
 
+**Status**: IN PROGRESS — code LANDED `52fc6f2b8`, live since reload R3; owed: the pair and the production `holds=` read-back, Tier-L queue row `bbe7b5b1ba63`
+
 - **Goal.** The reconciler hands `--place` the "store already holds this sid" answer it already has. That removes about 64% of `--place` CPU (B4 §1.2).
 - **Levers.**
   - `with_holds` runs on the loop thread, right after `plan.movers` in `_plan` (`__main__.py:997-1056`), from the kept `transcript.ProjectsIndex` (`transcript.py:84`, `recheck` at `:262-280`).
@@ -804,6 +822,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Kill switch.** `touch ~/.reso/limit-recover/recon/place-holds.off`. **Reload.** R3.
 
 ## W11: per-record deadline, rescoped (B3; slot A)
+
+**Status**: IN PROGRESS — code LANDED `b54efff86` `c8c922dc8` `ed6f47072`; live after operator reload R4 (step `3853d91f9626`); owed: the guarantee9 and guarantee30 pairs, then T1 to hard, Tier-L queue row `bbe7b5b1ba63`
 
 - **Goal.** A persisted per-record deadline after which soft gates no longer hold a record. Around it:
   - a lane width that is real and bounded in time;
@@ -897,6 +917,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 
 ## W12: pane identity from the kernel, one-window probe (B5a; slot C)
 
+**Status**: IN PROGRESS — code LANDED `c85b7063b`, in shadow; owed: the identity flip, parked as `a76128229b2a` until 30 agreeing `recycle-kid-shadow` rows exist
+
 - **Goal.** A slow or outaged kitty no longer stops pane identity, or the watcher's probe, from being proven. There is no new draft risk, and no proceed into a kitty that is background-banded. It ships in shadow.
   - Its value is insurance against kitty-side outages: 0 `recycle-held-unreachable` since the PRI-31 reload, and 48/48 stages claimed (measured by the reviewer).
 - **Levers (design §5.1-5.4 plus every review change; the cached-draft proof K1 is excluded):**
@@ -939,6 +961,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 
 ## W12b: the typed-relaunch hold (TR; slot C; part 2 after the TR ruling)
 
+**Status**: IN PROGRESS — part 1 LANDED `ac25e898e`; owed: the typed-relaunch rig group (Tier-L queue row `bbe7b5b1ba63`), then the `debt:typed-relaunch` row; part 2 waits on packet `db44ab0ebc55`
+
 - **Goal.** Remove the last gate on the recovery path that waits for load to fall.
   - Today a move that cannot stage its successor holds `HELD:load` whenever load is above 24/core at the commit and 20/core at the precheck (`handoff-fire.sh:4150-4194`, decision 600709c5fe4b).
   - Under 15-40/core that hold never releases, and W8 makes it a paged HOLD-LOAD.
@@ -964,6 +988,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Kill switch.** `printf load > ~/.reso/limit-recover/typed-relaunch-hold.mode`; `touch ~/.reso/limit-recover/stage-retry.off`. **Activation.** Converge. Part 2's default flip follows the ruling (L commit, under the handoff-fire edge rules).
 
 ## W13: plan-only honesty and hand-over, and the at-the-wall idle fan-out switch (A7 parts C and D + D2a; slot A)
+
+**Status**: IN PROGRESS — code LANDED `ef94cd89c` `0022f026d`; live after operator reload R4 (step `3853d91f9626`); owed: the guarantee30 idle-fanout pair, Tier-L queue row `bbe7b5b1ba63`
 
 - **Levers.**
   - **Part C.** `next_action` (`report.py:153-176`) names plan-only records honestly.
@@ -997,6 +1023,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 
 ## W14: kitty-free pane binding in the census (B5-R; slot A)
 
+**Status**: IN PROGRESS — code LANDED `4b4edf0de`, plus `6adbd797f` (the now-audit mutant re-anchor PLAN-STATUS cites as `cfdb341d2`, a pre-rebase sha) and the pid-reuse fix W14f `b8ce080ca`; live after operator reload R5 (step `7f151e71f291`); owed: the kitty-deaf pair, Tier-L queue row `bbe7b5b1ba63`
+
 - **Goal.** A record born during a kitty remote-control outage still gets a pane and reaches its kitty-dependent step, where it holds TRANSIENT and pages. Today it sits PRE-MOVE/None with nothing dispatched (C2 efficacy E1, measured with `phase.derive_phase` and `act.choose`).
 - **Levers.**
   - When a kitty's `kitten @ ls` fails (`observe.py:238`, bound 5 s; `:496-506` drops roots today), bind each claude holder to (kitty_pid, window_id) from `ps -E` `KITTY_WINDOW_ID`/`KITTY_PID` (last token), plus ancestry to that kitty, using W12's rules, marked `pane_src = "env"`.
@@ -1014,6 +1042,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Kill switch.** `printf off > ~/.reso/limit-recover/recon/pane-bind-env.mode`. **Reload.** R5.
 
 ## W15: a recycle re-pick leaves a pace-held account (D1; slot B; may build before the ruling)
+
+**Status**: IN PROGRESS — code LANDED `83e99fccc` + fixups to `01fee6a42`, at mode `off`; owed: a ≥30/core latency bin before mode `on`, which packet `0223cae3d185` sets
 
 - **Levers (design option B plus both reviews):**
   - **Router.** It declares `repick_leave=<accts>|-` from `REPICK_LEAVE_VERDICTS = ("on-pace", "hold-credits")`. `claimed` and `flat` stay (correctness 1).
@@ -1049,6 +1079,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Kill switch.** `printf off > ~/.claude/state/repick-held`. **Activation.** Converge at mode off; the ruling sets shadow or on.
 
 ## W16: late-band idle shed, shadow only (D2b; slot B; may build before the ruling)
+
+**Status**: IN PROGRESS — code LANDED `abb17fa10` `d0ffedbfe` + fixups to `721539ac6`, shadow only; owed: the shed-e1 pair (Tier-L queue row `bbe7b5b1ba63`) and T6, which needs a rig matrix running `lr-shed.py --tick` in an arm (not built); `on` waits on packet `76a584cc935b`
 
 - **Levers (design §6 plus correctness D1-D17 and efficacy E1-E10, each stated):**
   - **Controller.** `lr-shed.py` runs detached, with one writer holding an `O_EXCL` lock on (pid, lstart). The kick writes a different file and checks no pid (D1).
@@ -1088,6 +1120,8 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 - **Kill switch.** `rm ~/.reso/limit-recover/shed/mode` (nothing runs while it is absent).
 
 ## W17: self-recovery, shadow first (G2; slot A; entry trigger)
+
+**Status**: PARKED — entry trigger unmet: packet `4ab193daae88` is unruled (deadline 2026-11-03), reload R4 is not live, and there is no measured wall or failing guarantee9 cure run
 
 - **Entry trigger** (shared with C1's Gate 0). All of the following must hold:
   - R4 is live, and RK has read the router-cache producers back at ≥ 31 (G2 R6);
