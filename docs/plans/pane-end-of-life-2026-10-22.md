@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # Pane end of life, 2026-10-22: every pane ends running Claude Code or closed, and says which
@@ -126,3 +126,8 @@ B7. After Wave A has landed, on a rebased branch: the husk-row producer in hando
   cc-pane-id-lint allow marker, clearing trunk's red tests/cc-pane.bats #27 from 8d69845a0). The land
   smoke's autonomy-sweep.bats reds were load (~300): a same-moment A/B failed the identical tests on
   trunk and on wave B.
+- Close (lead, 2026-10-23): both waves verified against the remote tip (`git ls-remote`, not the local
+  origin/main ref, which briefly listed unpushed B4 commits at 00:33 and 01:28). The remaining trunk red,
+  tests/handoff-alarm-records.bats #28, predated both waves: e2d0cee07 (2026-10-19) added a tenth
+  hf_alarm site, recycle-held-fold, without raising the pin. Recorded and raised in d4c496ad9. Open
+  question carried in REPORT.md: the 09:12:40Z SIGTERM sender.
