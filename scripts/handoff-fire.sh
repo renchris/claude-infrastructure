@@ -2244,6 +2244,20 @@ await_pane_proof() { # $1=logfile → 0 pane-reachable, 1 explicitly unreachable
 # scripts/pane-close-retry.sh; and on giving up, say so loudly and leave the row.
 # Seams: CC_SELFCLOSE_NOANSWER_WAIT_S (75 — fits the default 120 s tool call with the arm's own
 # proof window), CC_SELFCLOSE_NOANSWER_POLL_S (10), CC_SELFCLOSE_NOANSWER_ARMS (3), CC_PCQ_LIB.
+# hf_husk_row — hand a pane to the pane closer (husk-panes-2026-10-22 F3). A self-close that could not
+# close its pane (husk-pane / husk-fs) and a headless self-close (which closes nothing by design) both
+# leave a `husk` row; scripts/pane-close-retry.sh then closes the pane through bin/cc-pane-close's
+# gates, on its tick or at once on a custody return. Never fatal: a missing lib is said, not fatal.
+hf_husk_row() { # $1=pane $2=reason $3=tty (may be empty)
+  sc_pcq_load || { echo "⚠ pane $1: pane-close queue lib unreachable — no husk row, nothing will retry its close" >&2; return 0; }
+  if pcq_add husk "$1" reason="$2" tty="${3:-}" producer=handoff-fire kitty_sock="${KITTY_LISTEN_ON:-}" \
+       kitty_pid="$(command -v oi_live_kitty_pid >/dev/null 2>&1 && oi_live_kitty_pid)" >/dev/null 2>&1; then
+    echo "→ pane $1 handed to the pane closer (reason $2)" >&2
+  else
+    echo "⚠ pane $1: could not write its husk row — nothing will retry its close" >&2
+  fi
+  return 0
+}
 sc_pcq_load() { # → 0 when pcq_add is defined (the shared queue lib sourced)
   command -v pcq_add >/dev/null 2>&1 && return 0
   local c
@@ -11888,6 +11902,10 @@ if [ "${1:-}" = "__selfclose" ]; then
     esac
     echo "$_hk" >&2
     hf_alarm "$_cls" "$SID" "" "${SUCCESSOR:-}" "$_pg"
+    case "$_cls" in
+      husk-fs)   hf_husk_row "$SID" guard-fullscreen "${TTY_PATH:-}" ;;
+      husk-pane) hf_husk_row "$SID" self-close-failed "${TTY_PATH:-}" ;;
+    esac
   fi
   if [ -n "$SUCCESSOR" ]; then
     # Succession legibility: land the operator's view ON the continuation. it2 python-API CLI
@@ -15773,6 +15791,10 @@ MSG
   fi
   # HEADLESS: the records are the whole close. Nothing is typed and no pane is closed here.
   if [ "$SC_HEADLESS" = 1 ]; then
+    # The row goes first, so the custody return inside sc_commit_close_records finds it and kicks the
+    # closer at once (bin/cc-custody _husk_drain). The closer's own gates decide: nothing live in the
+    # window, and this session's closedAt on the stamp.
+    [ "${SC_DRY:-0}" = 1 ] || hf_husk_row "$SC_SID" self-close-headless ""
     sc_commit_close_records
     echo "→ headless session: closedAt and the custody return are written on fire stamp $SC_SID — nothing typed, no pane closed; pane $SC_SID is left to the pane closer"
     exit 0
@@ -19649,9 +19671,9 @@ it2_split() { # $1=firing-uuid  $2=vertically|horizontally  → echoes new sessi
   # safe to retry. This runs inside `$(…)`, so the rc is the only channel that reaches the caller.
   local out rc=0 new
   if [ "${HF_ARGV_ACTIVE:-0}" = 1 ]; then
-    out="$(export CC_PANE_CMD="$CMD" CC_PANE_CMD_INTERACTIVE=1; hf_bounded_s "$HF_SPLIT_TIMEOUT_S" "$REAL_IT2" session split -s "$1" $vflag 2>&1)" || rc=$?
+    out="$(export CC_PANE_CMD="$CMD" CC_PANE_CMD_INTERACTIVE=1; IT2_SPLIT_CWD="${LAUNCH_DIR:-}" hf_bounded_s "$HF_SPLIT_TIMEOUT_S" "$REAL_IT2" session split -s "$1" $vflag 2>&1)" || rc=$?
   else
-    out="$(export CC_KITTY_ARGV_SPAWN=0; hf_bounded_s "$HF_SPLIT_TIMEOUT_S" "$REAL_IT2" session split -s "$1" $vflag 2>&1)" || rc=$?
+    out="$(export CC_KITTY_ARGV_SPAWN=0; IT2_SPLIT_CWD="${LAUNCH_DIR:-}" hf_bounded_s "$HF_SPLIT_TIMEOUT_S" "$REAL_IT2" session split -s "$1" $vflag 2>&1)" || rc=$?
   fi
   # The success line is FOUND, not required to lead. stderr is merged into $out (2>&1), and bin/it2-kitty
   # writes legitimate warnings BEFORE its final `Created new pane:` (e.g. "could not mark pane N armed");
@@ -19859,7 +19881,11 @@ spawn_frontmost() { # → echoes the new session id on stdout | empty on failure
     # 0.48.2 applies the state natively (glfw.c:1452; see scripts/lib/pane-placement.sh step 3), so
     # an overflow or --window pane gets its own Space instead of floating over the operator's.
     local wrc=0
-    wnew="$(kt_launch --type=os-window --cwd=current --os-window-state=fullscreen $kfocus ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || wrc=$?
+    # The session's own directory, not the firing window's (husk-panes-2026-10-22 F8): a kept shell
+    # otherwise sits in the originator's tree. A directory that does not exist yet keeps current.
+    local kcwd="--cwd=current"
+    [ -n "${LAUNCH_DIR:-}" ] && [ -d "$LAUNCH_DIR" ] && kcwd="--cwd=$LAUNCH_DIR"
+    wnew="$(kt_launch --type=os-window "$kcwd" --os-window-state=fullscreen $kfocus ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || wrc=$?
     [ "$wrc" != 13 ] || return 13             # outcome UNKNOWN — the caller must not read it as "nothing launched"
     [ "$wrc" = 0 ] || wnew=""
     # Empty output IS this function's documented failure and the caller (:3821 area) already fails

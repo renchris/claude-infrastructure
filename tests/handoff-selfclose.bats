@@ -533,6 +533,22 @@ SH
   [ "$(jq -r .class "$(ls "$H"/.claude/handoff-alarms/alarm-*.json)")" = husk-pane ]
 }
 
+@test "B7: a husk the self-close could not close is handed to the pane closer (husk row); a live session is not" {
+  # husk-panes-2026-10-22 F3: pane 42's self-close failed 4/4, paged, and wrote no row, so nothing
+  # retried when kitty answered at 04:28Z. RED before B7: no husk row.
+  H="$BATS_TEST_TMPDIR/home-huskrow"; mk_home "$H"
+  : > "$PS_DEAD_DIR/TTY-A"
+  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=1 bash "$HF" __selfclose PREDSID TTY-A
+  [ "$(jq -r .reason "$H/.claude/state/pane-close-queue/husk-PREDSID.json")" = self-close-failed ] || { echo "$output"; false; }
+  H="$BATS_TEST_TMPDIR/home-huskrow-fs"; mk_home "$H"
+  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 bash "$HF" __selfclose PREDSID TTY-A
+  [ "$(jq -r .reason "$H/.claude/state/pane-close-queue/husk-PREDSID.json")" = guard-fullscreen ] || { echo "$output"; false; }
+  # CONTROL: claude still running in the pane is not a husk — no row
+  H="$BATS_TEST_TMPDIR/home-huskrow-live"; mk_home "$H"; rm -f "$PS_DEAD_DIR/TTY-A"
+  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=1 bash "$HF" __selfclose PREDSID TTY-A
+  [ ! -e "$H/.claude/state/pane-close-queue/husk-PREDSID.json" ]
+}
+
 @test "close REFUSED by the fullscreen guard (rc 70) + CC STILL RUNNING → ONE attempt, close-failed-live naming the guard, NOT paged" {
   # The guard refuses on a live session too. husk-fs is only for `shell`; here the live arm keeps its
   # "look first" wording, reports the real attempt count (1, not a literal 4) and gains the guard

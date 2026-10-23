@@ -480,6 +480,24 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   grep -q -- '--os-window-state=fullscreen' "$KLOG"
 }
 
+@test "spawn_frontmost launches the OS window in LAUNCH_DIR, not the firing window's cwd (husk-panes F8)" {
+  # RED before B7: always --cwd=current, so a kept shell sat in the originator's tree.
+  pin_kitty; FOLLOW=1
+  export KFAKE_LAUNCH_ID=88
+  LAUNCH_DIR="$BATS_TEST_TMPDIR"; run spawn_frontmost
+  [ "$status" -eq 0 ]
+  grep -qF -- "--cwd=$BATS_TEST_TMPDIR" "$KLOG" || { cat "$KLOG"; false; }
+  ! grep -q -- '--cwd=current' "$KLOG" || false
+}
+
+@test "CONTROL: spawn_frontmost with no LAUNCH_DIR (or a missing one) keeps --cwd=current" {
+  pin_kitty; FOLLOW=1
+  export KFAKE_LAUNCH_ID=88
+  LAUNCH_DIR="$BATS_TEST_TMPDIR/not-there"; run spawn_frontmost
+  [ "$status" -eq 0 ]
+  grep -q -- '--cwd=current' "$KLOG"
+}
+
 @test "spawn_frontmost AUTONOMOUS (--follow off) keeps the operator's focus (C1)" {
   # kitty focuses a new os-window by DEFAULT — the opposite polarity of iTerm2's `activate`. Without
   # --keep-focus an autonomous fire yanks the operator out of whatever they were doing.

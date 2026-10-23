@@ -187,6 +187,17 @@ units() {
   [ ! -s "$IT2LOG" ] || { echo "it2 was driven:"; cat "$IT2LOG"; false; }
 }
 
+@test "B7: the headless close hands ITS stamp's pane to the pane closer (a husk row), and never pane 16" {
+  # Wave A made a headless self-close close nothing; without a row its pane stayed a shell forever.
+  stamp PANE85 "$CC_PROJECTS_DIRS/-p/$CHILD.jsonl"
+  export COMPLETION_PUSH_BIN="$BATS_TEST_TMPDIR/no-completion-push" CC_CUSTODY_HUSK_DRAIN=off
+  CHILD_TTY='??' CLAUDE_CODE_SESSION_ID="$CHILD" sc
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(jq -r .reason "$CC_PANE_CLOSE_QUEUE_DIR/husk-PANE85.json")" = self-close-headless ] || { ls "$CC_PANE_CLOSE_QUEUE_DIR"; false; }
+  [ ! -e "$CC_PANE_CLOSE_QUEUE_DIR/husk-16.json" ]
+  [ ! -s "$IT2LOG" ] || { echo "it2 was driven:"; cat "$IT2LOG"; false; }
+}
+
 @test "A2: a headless run with no stamp of its own is REFUSED, nothing typed" {
   CHILD_TTY='??' CLAUDE_CODE_SESSION_ID="$CHILD" sc --dry-run
   [ "$status" -eq 2 ] || { echo "$output"; false; }
