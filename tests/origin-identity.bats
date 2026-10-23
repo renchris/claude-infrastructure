@@ -242,3 +242,66 @@ JSON
   run call "oi_marker_inbound '' '$TP'"
   [ "$status" -ne 0 ]
 }
+
+# ── KITTY GENERATION (pane-end-of-life 2026-10-22, A6) ─────────────────────────────────────────────
+# kitty ids restart at 1 per process, so a stamp from an earlier kitty names a window a new pane may
+# hold. The live kitty is OI_KITTY_PID = this bats process (alive), its start OI_KITTY_START_EPOCH.
+# RED on origin/main: no generation check exists, so every `stale` below reads `valid` there.
+gen_env() { unset KITTY_PID; export OI_KITTY_PID="$$" OI_KITTY_START_EPOCH=1792600000 OI_KITTY_COUNT=1; }
+gstamp() { # <pane> <firedAt> [kittyPid] [closedAt-json]
+  jq -n --arg p "$1" --arg c "$WT" --arg f "$2" --arg k "${3:-}" --argjson closed "${4:-null}" \
+    '{paneUUID:$p, cwd:$c, selfRetire:true, firedAt:$f, closedAt:$closed}
+     + (if $k == "" then {} else {kittyPid:($k|tonumber)} end)' > "$CC_FIRED_DIR/$1.json"
+}
+
+@test "A6 tenancy: a stamp whose kittyPid names a kitty that is gone is STALE, not valid" {
+  gen_env; gstamp 16 2026-10-22T00:00:00Z 99999999
+  [ "$(call "fired_stamp_tenancy '$CC_FIRED_DIR/16.json' '$WT'")" = stale ]
+}
+
+@test "A6 tenancy: a LEGACY numeric stamp fired before the live kitty started is STALE (16.json, fired 10-18)" {
+  gen_env; gstamp 16 2026-10-18T12:00:00Z
+  [ "$(call "fired_stamp_tenancy '$CC_FIRED_DIR/16.json' '$WT'")" = stale ]
+}
+
+@test "A6 CONTROL: this kitty's stamps stay valid — same kittyPid, or a legacy one fired after the start" {
+  gen_env
+  gstamp 16 2026-10-18T12:00:00Z "$$"
+  [ "$(call "fired_stamp_tenancy '$CC_FIRED_DIR/16.json' '$WT'")" = valid ]
+  gstamp 17 2026-10-22T23:00:00Z
+  [ "$(call "fired_stamp_tenancy '$CC_FIRED_DIR/17.json' '$WT'")" = valid ]
+}
+
+@test "A6 ABSTAINS: no live kitty (iTerm2, launchd), or a non-numeric id, judges nothing by generation" {
+  gen_env; gstamp 16 2026-10-18T12:00:00Z; gstamp AAAA-UUID 2026-10-18T12:00:00Z
+  [ "$(call "fired_stamp_tenancy '$CC_FIRED_DIR/AAAA-UUID.json' '$WT'")" = valid ]
+  unset OI_KITTY_PID
+  [ "$(call "fired_stamp_tenancy '$CC_FIRED_DIR/16.json' '$WT'")" = valid ]
+}
+
+@test "A6 GC: closes open stamps of an older kitty once per generation, keeps this kitty's and the closed ones" {
+  gen_env
+  gstamp 16 2026-10-18T12:00:00Z                       # legacy, older  → closed
+  gstamp 18 2026-10-21T00:00:00Z 99999999              # older kittyPid → closed
+  gstamp 19 2026-10-22T23:00:00Z "$$"                  # this kitty     → untouched
+  gstamp 20 2026-10-18T12:00:00Z "" '"2026-10-19T00:00:00Z"'   # already closed → untouched
+  call "oi_gc_old_generation_stamps '$CC_FIRED_DIR'"
+  [ "$(jq -r .closedReason "$CC_FIRED_DIR/16.json")" = kitty-restarted ]
+  [ "$(jq -r .closedReason "$CC_FIRED_DIR/18.json")" = kitty-restarted ]
+  [ "$(jq -r .closedAt "$CC_FIRED_DIR/19.json")" = null ]
+  [ "$(jq -r .closedAt "$CC_FIRED_DIR/20.json")" = 2026-10-19T00:00:00Z ]
+  [ "$(jq -r '.closedReason // "none"' "$CC_FIRED_DIR/20.json")" = none ]
+  # once per generation: a second pass under the same kitty is a no-op
+  gstamp 21 2026-10-18T12:00:00Z
+  call "oi_gc_old_generation_stamps '$CC_FIRED_DIR'"
+  [ "$(jq -r .closedAt "$CC_FIRED_DIR/21.json")" = null ]
+}
+
+@test "A6 GC: with two kitties running, a LEGACY stamp is left open (its id may be the other kitty's)" {
+  gen_env; export OI_KITTY_COUNT=2
+  gstamp 16 2026-10-18T12:00:00Z
+  gstamp 18 2026-10-21T00:00:00Z 99999999
+  call "oi_gc_old_generation_stamps '$CC_FIRED_DIR'"
+  [ "$(jq -r .closedAt "$CC_FIRED_DIR/16.json")" = null ]
+  [ "$(jq -r .closedReason "$CC_FIRED_DIR/18.json")" = kitty-restarted ]
+}

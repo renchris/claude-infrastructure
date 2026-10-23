@@ -289,3 +289,13 @@ resumed_successor_fixture() { # $1=marker-in-transcript
   mark_fired_peer "$FIREDIR" "$PANE" '/tmp/wt' 'FIRING-SID-1'
   [ -s "$FIREDIR/$PANE.json" ]
 }
+
+@test "pane-end-of-life A6: the stamp records the kitty that issued its pane id (kittyPid), null outside kitty" {
+  # shellcheck disable=SC1091
+  . "$REPO/hooks/lib/origin-identity.sh"
+  unset KITTY_PID
+  OI_KITTY_PID="$$" CC_STAMP_GENERATION_GC=0 mark_fired_peer "$FIREDIR" "$PANE" /tmp/wt FIRING-SID-1
+  [ "$(jq -r .kittyPid "$FIREDIR/$PANE.json")" = "$$" ] || { cat "$FIREDIR/$PANE.json"; false; }
+  CC_STAMP_GENERATION_GC=0 mark_fired_peer "$FIREDIR" "$PANE" /tmp/wt FIRING-SID-1
+  [ "$(jq -r .kittyPid "$FIREDIR/$PANE.json")" = null ] || false
+}

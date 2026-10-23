@@ -2263,7 +2263,7 @@ sc_noanswer_record() { # $1=pane $2=tty $3=proof rc $4=watcher log → the row p
   ls="$(_hf_lstart "$$")"
   pcq_add self-close "$1" sid="$(cc_sid_for_pane "$1" 2>/dev/null || true)" tty="${2:-}" \
     reason="pane probe got no answer (proof rc $3)" rc="$3" cwd="$PWD" log="${4:-}" \
-    retrier_pid="$$" retrier_lstart="$ls" \
+    retrier_pid="$$" retrier_lstart="$ls" kitty_pid="$(command -v oi_live_kitty_pid >/dev/null 2>&1 && oi_live_kitty_pid)" \
     argv="$([ "${SC_TERMINAL:-0}" = 1 ] && printf -- '--terminal' || printf -- '--successor %s' "${SC_SUCCESSOR:-}")" \
     >/dev/null 2>&1 || { echo "⚠ self-close: could not write the pane-close queue row" >&2; return 0; }
   row="$(pcq_list 2>/dev/null | grep -F "/self-close-" | grep -F "$(printf '%s' "$1" | tr -c 'A-Za-z0-9_.:-' '_')" | head -1 || true)"
@@ -8883,6 +8883,7 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
         --arg marker "${FIRE_MARKER:-}" --arg originator "$by" \
         --arg notifyBack "${NB_ARMED_TARGET:-}" --arg firedBySid "$bysid" \
         --arg latency "$(_iso_delta_s "${LR_STARTED_AT:-}" "${LR_ENGAGED_AT:-}")" \
+        --arg kittyPid "$(command -v oi_live_kitty_pid >/dev/null 2>&1 && oi_live_kitty_pid)" \
         '{paneUUID:$paneUUID, cwd:$cwd, firedBy:$firedBy, firedAt:$firedAt, selfRetire:true}
          + {schema:2, originClass:"fired-peer"}
          + {originator:      (if $originator  == "" then null else $originator  end)}
@@ -8894,6 +8895,7 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
          + {transcript:      (if $transcript  == "" then null else $transcript  end)}
          + {marker:          (if $marker      == "" then null else $marker      end)}
          + {engageLatencyS:  (if $latency     == "" then null else ($latency|tonumber) end)}
+         + {kittyPid:        (if $kittyPid    == "" then null else ($kittyPid|tonumber) end)}
          + {closedAt:null, succession:null}' \
         > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
     mv -f "$tmp" "$dir/$pane.json" 2>/dev/null \
@@ -8917,6 +8919,8 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
   # The durable-key index, written by the SAME writer as the record so the two cannot be minted by
   # different parties with different notions of the cwd. Best-effort like everything else here.
   command -v write_fired_cwd_index >/dev/null 2>&1 && write_fired_cwd_index "$dir" "$pane" "$cwd"
+  # Once per kitty generation: retire the open stamps an earlier kitty issued (pane-end-of-life A6).
+  command -v oi_gc_old_generation_stamps >/dev/null 2>&1 && oi_gc_old_generation_stamps "$dir"
   return 0
 }
 
@@ -9273,8 +9277,10 @@ adopt_orphan_stamp() { # $1=fired-dir $2=cwd $3=self-pane → 0 adopted (echoes 
   tmp="$dir/.$self.adopt.$$"
   # adoptedFrom/adoptedAt are ADDITIVE, like every other v2 field — cc-reaper reads presence +
   # selfRetire and is untouched by keys it does not know (V2 §7 A9).
-  if jq --arg pane "$self" --arg from "$orphan" --arg at "$(_iso_now)" \
-       '. + {paneUUID:$pane, adoptedFrom:$from, adoptedAt:$at}' "$dir/$orphan.json" > "$tmp" 2>/dev/null \
+  # kittyPid is re-stamped: the adopting pane's id belongs to the kitty running NOW (A6).
+  if jq --arg pane "$self" --arg from "$orphan" --arg at "$(_iso_now)" --arg kp "$(command -v oi_live_kitty_pid >/dev/null 2>&1 && oi_live_kitty_pid)" \
+       '. + {paneUUID:$pane, adoptedFrom:$from, adoptedAt:$at}
+        + (if $kp == "" then {} else {kittyPid:($kp|tonumber)} end)' "$dir/$orphan.json" > "$tmp" 2>/dev/null \
      && [ -s "$tmp" ] && mv -f "$tmp" "$dir/$self.json" 2>/dev/null; then
     :
   else

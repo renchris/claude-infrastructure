@@ -102,6 +102,87 @@ write_fired_cwd_index() { # $1=fired-dir $2=pane $3=cwd → best-effort, always 
   return 0
 }
 
+# ---- KITTY GENERATION (2026-10-22, pane-end-of-life A6; husk-panes REPORT.md cause 1, skeptics RC2) --
+# kitty numbers windows from 1 in every process, so a stamp written under an earlier kitty names a
+# window id that a NEW pane may hold now. Measured 2026-10-22: 156 open stamps predated the running
+# kitty, 49 of them on ids above 128 that new panes will reuse; 16.json (fired 10-18, worktree since
+# deleted) sat on the pane a misdirected self-close closed. Stamps now carry kittyPid, and a stamp from
+# an older kitty is `stale`: the generation that issued its id is gone.
+#   current — kittyPid is the live kitty, or a legacy stamp touched after the live kitty started
+#   older   — kittyPid names a kitty that is no longer running, or a legacy stamp on a numeric (kitty)
+#             id whose every timestamp (fired/adopted/recycled/repaired) predates the live kitty
+#   unknown — no live kitty here (iTerm2, launchd), an unreadable start time, a kittyPid still alive
+#             (a second kitty), anything else. Callers treat unknown exactly as before.
+# Seams: OI_KITTY_PID (else $KITTY_PID) · OI_KITTY_START_EPOCH (else `ps -o lstart=`).
+oi_live_kitty_pid() { # → the live kitty pid this process runs under, or empty
+  local k="${OI_KITTY_PID:-${KITTY_PID:-}}"
+  case "$k" in ''|*[!0-9]*) return 0 ;; esac
+  kill -0 "$k" 2>/dev/null && printf '%s' "$k"
+  return 0
+}
+oi_kitty_start_epoch() { # $1=kitty pid → its start as epoch seconds, or empty
+  local ls
+  [ -n "${OI_KITTY_START_EPOCH:-}" ] && { printf '%s' "$OI_KITTY_START_EPOCH"; return 0; }
+  ls="$(LC_ALL=C ps -o lstart= -p "${1:-}" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')" || ls=""
+  [ -n "$ls" ] || return 0
+  LC_ALL=C date -j -f '%a %b %d %T %Y' "$ls" +%s 2>/dev/null || true
+}
+oi_stamp_generation() { # $1=stamp path → current|older|unknown · always rc 0
+  local s="${1:-}" live kp start latest id
+  live="$(oi_live_kitty_pid)"
+  [ -n "$live" ] && [ -s "$s" ] && command -v jq >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+  kp="$(jq -r '.kittyPid // empty' "$s" 2>/dev/null)" || kp=""
+  if [ -n "$kp" ]; then
+    case "$kp" in *[!0-9]*) printf 'unknown'; return 0 ;; esac
+    if [ "$kp" = "$live" ]; then printf 'current'
+    elif kill -0 "$kp" 2>/dev/null; then printf 'unknown'
+    else printf 'older'; fi
+    return 0
+  fi
+  id="${s##*/}"; id="${id%.json}"
+  case "$id" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
+  start="$(oi_kitty_start_epoch "$live")"
+  case "$start" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
+  latest="$(jq -r '[.firedAt, .adoptedAt, .recycledAt, .repairedAt] | map(select(type == "string")
+             | sub("\\.[0-9]+Z$"; "Z") | (fromdateiso8601? // empty)) | max // empty' "$s" 2>/dev/null)" || latest=""
+  latest="${latest%%.*}"
+  case "$latest" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
+  if [ "$latest" -lt "$start" ]; then printf 'older'; else printf 'current'; fi
+}
+
+# oi_gc_old_generation_stamps — close every OPEN stamp an earlier kitty issued: closedAt + closedReason
+# "kitty-restarted", never a delete (the record of who held the id stays readable). Runs at most once
+# per kitty generation (a marker file keyed on the live kitty pid), so the first fire after a kitty
+# restart pays one jq pass over the store and every later call returns at a stat. A legacy stamp (no
+# kittyPid) is closed only when exactly ONE kitty is running: with two, an id from the other one is
+# not this generation's to retire. CC_STAMP_GENERATION_GC=0 disables. Seam: OI_KITTY_COUNT.
+oi_gc_old_generation_stamps() { # $1=fired-dir → best-effort, always 0
+  local dir="${1:-}" live mark f n=0 tmp kitties OI_KITTY_START_EPOCH="${OI_KITTY_START_EPOCH:-}"
+  [ "${CC_STAMP_GENERATION_GC:-1}" != 0 ] || return 0
+  [ -d "$dir" ] && command -v jq >/dev/null 2>&1 || return 0
+  live="$(oi_live_kitty_pid)"; [ -n "$live" ] || return 0
+  mark="$dir/.generation-gc-$live"
+  [ -e "$mark" ] && return 0
+  : > "$mark" 2>/dev/null || return 0
+  [ -n "$OI_KITTY_START_EPOCH" ] || OI_KITTY_START_EPOCH="$(oi_kitty_start_epoch "$live")"
+  kitties="${OI_KITTY_COUNT:-$(pgrep -x kitty 2>/dev/null | wc -l | tr -d ' ')}"
+  while IFS= read -r f; do
+    [ -n "$f" ] && [ "$(oi_stamp_generation "$f")" = older ] || continue
+    if [ "$kitties" != 1 ] && [ -z "$(jq -r '.kittyPid // empty' "$f" 2>/dev/null)" ]; then continue; fi
+    tmp="$f.gc.$$"
+    if jq --arg at "$(_oi_now)" --argjson k "$live" \
+         '. + {closedAt:$at, closedReason:"kitty-restarted", closedUnderKittyPid:$k}' "$f" > "$tmp" 2>/dev/null \
+       && [ -s "$tmp" ] && mv -f "$tmp" "$f" 2>/dev/null; then
+      n=$((n + 1))
+    else
+      rm -f "$tmp" 2>/dev/null
+    fi
+  done < <(find "$dir" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null \
+           | xargs -0 jq -r 'select(.closedAt == null) | input_filename' 2>/dev/null)
+  printf '%s kitty=%s closed=%s\n' "$(_oi_now)" "$live" "$n" >> "$mark" 2>/dev/null
+  return 0
+}
+
 read_fired_cwd_index() { # $1=fired-dir $2=cwd → echoes the pane id, or nothing
   local dir="${1:-}" cwd="${2:-}" key f
   [ -n "$dir" ] && [ -n "$cwd" ] || return 0
@@ -144,6 +225,9 @@ fired_stamp_tenancy() { # $1=stamp-path $2=this-pane-cwd → echoes absent|valid
   [ -n "$stamp" ] && [ -s "$stamp" ] || { printf 'absent'; return 0; }
   [ "${CC_SELFCLOSE_TENANCY:-1}" != 0 ] || { printf 'unknown'; return 0; }
   command -v jq >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+  # A stamp issued under an EARLIER kitty names a window id a new pane now holds: a positive
+  # refutation, checked first because it needs no cwd (oi_stamp_generation's header).
+  [ "$(oi_stamp_generation "$stamp")" = older ] && { printf 'stale'; return 0; }
   want="$(jq -r '.cwd // ""' "$stamp" 2>/dev/null || true)"
   [ -n "$want" ] || { printf 'unknown'; return 0; }
   # Resolve BOTH sides the same way. macOS hands out /tmp and /private/tmp for one directory, and a
