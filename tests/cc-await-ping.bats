@@ -2107,6 +2107,25 @@ sd_arm() {  # <uuid> <errfile> → SD_W = pid of a watcher armed on that inbox, 
   wait "$w2" 2>/dev/null || true
 }
 
+# A claim file outlives its watcher, and its pid can be reused. On this fleet the reuser is often a
+# Claude session whose argv carries its whole brief, and every brief mentions cc-await-ping. A
+# substring match on argv then reads that session as a watcher and TERMs it: lane K's wrapper took a
+# TERM at 09:12:33Z on 2026-10-22, 45 s after lane P's stand-down (docs/research/husk-panes-2026-10-22/
+# a7-sigterm.md). Only a process RUNNING cc-await-ping, as its command or its interpreter's script,
+# is a watcher.
+@test "stand-down: a pid that only MENTIONS cc-await-ping in its argv (a fired brief) is never signalled" {
+  mkdir -p "$CC_MAILBOX_DIR/.watchers"
+  bash -c 'sleep 60; : brief says arm cc-await-ping --timeout 3300' &
+  local decoy=$!
+  : > "$CC_MAILBOX_DIR/.watchers/$UUID.$decoy"                          # a stale claim, pid reused
+  run "$AWAIT" "$UUID" --stand-down
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"n=0"* ]] || false
+  kill -0 "$decoy"                                                       # the session lives
+  kill -TERM "$decoy" 2>/dev/null || true
+  wait "$decoy" 2>/dev/null || true
+}
+
 @test "stand-down CONTROL: a bare TERM with no stamp is still reported as an external kill" {
   sd_arm "$UUID" "$BATS_TEST_TMPDIR/w.err"; local w=$SD_W
   kill -TERM "$w"

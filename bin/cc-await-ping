@@ -401,7 +401,13 @@ if [ "$STAND_DOWN" = 1 ]; then
   _sd_signal() {   # <pid> <key> — TERM a pid iff it is alive AND runs cc-await-ping; rc 0 = signalled
     local p="$1" k="$2"
     kill -0 "$p" 2>/dev/null || return 1
-    ps -o command= -p "$p" 2>/dev/null | grep -q 'cc-await-ping' || return 1
+    # cc-await-ping must be the COMMAND (word 1) or the script a shell runs (word 2). A substring
+    # match also selects a Claude session whose argv carries a brief that mentions us; when a stale
+    # claim's pid is reused by one, it gets TERMed (lane K, 2026-10-22; a7-sigterm.md).
+    ps -o command= -p "$p" 2>/dev/null | awk '{
+      n=split($1,a,"/"); c=a[n]; m=split($2,b,"/"); s=b[m]
+      exit !(c=="cc-await-ping" || ((c=="bash"||c=="sh"||c=="zsh") && s=="cc-await-ping"))
+    }' || return 1
     mkdir -p "$WATCH_CLAIM_DIR" 2>/dev/null || true
     : > "$WATCH_CLAIM_DIR/stand-down.$p" 2>/dev/null || true
     if kill -TERM "$p" 2>/dev/null; then
