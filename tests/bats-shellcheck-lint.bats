@@ -444,7 +444,10 @@ mkrepo() {  # $1=dir → git tree with the lint at scripts/, dirty trunk suite, 
   # this arm goes through the helper, AND the helper is the thing that runs `--selftest` — because
   # grepping only for the call would no longer pin that a selftest happens at all.
   grep -q 'selftest_ok "$SC_BATS_LINT"' scripts/ship-land.sh || false
-  grep -q -- '"$lint" --selftest' scripts/ship-land.sh || false
+  # The helper runs the lint through its interpreter since eef500138 (kalloc: tracked #! helpers go
+  # through cc-run), so the call is `"${run[@]}" --selftest` over an argv seeded from "$lint".
+  grep -q 'local run=("$lint")' scripts/ship-land.sh || false
+  grep -q -- '"${run\[@\]}" --selftest' scripts/ship-land.sh || false
   # …and at the task-quality-gate hook.
   grep -q 'bats-shellcheck-lint.sh' hooks/task-quality-gate.sh || false
   # THE INVARIANT that keeps the gate landable: is_shell_file() must not claim .bats, because every
