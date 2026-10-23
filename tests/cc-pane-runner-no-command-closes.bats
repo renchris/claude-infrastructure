@@ -91,3 +91,15 @@ exit 7'
   [[ "$output" == *"last pane of a fullscreen window"*"⌘W closes it"* ]] || { echo "$output"; false; }
   [[ "$output" != *"kitty-fullscreen-guard: refused"* ]] || { echo "$output"; false; }
 }
+
+@test "no command and the guard cannot read kitty: an exit record (never launched) AND a husk row are left" {
+  # husk-panes-2026-10-22 F3, pane 101: _no_command wrote no exit record, so cc-pane-close's
+  # never-launched arm refused the pane forever, and nothing retried. RED before the fix.
+  export CC_PANE_EXIT_DIR="$T/pane-exit" CC_PANE_CLOSE_QUEUE_DIR="$T/q"
+  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: x' run "$RUNNER"
+  [ "$status" -eq 7 ]
+  [ "$(jq -r .claude_started "$T/pane-exit/42.json")" = false ]
+  [ "$(jq -r .rc "$T/pane-exit/42.json")" = 124 ]
+  [ "$(jq -r .reason "$T/q/husk-42.json")" = guard-unreadable ]
+  [ "$(jq -r .what "$T/q/husk-42.json")" = "this armed agent pane" ]
+}

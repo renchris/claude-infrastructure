@@ -419,3 +419,31 @@ lr_move_fixture() {
     assert_rows || { echo "class: $c"; false; }
   done
 }
+
+# ── husk rows (husk-panes-2026-10-22 F3): a paint over a kept pane leaves a durable retry row ──────
+hrow() { jq -r ".$1" "$CC_PANE_CLOSE_QUEUE_DIR/husk-330.json"; }
+
+@test "a CRASH paint over a bare shell leaves a husk row (reason crash) — RED before F3: no row, no retry" {
+  export CC_PANE_CLOSE_QUEUE_DIR="$T/q"
+  run verdict_with "$HOOK" CRASH external-sigterm 143 15
+  [ "$(hrow kind)" = husk ]
+  [ "$(hrow reason)" = crash ]
+  [ "$(hrow sid)" = "$SID" ]
+  [ "$(hrow tty)" = "$T/dev/ttys099" ]
+  [ "$(hrow producer)" = lead-crash-watchdog ]
+}
+
+@test "the closer refusing a clean exit leaves a husk row carrying its refusal" {
+  export CC_PANE_CLOSE_QUEUE_DIR="$T/q"
+  rm -f "$T/cwd/scratch.txt"
+  printf '#!/bin/bash\ncase "$*" in *--dry-run*) echo "pane 330: REFUSED — kitty remote control is down"; exit 1 ;; esac\necho closed\n' > "$CC_PANE_CLOSE_BIN"
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  [ "$(hrow reason)" = closer-refused ]
+  [ "$(hrow refusal)" = "kitty remote control is down" ]
+}
+
+@test "CONTROL: CC_PANE_VERDICT_CLOSE=off keeps the pane on purpose — no husk row" {
+  export CC_PANE_CLOSE_QUEUE_DIR="$T/q"
+  CC_PANE_VERDICT_CLOSE=off run verdict_with "$HOOK" CRASH external-sigterm 143 15
+  [ ! -e "$T/q/husk-330.json" ]
+}

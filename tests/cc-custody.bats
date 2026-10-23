@@ -160,3 +160,35 @@ _backdate() { # <marker> <iso-ts> — fixture surgery: backdate the open row car
   [ "$output" = 0 ]
   [ "$("$BIN" count --open --cwd "$WT_A")" = 1 ]
 }
+
+# ── husk-panes-2026-10-22 F3d: a discharge re-runs the pane closer when a husk row names the pane ──
+husk_setup() {
+  export CC_PANE_CLOSE_QUEUE_DIR="$BATS_TEST_TMPDIR/q"; mkdir -p "$CC_PANE_CLOSE_QUEUE_DIR"
+  export CC_CUSTODY_HUSK_DRAIN_BIN="$BATS_TEST_TMPDIR/drain"
+  printf '#!/bin/bash\n: > %q\n' "$BATS_TEST_TMPDIR/drained" > "$CC_CUSTODY_HUSK_DRAIN_BIN"
+}
+wait_drained() { local i; for i in $(seq 1 50); do [ -e "$BATS_TEST_TMPDIR/drained" ] && return 0; sleep 0.1; done; return 1; }
+
+@test "return of a debt whose pane has a husk row detaches one pane-close-retry run" {
+  husk_setup; echo '{"kind":"husk","pane":"85"}' > "$CC_PANE_CLOSE_QUEUE_DIR/husk-85.json"
+  "$BIN" open --cwd "$WT_A" --target 85 --marker M-H
+  run "$BIN" return M-H
+  [ "$status" -eq 0 ]
+  wait_drained
+}
+
+@test "abandon frees the pane the same way" {
+  husk_setup; echo '{"kind":"husk","pane":"85"}' > "$CC_PANE_CLOSE_QUEUE_DIR/husk-85.json"
+  "$BIN" open --cwd "$WT_A" --target 85 --marker M-HA
+  run "$BIN" abandon M-HA --why superseded
+  [ "$status" -eq 0 ]
+  wait_drained
+}
+
+@test "CONTROL: no husk row for the pane — no drain run" {
+  husk_setup
+  "$BIN" open --cwd "$WT_A" --target 85 --marker M-H2
+  run "$BIN" return M-H2
+  [ "$status" -eq 0 ]
+  ! wait_drained
+}

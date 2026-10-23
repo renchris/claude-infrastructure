@@ -59,7 +59,8 @@
 #   Unparseable/absent ts ⇒ ageHours null ⇒ NOT stale: the classification gates a bulk discharge,
 #   so an unknown age must fail toward keeping the debt (lookup-miss-is-not-absence).
 #
-# Env seams (tests): CC_CUSTODY_DIR · CC_CUSTODY_TTL_HOURS · (lib) CC_FIRED_DIR unused here.
+# Env seams (tests): CC_CUSTODY_DIR · CC_CUSTODY_TTL_HOURS · (lib) CC_FIRED_DIR unused here ·
+#   CC_PANE_CLOSE_QUEUE_DIR · CC_CUSTODY_HUSK_DRAIN_BIN · CC_CUSTODY_HUSK_DRAIN=off (no drain on discharge).
 set -uo pipefail
 
 CUSTODY_DIR="${CC_CUSTODY_DIR:-$HOME/.claude/autonomy/custody}"
@@ -67,6 +68,27 @@ TTL_HOURS="${CC_CUSTODY_TTL_HOURS:-24}"
 case "$TTL_HOURS" in ''|*[!0-9]*) TTL_HOURS=24 ;; esac
 
 _die() { printf 'cc-custody: %s\n' "$1" >&2; exit "${2:-2}"; }
+
+# ── A DISCHARGED DEBT FREES ITS PANE (husk-panes-2026-10-22 F3d) ─────────────────────────────────
+# A peer pane kept after its session died (a `husk` row in the pane-close queue) is held while its
+# custody is open, because its orchestrator may still resume it there. The return or abandon is the
+# moment that hold ends, so it detaches ONE pane-close-retry run instead of leaving the close to the
+# next 10-minute tick. Pane 85 (2026-10-22): custody returned at 23:14:56Z and nothing followed.
+# Only when a husk row names the pane; detached in its own session so a caller's exit cannot kill it,
+# and never able to fail the discharge it follows.
+_husk_drain() { # $1=targetPane
+  local p="${1:-}" q d
+  [ "${CC_CUSTODY_HUSK_DRAIN:-on}" != off ] || return 0
+  case "$p" in ''|*[!0-9]*) return 0 ;; esac
+  q="${CC_PANE_CLOSE_QUEUE_DIR:-$HOME/.claude/state/pane-close-queue}"
+  [ -f "$q/husk-$p.json" ] || return 0
+  d="${CC_CUSTODY_HUSK_DRAIN_BIN:-$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../scripts/pane-close-retry.sh}"
+  [ -f "$d" ] || return 0
+  /usr/bin/python3 -c 'import subprocess, sys
+subprocess.Popen(["/bin/bash", sys.argv[1]], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                 stderr=subprocess.DEVNULL, start_new_session=True)' "$d" >/dev/null 2>&1 || true
+  return 0
+}
 
 command -v jq >/dev/null 2>&1 || _die "jq not found" 3
 
@@ -198,6 +220,7 @@ case "$cmd" in
             "$(printf '%s' "$r" | jq -r '.marker // ""')" \
             "$(printf '%s' "$r" | jq -r '.slug // ""')" "" "$WHY" >> "$f" \
             || _die "append failed" 3
+          _husk_drain "$(printf '%s' "$r" | jq -r '.targetPane // ""')"
           bulk_n=$((bulk_n + 1))
         done <<INNER
 $stale_rows
@@ -226,6 +249,7 @@ EOF
         "$(printf '%s' "$matched" | jq -r '.marker // ""')" \
         "$(printf '%s' "$matched" | jq -r '.slug // ""')" "" "$WHY" >> "$matched_file" \
         || _die "append failed" 3
+      _husk_drain "$(printf '%s' "$matched" | jq -r '.targetPane // ""')"
     else
       # Best-effort by design: a peer returning after its originator's store was pruned must not
       # fail its own close path. Loud on stderr, rc 0.

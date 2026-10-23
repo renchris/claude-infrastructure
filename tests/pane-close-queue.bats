@@ -42,6 +42,11 @@ setup() {
   printf '#!/bin/bash\necho "page $*" >> "%s/page-calls.log"\n' "$D" > "$D/bin/page"
   printf '#!/bin/bash\necho "notify $*" >> "%s/pcqnotify-calls.log"\n' "$D" > "$D/bin/pcqnotify"
   export CC_PCQ_NOTIFY_BIN="$D/bin/pcqnotify"
+  # husk rows (F3): the custody store and the kitty start time are pinned, never this machine's.
+  # cc-custody stub: `list --open --json` prints $D/custody.json (default: no open rows).
+  printf '#!/bin/bash\ncat "%s/custody.json" 2>/dev/null || echo "[]"\n' "$D" > "$D/bin/custody"
+  chmod +x "$D/bin/custody"
+  export CC_PCQ_CUSTODY_BIN="$D/bin/custody" CC_PCQ_KITTY_START_EPOCH=1000
   printf '#!/bin/bash\nexit 4\n' > "$D/bin/nosock"
   chmod +x "$D/bin/kitty" "$D/bin/it2" "$D/bin/page" "$D/bin/pcqnotify" "$D/bin/nosock"
 }
@@ -412,4 +417,91 @@ _as_member() { # $1 = KITTY_WINDOW_ID for the member's env ("" = none)
   _hook_close SOME-OTHER-PANE 0
   grep -q "✓ closed pane PANE-Z" "$HOME/.claude/logs/teammate-lifecycle.log"
   [ ! -e "$D/q/teammate-PANE-Z.json" ]
+}
+
+# ══ husk rows (husk-panes-2026-10-22 F3) ═════════════════════════════════════════════════════════
+# A pane KEPT with no claude in it. RED before F3: pcq_add refused kind husk, and the drainer had no
+# arm for it, so pane 42 (kept at 03:07Z while kitty was deaf) was never asked about again.
+ROW42() { printf '%s' "$D/q/husk-42.json"; }
+husk42() { q husk 42 reason=guard-unreadable kitty_pid="${1:-610}" producer=cc-pane-runner tty="${2:-}"; }
+# a closer stub that records argv + CC_PANE_CLOSE_REMOTE and answers $1 (default CLOSED)
+closer() {
+  printf '#!/bin/bash\necho "$* remote=${CC_PANE_CLOSE_REMOTE:-on}" >> %q\necho "pane 42: %s — stub"\n[ "%s" = REFUSED ] && exit 1\nexit 0\n' \
+    "$D/pc-calls.log" "${1:-CLOSED}" "${1:-CLOSED}" > "$CC_PCQ_PANE_CLOSE_BIN"
+}
+
+@test "husk: a kept bare-shell pane is handed to cc-pane-close, and its CLOSED removes the row" {
+  husk42; lsjson 42 ls.json /bin/zsh; closer
+  run "$DRAIN"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$D/pc-calls.log")" = "--pane 42 remote=on" ]
+  [ ! -e "$(ROW42)" ]
+  grep -q "husk pane=42 ✓ pane 42: CLOSED" "$D/pcq.log"
+  [ ! -e "$D/it2-calls.log" ]
+}
+
+@test "husk: kitty deaf — the closer is asked with remote control off" {
+  husk42; echo 124 > "$D/kitty.rc"; closer
+  run "$DRAIN"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$D/pc-calls.log")" = "--pane 42 remote=off" ]
+  [ ! -e "$(ROW42)" ]
+}
+
+@test "husk: a row from an earlier kitty is dropped and the stranger window is never closed" {
+  husk42 500; lsjson 42 ls.json /bin/zsh; closer
+  run "$DRAIN"
+  [ ! -e "$(ROW42)" ]
+  [ ! -e "$D/pc-calls.log" ]
+  grep -q "husk pane=42 kitty generation changed (500 → 610)" "$D/pcq.log"
+}
+
+@test "husk: a pane running something again (a resume) is not a husk — row removed, never closed" {
+  husk42; lsjson 42 ls.json /usr/local/bin/claude; closer
+  run "$DRAIN"
+  [ ! -e "$(ROW42)" ]
+  [ ! -e "$D/pc-calls.log" ]
+}
+
+@test "husk: a tty typed in since the first look means the operator took it — removed, never closed" {
+  : > "$D/tty42"; touch -a -t 202601010000 "$D/tty42"
+  husk42 610 "$D/tty42"; lsjson 42 ls.json /bin/zsh; closer REFUSED
+  run "$DRAIN"                                  # first look: baseline taken, closer refuses
+  [ "$(grep -c . "$D/pc-calls.log")" -eq 1 ]
+  [ -n "$(qget "$(ROW42)" tty_atime)" ]
+  touch -a -t 202602010000 "$D/tty42"           # someone read input from the tty
+  run "$DRAIN"
+  [ ! -e "$(ROW42)" ]
+  [ "$(grep -c . "$D/pc-calls.log")" -eq 1 ]    # not asked again
+  grep -q "husk pane=42 its tty was typed in since" "$D/pcq.log"
+}
+
+@test "husk: an open custody row for the pane holds it — no close, no attempt counted" {
+  husk42; lsjson 42 ls.json /bin/zsh; closer
+  printf '[{"kind":"open","targetPane":"42","ts":"2026-10-22T09:00:00Z"}]\n' > "$D/custody.json"
+  run "$DRAIN"
+  [ -e "$(ROW42)" ]
+  [ ! -e "$D/pc-calls.log" ]
+  [ "$(qget "$(ROW42)" attempts)" = 0 ]
+  grep -q "husk pane=42 an open custody row names it" "$D/pcq.log"
+}
+
+@test "husk CONTROL: an open custody row from before this kitty started does not hold it" {
+  husk42; lsjson 42 ls.json /bin/zsh; closer
+  printf '[{"kind":"open","targetPane":"42","ts":"1970-01-01T00:00:10Z"}]\n' > "$D/custody.json"
+  run "$DRAIN"
+  [ ! -e "$(ROW42)" ]
+  [ -e "$D/pc-calls.log" ]
+}
+
+@test "husk: a refusal keeps the row and counts an attempt; MAX_ATTEMPTS pages once naming the reason" {
+  husk42; lsjson 42 ls.json /bin/zsh; closer REFUSED
+  CC_PCQ_MAX_ATTEMPTS=2 run "$DRAIN"
+  [ "$(qget "$(ROW42)" attempts)" = 1 ]
+  [ ! -e "$D/page-calls.log" ]
+  CC_PCQ_MAX_ATTEMPTS=2 run "$DRAIN"
+  CC_PCQ_MAX_ATTEMPTS=2 run "$DRAIN"
+  [ "$(grep -c 'page ' "$D/page-calls.log")" -eq 1 ]
+  grep -q "kept: guard-unreadable" "$D/page-calls.log"
+  [ -e "$(ROW42)" ]
 }

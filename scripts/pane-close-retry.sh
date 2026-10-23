@@ -30,8 +30,12 @@
 # gone it pages the desk once, BEFORE the kitty gate (a dead retrier is news precisely while kitty is
 # deaf), and once kitty answers it tells the session once, via cc-notify, to re-run its self-close.
 #
+# husk rows (husk-panes-2026-10-22 F3) are panes KEPT with no claude in them; each run hands them to
+# bin/cc-pane-close until one closes, also while kitty is deaf. See drain_husk for the holds.
+#
 # Never fatal, `set -u`, every external call bounded. One log line per row per run.
 # Seams: CC_PCQ_KITTY_BIN · CC_PCQ_IT2_BIN · CC_PCQ_PS_FILE (a `ps -axo pid=,command=` capture) ·
+#        CC_PCQ_PANE_CLOSE_BIN · CC_PCQ_CUSTODY_BIN · CC_PCQ_CLOSE_TIMEOUT_S ·
 #        CC_PCQ_PAGE_BIN · CC_PCQ_NOTIFY_BIN · CC_PCQ_KITTY_SOCKET_BIN · CC_PCQ_TIMEOUT_S · CC_PCQ_MAX_ATTEMPTS · CC_PCQ_LOG
 #        · CC_PANE_CLOSE_QUEUE_DIR (the lib's).
 
@@ -98,15 +102,108 @@ drain_self_close() {
   [[ "$(pcq_get "$row" notified)" == 1 ]] || NOTIFY_ROWS="$NOTIFY_ROWS$row"$'\n'
 }
 
-N_TEAM=0 N_RCY=0
+# ── husk rows: a pane KEPT with no claude in it (husk-panes-2026-10-22 F3) ──────────────────────────
+# Written by cc-pane-runner's keep sites and the crash watchdog. The close itself is bin/cc-pane-close
+# with its fail-closed gates unchanged (identity, nothing live, meant to end, clean tree): this only
+# retries it, on every tick, until it closes or the row stops being a husk. Pane 42 (2026-10-22) was
+# kept at 03:07Z because kitty was deaf; kitty answered at 04:28Z and nothing ever asked again.
+# Holds, before the closer is asked:
+#   a. kitty generation changed ⇒ the id names a stranger ⇒ row removed, never closed
+#   b. (kitty answers) pane absent ⇒ gone; foreground not a bare shell ⇒ in use (a resume) ⇒ removed
+#   c. its tty was READ since the drainer first saw the row (atime moved: someone typed) ⇒ the
+#      operator took it over ⇒ removed, never closed. A bare shell at a prompt does not show that a
+#      human has left it (skeptics.md F3). The baseline is taken at first sight, not by the producer,
+#      because a shell's own start-up may read the tty (prompt themes query the terminal).
+#   d. an OPEN custody row names this pane (opened in this kitty's lifetime) ⇒ its orchestrator may
+#      still resume it ⇒ held, no attempt counted; bin/cc-custody return|abandon re-runs this drain.
+# A refusal counts an attempt and pages once at CC_PCQ_MAX_ATTEMPTS, as teammate rows do.
+
+# Count an unresolved attempt; page once when the count reaches MAX_ATTEMPTS. The row stays either way.
+# Defined here, above the kitty gate, because the deaf branch drains husk rows too.
+bump() { # <row> <pane> <why> [kind, default teammate]
+  local row="$1" pane="$2" why="$3" kind="${4:-teammate}" n who
+  n="$(pcq_get "$row" attempts)"; [[ "$n" =~ ^[0-9]+$ ]] || n=0; n=$((n + 1))
+  pcq_add "$kind" "$pane" attempts="$n" last_verdict="$why" >/dev/null 2>&1 || true
+  log "$kind pane=$pane attempt $n: $why — row kept"
+  if (( n >= MAX_ATTEMPTS )) && [[ "$(pcq_get "$row" paged)" != 1 ]]; then
+    who="$(pcq_get "$row" agent_id)"; [[ -n "$who" ]] || who="kept: $(pcq_get "$row" reason)"
+    page "pane-close-retry: pane $pane ($who) still not closed after $n attempts since $(pcq_get "$row" first_ts): $why. Close it manually. Row: $row"
+    pcq_add "$kind" "$pane" paged=1 >/dev/null 2>&1 || true
+  fi
+}
+CUSTODY_BIN="${CC_PCQ_CUSTODY_BIN:-$HERE/../bin/cc-custody}"
+CUSTODY_OPEN=""; CUSTODY_READ=0
+_kitty_start_epoch() { # → the live kitty's start epoch, or nothing
+  local l
+  [[ -z "${CC_PCQ_KITTY_START_EPOCH:-}" ]] || { printf '%s' "$CC_PCQ_KITTY_START_EPOCH"; return 0; }   # test seam
+  [[ -n "$LIVE_GEN" ]] || return 0
+  l="$(ps -p "$LIVE_GEN" -o lstart= 2>/dev/null)"; [[ -n "$l" ]] || return 0
+  LC_ALL=C date -j -f '%a %b %d %T %Y' "$(_norm "$l")" +%s 2>/dev/null || true
+}
+custody_open_for() { # <pane> <floor epoch> → rc 0 iff an open custody row names the pane, opened at/after floor
+  local p="$1" floor="$2" ts ep
+  if (( CUSTODY_READ == 0 )); then
+    CUSTODY_READ=1
+    [[ -x "$CUSTODY_BIN" ]] && CUSTODY_OPEN="$(bounded "$CUSTODY_BIN" list --open --json 2>/dev/null \
+      | jq -r '.[]? | select((.targetPane // "") != "") | [.targetPane, (.ts // "")] | @tsv' 2>/dev/null)"
+  fi
+  while IFS=$'\t' read -r tp ts; do
+    [[ "$tp" == "$p" ]] || continue
+    ep="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null || echo 0)"
+    (( ep >= floor )) && return 0
+  done <<<"$CUSTODY_OPEN"
+  return 1
+}
+drain_husk() { # uses $LS when kitty answered; LS="" means deaf (no pane/foreground read possible)
+  local row="$1" pane kpid win t at base floor first out rc pc
+  pane="$(pcq_get "$row" pane)"; kpid="$(pcq_get "$row" kitty_pid)"
+  [[ "$pane" =~ ^[0-9]+$ ]] || { pcq_remove "$row"; log "husk pane=$pane not a kitty window id — row removed"; return; }
+  if [[ -n "$kpid" && -n "$LIVE_GEN" && "$kpid" != "$LIVE_GEN" ]]; then
+    pcq_remove "$row"; log "husk pane=$pane kitty generation changed ($kpid → $LIVE_GEN) — row removed, never closed"; return
+  fi
+  if [[ -n "$LS" ]]; then
+    win="$(pane_window "$pane")"
+    [[ -n "$win" ]] || { pcq_remove "$row"; log "husk pane=$pane ✓ pane gone — row removed"; return; }
+    shell_only "$win" || { pcq_remove "$row"; log "husk pane=$pane foreground is not a bare shell — in use, row removed"; return; }
+  fi
+  t="$(pcq_get "$row" tty)"
+  if [[ -n "$t" && -e "$t" ]] && at="$(stat -f %a "$t" 2>/dev/null)" && [[ "$at" =~ ^[0-9]+$ ]]; then
+    base="$(pcq_get "$row" tty_atime)"
+    if [[ ! "$base" =~ ^[0-9]+$ ]]; then
+      pcq_add husk "$pane" tty_atime="$at" >/dev/null 2>&1 || true
+    elif (( at > base )); then
+      pcq_remove "$row"; log "husk pane=$pane its tty was typed in since $(pcq_get "$row" first_ts) — the operator owns it; row removed, never closed"; return
+    fi
+  fi
+  floor="$(_kitty_start_epoch)"
+  if [[ -z "$floor" ]]; then   # no kitty start: a day before the row, so a reused id's old debt is not read as this pane's
+    first="$(pcq_get "$row" first_ts)"
+    floor="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$first" +%s 2>/dev/null || echo 0)"; floor=$(( floor > 86400 ? floor - 86400 : 0 ))
+  fi
+  if custody_open_for "$pane" "$floor"; then
+    log "husk pane=$pane an open custody row names it — held until it is returned or abandoned"; return
+  fi
+  pc="${CC_PCQ_PANE_CLOSE_BIN:-$HERE/../bin/cc-pane-close}"
+  [[ -x "$pc" ]] || { bump "$row" "$pane" "cc-pane-close not executable at $pc" husk; return; }
+  if [[ -n "$LS" ]]; then out="$(TIMEOUT_S="${CC_PCQ_CLOSE_TIMEOUT_S:-60}" bounded "$pc" --pane "$pane" 2>&1 </dev/null)"; rc=$?
+  else out="$(CC_PANE_CLOSE_REMOTE=off TIMEOUT_S="${CC_PCQ_CLOSE_TIMEOUT_S:-60}" bounded "$pc" --pane "$pane" 2>&1 </dev/null)"; rc=$?; fi
+  case "$out" in
+    *": CLOSED"*|*": NOTHING TO CLOSE"*|*": ALREADY CLOSED"*)
+      pcq_remove "$row"; log "husk pane=$pane ✓ ${out//$'\n'/ }"; return ;;
+  esac
+  bump "$row" "$pane" "cc-pane-close rc=$rc: ${out//$'\n'/ }" husk
+}
+
+N_TEAM=0 N_RCY=0 N_HUSK=0
 while IFS= read -r _row <&3; do
   case "$(pcq_get "$_row" kind)" in
     self-close) drain_self_close "$_row" ;;
     teammate)   N_TEAM=$((N_TEAM + 1)) ;;
     recycle)    N_RCY=$((N_RCY + 1)) ;;
+    husk)       N_HUSK=$((N_HUSK + 1)) ;;
   esac
 done 3<<<"$ROWS"
-(( N_TEAM > 0 || N_RCY > 0 )) || [[ -n "$NOTIFY_ROWS" ]] || exit 0
+(( N_TEAM > 0 || N_RCY > 0 || N_HUSK > 0 )) || [[ -n "$NOTIFY_ROWS" ]] || exit 0
 
 # ── the gate: does kitty remote control answer? ────────────────────────────────────────────────
 # The LIVE socket first, then a row's recorded one. A row's socket can name a kitty that has since
@@ -153,6 +250,10 @@ if ! _ls_fresh; then
     fi
     _out=""
   done 3<<<"$ROWS"
+  # husk rows take the same no-socket path, through drain_husk's own holds (it reads LS="" as deaf).
+  while IFS= read -r _row <&3; do
+    [[ "$(pcq_get "$_row" kind)" == husk ]] && drain_husk "$_row"
+  done 3<<<"$ROWS"
   (( N_RCY == 0 )) || log "kitty unresponsive — $N_RCY owed recycle(s) held until it answers"
   log "kitty unresponsive — $_held row(s) held (sock=${SOCK:-none})"
   exit 0
@@ -171,7 +272,7 @@ while IFS= read -r _row <&3; do
   pcq_add self-close "$_p" notified=1 >/dev/null 2>&1 || true
   log "self-close pane=$_p terminal answers — told the session to re-run its self-close (cc-notify rc=$_rc)"
 done 3<<<"$NOTIFY_ROWS"
-(( N_TEAM > 0 || N_RCY > 0 )) || exit 0
+(( N_TEAM > 0 || N_RCY > 0 || N_HUSK > 0 )) || exit 0
 
 pane_window() { # <pane> → that window's JSON from $LS, or nothing
   jq -c --arg p "$1" '[.[]?.tabs[]?.windows[]? | select((.id | tostring) == $p)][0] // empty' <<<"$LS" 2>/dev/null
@@ -197,18 +298,6 @@ shell_only() { # <window json> → rc 0 iff it has foreground processes and ever
          and all($fp[]; ((.cmdline[0] // "") | sub(".*/"; "")) as $b
                         | ["zsh","bash","sh","-zsh","-bash","-sh","login"] | any(. == $b))' \
     <<<"$1" >/dev/null 2>&1
-}
-
-# Count an unresolved attempt; page once when the count reaches MAX_ATTEMPTS. The row stays either way.
-bump() {
-  local row="$1" pane="$2" why="$3" n
-  n="$(pcq_get "$row" attempts)"; [[ "$n" =~ ^[0-9]+$ ]] || n=0; n=$((n + 1))
-  pcq_add teammate "$pane" attempts="$n" last_verdict="$why" >/dev/null 2>&1 || true
-  log "teammate pane=$pane attempt $n: $why — row kept"
-  if (( n >= MAX_ATTEMPTS )) && [[ "$(pcq_get "$row" paged)" != 1 ]]; then
-    page "pane-close-retry: pane $pane ($(pcq_get "$row" agent_id)) still not closed after $n attempts since $(pcq_get "$row" first_ts): $why. Close it manually. Row: $row"
-    pcq_add teammate "$pane" paged=1 >/dev/null 2>&1 || true
-  fi
 }
 
 drain_teammate() {
@@ -293,6 +382,7 @@ while IFS= read -r _row <&3; do
   case "$(pcq_get "$_row" kind)" in
     teammate) drain_teammate "$_row" ;;
     recycle)  drain_recycle "$_row" ;;
+    husk)     drain_husk "$_row" ;;
   esac
 done 3<<<"$ROWS"
 exit 0

@@ -147,6 +147,29 @@ _say()    { _say_load; local CC_SAY_TOOL=cc-pane-runner CC_SAY_PANE="${KITTY_WIN
 # shellcheck disable=SC2034  # as above
 _detail() { _say_load; local CC_SAY_TOOL=cc-pane-runner CC_SAY_PANE="${KITTY_WINDOW_ID:-}"; cc_say_detail "$@"; }
 
+# ── A KEPT PANE IS A DURABLE ROW (husk-panes-2026-10-22 F3) ───────────────────────────────────────
+# Every keep below used to be final: the close was one attempt at the moment the command returned, so
+# a pane kept while kitty was deaf (pane 42, 2026-10-22) stayed a shell forever. Each keep that is not
+# on purpose now leaves a `husk` row in the pane-close queue, and scripts/pane-close-retry.sh retries
+# the close through bin/cc-pane-close until it closes or someone takes the pane over. On purpose, and
+# so no row: CC_PANE_CLOSE_ON_EXIT=0, a recycle pending for this pane, a human's pane (no command).
+# A subshell, so the queue lib's names never reach the command's environment; never fatal.
+_husk_row() { # $1=reason [key=value …]
+  local _sd _c _q="" _t=""
+  [ -n "${KITTY_WINDOW_ID:-}" ] || return 0
+  _sd="$(_self_dir)"
+  for _c in "${_sd:+$_sd/../scripts/lib/pane-close-queue.sh}" "${HOME:-}/.claude/scripts/lib/pane-close-queue.sh"; do
+    [ -n "$_c" ] && [ -r "$_c" ] && { _q="$_c"; break; }
+  done
+  [ -n "$_q" ] || { _detail "pane kept with no retry row" "pane-close-queue.sh not found"; return 0; }
+  _t="$(tty 2>/dev/null)" || _t=""
+  # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+  ( . "$_q" && pcq_add husk "$KITTY_WINDOW_ID" reason="$1" "${@:2}" kitty_pid="${KITTY_PID:-}" \
+      kitty_sock="${KITTY_LISTEN_ON:-}" tty="$_t" producer=cc-pane-runner ) >/dev/null 2>&1 \
+    || _detail "pane kept with no retry row" "pcq_add husk failed"
+  return 0
+}
+
 # The launch VERB, iff the command starts a Claude session: strip a leading `nocorrect`, take the
 # first word, then its basename. rc 1 (and no output) for any other command. ONE list, read by both
 # the wedge watch and the close-on-exit decision, so the two cannot drift on what "a claude pane" is.
@@ -245,6 +268,7 @@ _close_pane() { # $1=what exited $2=why it may close
   # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
   if [ -z "$_lib" ] || ! . "$_lib" 2>/dev/null; then
     CC_SAY_DETAIL="$_v $_why — recycle check unavailable, keeping the shell" _say warn "pane kept, not closed" "recycle check unavailable"
+    _husk_row recycle-check-unavailable what="$_v"
     return 0
   fi
   if cc_pane_recycle_pending "${KITTY_WINDOW_ID:-}"; then
@@ -268,6 +292,7 @@ _close_pane() { # $1=what exited $2=why it may close
       fi
       if [ ! -x "$_c" ]; then
         CC_SAY_DETAIL="fullscreen guard not executable at $_c — keeping the shell ($_v $_why)" _say warn "pane kept, not closed" "fullscreen guard missing"
+        _husk_row guard-missing what="$_v"
         return 0
       fi
       # --scope pane, not os-window: the runner removes only ITS OWN pane, and the kitten counts
@@ -283,9 +308,11 @@ _close_pane() { # $1=what exited $2=why it may close
       if ! _gout="$(cc_run "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner 2>&1)"; then
         case "$_gout" in
           *"refused (refused-fs)"*)
+            _husk_row guard-fullscreen what="$_v"
             CC_SAY_DETAIL="$_v $_why — guard: ${_gout:-no output}" \
               _say warn "last pane of a fullscreen window" "⌘W closes it" ;;
           *)
+            _husk_row guard-unreadable what="$_v"
             CC_SAY_DETAIL="$_v $_why — guard: ${_gout:-no output}" \
               _say wait "kitty didn't answer" "closes when it does" ;;
         esac
@@ -310,6 +337,9 @@ _kept_line() { # $1=verb $2=rc $3=1 iff fleet launch line $4=claude_started
   if [ "$3" = 1 ] && { [ "$2" = 3 ] || [ "$2" = 9 ]; }; then
     _detail "$_s" "the launcher printed the refusal"
   elif [ "$4" = true ] || [ -z "$_PANE_EXIT_DIR" ]; then
+    # claude ran and died: the row lets the closer retry once the session is ruled done (custody
+    # returned, Good to close, landed elsewhere) — cc-pane-close's gate 3 refuses it until then.
+    [ "$4" = true ] && _husk_row crash what="$1" rc="$2"
     CC_SAY_DETAIL="$_s" _say warn "${1#the } exited $2" "shell kept for resume"
   else
     # With a pane id the command takes the fact's room (cc_say drops a fact before it moves a command).
@@ -554,7 +584,11 @@ _armed="$_dir/$_id.armed"
 # shells sat ownerless on 2026-10-22). A shell here is a pane nobody will ever close. The other
 # _fallback causes above (no state dir, not kitty) and an empty delivery keep the shell: those are
 # a human's to read. CC_PANE_CLOSE_ON_EXIT=0 keeps it here too, and the close takes the same gates.
+# The exit record comes FIRST (husk-panes-2026-10-22 F3, pane 101): without it cc-pane-close's
+# never-launched arm has no evidence and refuses this pane forever. rc 124, claude_started=false.
 _no_command() {
+  _pane_exit_prepare
+  _pane_exit_record '<none>' 124 false
   if [ "${CC_PANE_CLOSE_ON_EXIT:-1}" != 0 ]; then
     _close_pane "this armed agent pane" "received no command within ${_wait}s"
   fi

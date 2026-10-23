@@ -2007,7 +2007,37 @@ paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath
   else
     log "[watchdog $sid] pane verdict WRITE FAILED on $tty (pane ${LEAD_PANE:-?}): $headline"
   fi
+  pane_husk_row "$sid" "$class" "$tty" "$kept"
   case "$block" in *"closing in "*|*"safe to close"*) pane_verdict_close "$sid" "$tty" ;; esac
+  return 0
+}
+# ── A KEPT PANE IS A DURABLE ROW (husk-panes-2026-10-22 F3) ───────────────────────────────────────
+# Everything above happens ONCE, at death: the close below is one attempt, and the crash and refusal
+# paths make none. Pane 42's one close was refused at 03:08Z while kitty was deaf and never retried;
+# pane 85's crash paint made no attempt at all, and its custody return at 23:14Z triggered nothing.
+# So every paint over a pane left at a bare shell also writes a `husk` row, and
+# scripts/pane-close-retry.sh retries cc-pane-close on it each tick (and on a custody discharge) until
+# the pane closes or is taken over. Written BEFORE the grace close: if that close works, the drainer
+# finds the pane gone and drops the row. CC_PANE_VERDICT_CLOSE=off keeps panes on purpose: no row.
+pane_husk_row() { # $1=sid $2=class $3=tty $4=the closer's refusal, or empty — ALWAYS returns 0
+  local q c reason
+  [[ "${CC_PANE_VERDICT_CLOSE:-on}" != off && "${LEAD_PANE:-}" =~ ^[0-9]+$ ]] || return 0
+  q=""
+  for c in "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/../scripts/lib/pane-close-queue.sh" \
+           "$HOME/.claude/scripts/lib/pane-close-queue.sh"; do
+    [[ -r "$c" ]] && { q="$c"; break; }
+  done
+  [[ -n "$q" ]] || { log "[watchdog $1] husk row NOT WRITTEN — pane-close-queue.sh not found"; return 0; }
+  if [[ -n "$4" ]]; then reason=closer-refused
+  elif [[ "$2" == RECYCLE ]]; then reason=ended
+  else reason=crash; fi
+  # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+  if ( . "$q" && pcq_add husk "$LEAD_PANE" reason="$reason" sid="$1" kitty_pid="${KITTY_PID:-}" \
+         kitty_sock="${KITTY_LISTEN_ON:-}" tty="$PANE_VERDICT_DEV/$3" producer=lead-crash-watchdog ${4:+"refusal=$4"} ) >/dev/null 2>&1; then
+    log "[watchdog $1] husk row written for pane $LEAD_PANE (reason $reason) — pane-close-retry owns its close from here"
+  else
+    log "[watchdog $1] husk row NOT WRITTEN for pane $LEAD_PANE (pcq_add failed)"
+  fi
   return 0
 }
 # ── A PANE THAT HOLDS NOTHING IS CLOSED, NOT LABELLED (2026-10-01) ──────────────────────────────────

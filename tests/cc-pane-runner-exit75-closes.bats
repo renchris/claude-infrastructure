@@ -116,3 +116,45 @@ field() { jq -r ".$1" "$CC_PANE_EXIT_DIR/42.json"; }
   [ "$status" -eq 0 ]
   [ "$(field rc)" = 0 ]
 }
+
+# ── husk rows (husk-panes-2026-10-22 F3): a keep that is not on purpose leaves a durable retry row ──
+husk() { jq -r ".$1" "$CC_PANE_CLOSE_QUEUE_DIR/husk-42.json"; }
+
+@test "claude ran and died: the kept pane leaves a husk row (reason crash) for the reconciler" {
+  export CC_PANE_CLOSE_QUEUE_DIR="$T/q" KITTY_PID=610
+  LAUNCH_RC=143 LAUNCH_STARTED=1 run_fleet "bash $S/lr-launch"
+  [ "$status" -eq 7 ]
+  [ "$(husk kind)" = husk ]
+  [ "$(husk reason)" = crash ]
+  [ "$(husk rc)" = 143 ]
+  [ "$(husk kitty_pid)" = 610 ]
+  [ "$(husk producer)" = cc-pane-runner ]
+}
+
+@test "a guard refusal on a clean exit leaves a husk row naming the guard's verdict" {
+  export CC_PANE_CLOSE_QUEUE_DIR="$T/q"
+  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: x' run_fleet "bash $S/lr-launch"
+  [ "$status" -eq 7 ]
+  [ "$(husk reason)" = guard-unreadable ]
+}
+
+@test "CONTROL: keeps on purpose leave no row (CC_PANE_CLOSE_ON_EXIT=0; claude never started, no owed record)" {
+  export CC_PANE_CLOSE_QUEUE_DIR="$T/q"
+  CC_PANE_CLOSE_ON_EXIT=0 run_fleet "bash $S/lr-launch"
+  [ "$status" -eq 7 ]
+  LAUNCH_RC=1 run_fleet "bash $S/lr-launch"
+  [ "$status" -eq 7 ]
+  [ ! -e "$CC_PANE_CLOSE_QUEUE_DIR/husk-42.json" ]
+}
+
+@test "STRUCTURAL PIN: every keep in _close_pane but the recycle-pending one writes a husk row" {
+  # A new keep site without a row is a pane nobody will ever retry. Each `return 0` in the function
+  # must have a _husk_row (or the recycle-pending keep, on purpose) in the 8 lines above it.
+  run awk '/^_close_pane\(\) \{/{f=1} f&&/^\}/{exit}
+           f{ L[++n]=$0; if ($0 ~ /return 0/) { ok=0; k++
+                for (i=n-1; i>=n-8 && i>0; i--) if (L[i] ~ /_husk_row |recycle pending, keeping the shell/) { ok=1; break }
+                if (!ok) { print "BARE KEEP: " $0; bad=1 } } }
+           END { print "keeps=" k; exit bad }' "$RUNNER"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "keeps=4" ] || { echo "$output"; false; }
+}
