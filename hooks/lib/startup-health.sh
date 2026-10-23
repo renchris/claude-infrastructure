@@ -224,13 +224,19 @@ sh_worker() {
 SH_PROOF_FALLBACK_S=600   # a fallback that has not shown up in the transcript after this is unproven
 
 # sh_delivered <transcript> <offset> <needle> → 0 when <needle> is in delivered hook output past <offset>.
+# Whitespace is collapsed on BOTH sides before the match: accounts-board.sh's fit() re-flows a message
+# to the pane width (a space becomes "\n  "), so a one-line needle never matched the delivered text it
+# came from, and the deadline banner's latch went unwritten from 2026-10-19 on. fit() only moves
+# word boundaries and never splits a word, so collapsing every whitespace run is its exact inverse.
 sh_delivered() {
   tail -c +"$(( $2 + 1 ))" "$1" 2>/dev/null \
     | LC_ALL=C grep -F -e '"hook_success"' -e '"hook_system_message"' -e '"hook_additional_context"' \
     | jq -R -e --arg n "$3" '
-        fromjson? | select(type == "object") | .attachment? // empty
+        ($n | gsub("\\s+"; " ")) as $n
+        | fromjson? | select(type == "object") | .attachment? // empty
         | select((.type // "") | IN("hook_success", "hook_system_message", "hook_additional_context"))
-        | [(.stdout // ""), (.content // "")] | map(tostring) | join("\n") | select(contains($n))' \
+        | [(.stdout // ""), (.content // "")] | map(tostring) | join("\n") | gsub("\\s+"; " ")
+        | select(contains($n))' \
       >/dev/null 2>&1
 }
 
@@ -274,7 +280,12 @@ sh_settle() {
   [ -n "$tp" ] && [ -f "$tp" ] || return 0
   case "$size" in ''|*[!0-9]*) size=0 ;; esac
   [ "$(stat -f %z "$tp" 2>/dev/null || echo 0)" -lt "$size" ] && size=0
-  sh_current "$d" && tail -c +"$(( size + 1 ))" "$tp" 2>/dev/null | LC_ALL=C grep -qF '"type":"user"' && flushed=1
+  # NEVER `tail | grep -q` here: every caller runs under pipefail (cc-startup-health, session-beat),
+  # grep -q exits at its first match, tail dies of SIGPIPE, and the pipeline reads 141, so `flushed`
+  # was never set on any transcript past the pipe buffer. No proof could then go unproven, no dir
+  # could cache (cc-startup-health fold_dir), and the fold outgrew its 30 s bound on 2026-10-21.
+  sh_current "$d" && LC_ALL=C grep -qF '"type":"user"' < <(tail -c +"$(( size + 1 ))" "$tp" 2>/dev/null) \
+    && flushed=1
   now="$(date +%s)"
   for f in "$d"/proof.*; do
     [ -f "$f" ] || continue

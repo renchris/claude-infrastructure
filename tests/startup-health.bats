@@ -11,6 +11,7 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude"
   export CC_STARTUP_HEALTH_DIR="$BATS_TEST_TMPDIR/sh"
   export CC_ACCOUNTS_BOARD="$BATS_TEST_TMPDIR/board.txt"   # the accounts-board hook's /tmp default
+  export CC_PANE_DIR="$BATS_TEST_TMPDIR/pane"              # its /tmp/claude-accounts-pane default
   SID="aaaaaaaa-1111-2222-3333-444444444444"
   S="$CC_STARTUP_HEALTH_DIR/$SID"
 }
@@ -715,6 +716,45 @@ rcy_hook() {
 BOARDBODY"; user_rec; } > "$TP"
   scanned; settle
   [[ "$(cat "$DL_DIR/.state/banner-latch")" == "$(date +%F) "* ]]
+}
+
+@test "5.4 deadline banner wrapped to the pane width still proves delivery and writes the latch (2026-10-23)" {
+  # RED-proof: before sh_delivered collapsed whitespace, fit()'s re-flow ("\n  " for a space) made
+  # the one-line needle unmatchable, the proof never settled, and the latch went unwritten from
+  # 2026-10-19 on, so the banner showed at every start (381 open proof.dl-banner, 0 settled).
+  export DL_DIR="$BATS_TEST_TMPDIR/deadlines"; mkdir -p "$DL_DIR/.state" "$BATS_TEST_TMPDIR/work"
+  export CLAUDE_CODE_ENTRYPOINT=cli CC_PANE_ID=pane-fixture CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired"
+  export CC_PANE_COLS=60                                          # forces fit() to wrap
+  printf '⏰ Confirm the fixture permit before it expires (13d over) · Reply to the fixture email about the weekend plan · Pay the bill\n' \
+    > "$DL_DIR/.state/banner.txt"
+  printf 'BOARDBODY\n' > "$CC_ACCOUNTS_BOARD"
+  run bash -c "printf '{\"source\":\"startup\",\"cwd\":\"$BATS_TEST_TMPDIR/work\",\"session_id\":\"$SID\"}' | '$REPO/hooks/accounts-board.sh'"
+  [ "$status" -eq 0 ]
+  msg="$(printf '%s' "$output" | jq -r .systemMessage)"
+  [[ "$msg" == *$'\n  '* ]] || { echo "the banner was not wrapped, so this case proves nothing: $msg"; false; }
+  [ -f "$S/proof.dl-banner" ]
+  [ ! -e "$DL_DIR/.state/banner-latch" ]                          # nothing latched at print
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; mksession "$TP"
+  { delivered_rec hook_system_message "$msg"; user_rec; } > "$TP"   # the hook's REAL output
+  scanned; settle
+  [ -f "$S/settled.dl-banner" ] || { ls "$S"; false; }
+  [ "$(cat "$DL_DIR/.state/banner-latch")" = "$(date +%F) $(/sbin/sha1sum < "$DL_DIR/.state/banner.txt" | cut -c1-16)" ] \
+    || { cat "$DL_DIR/.state/banner-latch"; false; }
+}
+
+@test "5.4 a start flushed past a pipe buffer is decided under pipefail, as its callers run it (2026-10-23)" {
+  # RED-proof: `tail | grep -q` read 141 under pipefail once the transcript tail outgrew the pipe
+  # buffer, so `flushed` never set, no proof went unproven, no dir cached, and the fleet fold
+  # outgrew its 30 s bound (fleet.stamp stale from 2026-10-21 15:09).
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; mksession "$TP"
+  pad="$(delivered_rec hook_success "padding record past the user turn")"
+  { user_rec; for _ in $(seq 1 3000); do printf '%s\n' "$pad"; done; } > "$TP"
+  [ "$(stat -f %z "$TP")" -gt 262144 ] || { echo "transcript too small to fill a pipe"; false; }
+  bash -c '. "$1"; sp_request "$2" probe "NEEDLE-ZZ" touch "$3"' _ "$REPO/hooks/lib/startup-proof.sh" "$SID" "$BATS_TEST_TMPDIR/latch"
+  scanned
+  bash -c 'set -uo pipefail; . "$1"; sh_settle "$2"' _ "$(RLIB)" "$S"
+  [ -f "$S/unproven.probe" ] || { ls "$S"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/latch" ]
 }
 
 @test "5.4 goal nudge at SessionStart: the once-marker waits for proof" {
