@@ -124,7 +124,7 @@ sc() { # self-close from $WORK, iTerm2 pane PANE16 claimed by the environment
 }
 units() {
   hf_bounded() { "$@"; }
-  REG_DIR="$CC_REGISTRY_DIR"
+  export REG_DIR="$CC_REGISTRY_DIR"   # read by the extracted units, not by this body
   local f
   for f in own_ancestry_pids own_claude_pid pane_nested_holder pane_tenant_mismatch hf_self_headless; do
     eval "$(sed -n "/^$f() {/,/^}/p" "$HF")"
