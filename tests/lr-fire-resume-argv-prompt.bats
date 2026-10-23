@@ -35,6 +35,7 @@ setup() {
   cat > "$STUB" <<'SH'
 #!/bin/bash
 printf '%s\n' "$@" > "$STUB_OUT.argv"
+printf '%s\n' "${CLAUDE_CODE_NO_FLICKER-<unset>}" > "$STUB_OUT.flicker"
 : > "$STUB_OUT.bytes"
 stty raw -echo 2>/dev/null
 printf 'booting\r\n'
@@ -119,4 +120,19 @@ noted() { grep -q "\"state\":\"$1\"" "$LR_RUN_DIR/events.jsonl" 2>/dev/null; }
   noted READY-NOT-SEEN || { events; false; }
   grep -q '"state":"READY-NOT-SEEN".*after spawn (bound 5s)' "$LR_RUN_DIR/events.jsonl" || { events; false; }
   [ ! -s "$STUB_OUT.bytes" ] || { od -c "$STUB_OUT.bytes" | head; false; }
+}
+
+@test "a recovered session loads every live mod and the launcher's renderer (2026-10-23)" {
+  # RED-proof (FIRE=<pre-fix copy>): no --plugin-dir on the argv and CLAUDE_CODE_NO_FLICKER <unset> —
+  # the 9-of-19 resumes with no accounts board (docs/research/startup-readout-visibility-2026-10-23.md).
+  mkdir -p "$BATS_TEST_TMPDIR/checkout/mods/m1/.claude-plugin" "$HOME/.claude/mods"
+  printf '{}' > "$BATS_TEST_TMPDIR/checkout/mods/m1/.claude-plugin/plugin.json"
+  ln -s "$BATS_TEST_TMPDIR/checkout/mods/m1" "$HOME/.claude/mods/m1"   # install.sh's dir-symlink shape
+  unset CLAUDE_CODE_NO_FLICKER
+  run fire --no-prompt
+  [ ! -e "$TRIP.hit" ] || { echo "the real-binary tripwire ran"; false; }
+  grep -A1 -x -- "--plugin-dir" "$STUB_OUT.argv" | grep -qx -- "$HOME/.claude/mods/m1" \
+    || { echo "the mod is not on the spawn argv:"; cat "$STUB_OUT.argv"; echo "$output"; false; }
+  [ "$(tail -n 1 "$STUB_OUT.argv")" = "$SID" ] || { cat "$STUB_OUT.argv"; false; }
+  [ "$(cat "$STUB_OUT.flicker")" = 1 ] || { echo "renderer: $(cat "$STUB_OUT.flicker")"; false; }
 }

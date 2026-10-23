@@ -198,19 +198,22 @@ _cc_charge_on_commit() {
 # mod-2026-10-19/), and an exported variable is inherited by every `claude -p` a session's shell
 # runs, none of which can draw anything. Not added for `-p`/`--print`, for a subcommand (`mcp`,
 # `plugin`, ...), or under CC_MODS=off.
+# WHICH mods and HOW they are spelled is lib/cc-mod-argv.sh's, shared with the two expect resume
+# wrappers (bin/reso-resume-one, scripts/limit-recover/lr-fire-resume.sh), which used to start every
+# resume without the mod; WHEN (not for -p or a subcommand) stays here, the one caller that sees an
+# arbitrary argv. A helper that cannot be sourced costs the mod, never the launch.
+source "${${(%):-%x}:A:h}/cc-mod-argv.sh" 2>/dev/null || source "$HOME/.claude/lib/cc-mod-argv.sh" 2>/dev/null
 _cc_mod_argv() {
   emulate -L zsh
   typeset -ga _CC_MOD_ARGV=()
-  [[ "${CC_MODS:-on}" == off ]] && return 0
   local a
   for a in "$@"; do [[ "$a" == (-p|--print) ]] && return 0; done
   case "${1:-}" in
     mcp|plugin|plugins|config|doctor|update|upgrade|install|setup-token|migrate-installer|auth) return 0 ;;
   esac
-  local d
-  for d in "$HOME"/.claude/mods/*(N-/); do      # -/: install.sh links each mod as a DIR symlink
-    [[ -f "$d/.claude-plugin/plugin.json" ]] && _CC_MOD_ARGV+=(--plugin-dir "${d%/}")
-  done
+  (( ${+functions[cc_mod_argv]} )) || return 0
+  local out; out="$(cc_mod_argv)"
+  [[ -n "$out" ]] && _CC_MOD_ARGV=("${(@f)out}")
   return 0
 }
 

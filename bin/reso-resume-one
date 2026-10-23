@@ -866,6 +866,21 @@ rr_pkt_attach
 CC_RR_WRAP="$HOME/.claude/bin/cc-close-attrib"
 [ -x "$CC_RR_WRAP" ] || CC_RR_WRAP=""
 export CC_RR_WRAP CC_RR_CERT_STORE="${CLAUDE_CODE_CERT_STORE:-bundled}"
+# ── THE MODS RIDE THE RESUME TOO (2026-10-23) ─────────────────────────────────────────────────────
+# Only the zsh launcher used to add the per-mod `--plugin-dir`, so every session resumed here came
+# up without the accounts-readout board (9 of 19 live 2.1.293 sessions, all expect-wrapper resumes;
+# docs/research/startup-readout-visibility-2026-10-23.md). lib/cc-mod-argv.sh composes the argv for
+# all three start paths, and cc_tui_env supplies the CLAUDE_CODE_NO_FLICKER the launcher's shell has
+# from ~/.zshrc. FAIL-OPEN: an unreadable helper costs the mod, never the resume.
+CC_RR_MOD_ARGS="" CC_RR_TUI_ENV=""
+for _rro_m in "$(cd "$(dirname "$_rro_s")" 2>/dev/null && pwd)/../lib/cc-mod-argv.sh" \
+              "${HOME:-}/.claude/lib/cc-mod-argv.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_rro_m" ] && . "$_rro_m" 2>/dev/null && command -v cc_mod_argv >/dev/null 2>&1 \
+    && { CC_RR_MOD_ARGS="$(cc_mod_argv)"; CC_RR_TUI_ENV="$(cc_tui_env)"; break; }
+done
+[ -n "$CC_RR_TUI_ENV" ] || printf '%s\n' "reso-resume-one: lib/cc-mod-argv.sh unreadable — resumed without the mods"
+export CC_RR_MOD_ARGS CC_RR_TUI_ENV
 # ── THE PANE MUST OUTLIVE THE SESSION IN IT (2026-08-26) ─────────────────────────────────────────
 # This used to be `exec expect`, which made expect(1) the pane's TERMINAL process: nothing under it,
 # nothing after it. Every way a resumed CC can end — a crash, a usage limit, and above all the
@@ -918,6 +933,11 @@ expect -c '
   # one apostrophe in a Tcl comment closes it and the rest of the file stops being expect at all.
   set envpfx [list DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg CLAUDE_CODE_CERT_STORE=$env(CC_RR_CERT_STORE)]
   if {$thr ne ""} { lappend envpfx CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=$thr }
+  if {[info exists env(CC_RR_TUI_ENV)] && $env(CC_RR_TUI_ENV) ne ""} { lappend envpfx $env(CC_RR_TUI_ENV) }
+  # The mod argv arrives one token per line (lib/cc-mod-argv.sh), so a split on newlines rebuilds it
+  # with no re-pairing, and a mod path with a space in it stays one argument.
+  set mods [list]
+  if {[info exists env(CC_RR_MOD_ARGS)]} { foreach t [split $env(CC_RR_MOD_ARGS) "\n"] { if {$t ne ""} { lappend mods $t } } }
   # A LIST again, and for the second reason this file already gives: an absent decision must pass
   # NO argument, not an empty one, and appending the value as a single element keeps a path with a
   # space in it one argument rather than two.
@@ -943,7 +963,7 @@ expect -c '
     catch {exec /bin/stty -echo <@ stdin 2>/dev/null}
   }
   # <<< lr-tty-quiet
-  spawn -noecho env {*}$envpfx {*}$wrap $bin --permission-mode $pmode --model $model --effort $effort {*}$mcplist --resume $sid {*}$prompt
+  spawn -noecho env {*}$envpfx {*}$wrap $bin {*}$mods --permission-mode $pmode --model $model --effort $effort {*}$mcplist --resume $sid {*}$prompt
   # THE RELAY IS BYTE-TRANSPARENT (2026-09-28), as in scripts/limit-recover/lr-fire-resume.sh, which
   # carries the measurement. Tcl 8.5 cannot hold a 4-byte UTF-8 character, so a utf-8 channel turned
   # every emoji the session painted into Latin-1 debris for the life of the pane. Both channels carry

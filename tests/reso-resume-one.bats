@@ -85,6 +85,7 @@ printf '%s\n' "$*" > "$CC_RR_STUB_ARGV"
 # assignment before exec — so recording "$*" could not see it at any value. Announcing a pin and
 # passing it are separate claims (the header above, on --effort); this records the second one.
 printf '%s\n' "${CLAUDE_CODE_RESUME_THRESHOLD_MINUTES-<unset>}" > "$CC_RR_STUB_ENV"
+printf '%s\n' "${CLAUDE_CODE_NO_FLICKER-<unset>}" > "$CC_RR_STUB_ENV.flicker"
 cols=${CC_RR_STUB_COLS:-80}
 # SOURCE SUPPRESSION, modelled on D3f in the 2.1.220 bundle: the dialog is not raised at all when
 # the session is younger than the threshold, and a session it is not raised for is resumed FULL
@@ -601,6 +602,21 @@ mk_fakesh() {
     || { echo "the dialog was raised and answered by keystrokes, not suppressed: $(stub_path)"; false; }
   [ "$(selected)" = "continue" ] \
     || { echo "suppressed, but the session did not come up as the full session: $(selected)"; false; }
+}
+
+@test "MODS: a resumed session loads every live mod and the launcher's renderer (2026-10-23)" {
+  # RED-proof: against the pre-fix file the argv carried no --plugin-dir and the stub read
+  # CLAUDE_CODE_NO_FLICKER as <unset> — the 9-of-19 resumes with no accounts board
+  # (docs/research/startup-readout-visibility-2026-10-23.md, Symptom 1).
+  mkdir -p "$BATS_TEST_TMPDIR/checkout/mods/m1/.claude-plugin" "$HOME/.claude/mods"
+  printf '{}' > "$BATS_TEST_TMPDIR/checkout/mods/m1/.claude-plugin/plugin.json"
+  ln -s "$BATS_TEST_TMPDIR/checkout/mods/m1" "$HOME/.claude/mods/m1"   # install.sh's dir-symlink shape
+  run env -u CLAUDE_CODE_NO_FLICKER CC_RR_STUB_COLS=80 timeout 90 "$RRO" next2 "$WT" SID-MODS
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$(spawn_argv)" == *"--plugin-dir $HOME/.claude/mods/m1 "* ]] \
+    || { echo "the mod is not on the spawn argv: $(spawn_argv)"; false; }
+  [ "$(cat "$CC_RR_STUB_ENV.flicker")" = 1 ] \
+    || { echo "renderer variable reached the process as: $(cat "$CC_RR_STUB_ENV.flicker")"; false; }
 }
 
 @test "FALLBACK is reachable — CC_RESUME_NO_SUPPRESS withholds the variable and the matcher answers" {

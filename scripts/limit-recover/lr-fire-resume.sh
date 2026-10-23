@@ -1185,6 +1185,20 @@ export LR_RECR_SCHEDULE="$_lr_sched"
 LR_WRAP="$HOME/.claude/bin/cc-close-attrib"
 [[ -x "$LR_WRAP" ]] || LR_WRAP=""
 export LR_WRAP
+# ── THE MODS RIDE THE RESUME TOO (2026-10-23) ─────────────────────────────────────────────────────
+# Only the zsh launcher used to add the per-mod `--plugin-dir`, so every session recovered here came
+# up without the accounts-readout board (9 of 19 live 2.1.293 sessions, all expect-wrapper resumes;
+# docs/research/startup-readout-visibility-2026-10-23.md). lib/cc-mod-argv.sh composes the argv for
+# all three start paths, and cc_tui_env supplies the CLAUDE_CODE_NO_FLICKER the launcher's shell has
+# from ~/.zshrc. FAIL-OPEN, as LR_WRAP above: an unreadable helper costs the mod, never the recovery.
+LR_MOD_ARGS="" LR_TUI_ENV=""
+for _lrf_mods in "$_LRF_DIR/../../lib/cc-mod-argv.sh" "$HOME/.claude/lib/cc-mod-argv.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder
+  [ -f "$_lrf_mods" ] && . "$_lrf_mods" 2>/dev/null && command -v cc_mod_argv >/dev/null 2>&1 \
+    && { LR_MOD_ARGS="$(cc_mod_argv)"; LR_TUI_ENV="$(cc_tui_env)"; break; }
+done
+[ -n "$LR_TUI_ENV" ] || printf '%s\n' "lr-fire-resume: lib/cc-mod-argv.sh unreadable — resumed without the mods" >&2
+export LR_MOD_ARGS LR_TUI_ENV
 # ── THE PANE MUST OUTLIVE THE SESSION IN IT ──────────────────────────────────────────────────────
 # This used to be `exec expect`, which made expect(1) this pane's TERMINAL process: nothing under
 # it, nothing after it. Every way a resumed CC can end — a crash, a usage limit, and above all the
@@ -1742,10 +1756,15 @@ expect -c '
   # Identity tokens (validated to a strict charset in bash above), empty for an ordinary session.
   set xargs [expr {[info exists env(LR_EXTRA_ARGS)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ARGS)] : {}}]
   set xenv  [expr {[info exists env(LR_EXTRA_ENV)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ENV)] : {}}]
+  # The mod argv arrives one token per line (lib/cc-mod-argv.sh): a split on newlines rebuilds it with
+  # no re-pairing. The renderer variable goes BEFORE xenv, so an explicit --extra-env still wins.
+  set mods [list]
+  if {[info exists env(LR_MOD_ARGS)]} { foreach t [split $env(LR_MOD_ARGS) "\n"] { if {$t ne ""} { lappend mods $t } } }
+  if {[info exists env(LR_TUI_ENV)] && $env(LR_TUI_ENV) ne ""} { set xenv [linsert $xenv 0 $env(LR_TUI_ENV)] }
   if {$wrap ne ""} {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg bash $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs {*}$aprompt
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg bash $wrap $bin {*}$mods --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs {*}$aprompt
   } else {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs {*}$aprompt
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin {*}$mods --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs {*}$aprompt
   }
   set tspawn [clock seconds]
   # The launch lock now names the spawned claude (env and the wrapper both exec in place, so this
