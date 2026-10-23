@@ -145,7 +145,9 @@ custody_open_for() { # <pane> <floor epoch> → rc 0 iff an open custody row nam
   if (( CUSTODY_READ == 0 )); then
     CUSTODY_READ=1
     [[ -x "$CUSTODY_BIN" ]] && CUSTODY_OPEN="$(bounded "$CUSTODY_BIN" list --open --json 2>/dev/null \
-      | jq -r '.[]? | select((.targetPane // "") != "") | [.targetPane, (.ts // "")] | @tsv' 2>/dev/null)"
+      | jq -r 'def cell(ph): (if . == null then "" else . end) | tostring
+                             | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
+               .[]? | select((.targetPane // "") != "") | [(.targetPane | cell("-")), (.ts | cell("-"))] | @tsv' 2>/dev/null)"
   fi
   while IFS=$'\t' read -r tp ts; do
     [[ "$tp" == "$p" ]] || continue
