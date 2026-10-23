@@ -106,3 +106,16 @@ B7. After Wave A has landed, on a rebased branch: the husk-row producer in hando
 - B6 (wave B): it2-kitty split honours IT2_SPLIT_CWD (an existing dir) over --cwd=current ·
   tests/it2-kitty-operator-safety.bats. Scope (grown): +cc-pane-close polls a zombie root up to
   CC_PANE_CLOSE_REAP_S before calling kitty wedged (lead report, 2026-10-23) · tests/cc-pane-close.bats.
+- B3 (wave B): interim — a refused close paints its reason (✓ done / ◆ check), never ✅ closed or
+  "reason unknown" (90968e105). Then bin/cc-pane-verdict, the one writer: contract states, width-fit,
+  `set-window-title --temporary`, repaint only on change; watchdog, runner and drain_husk paint through
+  it (98639e603) · tests/cc-pane-verdict.bats, tests/lead-crash-pane-verdict.bats.
+- B5 (wave B): classify_death names closed-by-other-session (an /exit typed by a session nested in the
+  pane; pages) and headless-ended (tty=none, no close record; no page) (a96e52bdc) ·
+  tests/lead-crash-watchdog.bats F7c.
+- B7 (wave B, after A): husk-pane/husk-fs and the headless self-close write husk rows; splits and
+  os-windows start in LAUNCH_DIR (764745e6d) · tests/handoff-selfclose.bats,
+  tests/handoff-selfclose-nested-claude.bats, tests/handoff-fire-kitty.bats. Scope (grown): +self-close
+  rows from an older kitty are dropped (5fe7685c3) · tests/pane-close-queue.bats.
+- Known red, not wave B's: tests/handoff-alarm-records.bats #28 pins 9 `hf_alarm` sites; trunk has had 10
+  for at least the last 12 handoff-fire commits.
