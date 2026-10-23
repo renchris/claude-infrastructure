@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # Pane end of life, 2026-10-22: every pane ends running Claude Code or closed, and says which
