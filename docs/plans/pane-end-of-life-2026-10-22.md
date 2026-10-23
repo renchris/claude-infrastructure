@@ -78,4 +78,19 @@ B7. After Wave A has landed, on a rebased branch: the husk-row producer in hando
 
 ## Progress
 
-(empty)
+- A1-A3 (wave A): self-close refuses a claude nested in the pane's live tenant ("pane N holds live
+  session X; you are Y"); a headless run uses its own fire stamp's pane and types nothing; the
+  registry is re-read before /exit and at the watcher's close. Landed aea01028e (+ fixups 70cd225cb
+  2d8b49c12 2ba830035) · tests/handoff-selfclose-nested-claude.bats.
+- A4 (wave A): adoption and the spent-stamp retry prove the marker arrived (oi_marker_inbound).
+  Landed 64513d5e1 (+ 0dc4fb368) · tests/handoff-selfclose-stale-stamp.bats.
+- A5 (wave A): validate-bash denies an unscrubbed `claude -p --resume` from a pane (command position
+  only); cc-husk-sweep ignores tty=none registrations. Landed 8d69845a0 (+ 4d00e7c20, site re-pin) ·
+  tests/validate-bash-headless-resume.bats, tests/cc-husk-sweep-lineage.bats.
+- A6 (wave A): stamps carry kittyPid and self-close queue rows kitty_pid; an older kitty's stamps read
+  stale; a once-per-generation GC closes them (closedReason kitty-restarted). Landed af6c54c8d ·
+  tests/origin-identity.bats. For wave B: pane-close-retry can drop self-close rows whose kitty_pid is
+  not the live kitty; a headless self-close leaves its pane to the pane closer (a husk row would close it).
+- A7 (wave A): the 09:12Z SIGTERM sender is still unresolved after 40+ stores; lane K sat 55 min at an
+  unanswered permission dialog, not mid-pytest. Landed d0b3a043a · REPORT.md Open line, a7-sigterm.md.
+- Wave A converged: live checkout at 2ba830035 (deploy-live degraded tier).
