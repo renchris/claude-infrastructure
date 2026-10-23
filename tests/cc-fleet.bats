@@ -715,8 +715,10 @@ STUB
   # 57 since 2026-10-19: com.claude.active-cpu-sampler (lr-wake REPORT §4 Wave B2, the 15 s CPU-active
   # sampler capacity-admit.sh reads), `staged` in launchd/staged/ until 54-active-cpu-sampler-activate.sh
   # runs. Its row landed in 19eaebf7a without this count, which read red until 2026-10-22.
-  if [ "$n" != 57 ]; then
-    echo "manifest declares $n labels, expected 57 — if a plist was legitimately added or retired,"
+  # 58 since 2026-10-23: com.claude.pane-close-drainer (pane-end-of-life C5, the pane-close queue's
+  # own Standard-priority job, split out of teammate-reap-alarm), `run`; row, plist and count in one land.
+  if [ "$n" != 58 ]; then
+    echo "manifest declares $n labels, expected 58 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1

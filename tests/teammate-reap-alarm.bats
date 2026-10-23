@@ -10,6 +10,8 @@
 # Assertion style: `[ ]` throughout — a non-final `[[ ]]`/`(( ))` is errexit-EXEMPT under bats and
 # therefore a DEAD assertion (memory: bats-dead-assertions-errexit-exemptions).
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   S="$REPO/scripts/teammate-reap-alarm.sh"
@@ -197,6 +199,35 @@ stub_world() { # stub_world <token-tail…>
   if printf '%s\n' "$output" | grep -q "measured against the WORLD"; then
     echo "the fallback claimed a world reading it does not have" >&2; false
   fi
+}
+
+# At load ~150 one launchd run of this job sat 75+ minutes inside the residency join (2026-10-23),
+# and launchd starts no new run while one is executing. The join is now cut at a bound; a cut join
+# reads as no world reading, so the alarm still prints its own (log-fallback) verdict.
+@test "a residency join that hangs is cut at its bound, and the alarm keeps its own verdict" {
+  refusals 30
+  cc_stub "$BATS_TEST_TMPDIR/stubs" res.sh '#!/bin/bash
+sleep 30
+echo "verdict=OK members=15 resident=3 stale=3 departed=12 ours=12 vendor=0"'
+  local t0=$SECONDS
+  run env CC_RESIDENCY_SH="$BATS_TEST_TMPDIR/stubs/res.sh" CC_REAP_RESIDENCY_TIMEOUT_S=2 "$S" --log "$LOG"
+  [ $(( SECONDS - t0 )) -lt 15 ]
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "no world reading (absent)"
+}
+
+# The pane-close drainer moved to its own Standard-priority job (com.claude.pane-close-drainer):
+# riding this Background, Nice 10 job starved it at high load. The alarm must not run it any more.
+@test "the alarm no longer runs the pane-close drainer" {
+  refusals 2; closes 20
+  # shellcheck disable=SC2016  # the stub body expands $DRAIN_MARK when it runs, not here
+  cc_stub "$BATS_TEST_TMPDIR/stubs" drain.sh '#!/bin/bash
+touch "$DRAIN_MARK"'
+  export DRAIN_MARK="$BATS_TEST_TMPDIR/drainer-ran"
+  export CC_PCQ_DRAIN_BIN="$BATS_TEST_TMPDIR/stubs/drain.sh" CC_PCQ_DRAIN=on
+  run "$S" --log "$LOG"
+  [ "$status" -eq 0 ]
+  [ ! -e "$BATS_TEST_TMPDIR/drainer-ran" ]
 }
 
 @test "an undeployed join degrades — it never crashes the alarm" {

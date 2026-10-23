@@ -90,6 +90,14 @@ LOG="${TEAMMATE_LIFECYCLE_LOG:-$HOME/.claude/logs/teammate-lifecycle.log}"
 # repo copy each find their own; CC_RESIDENCY_SH points it elsewhere (or at nothing, which forces
 # the labelled log-grep fallback — that is how the self-test drives both sources).
 RESIDENCY_SH="${CC_RESIDENCY_SH:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)/assignee-pane-residency.sh}"
+# The join's time limit (seconds) and the timeout binary that enforces it; launchd's PATH may lack
+# Homebrew, so the absolute paths are tried after `command -v`.
+RES_TIMEOUT_S="${CC_REAP_RESIDENCY_TIMEOUT_S:-300}"
+RES_TO=""
+for _res_c in "$(command -v timeout 2>/dev/null || true)" /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+              /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+  [ -n "$_res_c" ] && [ -x "$_res_c" ] && { RES_TO="$_res_c"; break; }
+done
 WINDOW_D="${REAP_ALARM_WINDOW_D:-3}"
 MIN_EVENTS="${REAP_ALARM_MIN_EVENTS:-10}"
 WARN_RATE_PCT="${REAP_ALARM_WARN_RATE_PCT:-10}"
@@ -164,9 +172,17 @@ measure() {
   # residency script prints its verdict as a TOKEN on stdout, so the verdict survives an exit status
   # this call throws away (memory: claimed-outcome-vs-checked-outcome). Suppressing the rc here is
   # deliberate — ALARM exits 2, and a bare call would abort the read of its own finding.
+  #
+  # Bounded at RES_TIMEOUT_S: at load ~150 one run sat 75+ minutes in this join (2026-10-23), and
+  # launchd starts no new run of a job still executing. A cut join prints no token, so it reads as
+  # no world reading and the alarm falls back to its labelled log verdict. No timeout binary ⇒ unbounded.
   local rtok=""
   if [ -x "$RESIDENCY_SH" ]; then
-    rtok="$("$RESIDENCY_SH" --quiet --no-state --log "$log" 2>/dev/null || true)"
+    if [ -n "$RES_TO" ]; then
+      rtok="$("$RES_TO" -k 5 "$RES_TIMEOUT_S" "$RESIDENCY_SH" --quiet --no-state --log "$log" 2>/dev/null || true)"
+    else
+      rtok="$("$RESIDENCY_SH" --quiet --no-state --log "$log" 2>/dev/null || true)"
+    fi
   fi
   RES_VERDICT="$(printf '%s\n' "$rtok" | sed -n 's/.*verdict=\([A-Z-][A-Z-]*\).*/\1/p' | tail -1)"
   RES_VERDICT="${RES_VERDICT:-absent}"
@@ -417,30 +433,8 @@ elif [ "$QUIET" != 1 ]; then
   fi
 fi
 
-# ── F-b: drain the pane-close queue (docs/research/husk-panes-2026-09-30.md, root cause 4) ──────────
-# A failed teammate close is now a durable row (scripts/lib/pane-close-queue.sh), and something has
-# to retry it once kitty answers again. This job is already loaded and runs every 10 minutes, so the
-# drainer rides it rather than needing a new plist. The ALARM above still never closes a pane; the
-# drainer is a separate script with its own re-read gates. BEST-EFFORT and outside this script's
-# contract: bounded, output to its own log, exit code discarded, because RC is the alarm's verdict
-# and a drainer failure must never change it. With no rows queued the drainer exits before asking
-# kitty anything. Kill switch CC_PCQ_DRAIN=off; CC_PCQ_DRAIN_BIN is the test seam.
-if [ "${CC_PCQ_DRAIN:-on}" != off ]; then
-  _pcq_bin="${CC_PCQ_DRAIN_BIN:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)/pane-close-retry.sh}"
-  _pcq_out="$(dirname "$LOG")/pane-close-retry.out"
-  _pcq_to=""
-  for _pcq_c in "$(command -v timeout 2>/dev/null || true)" /opt/homebrew/bin/timeout /usr/local/bin/timeout \
-                /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
-    [ -n "$_pcq_c" ] && [ -x "$_pcq_c" ] && { _pcq_to="$_pcq_c"; break; }
-  done
-  if [ -x "$_pcq_bin" ]; then
-    mkdir -p "$(dirname "$_pcq_out")" 2>/dev/null || true
-    if [ -n "$_pcq_to" ]; then
-      "$_pcq_to" -k 5 "${CC_PCQ_DRAIN_TIMEOUT_S:-240}" "$_pcq_bin" >>"$_pcq_out" 2>&1 </dev/null || true
-    else
-      "$_pcq_bin" >>"$_pcq_out" 2>&1 </dev/null || true
-    fi
-  fi
-fi
+# The pane-close drainer (scripts/pane-close-retry.sh) no longer rides this job: it has its own
+# Standard-priority launchd job, com.claude.pane-close-drainer, because at load ~150 this Background,
+# Nice 10 job starved it and the last queued pane never got a turn (2026-10-23, pane-end-of-life C5).
 
 exit "${RC:-0}"

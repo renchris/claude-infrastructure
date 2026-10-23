@@ -317,6 +317,12 @@ PLIST_TARGET_ALT="${PLIST_TARGET_LAYERS// /|}"
 #    resolver is the same guarded ladder as hooks/notify.sh: `command -v gtimeout` screened by
 #    `[ -n ] && [ -x ]`, with /opt/homebrew and /usr/local absolute candidates in the SAME loop, and an
 #    empty result blocks the removal with a reason rather than running unbounded. One binary, one row.
+# ── ADDED 2026-10-23: `scripts/pane-close-retry.sh:it2` — the drainer is now launched DIRECTLY by its
+#    own plist, com.claude.pane-close-drainer (pane-end-of-life C5), where it used to run under
+#    teammate-reap-alarm.sh, so the lint now reads it against that plist's PATH. The site (:66) is
+#    `${CC_PCQ_IT2_BIN:-$(command -v it2 || echo "$HOME/.claude/bin/it2")}`: the same guarded shape
+#    as hooks/teammate-auto-shutdown.sh:it2 above, with the absolute fallback this lint asks for.
+#    it2 is a real file in ~/.claude/bin, not repo-provided, so the scanned tree's bin/ cannot hold it.
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
 bin/cc-dispatch:bun
 bin/cc-dispatch:cargo
@@ -351,6 +357,7 @@ scripts/autonomy-sweep.sh:timeout
 scripts/lead-supervisor.sh:cc-notify
 scripts/lead-supervisor.sh:gtimeout
 scripts/lead-supervisor.sh:timeout
+scripts/pane-close-retry.sh:it2
 scripts/postland-verify.sh:sysctl
 scripts/qos-census.sh:sysctl
 scripts/qos-census.sh:taskpolicy

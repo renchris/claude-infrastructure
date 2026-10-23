@@ -35,6 +35,17 @@
   path-resolved-dependency-in-daemon-code). Each missing tool degrades to a NAMED source in the
   verdict token — `src_win=unreachable`, `src_mem=no-jq` — never to a silent zero.
 
+  BOTH RESIDENCY CALLS ARE BOUNDED AT 300 s (2026-10-23, docs/plans/pane-end-of-life-2026-10-22.md
+  item C5). At load ~150 one run of this job sat 75+ minutes inside assignee-pane-residency.sh, and
+  launchd starts no new run of a job that is still executing, so every later tick was lost. The
+  alarm bounds its own call (CC_REAP_RESIDENCY_TIMEOUT_S, default 300); the sampler below is wrapped
+  in `/opt/homebrew/bin/timeout -k 5 300`. The pane-close drainer that used to ride this job now has
+  its own Standard-priority job, com.claude.pane-close-drainer.
+
+  ⚠ AN EDIT TO THIS PLIST DOES NOT APPLY WHILE A RUN IS EXECUTING. install.sh never bounces a job
+  that has a PID ("executing right now, not reloaded"), so a run that is already hours deep keeps
+  the OLD ProgramArguments until it ends; the new plist applies at the job's next load.
+
   RunAtLoad false — a login must not fire an it2 probe. C10: the OPERATOR loads it; see
   docs/activation/pending-activation/30-teammate-reap-alarm-activate.sh.
   Kill switch after load: launchctl bootout gui/$UID/com.claude.teammate-reap-alarm.
@@ -48,7 +59,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; /bin/bash "$HOME/.claude/scripts/teammate-reap-alarm.sh"; rc=$?; /bin/bash "$HOME/.claude/scripts/assignee-pane-residency.sh" --quiet >/dev/null 2>&amp;1 || true; exit $rc</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; /bin/bash "$HOME/.claude/scripts/teammate-reap-alarm.sh"; rc=$?; /opt/homebrew/bin/timeout -k 5 300 /bin/bash "$HOME/.claude/scripts/assignee-pane-residency.sh" --quiet >/dev/null 2>&amp;1 || true; exit $rc</string>
     </array>
 
     <key>StartInterval</key>

@@ -410,6 +410,17 @@ com.claude.worktree-gc-infra      | run    | 0    | ~/.claude/logs/worktree-gc-i
 # worktree-gc-infra, whose runners route their output elsewhere and leave stdout at 0 bytes.
 com.claude.teammate-reap-alarm    | run    | 600  | auto | 4  | 30-teammate-reap-alarm-activate.sh | 0,1,2,3
 
+# ── com.claude.pane-close-drainer (row 4) — the pane-close queue gets its own Standard job ─────────
+# The drainer (scripts/pane-close-retry.sh) rode the teammate-reap-alarm row above until 2026-10-23,
+# when load ~150 starved that Background, Nice 10 job: one run sat 75+ minutes in the residency join,
+# the drainer got its turn 7 minutes in and was cut at 240 s, and the last queued pane never closed
+# (docs/plans/pane-end-of-life-2026-10-22.md item C5). `run` so install.sh bootstraps it on the next
+# converge; it is a new label, so nothing is loaded yet. evidence `-`, not `auto`: with an empty
+# queue the drainer exits before writing a byte, so StandardOutPath's mtime would read a healthy job
+# STALLED (worktree-gc-infra's lesson, same shape); launchd's own counters still give S1-S4.
+# ok_exits stays 0: the drainer exits 0 on every designed path, and 124 (the outer timeout) is a fault.
+com.claude.pane-close-drainer     | run    | 300  | -    | 4  | 18-fleet-activate.sh
+
 # ── com.claude.devserver-gc (row 13) — the hourly idle-reaper for per-worktree `next dev` servers ──
 # `195d91f5 feat(devserver-gc)` landed launchd/com.claude.devserver-gc.plist with NO manifest row,
 # so the three-way coverage loop in tests/cc-fleet.bats and `cc-fleet --plist-parity` were RED on
