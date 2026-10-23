@@ -247,8 +247,10 @@ kitty_start_ts() {
 KSTART_TS="$(kitty_start_ts)"
 watchdog_sid() {  # <pane> → the sid of the LAST registration naming exactly pane=<pane> since KSTART_TS
   [ -n "$KSTART_TS" ] && [ -f "$WDLOG" ] || return 1
+  # A `tty=none` registration is a headless run (claude -p from some session's Bash tool) that
+  # inherited the pane id from its starter: it never was the pane's tenant (2026-10-22, pane 16).
   LC_ALL=C awk -v p="pane=$1" -v since="$KSTART_TS" '
-    index($0, " registered session=") && $NF == p && substr($0, 2, 19) >= since {
+    index($0, " registered session=") && !index($0, " tty=none ") && $NF == p && substr($0, 2, 19) >= since {
       s = $0; sub(/.* registered session=/, "", s); sub(/[[:space:]].*/, "", s); last = s; at = substr($0, 2, 19) }
     END { if (last ~ /^[0-9a-f-]+$/ && length(last) == 36) print last "|" at; else exit 1 }' "$WDLOG"
 }
@@ -286,6 +288,9 @@ try:
     with open(wdlog, "r", errors="replace") as fh:
         for line in fh:
             if " registered session=" not in line: continue
+            # tty=none is a headless run that inherited a pane id (lane K's `claude -p --resume`
+            # registered as pane=16, 2026-10-22): it neither moved the session nor succeeded it.
+            if " tty=none " in line: continue
             m = REG.match(line)
             if m:
                 ep = local_ep(m.group(1))

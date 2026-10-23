@@ -64,6 +64,14 @@ verdict() { "$SWEEP" --json | jq -r 'select(.pane == "332") | .verdict'; }
   [ "$output" = "MOVED→pane 442" ] || { echo "got: $output"; false; }
 }
 
+@test "pane-end-of-life A5: a later tty=none registration (a headless resume) is NOT a move — pane 85's MOVED→pane 16" {
+  # lane K's `claude -p --resume 570d3917`, run from lead 666022fd's Bash tool, registered as
+  # `tty=none pane=16` because it inherited the lead's KITTY_WINDOW_ID. The session never left 85.
+  printf '[%s] registered session=%s pid=23549 tty=none pane=%s\n' "$(date -r $((R0 + 30000)) '+%Y-%m-%d %H:%M:%S')" "$SID" 442 >> "$T/watchdog.log"
+  run verdict
+  [ "$output" != "MOVED→pane 442" ] || { echo "pre-fix: the headless run read as a move"; false; }
+}
+
 @test "a successor in another pane WITHOUT a HANDOFF-RECYCLE marker is not proven: MOVED, not RECYCLED" {
   register "$SUCC" 442 $((R0 + 37000))
   tx "$SUCC" '{"type":"user","message":{"role":"user","content":"hello"}}'

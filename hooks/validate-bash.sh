@@ -992,6 +992,65 @@ vb_strip_quotes() {
     }'
 }
 CMD_NOQ=$(vb_strip_quotes "$CMD_NOHD")$'\n'$(printf '%s' "$CMD_NOHD" | sed -e "s/'[^']*'/''/g" -e 's/"[^"]*"/""/g')
+
+# ── A HEADLESS RESUME FROM A PANE INHERITS THE PANE (2026-10-22, pane 16) ───────────────────────────
+# `claude -p --resume <sid>` run from this session's Bash tool inherits KITTY_WINDOW_ID and
+# ITERM_SESSION_ID, so the resumed session believes it lives in THIS pane. On 2026-10-22 lead
+# 666022fd resumed lane K that way; lane K's self-close then typed /exit into the lead's pane 16 and
+# closed it mid-turn (docs/research/husk-panes-2026-10-22/REPORT.md, causes 1 and 5). self-close now
+# refuses that shape itself; this keeps the pane id from leaking in the first place, and admits the
+# same command with the two variables scrubbed (`env -u …`, `env -i`, or an earlier `unset`).
+# COMMAND POSITION over CMD_NOQ, never a substring: a printf, a grep or a commit message that merely
+# MENTIONS the command is not running it (lesson: research-block-matches-verb-names-in-any-command-
+# text). Path forms count (`…/node_modules/.bin/claude`, `claude4`). Silent when this session has no
+# pane id to leak. Kill switch CC_HEADLESS_RESUME_GATE=off. Tests: tests/validate-bash-headless-resume.bats.
+if [[ "${CC_HEADLESS_RESUME_GATE:-on}" != off && -n "${KITTY_WINDOW_ID:-}${ITERM_SESSION_ID:-}" \
+      && "$CMD_NOQ" == *claude* && ( "$CMD_NOQ" == *--resume* || "$CMD_NOQ" == *' -r'* ) ]]; then
+  _hr_flat="${CMD_NOQ//&&/$'\n'}"; _hr_flat="${_hr_flat//||/$'\n'}"
+  _hr_flat="${_hr_flat//;/$'\n'}"; _hr_flat="${_hr_flat//|/$'\n'}"; _hr_flat="${_hr_flat//&/$'\n'}"
+  _hr_flat="${_hr_flat//(/$'\n'}"; _hr_flat="${_hr_flat//)/$'\n'}"
+  _hr_unset=" "
+  while IFS= read -r _hr_seg; do
+    read -r -a _hr_w <<<"$_hr_seg"
+    [[ ${#_hr_w[@]} -gt 0 ]] || continue
+    _hr_i=0 _hr_scrub="$_hr_unset" _hr_envi=0
+    if [[ "${_hr_w[0]}" == unset ]]; then
+      for _hr_x in "${_hr_w[@]:1}"; do _hr_unset="$_hr_unset$_hr_x "; done
+      continue
+    fi
+    # Leading assignments and wrappers, then `env`'s own flags (-u NAME, -i, NAME=value).
+    while [[ $_hr_i -lt ${#_hr_w[@]} ]]; do
+      case "${_hr_w[$_hr_i]}" in
+        *=*|exec|command|nohup|time|caffeinate) _hr_i=$((_hr_i + 1)) ;;
+        env|*/env)
+          _hr_i=$((_hr_i + 1))
+          while [[ $_hr_i -lt ${#_hr_w[@]} ]]; do
+            case "${_hr_w[$_hr_i]}" in
+              -u) _hr_scrub="$_hr_scrub${_hr_w[$((_hr_i + 1))]:-} "; _hr_i=$((_hr_i + 2)) ;;
+              -i|-) _hr_envi=1; _hr_i=$((_hr_i + 1)) ;;
+              -*|*=*) _hr_i=$((_hr_i + 1)) ;;
+              *) break ;;
+            esac
+          done ;;
+        *) break ;;
+      esac
+    done
+    [[ $_hr_i -lt ${#_hr_w[@]} ]] || continue
+    _hr_cmd="${_hr_w[$_hr_i]##*/}"
+    [[ "$_hr_cmd" =~ ^claude[0-9]*$ ]] || continue
+    _hr_p=0 _hr_r=0
+    for _hr_x in "${_hr_w[@]:$((_hr_i + 1))}"; do
+      case "$_hr_x" in -p|--print) _hr_p=1 ;; -r|--resume|--resume=*) _hr_r=1 ;; esac
+    done
+    [[ $_hr_p == 1 && $_hr_r == 1 && $_hr_envi == 0 ]] || continue
+    _hr_leak=""
+    [[ -n "${KITTY_WINDOW_ID:-}" && "$_hr_scrub" != *" KITTY_WINDOW_ID "* ]] && _hr_leak="KITTY_WINDOW_ID"
+    [[ -n "${ITERM_SESSION_ID:-}" && "$_hr_scrub" != *" ITERM_SESSION_ID "* ]] && _hr_leak="${_hr_leak:+$_hr_leak and }ITERM_SESSION_ID"
+    [[ -n "$_hr_leak" ]] || continue
+    deny "BLOCKED: a headless resume (claude -p --resume) run from this pane inherits $_hr_leak, so the resumed session believes it lives in YOUR pane — on 2026-10-22 such a run's self-close typed /exit into lead 666022fd's pane 16 and closed it mid-turn. Resume the session in its own pane when kitty answers: cc-husk-sweep --resume --yes --pane <N>. If it must run headless, scrub the pane identity first: env -u KITTY_WINDOW_ID -u ITERM_SESSION_ID <the same claude -p --resume command>."
+  done <<<"$_hr_flat"
+fi
+
 if printf '%s' "$CMD_NOQ" | sed 's/[&|()]/;/g' | tr ';' '\n' | sed 's/^[[:space:]]*//' \
      | grep -qE '^(sudo[[:space:]]+)?(pkill|killall)([[:space:]]|$)'; then
   PK_OCCURRENCES=$(printf '%s' "$CMD_NOHD" | grep -oE '(pkill|killall)[^;&|]*' || true)
