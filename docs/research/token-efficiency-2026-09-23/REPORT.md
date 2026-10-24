@@ -17,7 +17,8 @@ session at launch; a change ships to all accounts or none. Migration 0037 conver
   **$32,517 at list-price weights** ($18,319 re-priced at Opus 5.5, the default since 09-22). By billing type:
   cache read 58%, cache write 1h 16%, cache write 5m 12%, output 13%, uncached ≈0. A median task costs $7.33
   (42 responses); the top 10% of tasks carry 67% of spend. The fleet is subscription-billed, so dollars are list
-  weights, not charges; on the plan meter cache reads weigh ≈0, and the meter-relevant classes are cache writes and
+  weights, not charges; on the plan meter cache reads are discounted, not free — ≈0.005 pp/Mtok weekly on Opus 5.5 (CORRECTED
+  2026-10-24, `docs/research/usage-levers-2026-10-23/round2/REPORT.md`) — and the heaviest meter classes are cache writes and
   output (`BASELINE.md` § Weights).
 - **Where it goes:** the always-loaded memory files are the largest source (**27%**; the global CLAUDE.md alone
   **12.2%**), and **agents pay $4.2k of it** for rules written for the lead. Then the model's own earlier turns
@@ -315,7 +316,8 @@ re-run, with raw data in `eval/gate/`. The pass/fail rule was fixed in `harness/
 
 ## 5. Gaps
 
-- **Plan-meter weights are bounded, not measured per class.** Cache reads are ≤¼ of list weight and plausibly 0;
+- **Plan-meter weights are bounded, not measured per class.** Cache reads are ≤¼ of list weight and discounted, not free:
+  ≈0.005 pp/Mtok weekly on Opus 5.5 (CORRECTED 2026-10-24, `docs/research/usage-levers-2026-10-23/round2/REPORT.md`);
   every saving is shown at list weight and on a meter proxy (writes + output).
 - **Side requests** (prompt suggestion, away summary, titles, goal evaluator, auto-mode classifier) never reach a
   transcript; they are estimated from Claude Code's per-session cost-state minus transcript usage (≈$884 per window),

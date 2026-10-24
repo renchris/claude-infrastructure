@@ -1,7 +1,7 @@
 #!/bin/bash
 # UserPromptSubmit Hook — Cache Expiry Warning
 # Fires when the idle gap since the last interaction exceeds the prompt-cache TTL, so
-# the next turn pays cache_creation on the whole context instead of a free cache_read.
+# the next turn pays cache_creation on the whole context instead of a discounted cache_read.
 #
 # ⚠️ CORRECTED 2026-08-16 (USAGE_TELEMETRY_100P §2.4). This hook was wrong twice over:
 #
@@ -15,8 +15,9 @@
 #     measured over 13,622 user-prompt gaps in 200 sessions.
 #
 #  2. ITS ADVICE INCREASED QUOTA SPEND. It recommended /clear or /compact "to reduce token cost".
-#     Against the weekly limit, cache_read is charged at ~nothing while cache_creation is 42-48%
-#     of the bill — so discarding a warm cache converts a FREE operation into a PAID one. It also
+#     Against the weekly limit, cache_read is discounted (≈0.005 pp/Mtok weekly on Opus 5.5 —
+#     CORRECTED 2026-10-24 from "~nothing", docs/research/usage-levers-2026-10-23/round2/REPORT.md) while cache_creation
+#     is 42-48% of the bill — so discarding a warm cache converts a CHEAP operation into an EXPENSIVE one. It also
 #     traded session state for tokens, which the operator's standing rule forbids outright
 #     ("never cut quality even for a disproportionate amount of token savings").
 #

@@ -149,7 +149,7 @@ event 2–3×). A1's own falsifier #6 named this hazard and was not run. Correct
 |---|---|---|
 | Opus-5 **output** — tokens per 1 pp | 261,000 | ~360,000 (320–410K) |
 | Opus-5 **cache_creation** — tokens per 1 pp | 3.19 M | ~3.4 M |
-| Opus-5 **cache_read** | free | free (`op_cr` = 0.0000 at every anchor spacing) |
+| Opus-5 **cache_read** | discounted, not free¹ | discounted, not free¹ (`op_cr` = 0.0000 at every anchor spacing is the NNLS zero boundary, not a measurement) |
 
 **Use ~360K as the marginal price and ~261K as the realised average.** They differ by 1.38× for a
 reason worth keeping: the skeptic's figure is the clean *local* relationship fitted on transcript-
@@ -176,8 +176,12 @@ number:
 |---|---|---|
 | output | **0.31%** | **51–57%** |
 | cache_creation | **2.74%** | **42–48%** |
-| cache_read | **96.95%** | **≈0%** (bounded small — not proven exactly zero; see below) |
+| cache_read | **96.95%** | **discounted, not ≈0¹** (bounded small — not proven exactly zero; see below) |
 | input | 0.005% | ~0.9% |
+
+¹ CORRECTED (2026-10-24): cache reads are discounted, not free — ≈0.005 pp/Mtok weekly on Opus 5.5
+(0.0048 [0.0036, 0.0056], 28–35% of the meter; `docs/research/usage-levers-2026-10-23/round2/REPORT.md`). The Opus 5
+era cannot tell 0 from 0.005. The 0.049 pp/Mtok ceiling below still holds.
 
 **Two levers of roughly equal size, and neither of them is context length.** My first pass reported
 61.4 / 37.9 from a non-deduped census; on deduped totals the split is closer to even, and the

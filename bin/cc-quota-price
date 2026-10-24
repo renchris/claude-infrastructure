@@ -66,6 +66,10 @@ tool refuses to publish a cache_read coefficient by default: it reports the expe
 the measured collinearity instead. `--with-cache-read` adds the column as a labelled DIAGNOSTIC,
 never as the price list.
 
+CACHE READS ARE DISCOUNTED, NOT FREE (CORRECTED 2026-10-24). On Opus 5.5 the weekly weight is
+≈0.005 pp/Mtok (0.0048 [0.0036, 0.0056]; docs/research/usage-levers-2026-10-23/round2/REPORT.md), well inside the
+0.049 bound, so the bound below stays and the right reading of it is "cheap", never "zero".
+
 ABSTAIN, NEVER IMPUTE (design law §3.3.4, carried from CONTEXT_ECONOMY_V2). A missing store, a
 window with no movement, too few buckets -> the verdict is ABSTAIN with the reason NAMED, exit 3,
 and no numbers. A price list that quietly interpolates over an empty join is the `cc-value` failure
