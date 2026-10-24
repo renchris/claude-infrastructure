@@ -128,7 +128,25 @@ Landed `b6c6b8e9f` (pin), `2086f6774` (reword), `baf1c3185` (shadow hook), `75a7
   rebuilds; narrow it, run it as count-only for a week, accept only if wrongly denied calls cost
   <0.2% of weekly usage.
 
-## W4 — context-recycle thresholds (S, unblocked: W2 found reads charged)
-- Only if W2 confirms reads are charged. Main sessions run a 1M window at median 231k / p90 459k;
-  the recycle rails act at 250k–750k. Do not force busy sessions to drain; the candidate is an
-  earlier idle recycle. Estimated 3–8.5% of weekly usage.
+## W4 — context-recycle thresholds — DONE (2026-10-24): 150k after 15 idle min, ≈19.7 pp/week; operator ruling pending
+- Brief (kept): only if W2 confirms reads are charged. Main sessions run a 1M window at median 231k /
+  p90 459k; the recycle rails act at 250k–750k. Do not force busy sessions to drain; the candidate
+  is an earlier idle recycle. Estimated 3–8.5% of weekly usage.
+- **Result** (`627abfe27`, report `docs/research/usage-levers-2026-10-23/w4/REPORT.md`): 14 days,
+  1,679 main sessions on all 4 accounts, 0 cross-account duplicate requests. Recycling at a turn
+  start after ≥15 idle min at ≥150k context saves **19.7 pp of weekly quota per week fleet-wide**
+  (17.4–21.8 across round 3's read weights; next 4.0, next2 6.4, next3 4.4, next4 5.0), **0.31 extra
+  recycles per session** (max 5). The stated 35%/25% practice fully applied: 9.1 pp/week. Almost all
+  of it is later requests at lower context; panes that never resume cost −1.6.
+- **Learnings.** (1) A session waiting on its own background job is not idle: ignoring that doubles
+  the answer (41.1). Job intervals come from launch → `<task-notification>` (first written as a
+  `queue-operation` record). (2) Past 55 min the saving collapses (the 55-min wakes split gaps, and
+  the handoff turn must rewrite its context), so N must stay ≤55. (3) Re-prime = median first request
+  of a fresh session, 43.8k written + 14.8k read; successors grow no more in their first turn than
+  fresh sessions. Unpriced: rework after a successor's first turn — why K stays at 150k, not 100k.
+- **Shipped log-only** (`d2742f48c`, live): `hooks/boundary-handoff.sh` "IDLE-RECYCLE SHADOW" logs
+  each Stop's preceding idle gap to `~/.claude/logs/idle-recycle-shadow.jsonl` with `would_advise`;
+  no advisory, IDL row or latch changes (`tests/boundary-handoff-idle-shadow.bats`, 4/4, red on base).
+  Expect ≈38 would-advise turns/day.
+- **Decision `43da49891e75`** (class C, conviction 75): keep 25/35% vs 150k after 15 idle min.
+  Acting on it also needs a wake at idle minute 15 (W3's idle keepalive), since an idle pane runs no hook.
