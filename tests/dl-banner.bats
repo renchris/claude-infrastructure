@@ -160,7 +160,8 @@ or_stop() { # <sid> <transcript>
   printf '#!/bin/sh\necho hi\n' > "$CC_ACTIVATION_DIR/01-fixture-activate.sh"
   run or_stop s3 "$(mk_or_tx)"
   msg="$(printf '%s' "$output" | jq -r .systemMessage)"
-  [[ "$msg" == *"01-fixture-activate"* ]] || false
+  # the block counts the standing pile (`◆ pile: 1 run`), it no longer names each step
+  [[ "$msg" == *"OPERATOR ▸"*"◆ pile: 1 run"* ]] || { echo "no rendered block: $msg"; false; }
   [ "$(printf '%s\n' "$msg" | tail -1)" = "⏰ 2 due ≤72h — top: Pay the fixture bill" ]
 }
 
