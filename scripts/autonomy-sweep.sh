@@ -1055,41 +1055,49 @@ log_idl cloud-refusal-route "$(jq -cn --arg c "$_cloudrfz_rc" \
 # deletes nothing, so the very first thing that exists is the restore record for what the second
 # pass will do — a reviewable list before an irreversible batch, keyed on a marker in the cloud
 # state dir so a fresh store gets the same courtesy.
+#
+# THE PASS NO LONGER RUNS INSIDE THE TICK (2026-10-24, backlog b6fb791b88fa). Inline under a 240 s
+# bound it was cut (rc 124) on all but 44 of ~525 ticks from 2026-10-18 — one `git cherry` per
+# remote ref (~350) at load ~35 — so it spent 60% of the 400 s self-bound AND deleted nothing, and
+# 90% of ticks self-bounded at `0b`/`1`, starving every arm below. It is now spawned DETACHED, like
+# the cloud lane and the pin gc, as scripts/branch-prune-pass.sh: its own bound
+# (CC_PRUNE_PASS_BOUND_S, 1800 s), its own lock, its own `branch-prune` row (tool:
+# branch-prune-pass), and the dry-run-first marker logic moved with it. At most once per
+# CC_SWEEP_PRUNE_EVERY_S (3600 s): landed branches accrue over hours, not over a 300 s tick.
 _cloudprune_rc="skipped"
 _cloudretire_rc="skipped"
 _cloudstate_d="${CC_CLOUD_STATE:-$_cc_cfg/autonomy/cloud}"
 _prune="$_SWEEP_DIR/branch-prune-landed.sh"
+_prune_pass="$_SWEEP_DIR/branch-prune-pass.sh"
 _retire="$_SWEEP_DIR/cloud-retire-terminal.sh"
 _prune_repo="${CC_SWEEP_PRUNE_REPO:-$HOME/Development/claude-infrastructure}"
-_prune_bound="${CC_SWEEP_PRUNE_BOUND_S:-240}"
-case "$_prune_bound" in ''|*[!0-9]*) _prune_bound=240 ;; esac
+_prune_every="${CC_SWEEP_PRUNE_EVERY_S:-3600}"
+case "$_prune_every" in ''|*[!0-9]*) _prune_every=3600 ;; esac
+_prune_mark="$_cloudstate_d/.branch-prune.last-spawn"
 if [ "$_cloudret_deployed" != 1 ]; then
   _cloudprune_rc="skipped-not-deployed"; _cloudretire_rc="skipped-not-deployed"
 else
-  _prune_first="$_cloudstate_d/.prune.applied-once"
-  # An ARRAY, not an unquoted string: the "apply" mode is the ABSENCE of a flag, and an empty
-  # unquoted "$_prune_mode" only works by word-splitting — which shellcheck reads as a defect and
-  # a later `set -f` would silently turn into a literal empty argument the pruner rejects (exit 2).
-  _prune_flags=(--dry-run)
-  _prune_mode=dry
-  [ -f "$_prune_first" ] && { _prune_flags=(); _prune_mode=apply; }
-  if [ -x "$_prune" ] && [ -d "$_prune_repo/.git" ]; then
-    mkdir -p "$_cloudstate_d" 2>/dev/null
-    _prune_manifest="$_cloudstate_d/branch-prune-manifest-$(date -u +%Y-%m-%d).tsv"
-    if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
-      ( cd "$_prune_repo" && "$_tmo" -k 10 "$_prune_bound" bash "$_prune" ${_prune_flags[@]+"${_prune_flags[@]}"} --manifest "$_prune_manifest" ) >/dev/null 2>&1
-    else
-      ( cd "$_prune_repo" && bash "$_prune" ${_prune_flags[@]+"${_prune_flags[@]}"} --manifest "$_prune_manifest" ) >/dev/null 2>&1
-    fi
-    _cloudprune_rc=$?
-    # THE MARKER IS WRITTEN ONLY BY A DRY RUN THAT COMPLETED. A cut or a failed first pass leaves it
-    # absent, so the next tick dry-runs again rather than promoting itself to a delete on the
-    # strength of a pass that never finished (memory: claimed-outcome-vs-checked-outcome).
-    if [ "$_prune_mode" = dry ] && [ "$_cloudprune_rc" = 0 ]; then
-      printf 'first_dry_run_at=%s\nmanifest=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_prune_manifest" >"$_prune_first" 2>/dev/null || true
-    fi
-  elif [ ! -x "$_prune" ]; then _cloudprune_rc="skipped-absent"
-  else _cloudprune_rc="skipped-no-repo"
+  if [ ! -x "$_prune" ] || [ ! -x "$_prune_pass" ]; then _cloudprune_rc="skipped-absent"
+  elif [ ! -d "$_prune_repo/.git" ]; then _cloudprune_rc="skipped-no-repo"
+  elif [ ! -x /usr/bin/perl ]; then _cloudprune_rc="skipped-no-detach"
+  elif [ -f "$_prune_mark" ] && [ $(( $(date +%s) - $(file_mtime "$_prune_mark") )) -lt "$_prune_every" ]; then
+    _cloudprune_rc="not-due"
+  else
+    mkdir -p "$_cloudstate_d" "$_cc_cfg/logs" 2>/dev/null
+    touch "$_prune_mark" 2>/dev/null || true
+    /usr/bin/perl -e 'use POSIX; POSIX::setsid() or die "setsid: $!"; exec @ARGV or die "exec: $!"' -- \
+      /bin/bash "$_prune_pass" --repo "$_prune_repo" \
+      --manifest "$_cloudstate_d/branch-prune-manifest-$(date -u +%Y-%m-%d).tsv" \
+      </dev/null >>"$_cc_cfg/logs/branch-prune-pass.log" 2>&1 &
+    _prune_pid=$!
+    disown "$_prune_pid" 2>/dev/null || true
+    # A short grace so a quiet store (or a stubbed suite) finishes inline; the pass journals its own
+    # rc either way, so this row only says WHERE to read it.
+    _g=0
+    while [ "$_g" -lt "${CC_SWEEP_PRUNE_GRACE_S:-5}" ] && kill -0 "$_prune_pid" 2>/dev/null; do
+      sleep 1; _g=$((_g + 1))
+    done
+    if kill -0 "$_prune_pid" 2>/dev/null; then _cloudprune_rc="detached"; else _cloudprune_rc="pass-done"; fi
   fi
 
   # THE RETIRE PASS NO LONGER RUNS HERE (2026-09-06). It runs SECOND inside the detached lane
@@ -1104,7 +1112,7 @@ else
 fi
 log_idl cloud-retire "$(jq -cn --arg p "$_cloudprune_rc" --arg r "$_cloudretire_rc" \
   '{branch_prune_rc:$p, cloud_retire_rc:$r,
-    note:"branch_prune_rc: 0 = pass completed (first tick is a DRY RUN that only writes the manifest; every later tick deletes, and only branches patch-equivalent on the trunk); 1 = at least one delete batch failed, see the manifest; 124/137 = the bound cut it, next tick resumes; skipped-absent = the tool is not deployed; skipped-no-repo = the pruner has no checkout to read; skipped-not-deployed = a checkout/suite copy, which may never delete a remote ref. cloud_retire_rc: 0 = pass completed; 69 = SENSOR FAILED (ls-remote unreadable, or a remote answering with ZERO heads) and NOTHING was retired — never read as an empty remote; 3 = cc-cloud or the repo is missing"}')"
+    note:"branch_prune_rc: the pass runs DETACHED and journals its real rc in its own branch-prune row (tool: branch-prune-pass; 0 ran, first pass a DRY RUN; 1 a delete batch failed; 124/137 cut by its bound; 4 lock held). Here: detached = spawned and still running past the grace; pass-done = spawned and already finished; not-due = spawned within CC_SWEEP_PRUNE_EVERY_S; skipped-no-detach = /usr/bin/perl missing; skipped-absent = the pruner or the pass is not deployed; skipped-no-repo = the pruner has no checkout to read; skipped-not-deployed = a checkout/suite copy, which may never delete a remote ref. cloud_retire_rc: 0 = pass completed; 69 = SENSOR FAILED (ls-remote unreadable, or a remote answering with ZERO heads) and NOTHING was retired — never read as an empty remote; 3 = cc-cloud or the repo is missing"}')"
 
 # ── the THRASH RECOVERY ARM (W3 F) — the other built tool with zero callers ───────────────────────
 # cc-backlog's reap rule B blocks an item after MAX_THRASH fast claim→reopen pairs, and cc-dispatch

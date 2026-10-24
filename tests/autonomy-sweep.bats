@@ -1604,6 +1604,7 @@ STUB
     cp "$REPO/scripts/cloud-return-lane.sh" "$d/cloud-return-lane.sh"; chmod +x "$d/cloud-return-lane.sh"
     # the stubs stand where the two ACTING tools stand — one deletes remote refs, the other writes
     # to the declaration store — so an invocation is RECORDED rather than performed.
+    cp "$REPO/scripts/branch-prune-pass.sh" "$d/branch-prune-pass.sh"; chmod +x "$d/branch-prune-pass.sh"
     cat >"$d/branch-prune-landed.sh" <<STUB
 #!/bin/bash
 echo "prune from=$d args=\$*" >>"$marker"
@@ -1630,14 +1631,17 @@ STUB
   ! grep -q "manifest $prunerepo" "$marker" || false
   [ -f "$CC_CLOUD_STATE/.prune.applied-once" ]
 
-  # SECOND TICK: the marker exists, so the pruner is now allowed to delete.
-  "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  # SECOND TICK: the marker exists, so the pruner is now allowed to delete. The cooldown is lifted
+  # for this tick only; the third tick below is its own positive control.
+  CC_SWEEP_PRUNE_EVERY_S=0 "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
   grep -q "prune from=$deployed args=--manifest" "$marker" || false
 
   # AND IT IS JOURNALLED — both rcs, on every tick, so "the pruner did nothing" and "the pruner was
-  # never called" can never read the same. The prune rc is the sweep's row; the retire rc is the
-  # LANE's row (tool: cloud-return-lane), and the sweep's own row points there with `lane`.
-  [ "$(jq -r 'select(.disposition=="cloud-retire" and .tool=="autonomy-sweep")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "0" ]
+  # never called" can never read the same. The prune rc is the PASS's row (tool: branch-prune-pass),
+  # the retire rc is the LANE's row (tool: cloud-return-lane), and the sweep's own row points there.
+  [ "$(jq -r 'select(.disposition=="branch-prune" and .tool=="branch-prune-pass")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "0" ]
+  [ "$(jq -r 'select(.disposition=="branch-prune")|.mode' "$CC_IDL" | tail -1)" = "apply" ]
+  [ "$(jq -r 'select(.disposition=="cloud-retire" and .tool=="autonomy-sweep")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "pass-done" ]
   [ "$(jq -r 'select(.disposition=="cloud-retire" and .tool=="autonomy-sweep")|.cloud_retire_rc' "$CC_IDL" | tail -1)" = "lane" ]
   [ "$(jq -r 'select(.disposition=="cloud-retire" and .tool=="cloud-return-lane")|.cloud_retire_rc' "$CC_IDL" | tail -1)" = "0" ]
 }
@@ -1663,10 +1667,59 @@ STUB
   done
   printf '#!/bin/bash\nexit 1\n' >"$deployed/branch-prune-landed.sh"
   chmod +x "$deployed/branch-prune-landed.sh"
+  cp "$REPO/scripts/branch-prune-pass.sh" "$deployed/branch-prune-pass.sh"; chmod +x "$deployed/branch-prune-pass.sh"
 
   "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
   [ ! -f "$CC_CLOUD_STATE/.prune.applied-once" ]
-  [ "$(jq -r 'select(.disposition=="cloud-retire")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "1" ]
+  [ "$(jq -r 'select(.disposition=="branch-prune")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "1" ]
+  [ "$(jq -r 'select(.disposition=="branch-prune")|.mode' "$CC_IDL" | tail -1)" = "dry" ]
+}
+
+@test "the branch pruner runs OUTSIDE the tick: hourly at most, and a slow pass costs the tick only its grace" {
+  # backlog b6fb791b88fa. Inline under a 240 s bound the pruner was cut on nearly every tick from
+  # 2026-10-18, spending 60% of the 400 s self-bound while deleting nothing, so 90% of ticks stopped
+  # at 0b/1 and the arms below (drain-revival, strand-fill) went days without running.
+  local cfg="$BATS_TEST_TMPDIR/cfg4b"
+  local deployed="$cfg/scripts"
+  mkdir -p "$deployed"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloudstate4b"; mkdir -p "$CC_CLOUD_STATE"
+  local prunerepo="$BATS_TEST_TMPDIR/prunerepo4b"
+  git init --quiet "$prunerepo"
+  export CC_SWEEP_PRUNE_REPO="$prunerepo"
+  cp "$SWEEP" "$deployed/autonomy-sweep.sh"; chmod +x "$deployed/autonomy-sweep.sh"
+  mkdir -p "$deployed/lib" && cp "$REPO"/scripts/lib/*.sh "$deployed/lib/" 2>/dev/null
+  cp "$REPO/scripts/branch-prune-pass.sh" "$deployed/branch-prune-pass.sh"; chmod +x "$deployed/branch-prune-pass.sh"
+  local t
+  # No `#!` line: the sweep and the pass run all of these as `bash <path>`, so they are bodies, not
+  # executables, and stay plain files (the stub ratchet counts inline `#!` writes).
+  for t in cloud-return cloud-refusal-route cloud-retire-terminal; do
+    printf 'exit 0\n' >"$deployed/$t.sh"; chmod +x "$deployed/$t.sh"
+  done
+  local marker="$BATS_TEST_TMPDIR/prune-invocations4b"; : >"$marker"
+  # A pruner slower than the grace, held open by a flag so it is still running at the lock check;
+  # capped at 30 s so a failed test cannot leave it behind.
+  local hold="$BATS_TEST_TMPDIR/prune-hold4b"; : >"$hold"
+  printf 'echo ran >>"%s"\ni=0; while [ -f "%s" ] && [ $i -lt 150 ]; do sleep 0.2; i=$((i+1)); done\n' \
+    "$marker" "$hold" >"$deployed/branch-prune-landed.sh"
+  chmod +x "$deployed/branch-prune-landed.sh"
+
+  CC_SWEEP_PRUNE_GRACE_S=1 "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  [ "$(jq -r 'select(.disposition=="cloud-retire" and .tool=="autonomy-sweep")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "detached" ]
+  # THE POSITIVE CONTROL for the timing: the pass really did start.
+  [ "$(grep -c '^ran$' "$marker")" = 1 ]
+
+  # SECOND TICK inside the cooldown: not spawned, and says so.
+  "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  [ "$(jq -r 'select(.disposition=="cloud-retire" and .tool=="autonomy-sweep")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "not-due" ]
+  [ "$(grep -c '^ran$' "$marker")" = 1 ]
+
+  # SINGLE-FLIGHT: with the first pass still holding its lock, a forced pass refuses with rc 4.
+  run bash "$deployed/branch-prune-pass.sh" --repo "$prunerepo" --manifest "$CC_CLOUD_STATE/m.tsv"
+  [ "$status" -eq 4 ]
+  [ "$(grep -c '^ran$' "$marker")" = 1 ]
+  [ "$(jq -r 'select(.disposition=="branch-prune")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "4" ]
+  rm -f "$hold"
 }
 
 @test "the thrash recovery arm runs ONLY from the deployed copy — it writes to the operator's backlog" {
