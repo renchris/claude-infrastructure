@@ -164,3 +164,35 @@ Nothing here is drivable before its gate; checked 2026-10-24 with all of W0–W4
   `workflow-lean-shadow.jsonl` after 0078; (4) idle recycle at 150k/15 min, from
   `idle-recycle-shadow.jsonl`, only after `43da49891e75` is ruled yes.
 - Backlog `fa0304864f4e` (this plan) is parked not-yet-true until 2026-10-31.
+- **Update 2026-10-24 (later):** both migrations ran (0077, 0078 verified in `~/.claude/settings.json`;
+  backlog rows closed). The ruling inputs changed — see the next section.
+
+## Decision re-research (2026-10-24) — receipt `docs/research/usage-levers-2026-10-23/decisions-2026-10-24/REPORT.md`
+None clears 90%; all are sign-off class. Replay of the shadow logic over 14-30 days of history:
+- **Idle recycle** (`43da49891e75`, 75 → 65): recommend **200k/15 min**, not 150k (net ≈+11.1 vs
+  +9.7 pp/week). Successors start at 78k, not 59k; orientation + handoff turns cost ≈6.6 pp/week at
+  150k. 150-200k holds 15 of 19 context-dependent operator replies. Guards G1-G6 (busy test by the
+  launching tool, activity resets the clock, brief carries the final message + open questions,
+  pending-question hold, lazy orientation, 7-day fixed shadow) are prerequisites.
+- **Workflow deny** (packet filed 2026-10-24, 25-55%): not yet. On 2.1.293 lean saves 39-43k prefix
+  tokens, not 91-113k; deny turns negative if lean needs ≥1.33x turns. The bigger, hook-free lever is
+  the agentsync b13 round template (≈+9-10 pp/week while that loop runs; no b13 run on 10-24).
+  A deny on a resumed run re-runs finished slots (18 runs, 72-78 pp over 30 days): the shadow must log
+  `resumeFromRunId`. Never auto-rewrite (48 of 275 would-deny runs needed Skill/MCP/commit).
+- **Keepalive wake** (packet filed, 65%): keep log-only; today an `away_summary` record ~190 s into a
+  gap ends 52% of timers, and only 47% of rebuild gaps get a timer. Redesign busy-scoped first.
+- **Subagent long-Bash deny** (packet filed, 68%): deny only the poll-loop class; the message must say
+  foreground `timeout 260 bash -c …`, never `run_in_background` (trips the /goal gate; 86 of 798 poll
+  loops ran under a goal); exempt commands with an inner timeout < 300 s.
+
+## W6 — make the shadows measure correctly (S; behavior-neutral, no sign-off needed)
+Every item stays log-only; none wakes, denies or changes an advisory.
+1. `hooks/idle-keepalive.sh`: end a gap only on a new user/assistant record (not `away_summary`);
+   log whether the session's own background job was running and whether a watcher would fire before
+   the cache TTL, so the busy-scoped redesign can be read from the log.
+2. `hooks/workflow-lean-shadow.py`: log `resumeFromRunId`, script sha, repeat-in-session, and honor a
+   `needs-default` marker in the would-deny verdict.
+3. W3 subagent rule (`d9ffc3964`): split would-deny by class (poll-loop / long-runner / waiter) and
+   exempt an inner timeout < 300 s in the count.
+4. `hooks/boundary-handoff.sh` idle-recycle shadow: log `would_advise` at 200k as well as 150k, plus
+   the G1 busy test and G4 pending-question flag, so the 7-day shadow week answers decision 1.
