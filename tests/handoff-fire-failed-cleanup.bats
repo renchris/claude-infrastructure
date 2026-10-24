@@ -388,11 +388,18 @@ tomb_env() {
 
 @test "RED control: the pre-tombstone fire_cleanup removes the same cold worktree with NO row" {
   tomb_env
-  local old="$BATS_TEST_TMPDIR/handoff-fire-pretomb.sh"
+  # The old script finds origin-identity.sh at ../hooks/lib beside ITSELF, then under
+  # $CLAUDE_CONFIG_DIR. A bare copy in $BATS_TEST_TMPDIR missed the first, so the control passed
+  # only where the ambient CLAUDE_CONFIG_DIR held the lib and aborted at 1 everywhere else (the
+  # postland verifier, @ 28871ad223a2). Lay out the same-vintage lib beside it and unset the var.
+  local old="$BATS_TEST_TMPDIR/pretomb/scripts/handoff-fire.sh"
+  mkdir -p "$BATS_TEST_TMPDIR/pretomb/scripts" "$BATS_TEST_TMPDIR/pretomb/hooks/lib"
   git -C "$REPO_SRC" show 7fa90e0c2:scripts/handoff-fire.sh > "$old"
+  git -C "$REPO_SRC" show 7fa90e0c2:hooks/lib/origin-identity.sh \
+    > "$BATS_TEST_TMPDIR/pretomb/hooks/lib/origin-identity.sh"
   local bad="$BATS_TEST_TMPDIR/bad-payload.md"
   printf 'do the thing\n\n## BACK-CHANNEL — ping the originator\n  cc-notify  "HANDOFF-PING: x"\n' > "$bad"
-  run env HOME="$HOMEDIR" HANDOFF_ACCOUNT_SWEEP=off CC_FIRE_CAPACITY_GATE=off \
+  run env -u CLAUDE_CONFIG_DIR HOME="$HOMEDIR" HANDOFF_ACCOUNT_SWEEP=off CC_FIRE_CAPACITY_GATE=off \
       CC_PAYLOAD_LINT_BIN="$REPO_SRC/scripts/payload-lint.sh" \
       bash "$old" --prompt-file "$bad" --launcher claude --worktree wt-tomb-red \
       --repo "$REPO" --wtroot "$WTROOT"
