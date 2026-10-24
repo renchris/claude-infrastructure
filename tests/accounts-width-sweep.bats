@@ -275,8 +275,8 @@ PY
              | [.variants[] | select(.cells <= $b)] | last | .lines | join("\n")' "$D/ladder.json")"
     # HH:MM masked: the wide layouts print reset clock times, and the two renders may straddle
     # a minute (measured: pane=200 differed only in its clock times).
-    [ "$(printf '%s' "$out" | sed -E 's/[0-9]{2}:[0-9]{2}/HH:MM/g')" = \
-      "$(ca --readout --pane --cols "$w" --no-agents --max-wait 0 | sed -E 's/[0-9]{2}:[0-9]{2}/HH:MM/g')" ] \
+    [ "$(printf '%s' "$out" | sed -E 's/[0-9]{1,2}:[0-9]{2}/HH:MM/g')" = \
+      "$(ca --readout --pane --cols "$w" --no-agents --max-wait 0 | sed -E 's/[0-9]{1,2}:[0-9]{2}/HH:MM/g')" ] \
       || { echo "pane=$w: the ladder's pick differs from --pane"; fail=1; }
     printf '%s' "$out" | fits "$w" 5 || fail=1
   done
@@ -667,7 +667,7 @@ L = json.load(open(sys.argv[1]))
 sgr = re.compile("\x1b\\[[0-9;]*m")
 bad = [f"{'dense' if v.get('dense') else 'full'} {v['cells']}: no read clock"
        for v in L["variants"]
-       if not any(re.search(r"\bread\b.*\d\d:\d\d|^\s*\d\d:\d\d$", sgr.sub("", x).replace("\u00a0", " "))
+       if not any(re.search(r"\bread\b.*\d{1,2}:\d\d|^\s*\d{1,2}:\d\d [AP]M$", sgr.sub("", x).replace("\u00a0", " "))
                   for x in v["lines"])]
 print("\n".join(bad[:8]))
 sys.exit(1 if bad else 0)

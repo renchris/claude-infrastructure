@@ -655,7 +655,7 @@ out = run_pass()
 assert "local: board re-rendered (auth)" in out, out           # no meta yet: re-render at once
 assert os.stat(bp).st_mtime == 1000                             # the producer-liveness signal kept
 txt = open(bp).read()
-assert re.search(r"^auth/live \d\d:\d\d:\d\d · quota \d\d:\d\d:\d\d$", re.sub(r"\x1b\[[0-9;]*m", "", txt), re.M), txt
+assert re.search(r"^auth/live \d{1,2}:\d\d:\d\d\u00a0[AP]M · quota \d{1,2}:\d\d:\d\d\u00a0[AP]M$", re.sub(r"\x1b\[[0-9;]*m", "", txt), re.M), txt
 assert not any(k == "k_phantom" or k.startswith("burn_") for r in cache()["rows"] for k in r)
 assert "board" not in run_pass()                                # same signature: no render
 # a cc-relogin-style write flips auth: re-render at once

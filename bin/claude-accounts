@@ -7696,7 +7696,16 @@ def local_overlay_path(cfg):
 # Every rule fires only when the overlay's stamp is newer than the row's matching stamp. It never
 # touches `ts`, `window`, `prev`, `no_heal` or `cfg_key` (C5), nor `row["k"]` (C6).
 LOCAL_OVERLAY_MAX_AGE_S = 600
-PENDING_RE = re.compile(r"^quota pending — logged in \d\d:\d\d, first read not landed$")
+def _hm(t, secs=False):
+    """A display clock, 12-hour like Claude Code's own `done 7:18 PM` (operator, 2026-10-24): `1:27 PM`,
+    or `11:54:47 AM` with secs. The space before AM/PM is no-break, so a re-wrap never strands it.
+    Takes a datetime or an epoch; machine timestamps (ISO, `Z`) are not display and stay 24-hour."""
+    dt = t if isinstance(t, datetime) else datetime.fromtimestamp(t)
+    return f"{dt.hour % 12 or 12}:{dt:%M}{':' + format(dt, '%S') if secs else ''}\u00a0{dt:%p}"
+
+
+_HM_RE = r"\d{1,2}:\d\d\u00a0[AP]M"
+PENDING_RE = re.compile(r"^quota pending — logged in " + _HM_RE + r", first read not landed$")
 QUOTA_FIELDS = ("session_pct", "session_reset_at", "weekly_pct", "weekly_reset_at", "fable_pct",
                 "fable_reset_at", "credits_on", "credits_used", "credits_used_usd")
 T2_FROM = ("logged-out", "no-oauth-blob")          # recover on any good verdict
@@ -7710,7 +7719,7 @@ def _epoch_iso(t):
 def _pending_marker(t):
     # Deliberately avoids `throttled` and `cached`: bin/cc-lr and lr-move-batch.sh string-match
     # those. Any errored row is data class (reason_class), so a pending row exits 3, never routes.
-    return (f"quota pending — logged in {time.strftime('%H:%M', time.localtime(t))}, "
+    return (f"quota pending — logged in {_hm(t)}, "
             "first read not landed")
 
 
@@ -9129,11 +9138,11 @@ def _fmt_asof(iso):
         dt = dt.replace(tzinfo=timezone.utc)
     dt = dt.astimezone()                         # → local, to match 'live · Mon HH:MM'
     now = datetime.now()
-    return dt.strftime("%H:%M") if dt.date() == now.date() else dt.strftime("%a %d")
+    return _hm(dt.replace(tzinfo=None)) if dt.date() == now.date() else dt.strftime("%a %d")
 
 
 def _fmt_when(iso):
-    """A FUTURE stamp → absolute LOCAL wall-clock: 'Sat 19:39' inside a week, 'Sat Aug 08'
+    """A FUTURE stamp → absolute LOCAL wall-clock: 'Sat 7:39 PM' inside a week, 'Sat Aug 08'
     beyond it. Same rule the /accounts chat readout applies to resets, and for the same
     reason: a bare weekday a week out is ambiguous with today. Absolute, not a countdown,
     because a login deadline is something the operator has to find a slot for."""
@@ -9146,7 +9155,7 @@ def _fmt_when(iso):
     if dt.tzinfo is None:                        # naive = UTC, as hrs_until reads it
         dt = dt.replace(tzinfo=timezone.utc)
     dt = dt.astimezone()
-    return (dt.strftime("%a %H:%M")
+    return (dt.strftime("%a ") + _hm(dt.replace(tzinfo=None))
             if (dt - datetime.now(dt.tzinfo)).days < 6 else dt.strftime("%a %b %d"))
 
 
@@ -9167,8 +9176,8 @@ def _same_instant(a, b, tol_s=120.0):
 
 
 def _md_when(iso):
-    """Absolute LOCAL wall-clock for the markdown readout: `Sat 07:21`, dated beyond ~6 days
-    (`Sat Jul 18 03:59`) because a bare weekday a week out is ambiguous with today.
+    """Absolute LOCAL wall-clock for the markdown readout: `Sat 7:21 AM`, dated beyond ~6 days
+    (`Sat Jul 18 3:59 AM`) because a bare weekday a week out is ambiguous with today.
 
     Distinct from _fmt_when, which DROPS the time past a week — fine for a login deadline
     the operator only needs to find a day for, wrong for a reset the readout must answer to
@@ -9187,7 +9196,7 @@ def _md_when(iso):
         dt = dt.replace(tzinfo=timezone.utc)
     dt = dt.astimezone()
     near = (dt - datetime.now(dt.tzinfo)).days < 6
-    return dt.strftime("%a %H:%M") if near else dt.strftime("%a %b %d %H:%M")
+    return dt.strftime("%a " if near else "%a %b %d ") + _hm(dt.replace(tzinfo=None))
 
 
 # The desk lane's rungs, in the words the footer prints. Keyed on the SAME constants desk_keys
@@ -9562,7 +9571,7 @@ def _nrow(mark, name, live, p5, bar, pwk, pfb, resets, login):
 # a monospace fence keeps the board's columns, its bar and its mark column, and has room for the
 # two things the board cannot carry: the 5-hour reset and the absolute clock beside each countdown.
 # Widths: live, a percent, the 5h countdown, the 5h clock (`Sun 03:59`), the weekly countdown.
-_CW_LIVE, _CW_PCT, _CW_CD5, _CW_ABS5, _CW_CDW = 4, 5, 6, 9, 7
+_CW_LIVE, _CW_PCT, _CW_CD5, _CW_ABS5, _CW_CDW = 4, 5, 6, 12, 7   # ABS5: `Sat 12:59 PM`
 
 # Flag severity, the order the chat AND board print their one-line flags in: money first (it is
 # the standing guard), then anything that blocks an account, then the near-wall readings, then
@@ -9590,7 +9599,7 @@ def _reset_pair(r, at_key, h_key):
     h = _until(r, at_key, h_key)
     if h is None or h <= 0:
         return "—", ""
-    clk = _md_when(r.get(at_key)).split()
+    clk = _md_when(r.get(at_key)).split(" ")     # " ", not split(): the no-break space before AM/PM
     # Dated (past ~6 days) drops the weekday — `Oct 24 23:00`, 12 cells, not 16: the date already
     # disambiguates, and the 4 cells are what keeps a long-named fleet inside the 100-cell grid.
     return ("<1m" if h < 1 / 60 else fmt_board_t(h)), " ".join(clk[1:] if len(clk) == 4 else clk)
@@ -10878,7 +10887,7 @@ def _read_time_line(cfg, cached, brief=False):
     is the cache's own `ts` (_quota_age_s), so an unknowable age says so rather than printing 0."""
     now = datetime.now()
     if not cached:
-        return f"Quota read live at {now:%H:%M}"
+        return f"Quota read live at {_hm(now)}"
     age = _quota_age_s(cfg)
     if brief:
         # The pane's narrow form (2026-10-22), once `claude-accounts --readout --fresh` cannot sit
@@ -10886,14 +10895,14 @@ def _read_time_line(cfg, cached, brief=False):
         # printed into the band's static ladder rots while the band waits (the board's own rule,
         # D8/C11); the clock stays true.
         return ("Quota read from cache, age unknown" if age is None
-                else f"Quota read at\u00a0{now - timedelta(seconds=age):%H:%M}")
+                else f"Quota read at\u00a0{_hm(now - timedelta(seconds=age))}")
     again = "`claude-accounts --readout --fresh` reads it again now"
     if age is None:
         return f"Quota read from cache, age unknown · {again}"
     ago = (f"{age} second{'' if age == 1 else 's'}" if age < 90
            else f"{age // 60} minute{'' if age // 60 == 1 else 's'}" if age < 90 * 60
            else fmt_board_t(age / 3600.0))
-    return f"Quota read at {now - timedelta(seconds=age):%H:%M}, {ago} ago · {again}"
+    return f"Quota read at {_hm(now - timedelta(seconds=age))}, {ago} ago · {again}"
 
 
 def _clock_row(cfg, cached, width):
@@ -10901,7 +10910,7 @@ def _clock_row(cfg, cached, width):
     else `read at 05:33`, else `read 05:33`, else `read at` over the clock — the time is one token
     and never leaves its label for a row of its own mid-phrase."""
     clk = _read_time_line(cfg, cached, brief=True)
-    m = re.search(r"\d\d:\d\d$", clk)
+    m = re.search(_HM_RE + "$", clk)
     if not m or _disp_w(clk) <= width:
         return clk
     t = m.group()
@@ -11093,7 +11102,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
         # pane−31 rather than pane−5: the previous 46-character header wrapped at an 80-column
         # pane, and a wrapped line 1 costs the reader the age of the very numbers below it.
         out = [bc("CLAUDE MAX", BOARD_TEXT, bold=True)
-               + bc(" · " + datetime.now().strftime("%a %H:%M")
+               + bc(" · " + datetime.now().strftime("%a ") + _hm(datetime.now())
                     + " · " + ("cached" if cached else "live")
                     + (f" {age}s" if age is not None else ""), BOARD_LABEL),
                _nrow(_cell("", _NW_MARK, "<", BOARD_LABEL),
@@ -11249,9 +11258,8 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
         # ---- flags: bullets, never extra columns, and enumerated by SOURCE not by literal
         if PENDING_RE.match(str(r.get("error") or "")):
             # D8: a just-logged-in account, recovered by the local pass, not yet read
-            _hm = time.strftime("%H:%M", time.localtime(_as_epoch(r.get("auth_recovered_at"))
-                                                        or time.time()))
-            _note(_SEV_STALE, f"↻ `{acct}` · logged in {_hm}; quota read pending, excluded from routing")
+            _hm_s = _hm(_as_epoch(r.get("auth_recovered_at")) or time.time())
+            _note(_SEV_STALE, f"↻ `{acct}` · logged in {_hm_s}; quota read pending, excluded from routing")
         elif r.get("stale_quota") or r.get("error"):
             asof = _fmt_asof(r.get("quota_as_of"))
             if r.get("poll_throttled"):
@@ -11326,7 +11334,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
             # no amount is stated; the read's clock time and the load on the account are, because
             # those are what tell a reader how long "accepting" can still be true.
             age_q = _quota_age_s(cfg)
-            at = (" at " + (datetime.now() - timedelta(seconds=age_q)).strftime("%H:%M")
+            at = (" at " + _hm(datetime.now() - timedelta(seconds=age_q))
                   if age_q is not None else "")
             k, kw = r.get("k"), r.get("k_work")
             load = (f", with {k} live session{'' if k == 1 else 's'}"
@@ -11435,9 +11443,11 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
         # the longest name (clipped at the board's cap, never the ← suffix); the weekly clock
         # column fits `Sat Oct 24 22:59` only when some reset is past ~6 days out.
         ww = max([_CW_ABS5] + [len(c[11]) for c in cells])
-        # The name column takes what the 100-cell budget leaves (66 fixed cells, the clock and
-        # the widest login cell), capped at the board's 13; `_clip` marks any shortened name.
-        budget = 100 - (66 + ww + max([5] + [len(c[12]) for c in cells]))
+        # The name column takes what the 100-cell budget leaves (57 fixed cells plus the 5h clock,
+        # the weekly clock and the widest login cell), capped at the board's 13; `_clip` marks any
+        # shortened name. The 5h clock is a term, not folded into a constant: it grew 9 → 12 cells
+        # when the clocks went 12-hour (2026-10-24), and a frozen 66 let the grid reach 103.
+        budget = 100 - (57 + _CW_ABS5 + ww + max([5] + [len(c[12]) for c in cells]))
         nw = min(_NW_NAME, budget, max([7] + [len(c[1]) + 2 * c[2] for c in cells]))
         out.append("```text")
         out.append((" " * (_NW_MARK + nw + 1 + _CW_LIVE + 1) + "5-hour "
@@ -11593,7 +11603,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
             quota_ts = (_read_json_obj(cfg["cache_file"]) or {}).get("ts")
         al = [t for r in rows for t in (_as_epoch(r.get("auth_as_of")),
                                         _as_epoch(r.get("k_native_as_of"))) if t is not None]
-        hms = (lambda t: time.strftime("%H:%M:%S", time.localtime(t)) if t else "—")
+        hms = (lambda t: _hm(t, secs=True) if t else "—")
         out.append(bc(f"auth/live {hms(max(al) if al else None)} · quota {hms(_as_epoch(quota_ts))}",
                       BOARD_LABEL))
     if pane:
@@ -11653,7 +11663,7 @@ LOGIN_FIXABLE = ("logged-out", "token-invalid", "no-oauth-blob", "login-required
 def render_table(rows, cfg, win, cached, prev=None):
     W = 82                                     # visible width budget (right-aligned header meta)
     src = "cached" if cached else "live"
-    stamp = f"{src} · {datetime.now().strftime('%a %H:%M')}"
+    stamp = f"{src} · {datetime.now().strftime('%a ')}{_hm(datetime.now())}"
     title = "Claude Max accounts"
     print()
     print("  " + c(title, bold=True)

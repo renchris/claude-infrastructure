@@ -515,6 +515,7 @@ print("OK")'
 
 @test "inherit_lastgood: an elapsed bucket is withheld, flagged, and never negative" {
   run python3 -c "$LOAD"'
+import re
 from datetime import datetime, timezone, timedelta
 now = datetime.now(timezone.utc)
 past, future = (now - timedelta(hours=9)).isoformat(), (now + timedelta(hours=5)).isoformat()
@@ -1088,6 +1089,7 @@ print("OK")'
 
 @test "collect: a 429 is a transient poll-throttle, never a cap, and falls back to last-good" {
   run python3 -c "$LOAD"'
+import re
 from datetime import datetime, timezone, timedelta
 ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
 ca.concurrency = lambda c: {"next3": 0}
@@ -1411,10 +1413,11 @@ print("OK")'
 
 @test "_fmt_when: absolute local wall-clock, dated once a bare weekday turns ambiguous" {
   run python3 -c "$LOAD"'
+import re
 from datetime import datetime, timezone, timedelta
 now = datetime.now(timezone.utc)
 soon = ca._fmt_when((now + timedelta(hours=20)).isoformat())
-assert ":" in soon and len(soon.split()) == 2, soon           # "Sat 12:39"
+assert re.fullmatch(r"\w{3} \d{1,2}:\d\d\u00a0[AP]M", soon), soon   # "Sat 12:39 PM"
 far = ca._fmt_when((now + timedelta(days=14)).isoformat())
 assert len(far.split()) == 3, far                             # "Sat Aug 08" — dated
 assert ca._fmt_when(None) == "" and ca._fmt_when("not-a-date") == ""
@@ -1758,7 +1761,7 @@ for r in grid[2:]:
         i = hdr.index(col) + len(col)        # right-aligned: the cell ends where the label ends
         assert r[i - 1] == "%" or r[i - 1] in "—*", (col, hdr, r)
     assert len(r.rstrip()) >= hdr.index("login"), (hdr, r)
-assert grid[2][3:].startswith("next-quat… ←"), grid   # clipped to the budget, ← kept
+assert re.match(r"next[-\w]*… ←", grid[2][3:]), grid   # clipped to the budget (how far tracks the clock widths), ← kept
 assert grid[3].rstrip().endswith("⊘ REQUIRED"), grid
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -1768,7 +1771,7 @@ print("OK")'
 @test "--readout grid: reset countdowns come from the stamp; elapsed is —, under a minute is <1m" {
   run python3 -c "$LOAD$READOUT"'
 r = acctrow(rd([row(acct="x", session_reset_at=at(1.2), session_reset_h=4.0)]), "x")
-assert re.search(r"\b1h 1[12]m \w{3} \d\d:\d\d", r), r       # stamp beats the stale 4.0h countdown
+assert re.search(r"\b1h 1[12]m \w{3} \d{1,2}:\d\d\u00a0[AP]M", r), r       # stamp beats the stale 4.0h countdown
 assert "4h 0m" not in r, r
 assert ca._reset_pair({"session_reset_at": at(-0.3), "session_reset_h": -0.3},
                       "session_reset_at", "session_reset_h") == ("—", "")
@@ -1965,14 +1968,14 @@ assert "Fable" not in last(rd([row(acct="x")], WIN_OPEN))
 assert last(rd([row(acct="x")])).startswith("Quota read live at "), last(rd([row(acct="x")]))
 json.dump({"ts": time.time() - 38, "rows": []}, open(cfg["cache_file"], "w"))
 c = last(rd([row(acct="x")], cached=True))
-clocks = {(datetime.now() - timedelta(seconds=s)).strftime("%H:%M") for s in (38, 39, 40)}
-m = re.fullmatch(r"Quota read at (\d\d:\d\d), (\d+) seconds ago · `claude-accounts --readout --fresh` reads it again now", c)
+clocks = {f"{d.hour % 12 or 12}:{d:%M}\u00a0{d:%p}" for d in (datetime.now() - timedelta(seconds=s) for s in (38, 39, 40))}
+m = re.fullmatch(r"Quota read at (\d{1,2}:\d\d\u00a0[AP]M), (\d+) seconds ago · `claude-accounts --readout --fresh` reads it again now", c)
 assert m and m.group(1) in clocks and 38 <= int(m.group(2)) <= 40, c
 # ten minutes back, the read clock can never share a minute with the render clock
 json.dump({"ts": time.time() - 600, "rows": []}, open(cfg["cache_file"], "w"))
 c = last(rd([row(acct="x")], cached=True))
-clocks = {(datetime.now() - timedelta(seconds=s)).strftime("%H:%M") for s in (600, 601, 602)}
-m = re.match(r"Quota read at (\d\d:\d\d), 10 minutes ago · ", c)
+clocks = {f"{d.hour % 12 or 12}:{d:%M}\u00a0{d:%p}" for d in (datetime.now() - timedelta(seconds=s) for s in (600, 601, 602))}
+m = re.match(r"Quota read at (\d{1,2}:\d\d\u00a0[AP]M), 10 minutes ago · ", c)
 assert m and m.group(1) in clocks, (c, clocks)
 json.dump({"ts": time.time() - 100, "rows": []}, open(cfg["cache_file"], "w"))
 c = last(rd([row(acct="x")], cached=True))
@@ -2196,6 +2199,7 @@ print("OK")'
   # by the UTC offset. The zone is pinned off UTC: on a UTC box the mutant would pass.
   run python3 -c "$LOAD"'
 import time
+import re
 from datetime import datetime, timezone, timedelta
 os.environ["TZ"] = "America/Chicago"; time.tzset()
 assert datetime.now().astimezone().utcoffset() != timedelta(0)
@@ -2335,6 +2339,7 @@ print("OK")'
 
 @test "refresh_login_countdown: a cached countdown is re-derived, never replayed" {
   run python3 -c "$LOAD"'
+import re
 from datetime import datetime, timezone, timedelta
 now = datetime.now(timezone.utc)
 # what a cache round-trip serves: an absolute stamp (durable) beside an _h frozen at sweep
@@ -2369,6 +2374,7 @@ print("OK")'
   # own, which is why the first version of this test skipped every row and asserted nothing.
   python3 - "$CA_BIN" "$CA_CFG" <<'SEED'
 import importlib.machinery, importlib.util, json, sys, time
+import re
 from datetime import datetime, timezone, timedelta
 loader = importlib.machinery.SourceFileLoader("ca", sys.argv[1])
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader("ca", loader))
@@ -2403,6 +2409,7 @@ print("OK")
 
 @test "render: a login that lapsed INSIDE the cache TTL still surfaces (auth is still 'ok')" {
   run python3 -c "$LOAD"'
+import re
 from datetime import datetime, timezone, timedelta
 import io, contextlib
 now = datetime.now(timezone.utc)
@@ -2573,6 +2580,7 @@ print("OK")'
 @test "router M7: apply_burn derives rates from the utilization series; a rolled window reads as unknown" {
   run python3 -c "$LOAD"'
 import json, os, time
+import re
 from datetime import datetime, timezone, timedelta
 p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util.jsonl")
 now = datetime.now(timezone.utc)
@@ -2617,6 +2625,7 @@ print("OK")'
   # incumbent burn_wk_ppd stays populated beside it rather than being overwritten.
   run python3 -c "$LOAD"'
 import json, os
+import re
 from datetime import datetime, timezone, timedelta
 p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-ewma.jsonl")
 now = datetime.now(timezone.utc)
@@ -2663,6 +2672,7 @@ print("OK")'
   #   at the roll. This must not: `never abstain on a roll` is the availability claim S7 ships on.
   run python3 -c "$LOAD"'
 import json, os
+import re
 from datetime import datetime, timezone, timedelta
 p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-5h.jsonl")
 now = datetime.now(timezone.utc)
