@@ -30,7 +30,13 @@ TIMEOUT = int(os.environ.get("CC_RT_TIMEOUT", "20"))
 # Which pbs.twimg.com size to fetch. `medium` (1200px) is the sweet spot: the
 # vision pipeline downscales to ~1568px anyway, so `orig` buys tokens, not detail.
 IMG_SIZE = os.environ.get("CC_RT_IMG_SIZE", "medium")
-MAX_VIDEO_HEIGHT = int(os.environ.get("CC_RT_MAX_VIDEO_HEIGHT", "720"))
+# Video variant cap, by LONG edge: Claude Code clamps every image Read to 2000px
+# on its long edge, so 1080p (1920px) is the largest frame that arrives at full
+# detail, landscape or portrait. 4K only costs bytes. An explicit
+# CC_RT_MAX_VIDEO_HEIGHT still caps by height instead (the old knob).
+MAX_VIDEO_EDGE = int(os.environ.get("CC_RT_MAX_VIDEO_EDGE", "2000"))
+_H = os.environ.get("CC_RT_MAX_VIDEO_HEIGHT")
+MAX_VIDEO_HEIGHT = int(_H) if _H else None
 
 ID_RE = re.compile(r"(?:status(?:es)?/)(\d{5,25})")
 BARE_ID_RE = re.compile(r"^\d{5,25}$")
@@ -382,15 +388,19 @@ def pick_video(m: dict) -> str | None:
         if ".mp4" not in u:
             continue
         br = v.get("bitrate") or 0
-        hh = 0
+        ww = hh = 0
         mm = re.search(r"/(\d+)x(\d+)/", u)
         if mm:
-            hh = int(mm.group(2))
-        cand.append((hh, br, u))
+            ww, hh = int(mm.group(1)), int(mm.group(2))
+        cand.append((ww * hh, max(ww, hh), hh, br, u))
     if not cand:
         return m.get("url")
-    ok = [c for c in cand if c[0] and c[0] <= MAX_VIDEO_HEIGHT] or cand
-    return sorted(ok, key=lambda c: (c[0], c[1]))[-1][2]
+    if MAX_VIDEO_HEIGHT is not None:
+        ok = [c for c in cand if c[2] and c[2] <= MAX_VIDEO_HEIGHT]
+    else:
+        ok = [c for c in cand if c[1] and c[1] <= MAX_VIDEO_EDGE]
+    ok = ok or cand
+    return sorted(ok, key=lambda c: (c[0], c[3]))[-1][4]
 
 
 def size_url(u: str) -> str:

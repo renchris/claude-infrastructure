@@ -59,8 +59,8 @@ yt-dlp --dump-json "$URL" > meta.json
 yt-dlp -f "137+bestaudio/best[height<=1080]" --merge-output-format mp4 \
        --write-auto-subs --sub-langs "en-orig,en" -o "video.%(ext)s" "$URL"
 #     Take at least 1080p for anything with on-screen text: 1920px fits under the
-#     2000px Read clamp; a 720p ingest misread "5" as "8" at sheet scale. An x.com
-#     video via cc-read-twitter is capped at 720p unless CC_RT_MAX_VIDEO_HEIGHT=1080.
+#     2000px Read clamp; a 720p ingest misread "5" as "8" at sheet scale. For an
+#     x.com video, cc-read-twitter prints the 1080p variant URL (since 2026-10-24).
 
 # 2-3 · audio -> transcript (local, ~43s for 8min, no data leaves the machine)
 ffmpeg -i video.mp4 -ac 1 -ar 16000 -c:a pcm_s16le audio16k.wav

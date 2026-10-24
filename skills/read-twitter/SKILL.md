@@ -35,7 +35,7 @@ Do not spend a turn rediscovering this.
 | Long posts | Full note-tweet body. A truncated source is flagged inline, never rendered as if complete. |
 | Images | URL + author alt text; `--images` downloads them so they can be `Read`. |
 | X Articles | The full article body, headings, lists and inline figures with captions. |
-| Video | The direct `.mp4`, capped at 720p (the top rung of the ladder is 4K/25 Mbps — ~120 MB for 38 s). Hand it to the **video-understanding** skill. |
+| Video | The direct `.mp4` URL only. It picks the largest variant whose long edge fits Claude Code's 2000 px Read clamp, which is 1080p in either orientation; 4K costs bytes and adds no detail. It does not download, transcribe or look at the video. To understand it, hand the URL to the **video-understanding** skill. |
 | Also | quote-tweets, polls, community notes, engagement counts. |
 
 ## Seeing an image, rather than citing its URL
@@ -92,7 +92,7 @@ normalised JSON · `--raw` the winning source's payload · `--max N` cap posts �
 `--source fxtwitter|syndication|jina` force one rung, no fallback.
 
 Env: `CC_RT_IMG_SIZE` (default `medium`), `CC_RT_TIMEOUT` (20),
-`CC_RT_MAX_VIDEO_HEIGHT` (720).
+`CC_RT_MAX_VIDEO_EDGE` (2000, long edge); `CC_RT_MAX_VIDEO_HEIGHT` (unset; when set it caps by height instead).
 
 ## Limits worth stating rather than discovering
 

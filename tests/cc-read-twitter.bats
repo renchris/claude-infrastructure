@@ -75,15 +75,39 @@ PY
 }
 
 @test "pick_video caps the ladder instead of taking the top rung" {
-  # media.videos[0].url is the 4K/25Mbps variant — ~120MB for a 38s clip.
+  # media.videos[0].url is the 4K/25Mbps variant — ~120MB for a 38s clip. The
+  # cap is the 2000px Read clamp on the LONG edge: 1080p arrives at full detail,
+  # 4K only costs bytes.
   run py "
 m={'url':'https://v/top.mp4','variants':[
  {'url':'https://v/vid/avc1/480x270/a.mp4','bitrate':256000},
  {'url':'https://v/vid/avc1/1280x720/b.mp4','bitrate':2176000},
  {'url':'https://v/vid/avc1/1920x1080/c.mp4','bitrate':10368000},
+ {'url':'https://v/vid/avc1/3840x2160/d.mp4','bitrate':25128000},
  {'url':'https://v/x.m3u8'}]}
 print(rt.pick_video(m))"
-  [ "$output" = "https://v/vid/avc1/1280x720/b.mp4" ]
+  [ "$output" = "https://v/vid/avc1/1920x1080/c.mp4" ]
+}
+
+@test "pick_video caps a portrait video by its long edge, not its height" {
+  # A height cap read 1920 as the height of a vertical 1080x1920 clip and fell
+  # back to a smaller rung; the long-edge cap keeps it.
+  run py "
+m={'url':'https://v/top.mp4','variants':[
+ {'url':'https://v/vid/avc1/720x1280/a.mp4','bitrate':2176000},
+ {'url':'https://v/vid/avc1/1080x1920/b.mp4','bitrate':10368000},
+ {'url':'https://v/vid/avc1/2160x3840/c.mp4','bitrate':25128000}]}
+print(rt.pick_video(m))"
+  [ "$output" = "https://v/vid/avc1/1080x1920/b.mp4" ]
+}
+
+@test "an explicit CC_RT_MAX_VIDEO_HEIGHT still caps by height" {
+  CC_RT_MAX_VIDEO_HEIGHT=720 run py "
+m={'url':'https://v/top.mp4','variants':[
+ {'url':'https://v/vid/avc1/1280x720/a.mp4','bitrate':2176000},
+ {'url':'https://v/vid/avc1/1920x1080/b.mp4','bitrate':10368000}]}
+print(rt.pick_video(m))"
+  [ "$output" = "https://v/vid/avc1/1280x720/a.mp4" ]
 }
 
 @test "pick_video degrades to the bare url when no variant carries dimensions" {
