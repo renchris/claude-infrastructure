@@ -1,0 +1,334 @@
+[
+ {
+  "decision": "43da49891e75",
+  "result": "Both tests pass, and the recommendation does not change: recycle at 200k after 15 idle minutes, with guards G1-G6, after the 7-day shadow. Conviction goes from 65% to 70%. More desk research would barely move it; live data from the shadow week can.\n\nTEST 1, second labeller (only partly blind, see the caveat at the end of this test):\n- **Sample:** I recovered the original 60 prompts from /tmp/idle-recycle-risk/b/sample_pids.json, so no redraw was needed. I labelled them from a view that shows neither the reply nor the first labels.\n- **Context-dependent:** the first labeller and I each flagged 8. We agree on all 60, kappa 1.00.\n- **Wrong-action:** the first labeller flagged 5 and I flagged 4. We agree on 59 of 60, kappa 0.88.\n- **The one disagreement:** pid 40 (\"...truly the only rows on that date?\", 154k). It is a read-only question, and the final message names the date. The (b) adversarial reviewer also downgraded it.\n- **Corrected counts over all 193 returns** (my labels on the 60, first labels on the other 133):\n  - 150-200k: 15 context-dependent, 6 wrong-action (was 7).\n  - 200k and above: 4 context-dependent, 3 wrong-action.\n- **With the reviewer's correction:** pids 136, 167 and 187 answer questions raised after the recycle point, which the successor would raise itself. Dropping them gives 14 and 5 for 150-200k, and 2 and 1 for 200k and above. Most of the operator risk is below 200k either way.\n- **Caveat:** I read the (b) finding before labelling. It quotes the prompt texts of all 10 wrong-action cases and the 9 other context-dependent ones, so treat the kappas as upper bounds.\n\nTEST 2, replay of the 10 wrong-action cases:\n- **Method:** for each case I built the G3 brief as it would stand at the recycle moment (last idle start plus 15 minutes). I wrote my successor action to replay/actions.txt before opening what the predecessor actually did.\n- **Wrong actions: 0 of 10.** The 95% upper bound on the true failure rate is 27.8%.\n  - 8 match what the predecessor did.\n  - In 1 case I would ask first (pid 263): I would confirm that \"Looks good\" means L1 before closing the decision, where the predecessor assumed it.\n  - In 1 case my plan misses a step (pid 120): the predecessor also disarmed a pending kitty-swap marker it knew about from its own context. That is an omission, not a wrong action.\n- **Cases a 200k policy would actually recycle:** only 3 of the 10 are at 200k or above (pids 120, 167 and 187), and all 3 pass.\n- **Effect on the hold:** the decision's bar was at most 2 failures, so the 1-hour hold is not needed. The 200k central net stays at about 11.1 pp/week instead of 9.4. The fully pessimistic case nets 6.3 instead of 4.7.\n- **Caveats:**\n  - I did the replay myself, reasoning as the successor would; these were not fresh sessions.\n  - I already knew the first labels.\n  - I read pid 69 before pid 168, and both are about the same ElevenLabs plan.\n\nWhat can still move the conviction:\n- The shadow week's first successor turns. At most 5 requests and 8k tokens moves it up; about 10 requests and 26k tokens moves it down.\n- A subagent cost near its +4.0 point estimate would move it down.\n- A cheap way to firm this up: re-run the 3 cases at 200k and above, plus pids 263 and 208, in fresh sessions given only the G3 brief.\n\nEverything is in /tmp/conv-tests/43da49891e75/:\n- labels_second.json (my labels)\n- blind_view.py and compare.py (sample view and agreement)\n- replay_extract.py, replay/actions.txt, replay/*.in.txt and replay/*.after.txt (the replay)\n- net_nohold.py (net without the 1-hour hold)\n\nI wrote nothing else.",
+  "moves_decision": "Slightly up; the recommendation stays 200k/15 with guards. The replay had 0 wrong actions against a bar of at most 2, so the 1-hour hold is not needed and the 200k central net stays about 11.1 instead of 9.4. The second labeller agrees that the operator risk sits mainly below 200k. More desk research is unlikely to move conviction. The next real mover is the G6 shadow week (successor first-turn size, subagent cost). Optionally, run a fresh-session replay of the cases at 200k and above to firm up the self-replay caveat.",
+  "new_conviction_pct": 70,
+  "evidence": [
+   {
+    "claim": "The original 60-prompt sample was recovered, not redrawn",
+    "value": "60 pids (seed 20261024) in sample_pids.json; pid = line index in ctx.jsonl",
+    "source": "measured: cat /tmp/idle-recycle-risk/b/sample_pids.json; ana.py line 10 (r['pid']=j)"
+   },
+   {
+    "claim": "Context-dependent label agreement between first and second labeller on the 60",
+    "value": "8 vs 8; agree 60/60; Cohen's kappa 1.000 (p_e 0.769)",
+    "source": "measured: python3 -I -B /tmp/conv-tests/43da49891e75/compare.py"
+   },
+   {
+    "claim": "Wrong-action label agreement on the 60",
+    "value": "first 5, second 4; agree 59/60; kappa 0.880 (p_e 0.861); only disagreement pid 40 (154k, read-only 'that date' question)",
+    "source": "measured: python3 -I -B /tmp/conv-tests/43da49891e75/compare.py"
+   },
+   {
+    "claim": "Corrected band counts over 193 returns with second labels on the sample",
+    "value": "150-200k: 123 returns, 15 context-dependent, 6 wrong-action (was 7); >=200k: 70 returns, 4 context-dependent, 3 wrong-action",
+    "source": "measured: python3 -I -B /tmp/conv-tests/43da49891e75/compare.py"
+   },
+   {
+    "claim": "Band counts after also applying the reviewer's correction that pids 136/167/187 were asked after the recycle",
+    "value": "150-200k: 14 context-dependent, 5 wrong-action; >=200k: 2 context-dependent, 1 wrong-action",
+    "source": "measured: python3 -I -B /tmp/conv-tests/43da49891e75/compare.py (late-question exclusion line)"
+   },
+   {
+    "claim": "Second labelling was not fully blind",
+    "value": "the (b) answer, read before labelling, quotes all 10 A texts and 9 other H texts plus sample totals H 8 / A 5; per-pid label files stayed unopened until labels_second.json was written",
+    "source": "measurements.json wf_0491f88f-c15[2].answer; /tmp/conv-tests/43da49891e75/labels_second.json _definitions.contamination"
+   },
+   {
+    "claim": "Replay of the 10 wrong-action cases with a G3 brief built at the recycle moment",
+    "value": "0/10 wrong actions; 8 match, 1 ask (pid 263), 1 soft omission (pid 120 kitty-swap marker)",
+    "source": "measured by hand: python3 -I -B /tmp/conv-tests/43da49891e75/replay_extract.py, then actions recorded in /tmp/conv-tests/43da49891e75/replay/actions.txt before each <pid>.after.txt was read"
+   },
+   {
+    "claim": "Only 3 of the 10 wrong-action cases sit where a 200k policy would recycle",
+    "value": "pids 120 (233k), 167 (356k), 187 (203k); all 3 pass; 167 and 187 answer questions raised after the recycle",
+    "source": "measured: compare.py 'first-label A pids with ctx_k' line; replay/actions.txt"
+   },
+   {
+    "claim": "Statistical bound on the replay failure rate",
+    "value": "0/10: 95% Wilson upper bound 27.8%; 0/3 (cases at 200k and above): 56.2%",
+    "source": "measured: python3 -I -B /tmp/conv-tests/43da49891e75/net_nohold.py"
+   },
+   {
+    "claim": "200k net with and without the 1-hour hold",
+    "value": "central 11.08 without vs 9.40 with; pessimistic stack 6.33 without vs 4.66 with (150k: 2.41 vs -0.18)",
+    "source": "estimated: /tmp/idle-recycle-risk/decide/net.out and python3 -I -B /tmp/conv-tests/43da49891e75/net_nohold.py (net.py arithmetic minus the HOUR term)"
+   },
+   {
+    "claim": "The (b) adversarial reviewer independently judged pid 40 low-risk",
+    "value": "'Pid 40 ... is a read-only question ... A realistic range is 7 to 10'",
+    "source": "measurements.json wf_0491f88f-c15[4].broken_claims"
+   }
+  ]
+ },
+ {
+  "decision": "c0f9d5368147",
+  "result": "Wake turns from existing transcripts cost about 3 requests, and that holds at 150k context and above. This is the same cost the finding already assumed as its central case, so it confirms the estimate rather than shifting it. I found no 1-hour write premium on the weekly meter.\n\nScope: 14 days (2026-10-10T18Z to 10-24T18Z), interactive main sessions on all four accounts. The scan found 7,495 wake turns with no operator input; 5,926 had a warm cache and 475 started cold.\n\n**Wake cost (warm cache, context \u2265150k, result \"nothing to do\").**\n- No-news wakes (watcher timeout or Monitor expiry), n=943: median 3 requests, p90 4, mean 2.86. 64% take 3 or more requests and 2% take one.\n  - Cache writes: median 1,439 tokens, p90 3,092, all to the 1-hour tier.\n  - Output: median 475, p90 920.\n  - Cost per wake: median 0.0060 pp, p90 0.0115, mean 0.0068. Beyond one read of the context, the median is 0.0040.\n- Cost by context band (median / p90 pp): 150-200k 0.0038 / 0.0062; 200-300k 0.0053 / 0.0070; 300-500k 0.0072 / 0.0118; \u2265500k 0.0120 / 0.0142.\n- Wakes while the session's own job runs (what the redesign does), n=1,270: median 2 requests, mean 2.64, mean 0.0065 pp.\n- Goal check-ins, n=248: median 3 requests, mean 3.09, mean 0.0084 pp.\n- Only informational Monitor events get close to the 1-request case: 53% are answered in one request.\n- A cold wake costs about 12x a warm one (median 0.075 pp).\n\n**1-hour write premium.** Round 3 cannot settle it: it made no cache writes inside its window. In round 2's fit data (fit4 reproduced exactly), splitting the write weight by tier gives:\n- Weekly meter: the 1-hour weight is 1.17x the 5-minute weight (95% interval 0.83-1.62). The chance it is at least the 1.6x list ratio is 2.8%. With reads fixed at 0.0067 the ratio is 0.97, and that chance is 0.2%.\n- The 5-hour meter's ratio is 1.35x, but that meter is not priced.\n- Every 1-hour write comes from a main session and every 5-minute write from a subagent, so the two cannot be fully separated.\n\n**Recomputed net, pp/week**, using the reviewer's replay engine (which reproduces their figures exactly) with the measured cost per context band:\n\n| Version | Central (mean cost, mid reads) | Range | next4 |\n|---|---|---|---|\n| Today's code | +3.12 | +2.59 to +3.85 | +0.41 to +0.72 |\n| Busy-scoped redesign | +4.60 | +4.21 to +5.64 | thin, +0.20 to +0.56 |\n| Redesign, priced at the goal check-in cost | +3.70 | +3.21 to +4.68 | |\n| Redesign variant that also skips gaps with a watcher armed | +4.49 | +4.24 to +5.16 | |\n\nThe redesign still beats today's code by about 1.5 pp/week.\n\nCharging every turn where the model did act after a wake to the wake gives a cost ceiling: today's code -0.25, the redesign -0.74, the watcher-skipping variant +1.22.\n\nNew conviction: 70% (up from 65%).",
+  "moves_decision": "No. The recommendation stays: keep idle-keepalive.sh log-only, build the busy-scoped version, and run it in shadow for 7 days. Conviction moves from 65% to 70%.\n- **Why it rises a little.** The finding's own rule is that 3+ requests per wake moves conviction up, and the data meets it: no-news wakes take a median of 3 requests and only 2% are single-request. But this is a proxy built from other kinds of wake, and it is the cost the finding already assumed. So I raised it by 5 points, not to the mechanism reviewer's 85%.\n- **Why the 45% trigger does not fire.** The weekly fit disfavors a 1-hour premium at the list ratio (2.8% likely, 0.2% with round 3's read weight).\n\nOn your question: more desk research will not move conviction much either way. Two things remain open:\n1. **How a real keepalive wake gets answered.** It could look like a Monitor event (one request, about 0.0025 pp) or like a watcher timeout (3 requests, about 0.006 pp). It is also unknown how often a wake leads the model to act; charging those turns to the wake drives the net to about zero. Only a live test answers this: the 7-day shadow plus about 20 real wakes with a minimal wake message. That test needs your sign-off, because it is a hook that wakes sessions.\n2. **Whether the roughly 3 pp/week given up while waiting matters to you.** Today's code nets +2.6 to +3.9 at the measured cost. That is a judgment for you, not something more research settles.\n\nIf you build the redesign, the variant that also skips gaps with a watcher armed is the more robust choice. It is positive on every account in every \"nothing to do\" profile, and still +1.2 with acting turns charged.",
+  "new_conviction_pct": 70,
+  "evidence": [
+   {
+    "claim": "Wake population (interactive main sessions, all 4 accounts, 14 days, no operator prompt opened or was queued during the turn)",
+    "value": "7,495 machine-wake turns; 5,926 warm (60-3500 s gap, first request not a rebuild); 475 cold; 1,094 under 60 s",
+    "source": "measured: python3 -I scan.py <acct> ~/.claude-*/projects 1791655200 1792864800 (x4); python3 -I turns.py /tmp/conv-tests/c0f9d5368147; python3 -I wakestats.py /tmp/conv-tests/c0f9d5368147 > wakestats.out"
+   },
+   {
+    "claim": "All machine wakes at >=150k, warm, result 'nothing to do' (no state-changing tool call)",
+    "value": "n=2,467; requests median 3 / p90 4 / mean 2.78, 8% single-request; output median 484 / p90 1,194; cache write median 1,644 / p90 4,054 (100% 1h tier); cache read median 751k / p90 1,586k; pp median 0.0057 / p90 0.0117 / mean 0.0068 at read 0.0067, write 0.245, output 0.404",
+    "source": "measured: wakestats.out section A"
+   },
+   {
+    "claim": "Same population by context band (pp median / p90; requests median, mean)",
+    "value": "150-200k 0.0033/0.0066 (2, 2.70); 200-300k 0.0047/0.0081 (2, 2.72); 300-500k 0.0070/0.0124 (3, 2.79); >=500k 0.0115/0.0161 (3, 3.07)",
+    "source": "measured: wakestats.out section A"
+   },
+   {
+    "claim": "No-news wakes (cc-await-ping timeout + Monitor expired), >=150k, warm, nothing to do: the closest analog to a keepalive wake under today's code",
+    "value": "n=943; requests median 3 / p90 4 / mean 2.86; 64% 3+, 2% single; output median 475 / p90 920; write median 1,439 / p90 3,092; pp median 0.0060 / p90 0.0115 / mean 0.0068; beyond one context read median 0.0040 / mean 0.0047. Bands pp median/p90: 150-200k 0.0038/0.0062, 200-300k 0.0053/0.0070, 300-500k 0.0072/0.0118, >=500k 0.0120/0.0142",
+    "source": "measured: wakestats.out sections B and D"
+   },
+   {
+    "claim": "Wakes while the session's own non-watcher background job runs (the redesign's case), >=150k, nothing to do",
+    "value": "n=1,270; requests median 2 / p90 4 / mean 2.64; 41% 3+, 12% single; pp median 0.0053 / p90 0.0115 / mean 0.0065",
+    "source": "measured: wakestats.out section E"
+   },
+   {
+    "claim": "Goal check-ins (Claude Code's 'background work still running' re-prompt)",
+    "value": "Nothing to do, n=248: median 3 / mean 3.09 requests, pp mean 0.0084, Stop-hook re-prompt in 13%. All results, n=382: mean 6.36 requests, pp mean 0.0178, 35% acted, Stop-hook continuation in 21%",
+    "source": "measured: wakestats.out sections B, C, E; inline python over turns.jsonl (act shares)"
+   },
+   {
+    "claim": "Only informational wakes approach the 1-request profile",
+    "value": "Monitor events, nothing to do, n=213: median 1 request, 53% single, output median 139, pp median 0.0025",
+    "source": "measured: wakestats.out section B"
+   },
+   {
+    "claim": "Session-continue / completion-assert Stop-hook re-prompts inside the nothing-to-do wakes at >=150k",
+    "value": "6% of turns carry at least one 'Stop hook feedback' continuation (4% of no-news wakes, 13% of goal check-ins); their requests are included in the counts above",
+    "source": "measured: wakestats.out (stopfb column)"
+   },
+   {
+    "claim": "What a warm wake avoids: cold machine wakes at >=150k (gap >=3500 s or first request rebuilt)",
+    "value": "n=387; write median 258,592 tokens; pp median 0.0751 / mean 0.0838, about 12x a warm no-news wake",
+    "source": "measured: wakestats.out section G"
+   },
+   {
+    "claim": "The 'nothing to do' label, hand-checked",
+    "value": "12/12 sampled 'look' timeout wakes were re-arm-and-report turns. 6/12 sampled 'act' turns were really status checks (so the label leans conservative) and 6/12 did real work (recycles, relaunches, writes)",
+    "source": "measured: inline python random.sample(seed 11) over turns.jsonl, read by hand"
+   },
+   {
+    "claim": "Replay engine parity before swapping in measured costs",
+    "value": "Reproduces the numbers reviewer exactly: today's code 3.79/2.67 and redesign 5.07/4.23 pp/week (low/high reads, 'med' profile)",
+    "source": "measured: python3 -I recompute.py /tmp/conv-tests/c0f9d5368147 > recompute.out (engine check; imports /tmp/lean-idle/idle-keepalive-wake/rv/rrep.py over G2.json)"
+   },
+   {
+    "claim": "Net pp/week for today's code (as coded, chain survival 0.89, dead panes at their last write) with the measured no-news cost per context band",
+    "value": "+3.12 at mean cost and mid reads (0.0067); range +2.59 to +3.85 over low/mid/high reads and median vs mean; next4 +0.41 to +0.72; 538 wakes and 124 rescues per week. Charging every acting turn's full cost to the wake (mean): -0.25 at mid reads (range -1.18 to +0.78)",
+    "source": "measured: recompute.out, 'AS CODED s=0.89 | nonews_*' rows"
+   },
+   {
+    "claim": "Net pp/week for the busy-scoped redesign (busy2, re-arming) with the measured busy-wake cost",
+    "value": "+4.60 at mean cost and mid reads (range +4.21 to +5.64), next4 +0.20 to +0.56; goal check-in profile +3.70 (range +3.21 to +4.68, next4 -0.12 to +0.29); acting turns charged (mean) -0.74; 373 wakes and 129 rescues per week. The variant that also skips gaps with a watcher armed: +4.49 (range +4.24 to +5.16), goal profile +3.96, acting turns charged +1.22, every account positive in the nothing-to-do profiles",
+    "source": "measured: recompute.out, 'R2 busy2' and 'R4 busy2+no watcher' rows"
+   },
+   {
+    "claim": "Round 3 data cannot settle a 1-hour write premium",
+    "value": "0 cache-write tokens in the 1,149 in-window calls. The only write was the pre-window cold write of 458,656 1h-tier tokens ($3.669 at the $8/Mtok list price). Across it the wire meters read 5h 0.01 to 0.01 and weekly 0.12 to 0.12, below their 1 pp resolution (predicted weekly 0.11 pp at 0.245 vs 0.15 pp at 0.3325)",
+    "source": "measured: python3 -I csv read of round3/calls.csv (phase, cache_write, list_usd); round3/meters.jsonl baseline-0 and baseline-1 wire fields"
+   },
+   {
+    "claim": "Round 2 fit data (fit4 blocks reproduced: n=709 weekly, cw 0.2446, cr 0.00481, R2 0.9668) with the write split by tier: weekly meter",
+    "value": "5m 0.2436 [0.2145, 0.2848], 1h 0.2844 [0.2051, 0.3724]; ratio 1.17, bootstrap 95% [0.83, 1.62], P(ratio >=1.6) 2.8%. Fixing the ratio at 1.6 fits worse than 1.0 (SSE 262.8 vs 256.9; held-out RMSE 0.5687 vs 0.5589). With reads pinned at 0.0067: ratio 0.97 [0.68, 1.37], P(>=1.6) 0.2%",
+    "source": "measured: python3 -I /tmp/conv-tests/c0f9d5368147/fit_tier.py > fit_tier.out (imports /tmp/usage-audit/r2/cache-read-weight/fitlib.py and events.npz)"
+   },
+   {
+    "claim": "Same split on the 5h meter, and the confound",
+    "value": "5h ratio 1.35 [0.94, 1.87], P(>1) 96%, P(>=1.6) 14%. All 883M 1h-write tokens are from main sessions and all 1,822M 5m tokens from subagents (5 main rows with any 5m write, 0 subagent rows with a 1h write), so tier cannot be separated from main vs subagent",
+    "source": "measured: fit_tier.out"
+   },
+   {
+    "claim": "If the 1h weight were the free-fit point (0.2866) instead of 0.245",
+    "value": "Today's code +4.34, redesign +5.89, watcher-skipping variant +5.58 pp/week (mean nothing-to-do profiles, mid reads). At the reviewer's 0.3325: +5.70 / +7.32 / +6.79. The redesign keeps its lead either way",
+    "source": "measured: recompute.out, '1h-write premium sensitivity' rows"
+   }
+  ]
+ },
+ {
+  "briefs": [
+   {
+    "id": "B1-curl-no-url-parsed",
+    "source": "wf_225e9394-f08, slot research:curl-parser, agent aa2a00956335fe54e (~/.claude-next = ~/.claude), started 2026-09-29T03:44:48Z, CC 2.1.284, agentType workflow-subagent (the default agent), 29 requests (measured: python3 -I /tmp/conv-tests/regate-briefs/nreq.py <transcript>, which counts distinct assistant message ids; it matches nreq in /tmp/lean-idle/workflow-lean/slots.jsonl). Tools used: Bash and StructuredOutput only, no repo writes. Rewrite changes: a fixed data window and a pinned code sha; the original's stale '76 of 151' figure is dropped. Key scripts: /tmp/conv-tests/regate-briefs/key1.py and why15.py.",
+    "brief": "You are a read-only research worker. You see no CLAUDE.md, so everything you need is here.\n\nREPO: ~/Development/claude-infrastructure (git). Its working tree has moved on, so read code ONLY at the pinned commit da7cb10ba: `git -C ~/Development/claude-infrastructure show da7cb10ba:hooks/curl-gate.py`.\nDATA: ~/.reso/curl-audit.jsonl. This is curl-gate's decision log: one JSON row per curl segment it judged, with keys ts (UTC ISO), decision (allow|ask|deny), reason, cmd_redacted (the full command), host, method, session_id, tool_use_id and cwd. One tool call can write several rows.\nRULES: Strictly read-only. Put scratch files only under /tmp/b1-scratch/. Do not edit, commit, git stash, git reset, rm, curl or use any network command. Use python3 -I, /usr/bin/grep or jq. Every number you report carries the exact command that produced it. If you cannot measure something, say 'unmeasured'.\nWINDOW: rows with ts >= 2026-09-25T02:22:56Z (when commit edaaa897d landed) and ts < 2026-09-29T00:00:00Z.\n\nQUESTION: When a command's URL sits in a shell variable, a $(...) or a heredoc, hooks/curl-gate.py asks 'No URL parsed; review manually'. Should static resolution of those URLs be extended, so they are judged by host policy instead of asking? Measure the following inside the WINDOW:\n1. The total ask rows, and how many of them have a reason starting 'No URL parsed'. Give both as rows and as distinct tool_use_ids.\n2. How many sessions produced the No-URL asks. For the top session give its count, its first and last ts, and an hourly breakdown. Say whether it is one burst or recurs.\n3. Classify each No-URL command (cmd_redacted) by shape: for-loop over a literal word list, for-loop over a dynamic list ($, backtick or glob in the list), while-read loop, $(...) with no loop, or other. Estimate how many a static parser could resolve safely and how many are runtime-only.\n4. Does curl-gate.py at da7cb10ba already contain a resolver for URLs held in loop variables? Name the functions with line numbers, and name its refusal rule.\nRETURN: the counts with their commands, the classification table, and do or skip with a conviction % (the probability that your recommendation is right). Include the strongest argument against it.",
+    "answer_key": "All values measured with `python3 -I /tmp/conv-tests/regate-briefs/key1.py` unless noted.\n(1) The window holds 554 rows. 86 are asks, all with distinct tool_use_ids. 61 have reason 'No URL parsed; review manually', also 61 distinct tool_use_ids.\n(2) The 61 come from 2 sessions:\n- adb89f78-ec61-4289-b761-177115460988 has 58 (95%), cwd wt-pool-2. It spans 2026-09-26T02:35:14Z to 2026-09-28T00:42:19Z in 4 clusters (UTC hours):\n  - 09-26 02h-03h: 22\n  - 09-26 21h-22h: 3\n  - 09-27 18h-19h: 27\n  - 09-27 23h to 09-28 00h: 6\n  Correct verdict: one session recurring over about 2 days, not a fleet-wide pattern and not a single burst.\n- 61efb474-a0cc-4d8d-8401-a8675d02c5f5 has 3, within one minute on 09-26 around 03:59-04:00Z.\n(3) Shapes by key1.py's regexes:\n- for-loop over a literal list: 15 (all 15 from adb89f78)\n- for-loop over a dynamic list: 13\n- while-read: 13\n- $(...) with no loop: 16\n- other: 4\nAccept a statically resolvable count of 12-22 and a runtime-only count of 35-49 if the method is stated.\n(4) Yes, a resolver exists. At da7cb10ba, hooks/curl-gate.py has shell_bindings() at :1115 and expand_argv() at :1183, under the header comment at :1080, from commit 03e9a2c6a 'judge a URL held in a loop variable'. The refusal rule is _UNSEEN_BINDERS (read/source/eval/((\u2026)) and others); when it matches, the whole command is left unresolved. Measured with `python3 -I /tmp/conv-tests/regate-briefs/why15.py` on a copy of the pinned file: 3 of the 15 literal-loop commands hit _UNSEEN_BINDERS (2 `source`, 1 `((`). The other 12 get bindings from shell_bindings, yet still asked in the log. Why is not keyed (the live code at each row's ts was not pinned).\nA pass must say that the fix would close gaps in an existing resolver rather than add a new feature, and that it would remove at most about 15 prompts in about 3 days, nearly all from one session. The do/skip call and conviction are judgment and not keyed.\nAuto-fail: reporting the brief-era '76 of 151', or double-counting ~/.claude-next."
+   },
+   {
+    "id": "B2-curl-ask-census",
+    "source": "wf_64053140-014, slot investigate:curl_census, agent a989a3d27e55ac05c (~/.claude-tertiary), started 2026-09-29T01:39:45Z, CC 2.1.284, agentType workflow-subagent (default), 32 requests (measured with nreq.py as for B1). The original returned 182/3,105 'genuine' asks under an unstated filter and a moving cutoff. The rewrite fixes the cutoff and the definitions, and drops the waited_s and permission-archive parts, which have no stable key. Key scripts: /tmp/conv-tests/regate-briefs/key2.py and join2.py.",
+    "brief": "You are a read-only research worker. You see no CLAUDE.md, so everything you need is here.\n\nCODE: hooks/curl-gate.py in ~/Development/claude-infrastructure, read ONLY at the pinned commit: `git -C ~/Development/claude-infrastructure show da7cb10ba:hooks/curl-gate.py`.\nDATA: curl-gate's own decision log (find its path in the code). It has one JSON row per curl segment judged, with keys ts (UTC), decision, reason, cmd_redacted, host, method, session_id, tool_use_id and cwd. A single tool call (one operator prompt) can write several rows.\nTRANSCRIPTS: ~/.claude/projects, ~/.claude-secondary/projects, ~/.claude-tertiary/projects and ~/.claude-quaternary/projects. Each has <project-dir>/<session_id>.jsonl, plus <session_id>/subagents/**.jsonl. ~/.claude-next/projects is a symlink to ~/.claude/projects, so do not count it twice. These trees are large, so search only the files of the sessions you need.\nRULES: Strictly read-only. Put scratch files only under /tmp/b2-scratch/. No edits, commits, git stash, git reset, rm, curl or any network command. Use python3 -I, /usr/bin/grep or jq. Every number carries the command that produced it. If you cannot measure something, say 'unmeasured'.\nCUTOFF: use only rows with ts < 2026-09-29T00:00:00Z. 'Last 30 days' means ts >= 2026-08-30T00:00:00Z.\n\nTASK: take a census of curl-gate asks (decision == 'ask').\n1. Give the log path and the code lines that emit the '\u2014 confirm intent' reasons, as file:line.\n2. For all history and for the last 30 days, give: ask rows; distinct prompts (distinct tool_use_id); sessions; and rows by reason class. The classes are 'GET to unknown host', 'GET to unvetted host', 'No URL parsed', 'Non-HTTP scheme', and any reason containing 'confirm intent'.\n3. Is the '\u2014 confirm intent' reason the dominant source of asks? Give its share. For confirm-intent rows, also give:\n   - the split between 'POST to unknown host' and '<METHOD> <host> \u2014 confirm intent'\n   - the counts of the method field\n   - the top 5 hosts and the number of distinct hosts\n   Flag any host value that is a parse artifact, and any place where the method field disagrees with the reason.\n4. For the confirm-intent prompts (distinct tool_use_id) in the last 30 days, find the operator's answer by joining tool_use_id to the transcript tool_result. If the result text starts with \"The user doesn't want to proceed with this tool use\", count it as denied. Any other result is granted. No tool_result found counts as unknown. List the denied ones with ts and host.\n5. List every stretch of 3 or more days with no log rows before the cutoff, and say what that does to the 30-day window.\nRETURN: the tables with their commands, then a short verdict on where the asks actually come from.",
+    "answer_key": "Measured with `python3 -I /tmp/conv-tests/regate-briefs/key2.py`, except (4), which is measured with `python3 -I /tmp/conv-tests/regate-briefs/join2.py`.\n(1) The log is ~/.reso/curl-audit.jsonl: AUDIT_LOG at hooks/curl-gate.py:42. The confirm-intent reasons come from :905 ('POST to unknown host {host} \u2014 confirm intent') and :908 ('{method} {host} \u2014 confirm intent').\n(2) ALL (first row 2026-05-19T08:56:58Z): 3,485 ask rows, 3,044 distinct tool_use_ids, 135 sessions. Rows by class:\n- GET to unknown host: 2,065\n- No URL parsed: 964\n- GET to unvetted host: 222\n- confirm intent: 202\n- Non-HTTP scheme: 32\nLAST 30 DAYS: 1,070 rows, 629 distinct tool_use_ids, 63 sessions. Rows by class:\n- No URL parsed: 717\n- GET to unvetted host: 213\n- confirm intent: 121\n- Non-HTTP scheme: 19\n- GET to unknown host: 0 (last seen 2026-08-24T08:15:15Z)\n(3) Not dominant. Confirm intent is 202/3,485 rows (5.8%) and 155/3,044 prompts (5.1%) over all history, and 121/1,070 rows (11.3%) and 74/629 prompts (11.8%) in the last 30 days.\n- Split: ALL is 199 POST-to-unknown-host plus 3 '<METHOD> 127.0.0.1' (2 DELETE, 1 PUT). The last 30 days are 118 plus the same 3.\n- Method field: POST 184, GET 16, DELETE 2. 16 rows say GET while the reason says POST or PUT, which is a mismatch.\n- Top hosts, all history: mozilla 24, 127.0.0.1 21, www.nanaimo.ca 18, data.colorado.gov 17, overpass-api.de 12; 47 distinct. 'mozilla' is a parse artifact: `-A \"Mozilla/5.0\"` was read as the URL.\n- Top hosts, last 30 days: 127.0.0.1 21, www.nanaimo.ca 14, overpass-api.de 8, then 6 each for gn.localhost, bizfileonline.sos.ca.gov and data.colorado.gov; 30 distinct. '$h' (an unresolved variable) appears 4 times.\n(4) 74 prompts: 66 granted, 2 denied, 6 unknown. The 2 denials:\n- toolu_01TZkmw26TbT7yXqv8wyywmo at 2026-09-05T14:32:35Z, host '$h'\n- toolu_01No1jsb5pELPXgpBKw6WixZ at 2026-09-05T14:33:04Z, host gn.localhost\nTolerance: denied must be exactly 2; accept granted 62-70 and unknown 4-10.\n(5) Gaps of 3 days or more:\n- 06-02 to 06-23\n- 06-23 to 07-31\n- 07-31 to 08-07\n- 08-07 to 08-11\n- 08-28 to 09-03\n- 09-14 to 09-18\nThe 30-day window opens inside the 08-28 to 09-03 gap, so its first row is 2026-09-03T17:50:13Z, which leaves about 25 days of data.\nVerdict that passes: confirm intent is a minor class. Historically the bulk was GET-to-unknown-host (since retired). In the last 30 days the bulk is No URL parsed (717 of 1,070 rows). Auto-fail: rows equated with prompts, or the 'confirm intent is the dominant source' premise accepted."
+   },
+   {
+    "id": "B3-accounts-5h-reset",
+    "source": "wf_9b4dbf80-ef8, slot inv:accounts-5h-reset, agent ac5b4d57fb1087aca (~/.claude-tertiary), started 2026-10-12T02:53:29Z, CC 2.1.293, agentType workflow-subagent (default), 19 requests (measured with nreq.py). The pin dcf7c53d6 is the original worktree's HEAD at run time, taken from the reflog of /Users/chrisren/Development/.worktrees/wt-cc-214325-42538. The rewrite drops the load-incident preamble. Key: `bash /tmp/conv-tests/regate-briefs/key3.sh`.",
+    "brief": "You are a read-only code-research worker. You see no CLAUDE.md, so everything you need is here.\n\nREPO: ~/Development/claude-infrastructure. Read ONLY the pinned commit dcf7c53d6, not the working tree:\n- `git -C ~/Development/claude-infrastructure show dcf7c53d6:bin/claude-accounts`: a single Python script of about 8.8k lines. Copy it to /tmp/b3-scratch/ to grep it with line numbers.\n- `git -C ~/Development/claude-infrastructure ls-tree --name-only dcf7c53d6 tests/` and `git ... show dcf7c53d6:tests/<file>`.\n- `git -C ~/Development/claude-infrastructure grep ... dcf7c53d6 -- tests`.\nRULES: Read-only. Scratch only under /tmp/b3-scratch/. Do NOT run claude-accounts, which polls live accounts. Do not run bats. No edits, commits, git stash, git reset or rm. Cite file:line at dcf7c53d6 for every code claim.\n\nBACKGROUND: `claude-accounts --readout --narrow` renders the narrow accounts board shown at session start. Its columns are mark, account, live, 5h %, weekly bar, weekly %, fable %, resets and login. When an account's 5h usage is at or over the 85% routing cutoff, a line '\u25b2 <acct> \u2014 5h at N%, at/over the 85% routing cutoff' is printed. The operator asks whether to show when the 5-hour window resets, especially in that case. Someone assumed the usage API returns this as five_hour.resets_at; check that assumption.\n\nTASK: answer at dcf7c53d6.\n1. Is the 5h reset time already fetched from the usage API? By which function and call, and under which row keys is it stored (including any last-good ledger entry)?\n2. Which output surfaces already show the 5h reset, and which do not? Cover the default human table (no flags), --readout (markdown), --readout --narrow and --json. Include the existing \u25b2 lines.\n3. What does the narrow board's 'resets' column actually show?\n4. What are the narrow board's width budget and its column-width constants?\n5. Which test files pin the narrow board layout?\nThen propose the smallest change that surfaces the 5h reset when 5h is at or over the cutoff. Give the exact code sites to edit and the tests to update.",
+    "answer_key": "Measured with `bash /tmp/conv-tests/regate-briefs/key3.sh`, plus a read of the extracted file /tmp/conv-tests/regate-briefs/ca-dcf7c53d6.py. All line numbers refer to bin/claude-accounts at dcf7c53d6.\n(1) Yes, it is fetched. pick(u, kind) at :1526 walks u['limits'] and returns lm['percent'], lm['resets_at'] (:1532). It is called as `sp, sr = pick(u, \"session\")` at :2478. The row stores session_pct, session_reset_h and session_reset_at at :2488, and the last-good ledger entry stores session_reset_at at :2515. 'five_hour' occurs 0 times: the 5h window is kind 'session', and the five_hour.resets_at premise is wrong for this code.\n(2) Already shown:\n- the default table, render_table (:7455): a '\u21bb<h>' 5h-reset cell at :7536-7541\n- render_table's \u25b2 alert, which already appends ' \u00b7 resets in <session_reset_h>' at :7628-7629\n- --readout markdown, readout_lines(narrow=False) (:7029): a '| 5h resets |' header at :7112 and its cell `_md_cell(r.get(\"session_reset_at\"), r.get(\"session_reset_h\"))` at :7199\n- --json: the row's session_reset_h/at fields\nNot shown:\n- the --readout --narrow board\n- the \u25b2 note at :7225 ('\u25b2 `acct` \u2014 5h at N%, at/over the \u2026% routing cutoff'), which lists no reset time\n(3) The narrow 'resets' header (:7109) is the WEEKLY reset: `wk_n = fmt_board_t(r.get(\"weekly_reset_h\"))` at :7172.\n(4) NARROW_W = 76 at :6738. Column widths are `_NW_MARK, _NW_NAME, _NW_PCT, _NW_WKR = 3, 13, 5, 7` at :6743 and `_NW_BAR, _NW_STR, _NW_LIVE = 8, 6, 4` at :6757.\n(5) tests/accounts-board.bats (33 @test) is the only suite that invokes --narrow (`git grep -c -e --narrow dcf7c53d6 -- tests` gives 10 lines, all in it). Three more files mention readout_lines, NARROW_W or '--readout --narrow': claude-accounts-fleet-pace.bats, claude-accounts-freshness.bats and claude-accounts-wire-truth.bats.\nProposal: a pass appends the 5h reset to the \u25b2 note at :7225, mirroring :7629. That costs no width and adds no column. Adding a column to the 76-cell grid is a weaker answer, but not an automatic fail if it is justified. Auto-fail: saying the 5h reset is not fetched, or saying 'resets' is the 5h reset."
+   }
+  ]
+ },
+ {
+  "decision": "3df527edd333",
+  "result": "Short answer: no. More testing of whether agents comply would not move this decision much. Real deny history already settles that question, and it settles it better than my simulation can. The doubts that remain are about the money, and two cheap offline checks would resolve them before the one-day trial.\n\nWhat I tested:\n- 20 real subagent poll loops that the rule would deny (the d9ffc3964 predicate minus the inner-timeout exemption).\n- I rebuilt each one's situation (brief excerpt plus the last turns before the call) in /tmp/conv-tests/3df527edd333/cases/NN.md.\n- No exact deny text exists anywhere, so I drafted one from the REPORT and the reviewer's wording: deny_message.txt.\n- Acting as each subagent, I wrote the next call I would make (sims.jsonl) and graded it (grades.json).\n\nSimulated compliance: 20 of 20 meet all four criteria (a) foreground, (b) under 270 s, (c) the wait still happens, (d) no run_in_background. The grading script says 19 of 20; case 15 fails only its \"echo\" check, and its `ls` output shows whether the wait finished. Every re-issued call passes a `bash -n` syntax check, and the real predicate flags none of them again. A scaled-down run of the wrapped form returned rc=124 while the condition was unmet and rc=0 once it held. This is an upper bound: I knew the rule and the grading.\n\nReal behavior, weighted above the simulation (1,553 unique subagent denies, 2026-08-19 to 10-24):\n- **A deny that names an exact form to re-issue** (the rm -r deny, 1,014 organic cases): 75% used the named form on the next call. 20% dropped the step and carried on. 0.6% retried the forbidden form and were denied again; 0.1% found another way to delete.\n- **Denies about waiting** (316: Claude Code's built-in sleep block and the /goal gate): no agent repeated the refused call. 21 (6.6%) switched to a long foreground loop, which W3 would deny a second time. 2 (0.6%) wrote the wait without the word `sleep` (perl select, python time.sleep), which W3's pattern cannot see.\n- **Waits cut off at a tool timeout of 270 s or less** (38 poll loops): 35 still got their result, with 0 cache rebuilds.\n- **Repeat denies are rare**: only about 2% of agents got the same deny twice.\n\nEstimated real compliance with the W3 deny:\n- about 75% use the timeout-260 slice on the first try;\n- about 20% take some other path that keeps the cache warm (a one-off check, Monitor, or a lower tool timeout);\n- about 5-7% need a second deny;\n- under 1% slip through by re-spelling the wait.\n\nSo agents would almost never be left blocking past the limit after a deny. This combines the analogues above; it is an estimate, not a trial.\n\nProblems found:\n1. Five of the 20 denied calls (25%) are not waits at all. They are retry loops or Python test harnesses where `for` and `sleep` both appear inside a heredoc. \"Wrap the same loop\" does not fit them. The message needs a second branch: if this is not a wait, re-run it with a tool timeout of 270000 or less.\n2. The message should tell the agent to append `; echo rc=$?` and, when it sees 124, re-issue the same slice rather than a longer one. The only timed-out slice anywhere in history (case 01's own) was followed two calls later by a 500 s wait.\n3. Extending the pattern to catch `select(undef` and `time.sleep(` would close the re-spelling gap.\n4. In 3 of the 20 cases (02, 07, 09), `pgrep -f` matches the agent's own command line, so the loop can never see its condition come true. That bug was already there, and wrapping neither fixes nor worsens it.\n\nNew conviction: 72%, up from 68%.",
+  "moves_decision": "This moves conviction up a little: 68% to 72%. The poll-loop deny stays positive at every compliance level the reviewers priced, including 50%. The real deny history puts compliance near the top of that range, so the expected net sits closer to the full-compliance figures: +3.90 per week steady and +5.24 over 14 days (the reviewers' estimates from variants.py), rather than the +1.4 to +1.9 at 50% compliance.\n\nBefore switch-on, the message needs three changes:\n- a branch for calls that are not waits: re-run them with a tool timeout of 270000 or less;\n- tell the agent to append `echo rc=$?` and, on 124, repeat the same slice rather than a longer one;\n- teach the predicate to catch `select(undef` and `time.sleep(`.\n\nNext steps for your question:\n- **Stop:** more offline compliance testing. My simulation is biased upward, and the real denies already answer it.\n- **Do next, offline and cheap:**\n  - settle which account each of the 352 poll-loop calls copied across accounts really belongs to; this decides whether quaternary breaks the 0.2 bar (its upper bound is 0.237 at high cost);\n  - re-price with a write weight for the 5-minute cache only (about 0.20 instead of the blended 0.245).\n  Either check could move conviction 5-10 points either way.\n- **Then:** the one-day sign-off trial, which now only needs to measure how often a second deny is needed, how often agents re-spell the wait without `sleep`, and the wrong-deny cost per account.\n\nEverything I wrote is under /tmp/conv-tests/3df527edd333/.",
+  "new_conviction_pct": 72,
+  "evidence": [
+   {
+    "claim": "Population and sample: poll-loop calls the rule would deny after the inner-timeout exemption, one call per agent, 20 drawn at random",
+    "value": "765 calls across 346 agents (from 799 poll-loop calls). Sample: 13 until, 5 for, 2 while; 10 of 20 were followed by a cache rebuild (36% in the population); 19 of 20 were workflow agents; 2 ran under a live parent /goal; accounts next 4, secondary 5, tertiary 5, quaternary 6",
+    "source": "measured: python3 -I /tmp/conv-tests/3df527edd333/sample.py /tmp/lean-idle/w3-subagent-deny/review-numbers/myjoined.json sample.json 33; python3 -I extract.py sample.json cases"
+   },
+   {
+    "claim": "The real predicate flags every sampled original and none of the simulated re-issues",
+    "value": "Originals: 20 of 20 logged as narrow poll-loop. Re-issues: 0 of 20 logged. The predicate copy is byte-identical to d9ffc3964",
+    "source": "measured: cmp .d9_shadow.sh against git show d9ffc3964:hooks/subagent-long-bash-shadow.sh; python3 -I replay_pred.py sample.json sims.jsonl /tmp/lean-idle/w3-subagent-deny/.d9_shadow.sh pred.log.jsonl (log redirected under /tmp/conv-tests)"
+   },
+   {
+    "claim": "Simulated compliance with the drafted deny text (my own responses as each subagent; biased upward)",
+    "value": "Script: 19 of 20 pass (a) foreground, (b) under 270 s, (c) wait kept, (d) no background, plus syntax. After manual review: 20 of 20 (case 15's `ls` shows whether the wait finished). Syntax: 20 of 20 outer and inner commands pass bash -n. Response used: 14 wrapped in timeout 260, 4 tool timeout lowered to 270000, 2 for-loop counts cut",
+    "source": "measured: python3 -I grade.py sample.json sims.jsonl syn/ (sims made by make_sims.py; deny text in deny_message.txt)"
+   },
+   {
+    "claim": "The prescribed wrap behaves correctly under the Bash tool's zsh, including the escaped inner quotes",
+    "value": "First slice: rc=124 while the condition was unmet. Second slice: rc=0 with the file printed once the condition held. timeout is /opt/homebrew/bin/timeout",
+    "source": "measured: inline timeout 3 bash -c 'until grep -q '\\''^DONE'\\'' fx.log; do sleep 1; done; cat fx.log'; echo rc=$? (run twice)"
+   },
+   {
+    "claim": "A quarter of sampled denies are not waits: retry loops or Python harnesses where for/while and sleep both appear across a heredoc",
+    "value": "5 of 20 (cases 04, 05, 13, 18, 19). Their real runtimes were 27, 74, 2, 136 and 241 s, all false denies. Telling the agent to 'wrap the same loop' does not fit them",
+    "source": "measured: inline python regex-span listing over sample.json; hand reading of cases/04,05,13,18,19.md"
+   },
+   {
+    "claim": "Most denied agents have never seen the slice rule, so the deny would be their first exposure",
+    "value": "18 of 20 are agentType workflow-subagent and 2 are workflow-lean. The slice rule ('wait for it in slices', 4.5 minutes) is in only 4 agent definitions (deep-research, deep-research-sonnet, frontier-derivation, workflow-lean) and not in ~/.claude/CLAUDE.md",
+    "source": "measured: jq agentType over each agent's .meta.json; git grep 'wait for it in slices' and 'about 4.5 minutes'; grep -n 270 ~/.claude/CLAUDE.md (0 hits)"
+   },
+   {
+    "claim": "Real deny that names an exact re-issue form (validate-bash rm -r deny in subagents, 5a3403572): what the next call did",
+    "value": "1,014 organic cases: 760 (75.0%) used the named mktemp form (642 fresh mktemp directory, 118 mktemp + rm -rf \"$D\"); 202 (19.9%) dropped the rm and continued; 6 (0.6%) retried rm -r and were denied again; 1 (0.1%) deleted another way; 44 called a non-Bash tool next. The 27 wording-probe cases are separate",
+    "source": "measured: python3 -I deny_followups.py scanfiles.txt followups.jsonl (27,461 subagent files, rg prefilter); python3 -I split_rm.py followups.jsonl"
+   },
+   {
+    "claim": "Real wait-related denies: agents do not repeat the refused call, but few take the named alternative when it is a heavier change",
+    "value": "Built-in 'Blocked: sleep' (255): 0 denied again; the named shape (Monitor or background) used within 2 calls by 47 (18%); 13 (5%) went to a long foreground loop that W3 would deny. /goal gate (61): 61 of 61 did not re-issue a backgrounded loop; 0 used the named idle-scoped awaiter (it is main-session advice); 15 used Monitor; 8 went to a long foreground loop W3 would catch",
+    "source": "measured: python3 -I classify_followups.py followups.jsonl rm_examples.txt"
+   },
+   {
+    "claim": "Re-spelling a wait without the word sleep, which the W3 pattern misses",
+    "value": "After the /goal gate, 2 of 61 next calls were long foreground waits written with perl select(undef,...) or python time.sleep, with tool timeout 600000. After the sleep block, 10 of 23 long-timeout next calls were already the bounded 'timeout 270 bash -c until...' form, which the proposed inner-timeout exemption admits",
+    "source": "measured: inline python listing of long-timeout foreground next calls over followups.jsonl, with the W3 loop regex applied"
+   },
+   {
+    "claim": "Agents rarely get the same deny twice",
+    "value": "Agent files with 2 or more denies of the same class: rm -r 21 of 1,019; sleep block 5 of 249; /goal gate 0 of 61",
+    "source": "measured: python3 -I classify_followups.py followups.jsonl"
+   },
+   {
+    "claim": "Criterion (c) in real history: poll loops cut at a tool timeout of 270 s or less still deliver their result",
+    "value": "38 such loops (the harness moved each to the background): 35 got the completion notice while the agent was still working, 3 agents finished first; 0 rebuilds, 0 duplicate re-issues, 0 long foreground waits afterwards",
+    "source": "measured: inline python over /tmp/lean-idle/w3-subagent-deny/review-mechanism/after_moved.jsonl (loop and tsec <= 270)"
+   },
+   {
+    "claim": "What agents do after their own bounded slice times out: real data is too thin",
+    "value": "Only 1 timed-out bounded foreground loop slice was found in all history. It was case 01: the agent checked with ps, then escalated to a 500 s wait (the very call sampled here)",
+    "source": "measured: python3 -I slice_timeouts_tx.py slicefiles.txt slice_timeouts.jsonl (9,971 files that contain a 'timeout N bash -c' slice)"
+   },
+   {
+    "claim": "No blocking-wait escape route outside Bash",
+    "value": "0 TaskOutput calls in 27,461 subagent transcripts. The only other wait tool used is Monitor, which does not block",
+    "source": "measured: xargs rg -c '\"name\":\"TaskOutput\"' over allsub.txt (empty); tool-name census over the first 2,000 files"
+   },
+   {
+    "claim": "Bug that predates the rule, unchanged by the wrap",
+    "value": "3 of 20 conditions use pgrep -f with a pattern that matches the agent's own command line (cases 02, 07, 09), so the condition can never come true. Case 02 really ran 602 s and timed out",
+    "source": "measured: hand reading of cases/02,07,09.md; the shell's own argv is visible in case 09's ps output"
+   }
+  ]
+ },
+ {
+  "id": "b3-narrow-5h-reset",
+  "lean_correct": true,
+  "default_correct": true,
+  "note": "Both answers pass. Neither triggers an auto-fail: both say the 5h reset is fetched, and both say the narrow 'resets' column is the weekly reset at :7172.\n\nI checked the key's line refs with `sed -n` on /tmp/conv-tests/regate-briefs/ca-dcf7c53d6.py:\n- pick is at :1526-1533 and the session call at :2478.\n- The row keys are at :2488 and the ledger keys at :2515.\n- NARROW_W=76 is at :6738, and the width constants at :6743 and :6757.\n- The resets header is at :7109 and the '| 5h resets |' header at :7112.\n- wk_n=fmt_board_t(weekly_reset_h) is at :7172 and the _md_cell call at :7199.\n- The readout \u25b2 note with no reset is at :7222-7225, and render_table's \u25b2 with ' \u00b7 resets in' at :7627-7629.\n\n`grep -c five_hour` on that file gives 0.\n\n**Agreement with the key.** Both answers match it on all five items:\n- the fetch, the row keys and the ledger entry;\n- the surface table, including the two \u25b2 lines (shown in render_table, missing from the readout note);\n- the weekly 'resets' column;\n- NARROW_W and the six column widths;\n- accounts-board.bats as the main suite, plus fleet-pace, freshness and wire-truth.\n\nBoth reject the five_hour.resets_at premise for this code. Both propose the key's passing change: append the reset to the shared \u25b2 note at :7225 with _md_cell, guard out '\u2014', and add no column. Both suggest a new test in accounts-board.bats with its own fixture.\n\n**Differences, none affecting the grade:**\n- Default says the usage payload also has a top-level five_hour object. That is true: B2-VERIFY.md at dcf7c53d6, around line 154, lists five_hour as non-null, which I read with `git show`. It still says the code reads only limits[].\n- The two width estimates for an added column differ. Lean adds a 6-cell column (77). Default adds 8 cells (79). Both start from about 71 and both are labelled as estimates. Lean's 5-cell \u21bb figure follows fmt_h(narrow=True) more closely. Both conclude the column would breach 76.\n- Lean adds a schema-drift test ref (claude-accounts-schema-drift.bats:85-99) and the core.bats fmt_h width test. Default adds a render-time hrs_until refresh and the wire 5h-rejected note at :7270-7275 as optional extras. I did not verify these extra refs; they are not in the key.\n\nBoth answer texts are cut off in the task (lean in its test bullets, default at 'render_narrow --readout --na'). The truncation does not affect the graded items.\n\n**On the relayed question.** This item does not separate the two answers, so it gives no evidence either way."
+ },
+ {
+  "id": "B1-curl-no-url-parsed",
+  "lean_correct": true,
+  "default_correct": true,
+  "note": "Both answers pass. Every keyed value matches, and both frame the fix as repairing curl-gate's existing resolver, not adding a new feature.\n\nChecks I ran:\n- `python3 -I /tmp/conv-tests/regate-briefs/key1.py` gave 554 rows and 86 asks across 86 tool_use_ids. 61 asks have the No-URL reason, also 61 tool_use_ids. They come from 2 sessions: adb89f78 with 58 (2026-09-26T02:35:14Z to 2026-09-28T00:42:19Z) and 61efb474 with 3. adb89f78's hourly counts were 12, 10, 2, 1, 11, 16, 3, 3, which group into clusters of 22, 3, 27 and 6. Both answers report these exactly and both call it recurring.\n- `git show da7cb10ba:hooks/curl-gate.py | grep -n` confirms the line numbers: shell_bindings at 1115, expand_token at 1147, expand_argv at 1183, decide_command at 1241, _UNSEEN_BINDERS at 1103 and _EXPAND_CAP at 1102. The section header is at line 1082, not 1080 as the key says, so lean's 1082-1100 is accurate.\n- `python3 -I /tmp/conv-tests/regate-briefs/why15.py` counted 2 commands hitting `source` and 1 hitting `((`. The 4 'bound:r' rows show the loop variable u was rejected while r was bound. That fits both answers' explanation that a quoted `?` trips the glob check.\n- `python3 -I attrib.py`, run from /tmp/conv-tests/regate/default-B1-curl-no-url-parsed/, confirms the breakdown of the 13 literal for-loops both answers give. 9 are refused only because of the `?` glob check (10, 27, 31, 34, 43, 46, 48, 52, 53). 3 hit the cross-product cap of 32 (26, 38, 47). 1 hits `$((` (0). All 13 flip to allow once all three fixes are applied.\n\nQ3: both answers count 13 literal for-loops, against key1.py's 15. They differ because the 2 `source` rows are classed separately. Lean estimates 13 statically resolvable and 42 runtime-only; default estimates 13 (16 with inlining) and about 45. All of these are within the accepted ranges of 12-22 and 35-49, and both explain how they classified. Neither answer makes an auto-fail error: neither reports '76 of 151' and neither double-counts ~/.claude-next.\n\nLean has three defects, none on a keyed value:\n- Its strongest-argument section is cut off mid-sentence (\"work out to about 3\").\n- It says the one session ran \"over 4 days\", which contradicts its own \"about 46 hours\".\n- It does not name commit 03e9a2c6a.\n\nIt still states the required scale: 13 of 61 asks removable, 58 of 61 from one session, inside the roughly 3-day window. So I mark it correct, with lower confidence than default.\n\nDefault is cleaner. It says outright \"13 prompts in about 3.4 days, all from one image-scraping session\" and names 03e9a2c6a. It also answers the user's question directly: more log research would not move conviction, and the testing that matters is one safety test per relaxation. Its out-of-window figures (244 asks after 09-29, 53 of which would flip) are labelled as context only; I did not check them."
+ },
+ {
+  "id": "B2-curl-ask-census",
+  "lean_correct": true,
+  "default_correct": true,
+  "note": "I graded both answers against key2.py and join2.py and spot-checked them with python3 -I /tmp/conv-tests/B2-grade/chk.py, run on the lean answer's audit-snapshot.jsonl. Both pass.\n\nLEAN: passes.\n- (1) Matches the key: :42, :905 and :908.\n- (2) The raw figures match the key exactly. All history: 3485 rows, 3044 prompts, 135 sessions, with classes 2065/964/222/202/32. Last 30 days: 1070 rows, 629 prompts, 63 sessions, with classes 717/213/121/19/0.\n- (3) Says not dominant, at 5.8% and 11.3% raw. Split is 199/3 (DELETE 2, PUT 1). Method field is POST 184, GET 16, DELETE 2. Top-5 hosts and the 47 and 30 distinct-host counts match. It flags mozilla, $h and the 16 GET-vs-POST/PUT mismatches.\n- (4) 66 granted, 2 denied, 4-5 unknown, which is inside the tolerance. The 2 denials have the key's ts and hosts.\n- (5) The answer is cut off partway through the gap list. The visible part (06-03..06-22, 06-24..07-30, 08-01..08-06) matches the measured gaps. The sentence on what the gaps do to the 30-day window is not visible.\n- No rows-equal-prompts error, and it does not accept the premise.\n- One small slip: it puts the replay at 13:00-14:59Z. The measured span is 13:45:46-14:00:27Z (chk.py).\n\nDEFAULT: passes.\n- (1), (2), (3) raw split and method field, and (4) (66/2/4, same denials) all match the key or fall inside its tolerance.\n- The verdict covers the window: 23 days of data and 7 empty days. Measured with chk.py: first row in the window 2026-09-03T17:50:13Z and 23 distinct days with data. That agrees with the key's \"about 25 days\", which counts span rather than days with rows.\n- One deviation: the all-history top-5 hosts are given only after cleaning (data.colorado 11, arcgis 10, nanaimo 6). The key's raw list (nanaimo 18, data.colorado 17, overpass 12) is not shown. I accepted this because the cleaning removes a replay that is real.\n- Measured replay (chk.py): 442 ask rows with tool_use_id 'unknown', all on 2026-09-10 between 13:45:46Z and 14:00:27Z, 48 of them confirm-intent. That supports both answers' cleaning.\n- Small slip: default says the replay runs from 13:45 to 19:07. For ask rows it ends at 14:00:27 (measured). 19:07 may cover all decisions, but I did not check that.\n- The \"27 of 72 loopback\" figure was not checked.\n- Step 5 is also cut off in the text I was given.\n\nNeither answer equates rows with prompts. Both correctly say confirm-intent is a minor class: historically most asks were GET-to-unknown-host, and in the last 30 days most are No URL parsed."
+ },
+ {
+  "decision": "a4c54d1744d1",
+  "result": "On 2.1.293, lean passes the turn gate with room to spare, and it cost about a quarter of the default. Both arms passed all 3 graded briefs (B1, B2, B3). Lean used 64 requests against the default's 81 (0.79x pooled). Per brief that is 0.73x, 0.67x and 1.05x, so even the worst brief is under the 1.3x bar. Lean's cost was 0.0626 pp against 0.2740 (0.23x). The 0.23x is flattered by one outlier, default B2, explained below; without it the ratio is 0.43x. All figures come from `python3 -I /tmp/conv-tests/a4c54d1744d1/cost.py <wf dir>`, output in cost.out, except the 0.43x (adjust.py).\n\n**Per agent** (workflow wf_7582690a-1e6; all on 2.1.293; all cache writes were 5-minute, none 1-hour):\n\n| Agent | Requests | First request input-side | cache_read | cache_creation | output | pp |\n|---|---|---|---|---|---|---|\n| lean B1 (a9849634) | 19 | 7,454 | 650,133 | 68,343 | 4,704 | 0.0230 |\n| lean B2 (acbf3008) | 22 | 7,657 | 714,900 | 47,161 | 4,200 | 0.0181 |\n| lean B3 (a1b3f56d) | 23 | 7,413 | 804,908 | 59,674 | 3,579 | 0.0215 |\n| default B1 (af8ffc64) | 26 | 61,112 | 2,509,576 | 141,452 | 3,867 | 0.0530 |\n| default B2 (a84e22c3) | 33 | 61,315 | 2,462,577 | 649,353 | 3,828 | 0.1772 |\n| default B3 (a5976235) | 22 | 61,071 | 1,978,318 | 115,488 | 5,637 | 0.0438 |\n\nPer-brief cost ratios are 0.43x (B1), 0.10x (B2) and 0.49x (B3). The default's first request is about 53.6k tokens bigger than lean's. That is above the 39-43k that prefix.py found earlier.\n\n**The default B2 outlier.** It ran 55 minutes, against 7 for lean B2. It waited on a full-tree grep using foreground Bash polls with a 600-second timeout, and it did that 5 times (gaps.py). Each gap was 557-622 seconds, long enough for the cache to expire, so each poll forced a full cache rebuild costing 0.1287 pp in total (adjust.py). Removed, default B2 costs 0.0485 pp and the pooled ratio is 0.43x. The lean prompt has a rule against exactly this: no foreground call longer than about 4.5 minutes. One case is not enough to credit the saving to lean, so I report both ratios.\n\n**How sure the turn ratio is.** This is a t-interval on the 3 per-brief log ratios, so an estimate. The geometric mean is 0.80x. The one-sided 95% upper bound is 1.19x, under 1.3x. The two-sided 95% range is 0.44x to 1.44x. Each arm ran each brief once. The default's run-to-run spread looks like \u00b13 requests: the original runs took 29, 32 and 19 against 26, 33 and 22 now.\n\n**Correctness really is equal.** The grader said lean B1's answer was \"cut off mid-sentence\", but that cut was in the grader's copy, not the answer. Lean B1's full answer is 7,135 characters, ended normally, and the sentence finishes (\"about 3 a day\u2026\"). All six answers ended normally. Lean's one real slip is in B1: it says \"over 4 days\" where it should say about 46 hours.\n\n**Savings repriced at these ratios.** These are estimates from split3.py, a copy of the reviewer's split2 model at a read weight of 0.0067 (the model's 0.0057 and 0.0076 runs are in split3.out). At 1.195x it reproduces the reviewer's figures. Non-b13 means the would-deny slots outside the b13 loop.\n\n| Turn ratio | non-b13 gross (pp/week) | b13 gross (pp/week) |\n|---|---|---|\n| 0.79x (pooled) | 11.3-12.9 | 21.6-24.4 |\n| 1.045x (worst brief) | 6.6-7.2 | 14.9-15.6 |\n| 1.195x (old assumption) | 3.1-4.7 | 9.4-12.1 |\n\nThe hook's net is non-b13 gross minus 1.45 pp/week (0.25 for denies, 1.2 for slots wrongly switched). That gives about +5.2 to +11.5, up from +1 to +3.5.\n\n**The b13 loop has not stopped.** The report said no b13 run had started on 10-24; that is now out of date. Rounds 25, 26, 27 and 27-rerun ran on quaternary on 10-23 and 10-24. Their scripts contain 0 mentions of agentType, so the template fix has not landed.\n\nThe round scripts are written fresh each round under ~/.claude-quaternary/projects/-Users-chrisren-Development-agent-context-sync/666022fd-ed3e-4e72-b293-7caae899d585/workflows/scripts/ (round24 to round27). I found no template in the agent-context-sync repo (git grep and grep -r both came back empty). The report treats the b13 edit as sign-off only if the template lives under ~/.claude, and these scripts live under ~/.claude-quaternary, so the edit is probably sign-off class. In practice the fix is a change to how the b13 driving session writes each round's script.\n\n**New conviction.**\n- **Block once: 65%** (was 25% from the numbers reviewer, 55% from the mechanism reviewer). The turn condition that decision a4c54d1744d1 set has now passed. Three other conditions have not:\n  - resumes always pass;\n  - a needs-default marker is honoured;\n  - the hook keeps deny-once state.\n  Today's hook has none of the three. A one-day deny-once trial with at least 80% edited resubmits is also untested, and 3 runs leave the two-sided upper bound at 1.44x.\n- **b13 template fix: 85%** that it nets more than +9 pp/week while the loop runs. The worst measured ratio, 1.045x, is far below b13's break-even of 1.45-1.68x. The b13 slots are mostly read-only review work, like these briefs. They are shorter, though: a median of 11 requests against the briefs' 22-33. What holds it below 90%: b13 slots may lose agentsync repo context under lean, the review slots that commit must stay on the default, and the edit may need sign-off.\n\n**On your question.** More log research would not move either number much. More re-gate briefs would only narrow the two-sided interval; the bound the decision uses is already under 1.3x. What would move block-once is building the resume exemption, the needs-default marker and deny-once state, then a one-day trial counting edited resubmits. The b13 fix needs no more research. It needs the edit, and a sign-off check because the scripts live under ~/.claude-quaternary.\n\n**Deviation from the brief.** savings.py writes into /tmp/lean-idle/, which is outside my allowed directory. I ran a copy, savings_copy.py, whose only change is to write savings.json into my folder. Nothing outside /tmp/conv-tests/a4c54d1744d1/ was written.\n\nFiles are in /tmp/conv-tests/a4c54d1744d1/:\n- cost.py, cost.out\n- gaps.py\n- adjust.py, adjust.out\n- split3.py, split3.out\n- savings_copy.py, savings.json",
+  "moves_decision": "Yes for the turn condition. Decision a4c54d1744d1's rule was to block only if lean needs at most 1.3x the turns at equal correctness, and that now holds: 0.79x pooled, 1.045x on the worst brief, and the one-sided 95% upper bound is about 1.19x (estimate). Block-once is still not ready to switch on. Three things must be built first: resumes always pass, a needs-default marker is honoured, and the hook keeps deny-once state. A one-day trial must then show at least 80% edited resubmits. Order of work: the b13 template fix first, since the loop is still running with no agentType in today's round 27. Then build those three into the shadow hook and run the trial.",
+  "new_conviction_pct": 65,
+  "evidence": [
+   {
+    "claim": "Lean/default request (turn) ratio, pooled over 3 briefs on 2.1.293",
+    "value": "64/81 = 0.790x; per brief B1 19/26 = 0.731x, B2 22/33 = 0.667x, B3 23/22 = 1.045x",
+    "source": "measured: python3 -I /tmp/conv-tests/a4c54d1744d1/cost.py <wf_7582690a-1e6 dir> (cost.out), counting distinct requestId per agent"
+   },
+   {
+    "claim": "Lean/default cost ratio at the given weights",
+    "value": "0.0626/0.2740 pp = 0.228x pooled; 0.431x with default B2's 5 cache rebuilds removed (0.1287 pp)",
+    "source": "measured: cost.py; the rebuild removal is an estimate from adjust.py (adjust.out)"
+   },
+   {
+    "claim": "First request input-side tokens",
+    "value": "lean 7,413-7,657 vs default 61,071-61,315, a gap of about 53.6k (above prefix.py's 39-43k)",
+    "source": "measured: cost.py"
+   },
+   {
+    "claim": "The default B2 outlier is 5 cold-cache rebuilds from 600 s foreground waits on a full-tree grep",
+    "value": "rebuilds at requests 16, 26, 28, 30, 31 after 557-622 s gaps; 540,016 tokens rewritten; run lasted 55 min against 7 min for lean B2",
+    "source": "measured: python3 -I /tmp/conv-tests/a4c54d1744d1/gaps.py agent-a84e22c362fa90b01.jsonl; adjust.py"
+   },
+   {
+    "claim": "Uncertainty on the turn ratio",
+    "value": "geometric mean 0.799x; one-sided 95% upper bound 1.192x; two-sided 95% range 0.442-1.442x",
+    "source": "estimated: t-interval on n=3 log ratios, adjust.py"
+   },
+   {
+    "claim": "Correctness equal in all 3 pairs; the grader's 'cut off' defect for lean B1 was in the grader's copy",
+    "value": "all 6 runs ended normally (end_turn); lean B1's answer is 7,135 chars and finishes the sentence at char 5981",
+    "source": "measured: inline python over journal.jsonl results and the last assistant record of each agent"
+   },
+   {
+    "claim": "Hook savings repriced at the measured turn ratios (reviewer's split2 model, read weight 0.0067)",
+    "value": "non-b13 gross 11.3-12.9 pp/week at 0.79x, 6.6-7.2 at 1.045x, 3.1-4.7 at 1.195x (matches the reviewer); b13 gross 21.6-24.4, 14.9-15.6 and 9.4-12.1",
+    "source": "estimated: python3 -I /tmp/conv-tests/a4c54d1744d1/split3.py (split3.out), which uses savings_copy.py"
+   },
+   {
+    "claim": "The b13 loop is still running with default agents",
+    "value": "b13-round25, round26 (10-23), round27 and round27-rerun (10-24) on quaternary; 0 agentType mentions in round26, round27 and round27-rerun",
+    "source": "measured: ls -t ~/.claude-*/projects/*/*/workflows/wf_*.json plus inline python json/regex over the scripts"
+   },
+   {
+    "claim": "Where the b13 round scripts live",
+    "value": "~/.claude-quaternary/projects/-Users-chrisren-Development-agent-context-sync/666022fd-.../workflows/scripts/round24-27*.js; no template in the agent-context-sync repo",
+    "source": "measured: the scriptPath field of wf_db01d499-e70.json; git grep and grep -r in ~/Development/agent-context-sync gave 0 hits"
+   },
+   {
+    "claim": "How the re-gate brief lengths compare with the slots the hook would hit",
+    "value": "default re-gate runs took 22-33 requests; non-b13 default slots on 2.1.293 have median 25 (mean 34.1, n=1031); b13 slots median 11 (mean 23.5, n=2679)",
+    "source": "measured: inline python over /tmp/lean-idle/workflow-lean/review-numbers/slots.jsonl and runs.jsonl"
+   }
+  ]
+ }
+]
