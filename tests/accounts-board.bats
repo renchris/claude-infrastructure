@@ -719,8 +719,9 @@ PLIST_KW="launchd/staged/com.claude.accounts-keepwarm.plist"
 # snapshot of `<board>.ladder.json` and leaves the grid out. Every other case must be byte-identical
 # to the hook with the band block cut out at source (the control below), which is the hook as it was.
 BSID="0c1d2e3f-band-sid"
-band_setup() {  # a fresh board, its ladder in the same producer pass, and the mod's stamp
+band_setup() {  # a fresh board, its ladder in the same producer pass, the mod's stamp, the band opted in
   export CC_PANE_DIR="$D/pane"; mkdir -p "$CC_PANE_DIR"
+  export CC_BOARD_BAND=on
   mk_board
   printf '{"v":1,"written_ms":1,"gutter":5,"budget":{"from":20,"cells":[44]},"variants":[{"cells":35,"width":35,"lines":["LADDERTOK"]}]}\n' \
     > "$CC_ACCOUNTS_BOARD.ladder.json"
@@ -858,6 +859,12 @@ same_as_control() {  # [source] → the subject's bytes equal the control's, and
   [ ! -s "$D/out.json" ]
 }
 
+@test "29g band: by default the mod's stamp changes nothing — the grid stays in the header (ruling 2026-10-23)" {
+  band_setup; unset CC_BOARD_BAND
+  same_as_control
+  [[ "$(jqv '.systemMessage')" == *"$BOARDTOK"* ]] || { echo "the grid left the header by default"; false; }
+}
+
 @test "19d --keepwarm writes the band's ladder beside the board, in the board's own pass" {
   export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg
   export CC_ACCOUNTS_BOARD="$D/produced.txt"; rm -f "$CC_ACCOUNTS_BOARD"*
@@ -872,7 +879,7 @@ same_as_control() {  # [source] → the subject's bytes equal the control's, and
         "$L")" = true ] \
     || { echo "not a ladder the mod accepts: $(head -c 300 "$L")"; false; }
   # the end-to-end handshake over a REAL producer pass: the hook hands this ladder to the mod
-  export CC_PANE_DIR="$D/pane"; mkdir -p "$CC_PANE_DIR"
+  export CC_PANE_DIR="$D/pane" CC_BOARD_BAND=on; mkdir -p "$CC_PANE_DIR"
   printf '%s' "$BSID" > "$CC_PANE_DIR/$BSID.board-band.req"
   band_emit "$HOOK"
   [ ! -s "$D/out.json" ] && cmp -s "$L" "$CC_PANE_DIR/$BSID.board-band.json" \

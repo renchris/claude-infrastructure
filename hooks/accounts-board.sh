@@ -369,9 +369,17 @@ fi
 # band labels it itself: the mod reads the age from the snapshot's mtime (`cp -p` keeps the board's)
 # and draws its `⚠ STALE` head, re-evaluated while it waits. What the band cannot know is WHY the
 # producer is behind, so that diagnosis stays here as static prose, wrapped at words.
+#
+# THE BAND IS OPT-IN; THE GRID IS BACK IN THE HEADER (operator ruling 2026-10-23, decision
+# 9ee7197568c1). The operator wants the board ALWAYS visible, after every prompt, under the Clawd
+# header in the `SessionStart:startup says:` block. The band could not give that: the mod cleared
+# it at the first prompt, and its `[-]` collapse is Claude Code's (docs/research/startup-readout-
+# visibility-2026-10-23.md). A hook row is never removed by the TUI. Accepted cost: the static grid
+# keeps its startup numbers and startup width, so a pane narrowed later re-wraps it, and only
+# `claude-accounts --readout` redraws it live. CC_BOARD_BAND=on restores the band.
 band_handoff() {
   local sid stem dir req lad snap now qm lm
-  [ "${CC_BOARD_BAND:-on}" = off ] && return 1
+  [ "${CC_BOARD_BAND:-off}" = on ] || return 1
   sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
   stem="$(printf '%s' "$sid" | tr -cd 'A-Za-z0-9_-')"
   [ -n "$stem" ] || return 1

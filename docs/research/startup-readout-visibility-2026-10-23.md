@@ -254,3 +254,18 @@ and 6 were not attempted.
   - `sh_delivered` now collapses whitespace on both sides of the match.
   - The backlog was drained oldest-first, so the latch now reads today's value
     (`2026-10-23 cc70579ca7b42ef2`, written 17:47).
+
+## Operator ruling (2026-10-23): the board goes back in the header
+
+The operator chose neither filed option. The board must ALWAYS show, after every prompt, as part of
+the `SessionStart:startup says:` block under the Clawd header, as it did before 2026-10-21.
+
+- `hooks/accounts-board.sh` `band_handoff` now defaults to off (`CC_BOARD_BAND=on` restores the
+  band). The mod still stamps its request, but the hook keeps the grid in its `systemMessage`, so
+  the mod gets no snapshot and draws no band.
+- Why this meets the ask: a hook row is never removed by the TUI (Symptom 3 above). In fullscreen it
+  can scroll above the viewport after a long reply; the mouse wheel brings it back.
+- Accepted cost: the grid keeps its startup numbers and the pane width it had at startup. A pane
+  narrowed later re-wraps it (the 2026-10-22 narrow-pane defect returns for that case), and only
+  `claude-accounts --readout` redraws it live and re-laid out.
+- Test: `tests/accounts-board.bats` 29g pins the default; the band cases opt in explicitly.
