@@ -187,7 +187,12 @@ pin_kitty()  { pin_daemon; export KITTY_WINDOW_ID=28; }
   # The pad is COMPUTED off the live prefix rather than fixed at some depth, so this stays a genuine
   # >104-byte path on any box and a LONGER $BATS_TEST_TMPDIR strengthens it instead of voiding it —
   # a control pinned to today's path lengths would decay into a vacuous pass the moment they moved.
-  local deep="$SOCKDIR"
+  #
+  # The pad starts ONE LEVEL DOWN, never at $SOCKDIR itself (postland RED 2026-10-24, item
+  # 855f6e9386f1). Under postland's corpus TMPDIR plus a 5-digit test index, $SOCKDIR alone is
+  # already >= 100 bytes, so a loop seeded at $SOCKDIR padded zero times and `s` became setup()'s
+  # own bound socket: bind() raised EADDRINUSE, red ONLY in the gate whose prefix is longest.
+  local deep="$SOCKDIR/pad"
   while [ "${#deep}" -lt 100 ]; do deep="$deep/pad"; done
   mkdir -p "$deep"
   local s="$deep/kitty-4242"
