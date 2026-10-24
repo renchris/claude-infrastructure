@@ -1,0 +1,342 @@
+#!/usr/bin/env python3
+"""cc-idle-cache-readout — summarize the two idle-cache shadow logs (docs/plans/USAGE_LEVERS.md § W3).
+
+  main sessions  ~/.claude/logs/idle-keepalive.jsonl     kind=gap rows (hooks/lib/idle_gap.py via
+                                                          hooks/cache-expiry-tracker.sh) and kind=wake
+                                                          rows (the log-only timer hooks/idle-keepalive.sh)
+  subagents      ~/.claude/logs/subagent-long-bash.jsonl  count-only rule (hooks/subagent-long-bash-shadow.sh)
+
+For each account and day: how often the keepalive would have woken a session, and what that would
+have saved or lost in weekly-meter pp; and for the subagent rule, how many calls it would have
+denied, how many of those finished in 270 s or less anyway (wrongly denied), and what both cost.
+Weekly pp = percent of one account's weekly cap. Weights are round 3's (hooks/lib/idle_gap.py).
+
+The subagent rows are joined to each call's real runtime and the next request's cache write by
+reading the subagent's own transcript (<project>/<session>/subagents/**/agent-<id>.jsonl).
+
+Usage: cc-idle-cache-readout [--days N] [--json] [--no-resolve]
+Exit: 0 printed · 2 usage. Read-only: writes nothing.
+"""
+import argparse
+import glob
+import gzip
+import importlib.util
+import json
+import os
+import sys
+from collections import defaultdict
+from datetime import datetime, timezone
+
+HOME = os.path.expanduser("~")
+LOGS = os.path.join(HOME, ".claude/logs")
+SHORT_S = 270     # a subagent call that finished within this did not need to be denied
+REBUILD_FRAC = 0.5  # a next-request cache write of at least half the context is a rebuild
+
+
+def load_model():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for p in (os.path.join(here, "../hooks/lib/idle_gap.py"),
+              os.path.join(HOME, ".claude/hooks/lib/idle_gap.py")):
+        if os.path.isfile(p):
+            spec = importlib.util.spec_from_file_location("idle_gap", p)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    sys.exit("cc-idle-cache-readout: hooks/lib/idle_gap.py not found")
+
+
+M = load_model()
+
+
+def ts(s):
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def rows(path, since):
+    """Every JSON row of `path` and its rotated .gz siblings with ts >= since."""
+    out = []
+    for p in sorted(glob.glob(path + ".*.gz")) + [path]:
+        try:
+            fh = gzip.open(p, "rt") if p.endswith(".gz") else open(p)
+        except OSError:
+            continue
+        with fh:
+            for ln in fh:
+                try:
+                    r = json.loads(ln)
+                except ValueError:
+                    continue
+                t = ts(r.get("ts")) if isinstance(r, dict) else None
+                if t is not None and t >= since:
+                    r["_t"] = t
+                    out.append(r)
+    return out
+
+
+def acct_names():
+    try:
+        with open(os.path.join(HOME, ".claude/accounts.json")) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    names = {}
+
+    def walk(o):
+        if isinstance(o, dict):
+            if "config_dir" in o and isinstance(o.get("name"), str):
+                names[os.path.basename(str(o["config_dir"]).rstrip("/"))] = o["name"]
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(doc)
+    return names
+
+
+def day(t):
+    return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d")
+
+
+def rng(a, b):
+    return [round(a[0] + b[0], 6), round(a[1] + b[1], 6)]
+
+
+# ── main sessions ────────────────────────────────────────────────────────────────────────────────
+def main_summary(rs, state_dir, now_t, name):
+    gaps = [r for r in rs if r.get("kind") == "gap"]
+    wakes = [r for r in rs if r.get("kind") == "wake"]
+    per = defaultdict(lambda: dict(gaps=0, would_wake=0, wake_saves=0, wake_unneeded=0,
+                                   wake_insufficient=0, net_pp=[0.0, 0.0], wake_rows=0, watcher_armed=0))
+    for g in gaps:
+        c = per[(name(g.get("acct")), day(g["_t"]))]
+        c["gaps"] += 1
+        if g.get("wakes"):
+            c["would_wake"] += 1
+        if g.get("outcome") in c:
+            c[g["outcome"]] += 1
+        c["net_pp"] = rng(c["net_pp"], g.get("net_pp") or [0, 0])
+    for w in wakes:
+        c = per[(name(w.get("acct")), day(w["_t"]))]
+        c["wake_rows"] += 1
+        c["watcher_armed"] += 1 if w.get("watcher_armed") is True else 0
+    # Does the 1 h TTL hold? Share of gaps whose first request after the gap re-wrote the context.
+    obs = [g for g in gaps if g.get("obs_cw") is not None and g.get("ctx")]
+    def reb(gs):
+        return sum(1 for g in gs if g["obs_cw"] >= REBUILD_FRAC * g["ctx"])
+    over = [g for g in obs if g["dur"] >= g.get("ttl_s", 3600)]
+    under = [g for g in obs if g["dur"] < g.get("ttl_s", 3600)]
+    past_due = [g for g in gaps if g.get("dur", 0) >= g.get("wake_s", 3300) + 60]
+    opened = []
+    for p in glob.glob(os.path.join(state_dir, "*.json")):
+        try:
+            with open(p) as fh:
+                st = json.load(fh)
+            if isinstance(st.get("start"), (int, float)):
+                opened.append(st)
+        except (OSError, ValueError):
+            continue
+    return dict(
+        per_day={"%s %s" % k: v for k, v in sorted(per.items())},
+        ttl_check=dict(gaps_over_ttl=len(over), rebuilt_over_ttl=reb(over),
+                       gaps_under_ttl=len(under), rebuilt_under_ttl=reb(under)),
+        timer=dict(wake_rows=len(wakes), gaps_lasting_past_due=len(past_due)),
+        open_gaps=dict(total=len(opened),
+                       past_would_wake=sum(1 for s in opened if now_t - s["start"] >= M.WAKE_S)))
+
+
+# ── subagents ────────────────────────────────────────────────────────────────────────────────────
+_tx_cache = {}
+
+
+def agent_transcript(r):
+    tp, sid, aid = r.get("transcript_path") or "", r.get("sid") or "", r.get("agent_id") or ""
+    if not tp or tp == "-" or not aid or aid == "-":
+        return None
+    base = os.path.join(os.path.dirname(tp), sid, "subagents")
+    hits = glob.glob(os.path.join(base, "**", "agent-%s.jsonl" % aid), recursive=True)
+    return hits[0] if hits else None
+
+
+def index_transcript(path):
+    """→ {tool_use_id: dict(use_t, ctx, res_t, next_cw)} for one subagent transcript."""
+    if path in _tx_cache:
+        return _tx_cache[path]
+    idx, recs = {}, []
+    try:
+        with open(path) as fh:
+            for ln in fh:
+                try:
+                    recs.append(json.loads(ln))
+                except ValueError:
+                    continue
+    except OSError:
+        recs = []
+    pending = []   # tool_use_ids whose result arrived and await the next request's usage
+    for rec in recs:
+        if not isinstance(rec, dict):
+            continue
+        t = ts(rec.get("timestamp"))
+        msg = rec.get("message") if isinstance(rec.get("message"), dict) else {}
+        content = msg.get("content") if isinstance(msg.get("content"), list) else []
+        if rec.get("type") == "assistant":
+            u = msg.get("usage") if isinstance(msg.get("usage"), dict) else None
+            if u and pending:
+                for tid in pending:
+                    idx[tid]["next_cw"] = int(u.get("cache_creation_input_tokens") or 0)
+                pending = []
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id"):
+                    ctx = sum(int((u or {}).get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens",
+                                                                    "cache_read_input_tokens", "output_tokens"))
+                    idx.setdefault(b["id"], {}).update(use_t=t, ctx=ctx)
+        elif rec.get("type") == "user":
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in idx:
+                    idx[b["tool_use_id"]]["res_t"] = t
+                    pending.append(b["tool_use_id"])
+    _tx_cache[path] = idx
+    return idx
+
+
+def resolve(r):
+    p = agent_transcript(r)
+    if not p:
+        return None
+    e = index_transcript(p).get(r.get("tool_use_id"))
+    if not e or e.get("use_t") is None or e.get("res_t") is None:
+        return None
+    return dict(runtime=e["res_t"] - e["use_t"], ctx=e.get("ctx") or 0, next_cw=e.get("next_cw"))
+
+
+def price(r, res):
+    """→ (verdict, pp [lo, hi]) of having denied this call: wrong | rescued | long_no_rebuild."""
+    deny = sorted(M.wake_cost(res["ctx"], rr) for rr in M.READ_PP)   # one extra round trip
+    if res["runtime"] <= SHORT_S:
+        return "wrong", [-deny[1], -deny[0]]
+    cw = res.get("next_cw")
+    if cw is not None and res["ctx"] and cw >= REBUILD_FRAC * res["ctx"]:
+        val = sorted(cw * (M.WRITE_PP - rr) / 1e6 - M.wake_cost(res["ctx"], rr) for rr in M.READ_PP)
+        return "rescued", val
+    return "long_no_rebuild", [-deny[1], -deny[0]]
+
+
+def sub_summary(rs, name, do_resolve, ndays):
+    rs = [r for r in rs if r.get("kind") == "subagent_bash"]
+    first_seen = set()
+    per = defaultdict(lambda: defaultdict(lambda: dict(n=0, resolved=0, wrong=0, rescued=0, long_no_rebuild=0,
+                                                       wrong_pp=[0.0, 0.0], net_pp=[0.0, 0.0])))
+    by_why = defaultdict(lambda: dict(n=0, resolved=0, wrong=0, rescued=0, net_pp=[0.0, 0.0]))
+    for r in sorted(rs, key=lambda r: r["_t"]):
+        key = "%s %s" % (name(r.get("acct")), day(r["_t"]))
+        first = r.get("agent_id") not in first_seen
+        first_seen.add(r.get("agent_id"))
+        res = resolve(r) if do_resolve else None
+        verdict, pp = price(r, res) if res else (None, None)
+        variants = ["broad"] + (["narrow"] if r.get("narrow") else []) + (["narrow_first"] if r.get("narrow") and first else [])
+        for v in variants:
+            c = per[v][key]
+            c["n"] += 1
+            if verdict:
+                c["resolved"] += 1
+                c[verdict] += 1
+                c["net_pp"] = rng(c["net_pp"], pp)
+                if verdict == "wrong":
+                    c["wrong_pp"] = rng(c["wrong_pp"], pp)
+        w = by_why[r.get("why") or "(not narrow)"]
+        w["n"] += 1
+        if verdict:
+            w["resolved"] += 1
+            w["wrong"] += verdict == "wrong"
+            w["rescued"] += verdict == "rescued"
+            w["net_pp"] = rng(w["net_pp"], pp)
+    # acceptance: the narrow rule's wrong-deny cost per account-week, scaled from the window
+    wk = defaultdict(lambda: [0.0, 0.0])
+    for key, c in per["narrow"].items():
+        a = key.split(" ")[0]
+        wk[a] = rng(wk[a], c["wrong_pp"])
+    accept = {a: dict(wrong_pp_per_week=[round(-v[1] * 7 / ndays, 4), round(-v[0] * 7 / ndays, 4)],
+                      under_0_2pct=(-v[0] * 7 / ndays) < 0.2) for a, v in wk.items()}
+    return dict(variants={k: dict(sorted(v.items())) for k, v in per.items()}, by_why=dict(by_why), accept=accept)
+
+
+# ── render ───────────────────────────────────────────────────────────────────────────────────────
+def fmt(r):
+    return "%+.4f..%+.4f" % (r[0], r[1])
+
+
+def render(out):
+    L = []
+    L.append("Idle-cache shadow read-out — %s .. %s (%d d). Weekly-meter pp (1pp = 1%% of one account's week)."
+             % (out["since"], out["until"], out["days"]))
+    L.append("Weights: reads %.4f-%.4f, writes %.3f, output %.3f pp/Mtok (round 3 + round 2 fit4)."
+             % (M.READ_PP[0], M.READ_PP[1], M.WRITE_PP, M.OUT_PP))
+    m = out["main"]
+    L.append("")
+    L.append("MAIN SESSIONS — keepalive would wake once, %d s after the gap starts (cache TTL %d s)"
+             % (M.WAKE_S, M.TTL_S))
+    L.append("%-18s %5s %6s %6s %8s %6s %18s %6s" % ("account day", "gaps", "wakes", "saves", "unneeded",
+                                                   "insuff", "net pp (lo..hi)", "timer"))
+    for k, c in m["per_day"].items():
+        L.append("%-18s %5d %6d %6d %8d %6d %18s %6d" % (k, c["gaps"], c["would_wake"], c["wake_saves"],
+                 c["wake_unneeded"], c["wake_insufficient"], fmt(c["net_pp"]), c["wake_rows"]))
+    if not m["per_day"]:
+        L.append("  (no gap rows yet)")
+    t = m["ttl_check"]
+    L.append("TTL check: %d/%d gaps over the TTL re-wrote the context; %d/%d under it did."
+             % (t["rebuilt_over_ttl"], t["gaps_over_ttl"], t["rebuilt_under_ttl"], t["gaps_under_ttl"]))
+    tm = m["timer"]
+    if tm["wake_rows"]:
+        L.append("Timer: %d would-wake rows against %d gaps that lasted past the wake time."
+                 % (tm["wake_rows"], tm["gaps_lasting_past_due"]))
+    else:
+        L.append("Timer: 0 would-wake rows (hooks/idle-keepalive.sh is not registered until migration 0077 runs).")
+    L.append("Open gaps now: %d (%d already past the wake time)." % (m["open_gaps"]["total"], m["open_gaps"]["past_would_wake"]))
+    s = out["subagents"]
+    L.append("")
+    L.append("SUBAGENTS — count-only rule: foreground Bash with timeout > 270 s (5-minute cache)")
+    for v, label in (("broad", "every such call"), ("narrow", "narrowed rule"), ("narrow_first", "narrowed, first per agent")):
+        L.append("  %s:" % label)
+        rowsv = s["variants"].get(v, {})
+        if not rowsv:
+            L.append("    (none)")
+        for k, c in rowsv.items():
+            L.append("    %-18s calls %4d  resolved %4d  wrongly denied %4d (%s pp)  rebuilds avoided %3d  net %s pp"
+                     % (k, c["n"], c["resolved"], c["wrong"], fmt(c["wrong_pp"]), c["rescued"], fmt(c["net_pp"])))
+    if s["by_why"]:
+        L.append("  by class: " + "; ".join("%s %d (wrong %d, avoided %d, net %s)" % (k, w["n"], w["wrong"], w["rescued"], fmt(w["net_pp"]))
+                                            for k, w in sorted(s["by_why"].items())))
+    for a, v in sorted(s["accept"].items()):
+        L.append("  ACCEPT %s: narrowed rule's wrong denies cost %.4f..%.4f pp/week — %s the 0.2%% bar."
+                 % (a, v["wrong_pp_per_week"][0], v["wrong_pp_per_week"][1], "under" if v["under_0_2pct"] else "OVER"))
+    return "\n".join(L)
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="cc-idle-cache-readout", description=__doc__.split("\n")[0])
+    ap.add_argument("--days", type=float, default=7.0)
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--no-resolve", action="store_true", help="skip the subagent transcript join")
+    a = ap.parse_args(argv)
+    if a.days <= 0:
+        ap.error("--days must be positive")
+    now_t = float(os.environ.get("CC_IDLE_KEEPALIVE_NOW") or datetime.now(timezone.utc).timestamp())
+    since = now_t - a.days * 86400
+    names = acct_names()
+
+    def name(d):
+        return names.get(d or "", d or "?")
+    out = dict(since=day(since), until=day(now_t), days=a.days,
+               main=main_summary(rows(M.LOG, since), M.STATE_DIR, now_t, name),
+               subagents=sub_summary(rows(os.environ.get("CC_SUBAGENT_LONG_BASH_LOG")
+                                          or os.path.join(LOGS, "subagent-long-bash.jsonl"), since),
+                                     name, not a.no_resolve, a.days))
+    print(json.dumps(out, indent=1) if a.json else render(out))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
