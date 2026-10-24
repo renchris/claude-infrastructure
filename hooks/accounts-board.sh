@@ -213,7 +213,7 @@ EOF
 
 emit() {  # <message> → the ONE sanctioned channel, top-level, never nested, never additionalContext
   local m
-  m="$(fit "${DL_BANNER:-}${SH_FLEET:-}$1")"
+  m="$(fit "${STAMP:-}${DL_BANNER:-}${SH_FLEET:-}$1")"
   jq -nc --arg m "${m//"$FIT_RAW"/}" '{systemMessage:$m}' 2>/dev/null || true
   exit 0
 }
@@ -312,23 +312,33 @@ now="$(date +%s)"
 # seconds ago", "STALE by 10m") is relative to a moment the reader can no longer see. So the
 # first line names that moment as wall-clock time with the day: when the quota was read and, when
 # that differs, when the session opened. Read back hours later, the board's age is one subtraction.
-when() {  # <epoch> [<epoch it shares a day with>] → "Sat Oct 24 11:55", or "11:55" on the same day
-  local d
-  [ -n "${2:-}" ] && [ "$(date -r "$1" +%F 2>/dev/null)" = "$(date -r "$2" +%F 2>/dev/null)" ] \
-    && { date -r "$1" '+%H:%M' 2>/dev/null; return; }
-  d="$(date -r "$1" +%d 2>/dev/null)"
-  date -r "$1" "+%a %b ${d#0} %H:%M" 2>/dev/null
-}
-stamp() {  # [<board epoch>] → the dated first line
-  local o
-  o="$(when "$now")"
-  [ -n "${1:-}" ] || { printf 'Session opened %s\n' "$o"; return; }
-  [ "$(when "$1" "$now")" = "$(when "$now" "$now")" ] && { printf 'As of %s\n' "$o"; return; }
-  printf 'As of %s · session opened %s\n' "$(when "$1")" "$(when "$now" "$1")"
+# emit() puts it above everything, the deadline banner and the fleet line included; the band path
+# drops it, since the band labels its own age and leaves the header.
+# Two `date` forks in all (now, then the board's mtime), no function substitutions: test 14 holds
+# this hook to 1 s under load, and the first draft's ~10 forks measured 1.03 s.
+read -r N_F N_A N_B N_D N_T <<EOF
+$(date -r "$now" '+%F %a %b %d %H:%M' 2>/dev/null)
+EOF
+N_D="${N_D#0}"
+stamp() {  # [<board epoch>] → sets STAMP to the dated first line
+  local f a b d t
+  STAMP="Session opened $N_A $N_B $N_D $N_T
+"
+  [ -n "${1:-}" ] || return 0
+  read -r f a b d t <<EOF
+$(date -r "$1" '+%F %a %b %d %H:%M' 2>/dev/null)
+EOF
+  if [ "$f $t" = "$N_F $N_T" ]; then STAMP="As of $N_A $N_B $N_D $N_T
+"
+  elif [ "$f" = "$N_F" ]; then STAMP="As of $a $b ${d#0} $t · session opened $N_T
+"
+  else STAMP="As of $a $b ${d#0} $t · session opened $N_A $N_B $N_D $N_T
+"
+  fi
 }
 
-[ -f "$BOARD" ] || emit "$(stamp)
-accounts board unavailable — nothing pre-rendered at $BOARD.
+stamp
+[ -f "$BOARD" ] || emit "accounts board unavailable — nothing pre-rendered at $BOARD.
   Producer $PRODUCER $(producer_state)
   For the live table right now, run: claude-accounts"
 
@@ -337,12 +347,12 @@ accounts board unavailable — nothing pre-rendered at $BOARD.
 # the single worst outcome available to this hook, reached by the most forgettable line in it.
 mtime="$(stat -f %m "$BOARD" 2>/dev/null || stat -c %Y "$BOARD" 2>/dev/null || echo "")"
 if [ -z "$mtime" ]; then
-  emit "$(stamp)
-accounts board found but its age is unreadable ($BOARD) — numbers withheld.
+  emit "accounts board found but its age is unreadable ($BOARD) — numbers withheld.
   An unknown-age board cannot be labelled honestly, and an unlabelled one gets believed.
   For the live table, run: claude-accounts"
 fi
 
+stamp "$mtime"
 age=$(( now - mtime ))
 [ "$age" -lt 0 ] && age=0          # clock skew / a file stamped in the future is not 'fresh in the past'
 
@@ -358,8 +368,7 @@ body="$(cat "$(pick_board)" 2>/dev/null || true)"
 # (0.9 s on a 2 KB board, 6.5 s at 4 KB; docs/research/sessionstart-readout-2026-10-06, R1), so
 # every byte added to the board would have cost startup time wherever this runs under 3.2.
 if case "$body" in *[![:space:]]*) false ;; *) true ;; esac; then
-  emit "$(stamp "$mtime")
-accounts board at $BOARD is EMPTY — the producer wrote nothing.
+  emit "accounts board at $BOARD is EMPTY — the producer wrote nothing.
   Producer: $PRODUCER. For the live table, run: claude-accounts"
 fi
 
@@ -367,8 +376,7 @@ if [ "$age" -ge "$HARD_S" ]; then
   # NUMBERS SUPPRESSED, deliberately. Everything this board reports is a percentage of a window
   # that rolls — the 5h one every five hours — so past the hard band the figures are not merely
   # old, they can be describing a window that no longer exists.
-  emit "$(stamp "$mtime")
-accounts board is $(fmt_age "$age") old — numbers withheld as unsafe to read (the 5h
+  emit "accounts board is $(fmt_age "$age") old — numbers withheld as unsafe to read (the 5h
   window it reports rolls every 5h, so a board this old can describe a window that has ended).
   Producer $PRODUCER $(producer_state)
   For the live table, run: claude-accounts"
@@ -427,18 +435,16 @@ if band_handoff; then
   [ "$age" -ge "$STALE_S" ] && band_msg="${band_msg}$(producer_note)
 "
   [ -n "$band_msg" ] || exit 0
-  DL_BANNER=""; SH_FLEET=""
+  DL_BANNER=""; SH_FLEET=""; STAMP=""       # the band carries its own age
   emit "${band_msg%$'\n'}"
 fi
 
 if [ "$age" -ge "$STALE_S" ]; then
-  emit "$(stamp "$mtime")
-⚠ STALE by $(fmt_age "$age") — the numbers below are last-known, not current.
+  emit "⚠ STALE by $(fmt_age "$age") — the numbers below are last-known, not current.
   Producer $PRODUCER $(producer_state)
   Live table: claude-accounts
 
 $body"
 fi
 
-emit "$(stamp "$mtime")
-$body"
+emit "$body"

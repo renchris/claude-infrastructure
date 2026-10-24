@@ -28,7 +28,11 @@ setup() {
 BANNER="⏰ Pay the fixture bill — tomorrow · Call the fixture clinic — 2d over"
 board() { # [cwd] [source] → the hook's systemMessage on stdout
   printf '{"source":"%s","cwd":"%s","hook_event_name":"SessionStart"}' "${2:-startup}" "${1:-$WORK}" \
-    | "$BOARD_HOOK" | jq -r '.systemMessage'
+    | "$BOARD_HOOK" | jq -r '.systemMessage' \
+    | sed -E '1{/^(As of|Session opened) /d;}'   # the dated stamp; tests/accounts-board.bats #30 owns it
+}
+unstamp() { # hook stdout → the same JSON without the dated first line, which postdates 2792a2911
+  jq -c '.systemMessage |= sub("^(As of|Session opened) [^\n]*\n"; "")'
 }
 latch() { cat "$DL_DIR/.state/banner-latch" 2>/dev/null; }
 
@@ -94,14 +98,14 @@ latch() { cat "$DL_DIR/.state/banner-latch" 2>/dev/null; }
     for state in fresh empty; do
       if [ "$state" = empty ]; then : > "$CC_ACCOUNTS_BOARD"; else printf 'board\nZZ\n' > "$CC_ACCOUNTS_BOARD"; fi
       in="$(printf '{"source":"%s","cwd":"%s"}' "$src" "$WORK")"
-      a="$(printf '%s' "$in" | "$D/before.sh" | od -c)"
-      b="$(printf '%s' "$in" | "$BOARD_HOOK" | od -c)"
+      a="$(printf '%s' "$in" | "$D/before.sh" | unstamp | od -c)"
+      b="$(printf '%s' "$in" | "$BOARD_HOOK" | unstamp | od -c)"
       [ "$a" = "$b" ] || { echo "differs: $src/$state"; false; }
     done
   done
   rm -f "$CC_ACCOUNTS_BOARD"
   in="$(printf '{"source":"startup","cwd":"%s"}' "$WORK")"
-  [ "$(printf '%s' "$in" | "$D/before.sh" | od -c)" = "$(printf '%s' "$in" | "$BOARD_HOOK" | od -c)" ]
+  [ "$(printf '%s' "$in" | "$D/before.sh" | unstamp | od -c)" = "$(printf '%s' "$in" | "$BOARD_HOOK" | unstamp | od -c)" ]
 }
 
 # ── bin/dl render feeds both surfaces ────────────────────────────────────────────────────────────

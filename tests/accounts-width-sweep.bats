@@ -167,6 +167,9 @@ board_at() {  # <pane cols> → the SessionStart systemMessage for that pane
   printf '{"source":"startup","hook_event_name":"SessionStart"}' \
     | CC_PANE_COLS="$1" "$HOOK" | jq -r '.systemMessage // empty'
 }
+# The dated stamp line (accounts-board.bats #30 owns it). Only the byte-identity check drops it: the
+# fit checks need it in place, since it is what shares line 1 with the harness prefix.
+unstamp() { sed -E '1{/^(As of|Session opened) /d;}'; }
 
 @test "4 SessionStart board: no row wraps at any pane width 40..200" {
   run ca --keepwarm
@@ -207,10 +210,10 @@ board_at() {  # <pane cols> → the SessionStart systemMessage for that pane
   local want w
   want="$(cat "$CC_ACCOUNTS_BOARD")"
   for w in 81 100 120 160 200; do
-    [ "$(board_at "$w")" = "$want" ] || { echo "pane=$w: board changed where it fit"; false; }
+    [ "$(board_at "$w" | unstamp)" = "$want" ] || { echo "pane=$w: board changed where it fit"; false; }
   done
   # and an unknown width (no tty anywhere up the tree, no override) keeps the old board too
-  [ "$(printf '{"source":"startup"}' | CC_PANE_COLS=x "$HOOK" | jq -r .systemMessage)" = "$want" ]
+  [ "$(printf '{"source":"startup"}' | CC_PANE_COLS=x "$HOOK" | jq -r .systemMessage | unstamp)" = "$want" ]
 }
 
 # Operator, 2026-10-19, with a screenshot: "The weekly reset header is not aligned with the
