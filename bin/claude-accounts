@@ -3461,12 +3461,19 @@ def effective_reset_h(r, R, field="weekly_reset_h"):
     return g["hours_left"] + BANK_TIE_H * clamp(real / WEEK_H, 0.0, 1.0)
 
 
+BANK_LOCK_WAIT_S = 10.0      # a lawful hold is one JSON read + atomic replace: milliseconds
+
+
 def _bank_write(mutate):
-    """Apply `mutate(accounts_dict)` to the store under a lock; atomic replace. -> the new dict."""
+    """Apply `mutate(accounts_dict)` to the store under a lock; atomic replace. -> the new dict.
+    The lock is BOUNDED (tests/claude-accounts-fresh-lock-bound.bats): an alive-but-wedged holder
+    raises TimeoutError instead of stalling the sweep that called the reset detector."""
     p = bank_path()
     os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
     with open(p + ".lock", "a") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+        if not _acquire_lock_until(lk, time.monotonic() + BANK_LOCK_WAIT_S):
+            raise TimeoutError(f"bank store lock {p}.lock held past {BANK_LOCK_WAIT_S:g}s "
+                               f"by a live holder — not written")
         try:
             with open(p) as f:
                 d = json.load(f)
@@ -3548,7 +3555,8 @@ def bank_readout_line(rows):
 
 
 def note_bank_main(args):
-    """`--note-bank ACCT --left N --expires ISO [--source WHO]` -> exit 0 recorded · 64 bad args.
+    """`--note-bank ACCT --left N --expires ISO [--source WHO]` -> exit 0 recorded · 64 bad args ·
+    5 store lock wedged.
     The expiry must carry a UTC offset: "Oct 22" read off a web page is a local date, and a naive
     stamp would be read as UTC — five hours late on this box, i.e. past the real deadline."""
     def val(flag):
@@ -3575,7 +3583,11 @@ def note_bank_main(args):
         print(f"claude-accounts: --expires needs an ISO-8601 time WITH an offset "
               f"(e.g. 2026-10-22T00:00-05:00); got {exp!r}", file=sys.stderr)
         return 64
-    e = bank_note(acct, n, t.isoformat(), val("--source") or "note-bank")
+    try:
+        e = bank_note(acct, n, t.isoformat(), val("--source") or "note-bank")
+    except TimeoutError as te:
+        print(f"claude-accounts: {te}", file=sys.stderr)
+        return 5
     print(f"bank {acct}: resets_left={e['resets_left']} expires_at={e['expires_at']} "
           f"source={e['source']!r} -> {bank_path()}")
     return 0
