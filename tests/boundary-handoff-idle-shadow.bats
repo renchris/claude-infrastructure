@@ -8,6 +8,8 @@
 # RED-proof: against the pre-W4 hook (git show HEAD~1:hooks/boundary-handoff.sh, before the shadow
 # block) every case that expects a line fails at its `[ -s "$CC_IRS_LOG" ]` / line-count assertion,
 # because that hook writes no such log; the parity half passes there too, which is the point of it.
+# W6 RED-proof (2026-10-24): against the base hook (git show 11f7f87fa:…) the three W6 cases fail: the
+# line has no would_advise_k2 / busy_tool / pending_question / guarded fields.
 #
 # Assertions are simple commands only (bash exempts `[[ ]]` from errexit in a bats body).
 
@@ -120,4 +122,70 @@ field() { jq -r ".$1" "$CC_IRS_LOG"; }
   stop on
   [ ! -s "$CC_IRS_LOG" ] || { cat "$CC_IRS_LOG"; false; }
   [ -s "$CC_IDL" ]   # the hook did evaluate this Stop
+}
+
+# W6 builders. say <epoch> <context> <text> — the final message; launch <epoch> <id> <name> <input json>
+say() { jq -nc --arg t "$(iso "$1")" --argjson c "$2" --arg x "$3" \
+  '{type:"assistant",timestamp:$t,message:{model:"claude-opus-5-5",content:[{type:"text",text:$x}],
+    usage:{input_tokens:2,cache_read_input_tokens:($c-1002),cache_creation_input_tokens:1000}}}'; }
+launch() { jq -nc --arg t "$(iso "$1")" --arg id "$2" --arg n "$3" --argjson i "$4" \
+  '{type:"assistant",timestamp:$t,message:{model:"claude-opus-5-5",content:[{type:"tool_use",id:$id,name:$n,input:$i}],
+    usage:{input_tokens:2,cache_read_input_tokens:200000,cache_creation_input_tokens:1000}}}'; }
+launched() { jq -nc --arg t "$(iso "$1")" --arg id "$2" \
+  '{type:"user",timestamp:$t,message:{role:"user",content:[{type:"tool_result",tool_use_id:$id,content:"Command running in background with ID: b7q2w3e4r"}]}}'; }
+# w6 <idle s> <context at idle> <final text> <job: none|bash|monitor> — the operator's prompt opens the turn
+w6() {
+  local g="$1" c="$2" t0=$(( NOW - $1 - 120 ))
+  {
+    prompt $(( t0 - 60 )) "first task"
+    case "$4" in
+      bash)    launch $(( t0 - 50 )) tuB Bash '{"command":"bats tests/x.bats","run_in_background":true}'; launched $(( t0 - 49 )) tuB ;;
+      monitor) launch $(( t0 - 50 )) tuM Monitor '{"command":"tail -f x","description":"x","timeout_ms":1800000}'; launched $(( t0 - 49 )) tuM ;;
+    esac
+    say "$t0" "$c" "$3"
+    prompt $(( t0 + g - 2 )) "next step"
+    asst   $(( t0 + g )) $(( c + 5000 ))
+  } > "$TP"
+}
+row() { jq -r "[$1] | map(tostring) | join(\" \")" "$CC_IRS_LOG"; }
+
+@test "W6: would_advise is logged at 200k as well as 150k — 180k at idle earns only the 150k verdict" {
+  w6 1200 180000 "Landed." none
+  stop off; stop on
+  parity
+  [ "$(row '.would_advise, .would_advise_k2, .k2_thousand, .guarded, .guarded_k2')" = "true false 200 true false" ]
+  rm -f "$CC_IRS_LOG"
+  w6 1200 250000 "Landed." none
+  stop on
+  [ "$(row '.would_advise, .would_advise_k2, .guarded_k2')" = "true true true" ]
+}
+
+@test "W6: busy by the launching tool — a background job still running at idle minute 15 is busy; a Monitor is not" {
+  w6 1200 300000 "Waiting on the suite." bash
+  stop off; stop on
+  parity
+  # the operator typed while the job ran, so no notice opened the turn: only busy_tool sees it
+  [ "$(row '.busy_notice, .busy_tool, (.busy_kinds | join("+")), .would_advise, .guarded')" = "false true bash true false" ]
+  rm -f "$CC_IRS_LOG"
+  w6 1200 300000 "Watching the log." monitor
+  stop on
+  [ "$(row '.busy_tool, .watcher_running, .guarded')" = "false true true" ]
+}
+
+@test "W6: a pending question holds the guarded verdict — '?', 'your call', 'Still yours'; a statement does not" {
+  while IFS='|' read -r want why text; do
+    rm -f "$CC_IRS_LOG"
+    w6 1200 300000 "$text" none
+    stop on
+    got="$(row '.pending_question, (.pq_why // "-"), .guarded')"
+    [ "$got" = "$want $why $([ "$want" = true ] && echo false || echo true)" ] || { echo "text=[$text] got=$got"; false; }
+  done <<'ROWS'
+true|question-mark|Shall I land it now?
+true|question-mark|Which one do you want? **
+true|your-call|Two options are measured above. Your call on which.
+true|still-yours|Still yours: run the migration.
+false|-|Landed and converged. Nothing is open.
+ROWS
+  stop off; stop on
+  parity
 }

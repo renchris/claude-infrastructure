@@ -487,15 +487,27 @@ if [ -n "$_bsj" ] && printf '%s' "$_bsj" | jq -e 'type=="object"' >/dev/null 2>&
 # It cannot see a job that was still running when the operator typed (the notice came later); that
 # case is over-counted, so read would_advise as an upper bound.
 #
+# W6 (decision re-research 2026-10-24, docs/research/usage-levers-2026-10-23/decisions-2026-10-24/
+# REPORT.md decision 1) adds, on each v=ok line, what the 7-day shadow needs to rule on 200k vs 150k:
+#   would_advise_k2   the same predicate at IRS_K2 (200) thousand tokens
+#   busy_tool         guard G1: at idle minute IRS_N a job the session launched was running, judged by
+#                     the LAUNCHING tool (background Bash / Agent / Workflow, or a foreground Bash the
+#                     harness moved to the background); watchers and Monitors are not busy. Unlike
+#                     busy_notice it sees a job still running when the operator typed.
+#   pending_question  guard G4: the final message before the gap ends with "?", says "your call" /
+#                     "still yours", or asks through AskUserQuestion (pq_why names which)
+#   guarded, guarded_k2  would_advise / would_advise_k2 with G1 and G4 applied (null if unreadable)
+# They come from hooks/lib/session_jobs.py, run only when a line is written (≈38 a day).
 # COST GATE, weaker than the predicate by construction: context only grows inside a session, so the
 # telemetry's current `input_tokens` is at least the context at idle. Below IRS_K now ⇒ below IRS_K
 # then ⇒ no fork at all. A compaction during the turn is the one way through it, in the safe direction
 # (this block then measures and logs a turn the gate could have skipped). CC_IRS=off disables it.
-IRS_K="${CC_IRS_K:-150}"; IRS_N="${CC_IRS_N_MIN:-15}"
+IRS_K="${CC_IRS_K:-150}"; IRS_N="${CC_IRS_N_MIN:-15}"; IRS_K2="${CC_IRS_K2:-200}"
 IRS_LOG="${CC_IRS_LOG:-$HOME/.claude/logs/idle-recycle-shadow.jsonl}"
 IRS_TAIL="${CC_IRS_TAIL_BYTES:-2000000}"
 case "$IRS_K" in ''|*[!0-9]*) IRS_K=150 ;; esac
 case "$IRS_N" in ''|*[!0-9]*) IRS_N=15 ;; esac
+case "$IRS_K2" in ''|*[!0-9]*) IRS_K2=200 ;; esac
 case "$IRS_TAIL" in ''|*[!0-9]*) IRS_TAIL=2000000 ;; esac
 if [ "${CC_IRS:-on}" != off ] && [ "$_tk" -ge $(( IRS_K * 1000 )) ] 2>/dev/null && [ -f "$tp" ]; then
   # The whole transcript fits in the window (ce_size measured it above): a turn with no request
@@ -542,6 +554,22 @@ if [ "${CC_IRS:-on}" != off ] && [ "$_tk" -ge $(( IRS_K * 1000 )) ] 2>/dev/null 
       end)
     | select(.v != "first-turn" and (.v != "ok" or .gap_s >= $n * 60))
     | {ts: $now, sid: $sid, config_dir: $cfg, k_thousand: $k, n_min: $n} + .' 2>/dev/null || true)"
+  _irs_t0="$(printf '%s' "$_irs" | jq -r 'select(.v == "ok") | .idle_start' 2>/dev/null || true)"
+  case "$_irs_t0" in ''|*[!0-9]*) _irs_t0="" ;; esac
+  if [ -n "$_irs_t0" ]; then
+    _irs_sj="$_bscd/lib/session_jobs.py"
+    [ -f "$_irs_sj" ] || { _irs_h="$0"; [ -L "$_irs_h" ] && _irs_h="$(readlink "$_irs_h")"
+      _irs_sj="$(cd "$(dirname "$_irs_h")" 2>/dev/null && pwd)/lib/session_jobs.py"; }
+    _irs_g="$(/usr/bin/env python3 -I "$_irs_sj" gap "$tp" "$_irs_t0" $(( _irs_t0 + IRS_N * 60 )) "$IRS_TAIL" 2>/dev/null || true)"
+    printf '%s' "$_irs_g" | jq -e 'type == "object"' >/dev/null 2>&1 || _irs_g='{}'
+    _irs_m="$(printf '%s' "$_irs" | jq -c --argjson g "$_irs_g" --argjson k2 "$IRS_K2" '
+      . + $g + {k2_thousand: $k2,
+                would_advise_k2: (.gap_s >= .n_min * 60 and .ctx_at_idle >= $k2 * 1000 and (.busy_notice | not))}
+      | (if ($g | has("busy_tool")) then ((.busy_tool | not) and (.pending_question | not)) else null end) as $ok
+      | . + {guarded: (if $ok == null then null else .would_advise and $ok end),
+             guarded_k2: (if $ok == null then null else .would_advise_k2 and $ok end)}' 2>/dev/null || true)"
+    [ -z "$_irs_m" ] || _irs="$_irs_m"
+  fi
   if [ -n "$_irs" ]; then
     [ -d "${IRS_LOG%/*}" ] || mkdir -p "${IRS_LOG%/*}" 2>/dev/null || true
     printf '%s\n' "$_irs" >> "$IRS_LOG" 2>/dev/null || true
