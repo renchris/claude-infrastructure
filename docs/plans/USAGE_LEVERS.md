@@ -34,7 +34,8 @@ hook + its bats) so it may run them as three teammates.
   W2 DONE 2026-10-24: meter weights apply.
 - W4: blockedBy W2 (only worth doing if cache reads are charged — round 2 says 90%, one short).
   W2 DONE 2026-10-24: charged (98%), W4 unblocked.
-- Deny-mode Workflow hook: blockedBy W1 shadow data (3 days, ≈2026-10-27).
+- Deny-mode Workflow hook: blockedBy W1 shadow data (3 days from when the operator runs migration
+  0078, which registers the hook; the earlier ≈2026-10-27 assumed it would register itself).
 
 **Worktrees:** one per S session, branch `usage-levers-w<N>`, created by `handoff-fire.sh --worktree`.
 
@@ -53,24 +54,35 @@ into this plan, or at 35% fill while idle, whichever comes first.
   first written are wrong). Dropped: skill-listing trim, watcher timeout wakes, peer-message
   batching (each <1%).
 
-## W1 — binary pin, doc reword, Workflow shadow hook (S, unblocked)
-1. **Binary pin.** `bin/cc-notify:682` takes `command -v claude` first, which resolves to
-   `~/Library/pnpm/claude` 2.0.5 in scripts; `cc-claude-bin` (→ `~/.claude-293/.../claude`) is only
-   the fallback. Swap the order (keep the `CC_CLAUDE_BIN` seam). Audit the other bare callers the
-   round-1 scan named: `scripts/research-kit/router.py:546`, `scripts/rm-preempt-probe.sh:47`.
-   Pin with a bats case that puts a fake old `claude` first on PATH.
-2. **Doc reword (95%).** "Cache reads are free/≈0" → "discounted, ≈0.005 pp/Mtok weekly on Opus
-   5.5". Sites: `docs/plans/USAGE_TELEMETRY_100P.md:152,179`,
-   `docs/research/token-efficiency-2026-09-23/REPORT.md:20,318`, the `bin/cc-quota-price`
-   docstring, the `hooks/cache-expiry-warning.sh` header. Keep the 0.049 constant (it is an upper
-   bound, which still holds).
-3. **Shadow hook (log-only).** PreToolUse on `Workflow` that parses `tool_input.script` for
-   `agent(` calls without `agentType`, and logs per call: would-deny verdict, what a rewrite would
-   add, whether the slot's brief names commit/ship/Skill/MCP, and hook latency (a Workflow hook that
-   times out at 5 s lets the call through — measured round 2). Never denies. Registration may need
-   a settings.json change, which is the operator's (migration class c10): if so, write the
-   migration and file it with `cc-backlog needs … --class needs-human`.
-- Goal: the bats file for each task passes and `/ship` prints LANDED, content-verified.
+## W1 — binary pin, doc reword, Workflow shadow hook — DONE (2026-10-24)
+Landed `b6c6b8e9f` (pin), `2086f6774` (reword), `baf1c3185` (shadow hook), `75a74ae8b` (stubs via
+`cc_stub`); the migration renumber and its guard land with this plan update. Converged live.
+1. **Binary pin.** `bin/cc-notify` (`--cloud`), the research router's fast classifier call and
+   `scripts/rm-preempt-probe.sh` now ask `bin/cc-claude-bin` first and fall back to PATH;
+   `CC_CLAUDE_BIN` unchanged. Bats in `cc-notify.bats` and `research-router.bats`, each red on the
+   pre-fix code with an older `claude` first on PATH.
+   - Learning: the router resolves once per process and BEFORE both cold calls start. Resolving
+     lazily inside the fast call (+30 ms) let the careful stub answer first and cancel it, which
+     reddened "the real classifier call" test.
+   - Learning: in a test with a fixture `$HOME` and no zshrc pin, `cc-claude-bin` falls to rung 3,
+     the REAL `~/.claude/bin/claude-latest`; a PATH-stub test must also set `CC_CLAUDE_BIN`.
+   - The resident classifier daemon keeps its old fast binary until its next restart: the fast
+     binary is not part of `classifier_config()`'s id, so nothing restarts it.
+2. **Doc reword.** All six sites now say "discounted, ≈0.005 pp/Mtok weekly on Opus 5.5" with a
+   dated CORRECTED note; the 0.049 bound constant stays.
+3. **Shadow hook.** `hooks/workflow-lean-shadow.py`, log-only, to
+   `~/.claude/logs/workflow-lean-shadow.jsonl`: per `agent()` call the verdict (`has-agent-type`,
+   `would-deny`, `keep-default` when the brief names commit/ship/Skill/MCP, `unknown` when the brief
+   or options are not static), the rewrite, the markers, and wall/CPU latency. Kill switch
+   `CC_WORKFLOW_SHADOW=off`. Registration is c10 migration
+   `0078-workflow-lean-shadow-registration.sh`, operator-run; the shadow clock starts when it runs.
+   - Learning: W3 landed its own `0077` the same hour, and a `mig 0077` test glob then ran the
+     wrong file. Renumbered to 0078; `deploy-migrations.bats` 3b now refuses a duplicate number
+     (0009/0016/0021/0055 grandfathered: renaming them would change their ledger keys).
+   - Learning: the land's smoke selector answered FULL ("cannot decide"), so the land ran no
+     suite; every touched suite was run by hand (cc-notify 1..112, research-router 1..69, hook
+     1..3, c10 1..9, all 0 not ok).
+- Next: deny-mode decision reads ≥3 days of that log after 0078 runs.
 
 ## W2 — cache-read quota probe — DONE (2026-10-24): reads are CHARGED, 98%
 - Ran on next3 from a next session: 1,149 tool-free `-p` calls re-reading one 458,656-token cached
