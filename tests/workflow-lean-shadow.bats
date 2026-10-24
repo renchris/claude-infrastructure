@@ -6,6 +6,8 @@
 # commit/ship/Skill/MCP markers and the hook's latency.
 # RED-proof (2026-10-24, scratch copies): a copy that prints a deny decision fails test 2; a copy whose
 # agentType reader always returns None fails test 1 (the `lean` slot reads would-deny).
+# W6 RED-proof (2026-10-24): against the base hook (git show 11f7f87fa:…) test 4 fails: the `nd` slot
+# reads would-deny (no marker) and the row has no resume_from_run_id / script_sha / repeat_in_session.
 # Hermetic: scratch HOME; the log path is $HOME-rooted.
 
 setup() {
@@ -62,4 +64,24 @@ slot() { jq -r --arg l "$1" ".slots[] | select(.label == \$l) | $2" "$LOG"; }
   run fire "$(jq -nc --arg p "$FIX" '{scriptPath:$p}')"
   [ "$status" -eq 0 ]
   [ "$(jq -r '.source + " " + (.calls|tostring)' "$LOG")" = "scriptPath 6" ]
+}
+
+@test "4: W6 — resumeFromRunId, script sha, repeat-in-session, and a needs-default comment keeps the default agent" {
+  s1='await agent(`Summarise the notes` /* needs-default */, {label: "nd"}); await agent(`say /* needs-default */`, {label: "str"})'
+  run fire "$(jq -nc --arg s "$s1" '{script:$s, resumeFromRunId:"wf_abc123"}')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  [ "$(slot nd .verdict)" = keep-default ]
+  [ "$(slot nd .needs_default)" = true ]
+  # the marker counts only as a comment, never inside the brief's own text
+  [ "$(slot str .verdict)" = would-deny ]
+  [ "$(slot str .needs_default)" = false ]
+  [ "$(jq -r .resume_from_run_id "$LOG")" = wf_abc123 ]
+  [ "$(jq -r .script_sha "$LOG")" = "$(printf '%s' "$s1" | openssl dgst -sha256 -r | cut -d' ' -f1)" ]
+  [ "$(jq -r .repeat_in_session "$LOG")" = 0 ]
+  # the same script again in this session is a repeat; another session or script is not
+  fire "$(jq -nc --arg s "$s1" '{script:$s}')"
+  jq -nc --arg s "$s1" '{session_id:"OTHER",tool_name:"Workflow",tool_input:{script:$s}}' | /usr/bin/env python3 "$HOOK"
+  fire '{"script":"await agent(`x`)"}'
+  [ "$(jq -sr '[.[] | "\(.session_id):\(.repeat_in_session):\(.resume_from_run_id)"] | join(",")' "$LOG")" \
+    = "S:0:wf_abc123,S:1:null,OTHER:0:null,S:0:null" ]
 }

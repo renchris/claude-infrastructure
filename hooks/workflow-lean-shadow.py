@@ -15,6 +15,11 @@ run anyway. So before anything denies, this hook measures, per agent() call:
   - the hook's own latency against the 5 s timeout (wall from main(), plus process CPU, which
     includes interpreter start-up)
 
+W6 (decision re-research 2026-10-24) adds what a deny would need to be safe: `resume_from_run_id`
+(a deny obeyed on a resume re-runs the finished slots), `script_sha` and `repeat_in_session` (how
+many earlier rows of this session carried the same script), and a `/* needs-default */` comment
+inside an agent() call, which the would-deny verdict honors as keep-default.
+
 One JSON row per Workflow call to $HOME/.claude/logs/workflow-lean-shadow.jsonl. The brief text is
 never logged, only its length and the markers.
 
@@ -26,6 +31,7 @@ spread) is `unknown`, never guessed into either verdict.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -44,6 +50,8 @@ MARKERS = {
     "mcp": re.compile(r"\bmcp\b|mcp__", re.I),
 }
 IDENT = re.compile(r"[A-Za-z0-9_$]")
+NEEDS_DEFAULT = re.compile(r"\bneeds-default\b")
+LOG_TAIL_BYTES = 4_000_000  # repeat_in_session scans this much of the log's end
 
 
 class Bounded(Exception):
@@ -274,12 +282,37 @@ def options(arg: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     return None, label
 
 
+def comment_marker(args: List[str]) -> bool:
+    """True when a comment (not a string) inside the call's arguments says needs-default."""
+    for a in args:
+        i = 0
+        while i < len(a):
+            c = a[i]
+            j = skip_comment(a, i)
+            if j is not None:
+                if NEEDS_DEFAULT.search(a[i:j]):
+                    return True
+                i = j
+                continue
+            if c in "'\"":
+                i = skip_quoted(a, i)
+                continue
+            if c == "`":
+                i, _ = skip_template(a, i)
+                continue
+            i += 1
+    return False
+
+
 def slot_row(src: str, off: int, args: List[str]) -> Dict[str, Any]:
     kind, text = brief_text(args[0]) if args else ("opaque", "")
     agent_type, label = options(args[1] if len(args) > 1 else None)
     markers = {k: bool(rx.search(text)) for k, rx in MARKERS.items()}
+    needs_default = comment_marker(args)
     if agent_type is not None and agent_type != "opaque":
         verdict, rewrite = "has-agent-type", None
+    elif needs_default:
+        verdict, rewrite = "keep-default", None
     elif agent_type == "opaque" or kind == "opaque":
         verdict, rewrite = "unknown", None
     elif any(markers.values()):
@@ -293,6 +326,7 @@ def slot_row(src: str, off: int, args: List[str]) -> Dict[str, Any]:
         "brief": kind,
         "brief_chars": len(text),
         "markers": markers,
+        "needs_default": needs_default,
         "verdict": verdict,
         "rewrite": rewrite,
     }
@@ -323,20 +357,54 @@ def script_source(ti: Dict[str, Any], cwd: str) -> Tuple[str, Optional[str]]:
     return "none", None
 
 
+def repeats(log: str, sid: Any, sha: str) -> int:
+    """Earlier rows in the log's tail from this session with the same script sha."""
+    if not isinstance(sid, str) or not sid:
+        return 0
+    try:
+        with open(log, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - LOG_TAIL_BYTES))
+            raw = fh.read()
+    except OSError:
+        return 0
+    n, needle = 0, sha.encode()
+    for ln in raw.split(b"\n"):
+        if needle not in ln:
+            continue
+        try:
+            r = json.loads(ln)
+        except ValueError:
+            continue
+        if (
+            isinstance(r, dict)
+            and r.get("session_id") == sid
+            and r.get("script_sha") == sha
+        ):
+            n += 1
+    return n
+
+
 def main() -> None:
     t0 = time.monotonic()
     row: Dict[str, Any] = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "hook": "workflow-lean-shadow",
     }
+    log = os.path.join(
+        os.path.expanduser("~"), ".claude", "logs", "workflow-lean-shadow.jsonl"
+    )
     try:
         data = json.load(sys.stdin)
         ti = data.get("tool_input") or {}
+        rid = ti.get("resumeFromRunId")
         row.update(
             session_id=data.get("session_id"),
             tool_use_id=data.get("tool_use_id"),
             cwd=data.get("cwd"),
             tool_name=data.get("tool_name"),
+            resume_from_run_id=rid if isinstance(rid, str) and rid else None,
         )
         source, src = script_source(ti, data.get("cwd") or os.getcwd())
         row["source"] = source
@@ -344,6 +412,9 @@ def main() -> None:
             row["parse"] = "unresolved"
         else:
             row["script_chars"] = len(src)
+            sha = hashlib.sha256(src.encode("utf-8", "replace")).hexdigest()
+            row["script_sha"] = sha
+            row["repeat_in_session"] = repeats(log, row["session_id"], sha)
             slots = [slot_row(src, off, args) for off, args in agent_calls(src)]
             row["parse"] = "ok"
             row["calls"] = len(slots)
@@ -366,9 +437,6 @@ def main() -> None:
         "cpu": round(time.process_time() * 1000, 2),
         "timeout_s": TIMEOUT_S,
     }
-    log = os.path.join(
-        os.path.expanduser("~"), ".claude", "logs", "workflow-lean-shadow.jsonl"
-    )
     try:
         os.makedirs(os.path.dirname(log), exist_ok=True)
         with open(log, "a", encoding="utf-8") as fh:
