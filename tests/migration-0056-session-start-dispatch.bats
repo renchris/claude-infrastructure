@@ -8,6 +8,7 @@ SS_LIVE='[{"hooks":[{"type":"command","command":"~/.claude/hooks/session-start.s
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"
+  export CC_PANE_DIR="$BATS_TEST_TMPDIR/pane"
   export CC_SETTINGS_PARITY_BIN="$REPO/bin/cc-settings-parity"
   unset CC_MIGRATION_STATE
   export CC_ACCOUNTS_BOARD="$BATS_TEST_TMPDIR/claude-accounts-board.txt"   # pinned: an absolute /tmp default

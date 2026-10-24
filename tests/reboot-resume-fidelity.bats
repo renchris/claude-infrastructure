@@ -14,6 +14,7 @@ setup() {
   HBL="$REPO/scripts/lib/restore-heartbeat.sh"
   D="$BATS_TEST_TMPDIR"
   export HOME="$D/home"; mkdir -p "$HOME"
+  export CC_REBOOT_PREP_CLAUDE_TMP="$D/claude-tmp" CC_REBOOT_PREP_KITTY_SOCK_PREFIX="$D/kitty-" CC_REBOOT_PREP_SOCKS_DIR="$D/socks"
   export SHIP_LAND_CONVERGE=off DEPLOY_REPO="$D/absent-repo"   # hermeticity: no live converge
   export CC_REBOOT_PREP_DIR="$D/autonomy" CC_REBOOT_PREP_DATE=2020-01-01
   export CC_REBOOT_PREP_PS=/usr/bin/true CC_REBOOT_PREP_ZPRINT=/usr/bin/true

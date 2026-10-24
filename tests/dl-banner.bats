@@ -13,6 +13,7 @@ setup() {
   DL="$REPO/bin/dl"
   export D="$BATS_TEST_TMPDIR"
   export HOME="$D/home"; mkdir -p "$HOME"
+  export CC_PANE_DIR="$D/pane"          # absent: the board hook stamps no band snapshot into /tmp
   export DL_DIR="$D/personal/deadlines"; mkdir -p "$DL_DIR/.state"
   export CC_ACCOUNTS_BOARD="$D/board.txt"
   export CC_FIRED_DIR="$D/fired"; mkdir -p "$CC_FIRED_DIR"

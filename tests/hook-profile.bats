@@ -15,6 +15,7 @@ setup() {
   LIB="$REPO/hooks/lib/hook-profile.sh"
   D="$BATS_TEST_TMPDIR"
   export HOME="$D/home"; mkdir -p "$HOME/.claude/logs" "$D/bin" "$D/cwd"
+  export CC_PANE_DIR="$D/pane"
   unset CC_HOOK_PROFILE
   # jq / python3 stubs that record being reached and then behave as absent
   for t in jq python3; do
