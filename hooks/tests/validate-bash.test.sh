@@ -199,7 +199,8 @@ assert_case "D04-gh-issue-list"                  "gh issue list"                
 assert_case "D05-rm-rf-node-modules"             "rm -rf node_modules"                                                   "allow"  ""
 assert_case "D06-rm-rf-next"                     "rm -rf .next"                                                          "allow"  ""
 assert_case "D07-commit-safe-m-flag"             "git commit -m 'feat: new thing'"                                       "allow"  ""
-assert_case "D08-git-push"                       "git push origin main"                                                  "allow"  ""
+# D08 (`git push origin main` → allow) moved to E06: since the PUSH arm (9c7dba9e5) a push is
+# allowed only once its repository resolves, and these payloads carry no cwd.
 assert_case "D09-pnpm-typecheck"                 "pnpm typecheck"                                                        "allow"  ""
 assert_case "D10-curl-url"                       "curl https://api.example.com/status"                                   "allow"  ""
 
@@ -214,6 +215,10 @@ assert_case "E02-pipeline-real-flag"             "git commit --no-verify | tee l
 assert_case "E03-subst-msg-body"                 "echo 'topic: --no-verify' | git commit -F -"                           "allow"  ""
 assert_case "E04-commit-with-cd"                 "cd /tmp && git commit --no-verify"                                     "deny"   "--no-verify"
 assert_case "E05-git-dash-C-commit"              "git -C /path commit --no-verify"                                       "deny"   "--no-verify"
+# A payload with no cwd cannot say which repository `origin` is, so the PUSH arm cannot confirm the
+# remote is the operator's own and asks. The allow side, with a resolvable repo, is pinned in
+# tests/permission-widening-2026-10-20.bats ("push: PERMITS the operator's own remote …").
+assert_case "E06-push-no-cwd-unverifiable"       "git push origin main"                                                  "ask"    "cannot verify"
 
 # ────────────────────────────────────────────────────────────────────────
 # F. CATASTROPHIC-RM SPELLING EQUIVALENCE (codex-security dc12c8db finding 1)
