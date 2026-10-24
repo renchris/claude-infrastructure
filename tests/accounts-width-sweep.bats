@@ -169,7 +169,7 @@ board_at() {  # <pane cols> → the SessionStart systemMessage for that pane
 }
 # The dated stamp line (accounts-board.bats #30 owns it). Only the byte-identity check drops it: the
 # fit checks need it in place, since it is what shares line 1 with the harness prefix.
-unstamp() { sed -E '1{/^(As of|Session opened) /d;}'; }
+unstamp() { sed -E '1{/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Z][a-z]{2} [0-9]{1,2} · /d;}'; }
 
 @test "4 SessionStart board: no row wraps at any pane width 40..200" {
   run ca --keepwarm

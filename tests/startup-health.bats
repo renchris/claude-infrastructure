@@ -460,7 +460,7 @@ board() { # → the accounts-board systemMessage for a fixture board
   printf 'BOARDBODY\n' > "$BATS_TEST_TMPDIR/board.txt"
   printf '{"source":"startup","hook_event_name":"SessionStart"}' \
     | CC_ACCOUNTS_BOARD="$BATS_TEST_TMPDIR/board.txt" "$REPO/hooks/accounts-board.sh" | jq -r '.systemMessage' \
-    | sed -E '1{/^(As of|Session opened) /d;}'   # the dated stamp; tests/accounts-board.bats #30 owns it
+    | sed -E '1{/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Z][a-z]{2} [0-9]{1,2} · /d;}'   # the dated stamp; tests/accounts-board.bats #30 owns it
 }
 
 @test "3.5 the board: unchanged with no fold files; the line sits above the body; a stale fold is loud" {

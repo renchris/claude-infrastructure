@@ -741,7 +741,14 @@ same_as_control() {  # [source] → the subject's bytes equal the control's, and
   band_control || return 1
   band_emit "$D/control.sh" "${1:-startup}"; cp "$D/out.json" "$D/want.json"
   band_emit "$HOOK" "${1:-startup}"
-  cmp -s "$D/want.json" "$D/out.json" || { echo "differs from the pre-band hook:"; diff "$D/want.json" "$D/out.json"; return 1; }
+  # The dated first line (#30) reads the clock, and the two runs can straddle a minute under load:
+  # compare everything after it. Only a timestamp-shaped line 1 is dropped, never a real difference.
+  local rx='^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Z][a-z]{2} [0-9]{1,2} · [^\n]*\n'
+  for f in want out; do
+    jq -c --arg rx "$rx" 'if .systemMessage then .systemMessage |= sub($rx; "") else . end' \
+      < "$D/$f.json" > "$D/$f.cmp" 2>/dev/null || cp "$D/$f.json" "$D/$f.cmp"
+  done
+  cmp -s "$D/want.cmp" "$D/out.cmp" || { echo "differs from the pre-band hook:"; diff "$D/want.json" "$D/out.json"; return 1; }
   [ ! -e "$CC_PANE_DIR/$BSID.board-band.json" ] || { echo "a snapshot was left on a static-board path"; return 1; }
 }
 
@@ -888,18 +895,18 @@ same_as_control() {  # [source] → the subject's bytes equal the control's, and
 
 # ── the dated stamp (2026-10-24): the message outlives the moment its ages are relative to ──────
 
-@test "30 line 1 dates the readout: the quota-read time with its day, and the open time when they differ" {
-  local day; day="$(date '+%a %b')"
+@test "30 line 1 dates the readout, 12-hour: the quota-read time with its day, and the open time when they differ" {
+  local day; day="$(date '+%a %b') $(( 10#$(date +%d) ))"
   mk_board
   emit startup
-  [[ "$(jqv '.systemMessage' | head -1)" == "As of $day "*[0-9]":"[0-9][0-9] ]] \
+  [[ "$(jqv '.systemMessage' | head -1)" =~ ^"$day · "[0-9]{1,2}:[0-9]{2}" "(AM|PM)$ ]] \
     || { echo "fresh board not dated on line 1: $(jqv '.systemMessage')"; false; }
   age_board 600
   emit startup
-  [[ "$(jqv '.systemMessage' | head -1)" == "As of $day "*" · session opened "[0-9][0-9]":"[0-9][0-9] ]] \
+  [[ "$(jqv '.systemMessage' | head -1)" =~ ^"$day · "[0-9:]+" "(AM|PM)" · opened "[0-9]{1,2}:[0-9]{2}" "(AM|PM)$ ]] \
     || { echo "an older board does not name the open time: $(jqv '.systemMessage')"; false; }
   rm -f "$CC_ACCOUNTS_BOARD"
   emit startup
-  [[ "$(jqv '.systemMessage' | head -1)" == "Session opened $day "* ]] \
+  [[ "$(jqv '.systemMessage' | head -1)" =~ ^"$day · opened "[0-9:]+" "(AM|PM)$ ]] \
     || { echo "a missing board is not dated: $(jqv '.systemMessage')"; false; }
 }

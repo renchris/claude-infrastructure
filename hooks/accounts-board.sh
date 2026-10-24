@@ -310,29 +310,30 @@ now="$(date +%s)"
 # ── THE DATED STAMP (2026-10-24, operator ask) ─────────────────────────────────────────────────
 # This message stays in the scrollback for the life of the session, and every age in it ("47
 # seconds ago", "STALE by 10m") is relative to a moment the reader can no longer see. So the
-# first line names that moment as wall-clock time with the day: when the quota was read and, when
-# that differs, when the session opened. Read back hours later, the board's age is one subtraction.
+# first line names that moment as wall-clock time with the day, 12-hour like Claude Code's own
+# `done 7:18 PM`: when the quota was read and, when that differs, when the session opened. Read back hours later, the board's age is one subtraction.
 # emit() puts it above everything, the deadline banner and the fleet line included; the band path
 # drops it, since the band labels its own age and leaves the header.
 # Two `date` forks in all (now, then the board's mtime), no function substitutions: test 14 holds
 # this hook to 1 s under load, and the first draft's ~10 forks measured 1.03 s.
-read -r N_F N_A N_B N_D N_T <<EOF
-$(date -r "$now" '+%F %a %b %d %H:%M' 2>/dev/null)
+read -r N_F N_A N_B N_D N_T N_P <<EOF
+$(date -r "$now" '+%F %a %b %d %I:%M %p' 2>/dev/null)
 EOF
-N_D="${N_D#0}"
-stamp() {  # [<board epoch>] → sets STAMP to the dated first line
-  local f a b d t
-  STAMP="Session opened $N_A $N_B $N_D $N_T
+N_D="${N_D#0}"; N_T="${N_T#0} $N_P"
+stamp() {  # [<board epoch>] → sets STAMP to the dated first line, in Claude Code's own form
+  local f a b d t p
+  STAMP="$N_A $N_B $N_D · opened $N_T
 "
   [ -n "${1:-}" ] || return 0
-  read -r f a b d t <<EOF
-$(date -r "$1" '+%F %a %b %d %H:%M' 2>/dev/null)
+  read -r f a b d t p <<EOF
+$(date -r "$1" '+%F %a %b %d %I:%M %p' 2>/dev/null)
 EOF
-  if [ "$f $t" = "$N_F $N_T" ]; then STAMP="As of $N_A $N_B $N_D $N_T
+  t="${t#0} $p"
+  if [ "$f $t" = "$N_F $N_T" ]; then STAMP="$N_A $N_B $N_D · $N_T
 "
-  elif [ "$f" = "$N_F" ]; then STAMP="As of $a $b ${d#0} $t · session opened $N_T
+  elif [ "$f" = "$N_F" ]; then STAMP="$a $b ${d#0} · $t · opened $N_T
 "
-  else STAMP="As of $a $b ${d#0} $t · session opened $N_A $N_B $N_D $N_T
+  else STAMP="$a $b ${d#0} · $t · opened $N_A $N_B $N_D · $N_T
 "
   fi
 }
