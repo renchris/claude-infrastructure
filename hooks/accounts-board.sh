@@ -305,17 +305,40 @@ DL_BANNER="$( (dl_banner) 2>/dev/null || true)"
 [ -n "$DL_BANNER" ] && DL_BANNER="$DL_BANNER
 "
 
-[ -f "$BOARD" ] || emit "accounts board unavailable — nothing pre-rendered at $BOARD.
+now="$(date +%s)"
+
+# ── THE DATED STAMP (2026-10-24, operator ask) ─────────────────────────────────────────────────
+# This message stays in the scrollback for the life of the session, and every age in it ("47
+# seconds ago", "STALE by 10m") is relative to a moment the reader can no longer see. So the
+# first line names that moment as wall-clock time with the day: when the quota was read and, when
+# that differs, when the session opened. Read back hours later, the board's age is one subtraction.
+when() {  # <epoch> [<epoch it shares a day with>] → "Sat Oct 24 11:55", or "11:55" on the same day
+  local d
+  [ -n "${2:-}" ] && [ "$(date -r "$1" +%F 2>/dev/null)" = "$(date -r "$2" +%F 2>/dev/null)" ] \
+    && { date -r "$1" '+%H:%M' 2>/dev/null; return; }
+  d="$(date -r "$1" +%d 2>/dev/null)"
+  date -r "$1" "+%a %b ${d#0} %H:%M" 2>/dev/null
+}
+stamp() {  # [<board epoch>] → the dated first line
+  local o
+  o="$(when "$now")"
+  [ -n "${1:-}" ] || { printf 'Session opened %s\n' "$o"; return; }
+  [ "$(when "$1" "$now")" = "$(when "$now" "$now")" ] && { printf 'As of %s\n' "$o"; return; }
+  printf 'As of %s · session opened %s\n' "$(when "$1")" "$(when "$now" "$1")"
+}
+
+[ -f "$BOARD" ] || emit "$(stamp)
+accounts board unavailable — nothing pre-rendered at $BOARD.
   Producer $PRODUCER $(producer_state)
   For the live table right now, run: claude-accounts"
 
-now="$(date +%s)"
 # BSD stat first (this fleet is Darwin), GNU second, and a FAILURE to read the mtime is treated
 # as unknown-age rather than as age 0. Defaulting to 0 would render an ancient board as fresh —
 # the single worst outcome available to this hook, reached by the most forgettable line in it.
 mtime="$(stat -f %m "$BOARD" 2>/dev/null || stat -c %Y "$BOARD" 2>/dev/null || echo "")"
 if [ -z "$mtime" ]; then
-  emit "accounts board found but its age is unreadable ($BOARD) — numbers withheld.
+  emit "$(stamp)
+accounts board found but its age is unreadable ($BOARD) — numbers withheld.
   An unknown-age board cannot be labelled honestly, and an unlabelled one gets believed.
   For the live table, run: claude-accounts"
 fi
@@ -335,7 +358,8 @@ body="$(cat "$(pick_board)" 2>/dev/null || true)"
 # (0.9 s on a 2 KB board, 6.5 s at 4 KB; docs/research/sessionstart-readout-2026-10-06, R1), so
 # every byte added to the board would have cost startup time wherever this runs under 3.2.
 if case "$body" in *[![:space:]]*) false ;; *) true ;; esac; then
-  emit "accounts board at $BOARD is EMPTY — the producer wrote nothing.
+  emit "$(stamp "$mtime")
+accounts board at $BOARD is EMPTY — the producer wrote nothing.
   Producer: $PRODUCER. For the live table, run: claude-accounts"
 fi
 
@@ -343,7 +367,8 @@ if [ "$age" -ge "$HARD_S" ]; then
   # NUMBERS SUPPRESSED, deliberately. Everything this board reports is a percentage of a window
   # that rolls — the 5h one every five hours — so past the hard band the figures are not merely
   # old, they can be describing a window that no longer exists.
-  emit "accounts board is $(fmt_age "$age") old — numbers withheld as unsafe to read (the 5h
+  emit "$(stamp "$mtime")
+accounts board is $(fmt_age "$age") old — numbers withheld as unsafe to read (the 5h
   window it reports rolls every 5h, so a board this old can describe a window that has ended).
   Producer $PRODUCER $(producer_state)
   For the live table, run: claude-accounts"
@@ -407,11 +432,13 @@ if band_handoff; then
 fi
 
 if [ "$age" -ge "$STALE_S" ]; then
-  emit "⚠ STALE by $(fmt_age "$age") — the numbers below are last-known, not current.
+  emit "$(stamp "$mtime")
+⚠ STALE by $(fmt_age "$age") — the numbers below are last-known, not current.
   Producer $PRODUCER $(producer_state)
   Live table: claude-accounts
 
 $body"
 fi
 
-emit "$body"
+emit "$(stamp "$mtime")
+$body"

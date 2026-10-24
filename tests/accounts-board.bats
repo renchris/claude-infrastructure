@@ -885,3 +885,21 @@ same_as_control() {  # [source] → the subject's bytes equal the control's, and
   [ ! -s "$D/out.json" ] && cmp -s "$L" "$CC_PANE_DIR/$BSID.board-band.json" \
     || { echo "hook did not hand the produced ladder over: $(cat "$D/out.json")"; false; }
 }
+
+# ── the dated stamp (2026-10-24): the message outlives the moment its ages are relative to ──────
+
+@test "30 line 1 dates the readout: the quota-read time with its day, and the open time when they differ" {
+  local day; day="$(date '+%a %b')"
+  mk_board
+  emit startup
+  [[ "$(jqv '.systemMessage' | head -1)" == "As of $day "*[0-9]":"[0-9][0-9] ]] \
+    || { echo "fresh board not dated on line 1: $(jqv '.systemMessage')"; false; }
+  age_board 600
+  emit startup
+  [[ "$(jqv '.systemMessage' | head -1)" == "As of $day "*" · session opened "[0-9][0-9]":"[0-9][0-9] ]] \
+    || { echo "an older board does not name the open time: $(jqv '.systemMessage')"; false; }
+  rm -f "$CC_ACCOUNTS_BOARD"
+  emit startup
+  [[ "$(jqv '.systemMessage' | head -1)" == "Session opened $day "* ]] \
+    || { echo "a missing board is not dated: $(jqv '.systemMessage')"; false; }
+}
