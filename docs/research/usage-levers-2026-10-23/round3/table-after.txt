@@ -1,0 +1,5 @@
+  Claude Max accounts                                             live · Sat 01:48
+  account    live  5h session ┆85%   ↻5h  weekly all       weekly Fable      ↻week
+  next3    ↻    2  ▉·······┆·   9% ↻1.7h  █▍········  14%  ··········   0%   3d 5h
+  ↻ next3 showing LAST-KNOWN quota, not polled this sweep · as of 01:36 · excluded from routing · re-polled at the next sweep
+    next3 strand ~74pp of 86 · p74 of its own 24h burns · 3d left

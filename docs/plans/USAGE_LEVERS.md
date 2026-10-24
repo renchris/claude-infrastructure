@@ -31,7 +31,9 @@ hook + its bats) so it may run them as three teammates.
 **Dependency graph**
 - W1, W2: no blockers — fire in parallel.
 - W3: blockedBy W2 (decides which weighting the break-even uses); its Phase-0 counts may run now.
+  W2 DONE 2026-10-24: meter weights apply.
 - W4: blockedBy W2 (only worth doing if cache reads are charged — round 2 says 90%, one short).
+  W2 DONE 2026-10-24: charged (98%), W4 unblocked.
 - Deny-mode Workflow hook: blockedBy W1 shadow data (3 days, ≈2026-10-27).
 
 **Worktrees:** one per S session, branch `usage-levers-w<N>`, created by `handoff-fire.sh --worktree`.
@@ -70,15 +72,21 @@ into this plan, or at 35% fill while idle, whichever comes first.
    migration and file it with `cc-backlog needs … --class needs-human`.
 - Goal: the bats file for each task passes and `/ship` prints LANDED, content-verified.
 
-## W2 — cache-read quota probe (S, unblocked)
-- One idle Opus 5.5 account (next3: 13% weekly, ~79pp would otherwise strand), no tool calls (so no
-  server classifier requests), ≈500M cache reads by re-reading one large cached context.
-- Prediction: if reads are charged, ≈+10pp on the 5h meter and ≈+2.4pp weekly; if free, ≈+1pp.
-  Read both meters before and after from `claude-accounts --fresh`.
-- Outcome moves decision 1 above 90% (→ W4 unblocked) or refutes it (→ W4 dropped, W3 re-weighted).
-- Cost ≈2.4pp of one account's week; inside the standing small-spend allowance.
+## W2 — cache-read quota probe — DONE (2026-10-24): reads are CHARGED, 98%
+- Ran on next3 from a next session: 1,149 tool-free `-p` calls re-reading one 458,656-token cached
+  context (1h tier, 0 writes in the window) = **527.0M cache reads**. Meters, baseline → after:
+  5h **1 → 21** (wire), weekly **12 → 16** wire / **13 → 16** endpoint, so +3 to +4pp. "Free" predicted
+  +0.006 / +0.001pp. The only other live next3 session added ≤0.07pp 5h in the window.
+- Weights at large context: 5h ≈0.038 pp/Mtok (≈1.9× round 2), weekly 0.0057–0.0076 pp/Mtok
+  (≈1.2–1.6× fit4's 0.0048). Open confound: the context was above 200k, so the excess may be a
+  long-context premium. A same-size probe below 200k would split it (≈0.7pp weekly, not run: cap reached).
+- Spent ≈3–4pp of next3's week (stopped by the 4pp guard on the final batch). Decision 1: 90% → 98%.
+- **Unblocks:** W4 (its gate was "reads charged"); W3 uses round 2's meter-weight branch, with reads
+  ≈1/32–1/43 of a cache write, not 0.
+- Report, readings table, scripts and data: `docs/research/usage-levers-2026-10-23/round3-probe.md`,
+  `round3/`.
 
-## W3 — idle-cache redesign, shadow mode (S, blocked by W2)
+## W3 — idle-cache redesign, shadow mode (S, unblocked by W2: use the meter-weight branch)
 - Cause (reproduced): the mailbox watcher (`--timeout 14340`) exits silently on timeout, and the
   3300 s wake floor stands down while that hook is registered (`hooks/session-continue.sh:688`);
   a keepalive added beside it does nothing because `mailbox-wake-arm.sh:203` exits when a watcher
@@ -87,7 +95,7 @@ into this plan, or at 35% fill while idle, whichever comes first.
   rebuilds; narrow it, run it as count-only for a week, accept only if wrongly denied calls cost
   <0.2% of weekly usage.
 
-## W4 — context-recycle thresholds (S, blocked by W2)
+## W4 — context-recycle thresholds (S, unblocked: W2 found reads charged)
 - Only if W2 confirms reads are charged. Main sessions run a 1M window at median 231k / p90 459k;
   the recycle rails act at 250k–750k. Do not force busy sessions to drain; the candidate is an
   earlier idle recycle. Estimated 3–8.5% of weekly usage.
