@@ -18,7 +18,9 @@ little of the thing you were asked about as possible.
 
 Two channels behave completely differently:
 
-- **Speech → text** is near-lossless. Solved. Cheap.
+- **Speech → text** is near-lossless *for meaning* on clean studio audio, and cheap.
+  It is not solved for meetings (20.8-31.0% word error rate), names, pause
+  lengths or who said what — see the ASR guardrails in the pipeline below.
 - **Motion → anything** is where the work is, and where the naive approach fails
   silently.
 
@@ -52,16 +54,37 @@ says*. Never run the expensive tier blind.
 yt-dlp --dump-json "$URL" > meta.json
 yt-dlp -f "137+bestaudio/best[height<=1080]" --merge-output-format mp4 \
        --write-auto-subs --sub-langs "en-orig,en" -o "video.%(ext)s" "$URL"
+#     Take at least 1080p for anything with on-screen text: 1920px fits under the
+#     2000px Read clamp; a 720p ingest misread "5" as "8" at sheet scale. An x.com
+#     video via cc-read-twitter is capped at 720p unless CC_RT_MAX_VIDEO_HEIGHT=1080.
 
 # 2-3 · audio -> transcript (local, ~43s for 8min, no data leaves the machine)
 ffmpeg -i video.mp4 -ac 1 -ar 16000 -c:a pcm_s16le audio16k.wav
 whisper-cli -m ggml-large-v3-turbo.bin -f audio16k.wav -osrt -oj -of asr
+#     ASR guardrails (each measured on a 47-min interview, 2026-10-23):
+#     - drop segments past the file's end or over exact-zero audio (whisper
+#       invented "Thank you." over digital silence);
+#     - take pause lengths from audio energy (silencedetect), never from word
+#       times, which erased a measured 1.15 s pause;
+#     - seed --prompt with spellings read off the screen (names came out wrong);
+#     - when chunking long audio, overlap the chunk boundaries.
 
 # 4 · structural map — where are the hard cuts
 ffmpeg -i video.mp4 -vf "select='gt(scene,0.2)',metadata=print:file=scenes.txt" -an -f null -
+#     The scene filter is a LOWER BOUND: at 0.3 it missed 168 of ~345 hard cuts on
+#     an interview whose wide and close shots share one backdrop. When cut counts
+#     or shot spans matter, use per-frame mean luma difference (strong cut >= 20,
+#     local peak over +-2 frames so a dissolve counts once):
+#     ffmpeg -i video.mp4 -vf scale=96:54,format=gray -f rawvideo - | python3 -c \
+#       'import sys,numpy as n;a=n.frombuffer(sys.stdin.buffer.read(),n.uint8).reshape(-1,54,96).astype(int);d=n.abs(n.diff(a,axis=0)).mean((1,2));print(*[i+1 for i in range(len(d)) if d[i]>=20 and d[i]==d[max(0,i-2):i+3].max()])'
+#     (frame index of the first frame after each cut; divide by fps for seconds.
+#     Measured: 43/43 hand-verified cuts in 3 min of that interview, 0 extras.)
 
 # 5 · coarse sweep — 1 frame / 10s, 4 columns, timestamps burned in
 #     (ffmpeg here has NO drawtext/libfreetype; label via ImageMagick with -font)
+#     TIMING TRAP: the fps=1/N filter emits frame k at k*N + N/2, so labels taken
+#     as k*N are N/2 early (measured: every 20s-sheet label was 10s early). Label
+#     with k*N + N/2, or extract each tile with its own input-side -ss.
 #     FAST-CUT footage (step 4 finds a cut every ~1s — montages, trailers): a
 #     fixed interval skips whole shots, so take ONE frame at the midpoint of each
 #     scene interval instead. Measured: a 35s montage had 31 shots; 2s sampling
@@ -128,9 +151,18 @@ is properly eased." Do not claim "this is specifically outBack" from one element
 
 - Aesthetic judgement of motion. You can measure that something is eased and how;
   whether it is *good* is not measurable.
-- Sound beyond words — prosody, music, sound design, silence-as-meaning.
+- Hearing. Music onsets, ducking, edit silences and digital silence ARE
+  answerable from numbers (ffmpeg `astats`/`silencedetect`, per-0.25 s RMS; in a
+  stereo mix with mono dialogue the L-R side channel is a clean music detector).
+  Report per-bin values, never only a window mean, which blended a -42 dB and a
+  -29 dB phase into one wrong answer. Prosody, laughter and naming a tune are not
+  recoverable this way.
 - Anything between samples. At 10s sampling a 1s event has ~10% odds of capture.
-- Multi-speaker attribution, unless diarisation is run deliberately.
+- Who is speaking. Pitch did not separate the two voices on that interview. Lip-motion crops at
+  8-24 fps over the window answered it; local diarization needs its threshold
+  tuned (the default put 2,616 of 2,646 s of speech on one speaker).
 
 Full derivation, measurements and traps:
-`docs/research/agent-video-understanding-2026-07-26.md`.
+`docs/research/agent-video-understanding-2026-07-26.md`; the 2026-10-23 blind
+probe and its dated corrections to this skill:
+`docs/research/video-understanding-human-parity-2026-10-23/REPORT.md`.
