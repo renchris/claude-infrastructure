@@ -1,0 +1,962 @@
+[
+ {
+  "lever": "\">150k context\" (main-session context size versus the repo's recycle thresholds, which are percentages of a 1M window)",
+  "headline": "Main sessions run on 1M windows with a median per-request context of 231k (p90 459k, p99 649k, max 774k), measured. The recycle rails only act at 25-75% of 1M (250k-750k), so 89% of main-session input-side tokens are sent above 150k and 54% above 300k. In the simulation, recycling every main session at 250k with a measured 100k re-prime cuts main-session input-side tokens by about 37% raw, 8.2B of 22.4B per week. At the price-ratio weighting, which matches /usage closely, that is 32%, or about 14.5% of all usage across the 4 accounts. Recycling at 150k saves more on paper, 38-51% weighted, but it would force about 2,000 recycles a week, roughly 2.5 per session. Those figures are estimates.",
+  "measurements": [
+   {
+    "claim": "Scan coverage and validation: request counts per account (main + subagent, de-duplicated by requestId, last 7 days) match the 7-day request totals printed by /usage",
+    "value": "next 72,405 vs /usage 72,233; next2 82,738 vs 82,745; next3 53,287 vs 53,237; next4 63,610 vs 63,509. Full scan, no sampling: about 1.9 GB of main transcripts plus 4.5 GB of subagent transcripts, read line by line in about 62 s. ~/.claude-next/projects is a symlink to ~/.claude/projects and was followed.",
+    "command": "python3 -I /tmp/usage-audit/scan.py  (writes /tmp/usage-audit/requests.csv; cutoff 2026-10-17T02:35:14Z)"
+   },
+   {
+    "claim": "Per-request context size (input + cache_read + cache_creation) for main-session records, all 4 accounts",
+    "value": "n=86,242; p50=231,432, p75=342,886, p90=458,687, p99=649,352, max=774,188. Share of requests above 150k/200k/300k/500k/800k: 74.9% / 58.9% / 33.0% / 6.6% / 0.0%. Share of input-side tokens above the same thresholds: 89.3% / 78.5% / 53.9% / 14.7% / 0.0%. Total 22.36B input-side tokens per week, of which cache_read is 98.6%, cache_creation 1.4% and uncached input about 0%.",
+    "command": "python3 -I /tmp/usage-audit/analyze.py"
+   },
+   {
+    "claim": "Per-account main-session context distribution",
+    "value": "next: p50 232k, p90 451k, p99 640k; above 150k: 75.4% of requests, 89.4% of tokens. next2: p50 221k, p90 453k, p99 671k; 73.0% / 88.3%. next3: p50 242k, p90 484k, p99 653k; 76.0% / 90.3%. next4: p50 231k, p90 438k, p99 615k; 74.5% / 88.6%.",
+    "command": "python3 -I /tmp/usage-audit/analyze.py"
+   },
+   {
+    "claim": "Subagent records, reported for contrast and not part of the lever",
+    "value": "n=185,798; p50 88k, p90 213k, p99 357k, max 648k. Above 150k: 24.3% of requests, 49.0% of tokens. 20.11B input-side tokens per week.",
+    "command": "python3 -I /tmp/usage-audit/analyze.py"
+   },
+   {
+    "claim": "Context window actually in use",
+    "value": "1M. 58.9% of main requests exceed 200k (max 774k), which a 200k window could not hold. Every /tmp/cc-telemetry record that has a window field shows 1,000,000 (27 of 27; 134 files present). Model ids carry no [1m] suffix: 86,022 main requests are plain claude-opus-5-5.",
+    "command": "cat /tmp/cc-telemetry/*.json | python3 -I -c '<count \"window\" values>'  and the model Counter in analyze.py"
+   },
+   {
+    "claim": "/usage's '% at >150k context' is a usage-weighted share, not a request share",
+    "value": "Request share above 150k (main + subagent): next 44%, next2 39%, next3 41%, next4 38%. /usage reports 69%, 62%, 66%, 58%. Weighting tokens as uncached input 1, cache read 0.1, cache write 1.25, output 5 reproduces /usage at 69/62/66/58 (mean absolute error 0.2 points). Weights of 0.15 / 2.0 / 5 also fit (error 0.4), so the fit is not unique.",
+    "command": "python3 -I /tmp/usage-audit/xcheck.py ; python3 -I /tmp/usage-audit/fit.py"
+   },
+   {
+    "claim": "Re-prime cost of a fresh session",
+    "value": "First request of fresh main sessions (n=785): p25 40k, p50 60k, p75 74k, p90 77k; 46k of the median is cache write. Context at request 10: p50 100k. At request 30: p50 145k. Peak context per session (sessions with at least 5 requests, n=704): p50 235k, p75 366k, p90 489k.",
+    "command": "python3 -I /tmp/usage-audit/sim.py"
+   },
+   {
+    "claim": "Recycle thresholds in the repo are all percentages of the harness's used_percentage, so with a 1M window they mean 250k-880k",
+    "value": "waiting-recycle.sh: T_IDLE 35 (350k), idle floor and rot floor 25 (250k), T_NUDGE 50 (500k), T_BUSY_MIN 60 (600k), T_BUSY 75 (750k). boundary-handoff.sh: T 73 (730k), T_MIN 55, T_FREEWIN 35, plus an absolute TOK_K=700k. CC_CE_WALL is 88%. CLAUDE.global.md Context Stewardship says idle at 35% or more, plan the pause from 50%, drain before 75%, never past 85%. statusline.sh writes used_pct from .context_window.used_percentage. No env overrides were found in ~/.claude*/settings.json.",
+    "command": "grep -nE ':-[0-9]{2,7}\\}' hooks/waiting-recycle.sh hooks/boundary-handoff.sh ; sed -n 395,440p CLAUDE.global.md ; grep -n used_percentage statusline.sh"
+   },
+   {
+    "claim": "Simulated weekly savings for main sessions if every session recycled at threshold T",
+    "value": "With R=100k (median context at request 10): T=150k gives 1,998 recycles, raw input-side saving 49.7% (11.1B tokens), weighted saving 37.8% (0.98B-eq). T=250k gives 516 recycles, raw 36.7% (8.2B), weighted 32.0% (0.83B-eq). T=350k: raw 24.3%, weighted 21.7%. T=500k: raw 9.8%, weighted 8.9%. With R=60k (median first request): T=150k raw 57.7%, weighted 50.6%; T=250k raw 41.5% (9.3B), weighted 37.5% (0.97B-eq). Total weighted usage across all 4 accounts is 5.70B-eq per week, so T=250k saves about 14.5-17% of it and T=150k about 17-23%.",
+    "command": "python3 -I /tmp/usage-audit/sim2.py  (same as sim.py with weights 1 / 0.1 / 1.25)"
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "Re-express the recycle thresholds as absolute token counts instead of percentages of the window. Fire the idle free-win at about 200-250k (today 35% = 350k), the busy pause-point nudge at about 250k (today 50% = 500k), and the forced drain at about 350-400k (today T_BUSY 75% and boundary T 73%). Lower boundary-handoff TOK_K from 700k to about 300k. Keep the percentage gates only as a backstop.",
+    "files": "~/Development/claude-infrastructure/hooks/waiting-recycle.sh (T_IDLE, T_IDLE_FLOOR, T_NUDGE, T_BUSY, T_BUSY_MIN), hooks/boundary-handoff.sh (T, T_MIN, T_FREEWIN, TOK_K), CLAUDE.global.md Context Stewardship section",
+    "est_weekly_saving": "Estimated about 0.8-1.0B weighted token-equivalents per week, which is 32-37% of main-session input-side usage and about 14.5-17% of all usage across the 4 accounts, if recycling at about 250k is actually reached. The simulation assumes perfect compliance; real compliance will be lower.",
+    "confidence_pct": 60
+   },
+   {
+    "action": "Do not go as low as 150k. A fresh session already holds 60k on its first request and about 145k by request 30, so a 150k ceiling would force about 2,000 handoffs a week. That is roughly 2.5 per session, and the handoff and rebuild cost is only partly modelled. Treat 250k as the floor, and only consider 150k for idle desk sessions.",
+    "est_weekly_saving": "Going from 250k to 150k adds only about 0.15-0.35B-eq per week (estimated, from sim2.py), at much higher handoff churn",
+    "confidence_pct": 65
+   },
+   {
+    "action": "Shrink the 60k first-request baseline (system prompt, CLAUDE.md, rules, tools, hook injections). Every recycle pays it again as a cache write, so a smaller baseline makes lower thresholds cheaper. Measure it with cc-ctx-audit before cutting.",
+    "files": "~/Development/claude-infrastructure/CLAUDE.global.md, rules/, SessionStart hooks",
+    "est_weekly_saving": "Not measured. Each 10k removed saves about 10k cache reads on every main request (86k requests a week, so about 0.86B raw or 0.09B-eq per week, estimated as count times 10k)",
+    "confidence_pct": 45
+   }
+  ],
+  "caveats": [
+   "The weighting is an assumption. I used uncached input 1, cache read 0.1, cache write 1.25, output 5 because it reproduces /usage's '>150k' shares to within 0.2 points. Other weightings fit almost as well (0.15/2.0 gives 0.4), and Anthropic does not publish how Max-plan limits weight cache reads. Raw unweighted figures are given alongside.",
+   "The simulation assumes the work after a recycle produces the same per-request context growth as the original session. The successor's state rebuild is approximated only by its starting size R (60k or 100k) plus 3 handoff requests at T charged as cache reads. Lost context that forces extra re-reads, extra requests, and any quality or rework effects are not modelled, so the savings are upper-bound estimates.",
+   "Main and subagent records were separated by path (/subagents/) and by isSidechain. Subagents use 55% of all weighted usage and 49% of their tokens sit above 150k, but the session recycle rails do not govern them, so they are outside this lever.",
+   "A transcript file was used as a proxy for a session. 11 of 785 'fresh' first requests were above 150k, which are probably resumes or forks; they were left in the R distribution. Sessions whose first request fell before the 7-day cutoff were not counted as fresh.",
+   "The fresh-session p50 of 60k is an observed baseline. I did not break down what it contains; cc-ctx-audit and cc-quota-price --census were not run.",
+   "I did not fetch the X post the operator linked. The computed brief asked only for this measurement, so this result does not judge whether that prompt helps.",
+   "All scripts and the request CSV are in /tmp/usage-audit/: scan.py, analyze.py, sim.py, sim2.py, xcheck.py, fit.py, requests.csv. Nothing was written anywhere else, and nothing in the repo was edited."
+  ]
+ },
+ {
+  "lever": "Use `claude -p /usage` (no model call) as a daily snapshot for the \"What's contributing\" breakdown",
+  "headline": "Adopt it only in a narrow form. The run costs nothing: total_cost_usd 0, all token counts 0, duration_api_ms 0. Its session/week/Fable percentages repeat what claude-accounts already samples from /api/oauth/usage about every 5 minutes. Only the \"What's contributing\" block is new: nothing in the repo computes the parallel-session, >150k-context, 8+-hour-session or top-skill shares, and cc-token-ledger --by-agent-type only partly covers \"Top subagents\". Its \"requests\" count matches our deduped census to within 0.1% (next3, 7 days: 53,235 vs 53,287). The run has to call the pinned binary directly with --safe-mode --no-session-persistence and stdin from /dev/null. Calling the bare `claude` instead reaches pnpm 2.0.5 from a script, or the account router from kitty.",
+  "measurements": [
+   {
+    "claim": "No existing repo code calls /usage or parses the 'What's contributing' breakdown. The only '/usage' strings are '/usage-credits' messages in limit-recover, and the only 'contributing' hits are unrelated comments.",
+    "value": "0 consumers",
+    "command": "grep -rn -E \"(['\\\" ]|^)/usage\\b|What.s contributing|contributing\" bin scripts hooks lib core tools"
+   },
+   {
+    "claim": "claude-accounts already reads the session/week/Fable percentages from api.anthropic.com/api/oauth/usage and appends them to ~/.claude/logs/account-utilization.jsonl (UTIL_MIN_INTERVAL_S=300). The top block of /usage is therefore a duplicate.",
+    "value": "latest row 2026-10-24T02:33:42Z next2 session_pct 38 weekly_pct 98, the same as the /usage text for next2",
+    "command": "sed -n 1,70p bin/claude-accounts; sed -n 7542,7560p bin/claude-accounts; tail -1 ~/.claude/logs/account-utilization.jsonl"
+   },
+   {
+    "claim": "No existing tool computes the parallel, >150k-context, 8+h-session or top-skill shares. cc-token-ledger --by-agent-type covers subagent type, weighted by list price. cc-quota-price --census gives token totals only, and cc-ctx-audit gives per-session fill outcomes.",
+    "value": "4 of 6 /usage dimensions not computed anywhere; 1 partial (agent type)",
+    "command": "grep -n add_argument bin/cc-token-ledger; grep -n -i -E 'parallel|concurren|150|skill' bin/cc-token-ledger; grep -rln -E 'subagent.heavy|150k|parallel sessions' bin scripts hooks lib tools"
+   },
+   {
+    "claim": "/usage 'requests' are the same unit as our message.id-deduped responses",
+    "value": "next3 7d: /usage 53,235 requests vs census 53,287 deduped responses (0.1% apart; the windows differ by minutes). The census took 23.8 s.",
+    "command": "/usr/bin/time -p timeout 900 ~/.claude/bin/cc-quota-price --census --json --since 7d --acct next3 > /tmp/usage-audit/w-usage-src/census-next3-7d.json"
+   },
+   {
+    "claim": "/usage makes no model call (JSON run)",
+    "value": "total_cost_usd 0, duration_api_ms 0, num_turns 0, input/output/cache tokens all 0, modelUsage {}, local_command \"usage\", rc 0",
+    "command": "cd <worktree> && CLAUDE_CONFIG_DIR=$HOME/.claude-tertiary /usr/bin/time -p timeout 200 ~/.claude-293/node_modules/.bin/claude -p /usage --output-format json --safe-mode --no-session-persistence </dev/null > /tmp/usage-audit/w-usage-src/next3.json"
+   },
+   {
+    "claim": "Run time with --safe-mode, and the side effects avoided",
+    "value": "14.40 s real (duration_ms 12,853). No transcript written (project-dir jsonl count 1 before, 1 after). No stderr warnings (the plain runs printed the claude.ai MCP 'blocked by enterprise policy' warning). The contributing text matches the plain run except 7d requests 53,237 to 53,235 (window rolled).",
+    "command": "same command as above; ls <tertiary project dir> | wc -l before and after; cat /tmp/usage-audit/w-usage-src/next3.json.err"
+   },
+   {
+    "claim": "The plain collection runs (2.1.291) cost nothing too, but each one fired the full SessionStart hook chain and wrote a transcript of about 14 KB into the corpus that /usage and our census both read",
+    "value": "cost-state totalCostUSD 0, totalAPIDuration 0 on all 6 runs. totalDuration 26.5 / 50.6 s (next, 2 runs), 37.9 s (next2), 30.6 s (next3), 30.4 s (next4), 5.4 s (~/.claude-next4). hook_success SessionStart:startup attachments present.",
+    "command": "python3 -I /tmp/usage-audit/inspect_usage_tx.py <the /usage transcripts>; python3 -I (print cost-state records) on ~/.claude*/projects/-Users-chrisren-Development--worktrees-wt-cc-212519-77967/*.jsonl"
+   },
+   {
+    "claim": "Running the bare launcher from a non-interactive shell reached pnpm 2.0.5. That version does not know /usage, and it tried a summary model call that failed",
+    "value": "2 transcripts with version 2.0.5 at 21:27 (58c23b2a, 8d756f63): user record 'Unknown slash command: usage', and a summary record 'API Error: 404 ... model: claude-3-5-haiku-20241022'",
+    "command": "cat ~/.claude/projects/-Users-chrisren-Development--worktrees-wt-cc-212519-77967/58c23b2a-b44e-462c-bf35-4db0094bec5d.jsonl"
+   },
+   {
+    "claim": "How bare `claude` resolves outside the zsh function",
+    "value": "bash, session PATH: /Users/chrisren/Library/pnpm/claude (2.0.5, a #!/bin/sh shim). launchd-style PATH: /opt/homebrew/bin/claude (2.1.291). The interactive launcher pin is ~/.claude-293 (2.1.293), the binary 28 live sessions run.",
+    "command": "bash -c 'command -v claude'; env -i HOME=$HOME PATH=/usr/bin:/bin:/opt/homebrew/bin bash -c 'command -v claude'; ~/.claude/bin/cc-claude-bin; ps -axo command | awk '{print $1}' | sort | uniq -c"
+   },
+   {
+    "claim": "Repo scripts that resolve bare `claude` from PATH and would get 2.0.5 under an interactive-shell PATH",
+    "value": "bin/cc-notify:683 (command -v claude runs BEFORE cc-claude-bin, while the --cloud transport needs 2.1.220+). scripts/research-kit/router.py:546 (fast classifier uses shutil.which; the live daemon pid 2953 has no pnpm on PATH, so its sonnet-5-5 children run /opt/homebrew/bin/claude 2.1.291, unpinned). scripts/rm-preempt-probe.sh:47 (default bin). scripts/handoff-fire.sh:7613 (only if CLAUDE_CODE_EXECPATH is unset; it is set inside sessions). bin/claude-kimi:128 and bin/cc-claude-bin:92 (last-resort rungs, normally unreachable). Safe: scripts/propose-goal-flag-watch.sh:213 rejects '#!' scripts, so the pnpm shim is refused. lib/desk.zsh:67 and the lr-upgrade.sh:1812 text run in interactive zsh, where `claude` is the function.",
+    "command": "python3 -I /tmp/usage-audit/bare_claude_scan2.py bin scripts hooks lib core tools mods; grep -rn -E ':-claude\\}|command -v claude\\b|which\\(.claude.\\)' bin scripts hooks lib; ps -axo pid,etime,command | grep -E '[s]etting-sources local'; ps -E -o command= -p 2953"
+   },
+   {
+    "claim": "~/.claude-next4 is a leftover directory from a 2026-09-28 probe. The /usage collection did not create it, and it is not an account",
+    "value": "contains s55-probe transcripts dated 2026-09-28 15:08 and a .claude.json backup at epoch 1790626133. The 21:29 /usage run added one transcript and printed the API cost summary because the dir has no subscription login. lib/account-map.generated.sh maps next4 to ~/.claude-quaternary.",
+    "command": "find ~/.claude-next4 -maxdepth 3; date -r 1790626133; sed -n 1,25p lib/account-map.generated.sh"
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "Do not add the /usage session/week/Fable percentages to any tool. claude-accounts and account-utilization.jsonl already hold them at 5-minute resolution, and the oauth integer has the same rounding caveats.",
+    "est_weekly_saving": "0 tokens (avoids a duplicate store)",
+    "confidence_pct": 90,
+    "files": "bin/claude-accounts (no change)"
+   },
+   {
+    "action": "Build the smallest integration as one new script, bin/cc-usage-why (not implemented here), bash 3.2-safe. (1) Resolve the binary with `bin=$(~/.claude/bin/cc-claude-bin)` and fail closed; never use PATH or the zsh function. (2) Take the account dirs from lib/account-map.generated.sh cc_acct_dir_for_name for next, next2, next3, next4; never build ~/.claude-$acct. (3) Run the accounts one at a time, from the repo root: `CLAUDE_CONFIG_DIR=$dir timeout 120 \"$bin\" -p /usage --output-format json --safe-mode --no-session-persistence </dev/null`. (4) Accept a run only if .local_command==\"usage\", .total_cost_usd==0 and every .usage token count is 0; otherwise write an ABSTAIN row with the reason. (5) Parse the .result text: one row per account per window (24h/7d) with requests, sessions, behaviors {label: pct}, top_skills, top_subagents and top_mcp, plus the binary version. Append the rows to ~/.claude/logs/usage-why.jsonl and keep the raw text in ~/.claude/logs/usage-why/<YYYY-MM-DD>-<acct>.txt. (6) Schedule it optionally with launchd/com.claude.usage-why.plist once a day, with a fixed PATH that excludes ~/Library/pnpm, plus a kill switch CC_USAGE_WHY=off and a hermetic test under tests/. Measured cost per run: 0 tokens and about 14 s per account.",
+    "est_weekly_saving": "0 tokens directly. It is a monitoring input, and any saving depends on acting on it (e.g. the >150k-context share of 55-69% across accounts); I can't estimate that from this data.",
+    "confidence_pct": 65,
+    "files": "bin/cc-usage-why (new), launchd/com.claude.usage-why.plist (new, optional), tests/cc-usage-why.bats (new); reads bin/cc-claude-bin and lib/account-map.generated.sh"
+   },
+   {
+    "action": "Fix bin/cc-notify:683 so it calls cc-claude-bin BEFORE `command -v claude`. From any shell with pnpm on PATH, the current order picks 2.0.5, and the --cloud transport needs 2.1.220+.",
+    "est_weekly_saving": "0 tokens (correctness: prevents a failed cloud send)",
+    "confidence_pct": 80,
+    "files": "bin/cc-notify"
+   },
+   {
+    "action": "Pin the research-kit fast classifier to cc-claude-bin instead of shutil.which('claude'). Today it runs unpinned /opt/homebrew 2.1.291, and restarted from an interactive shell it would get pnpm 2.0.5. Do the same for the scripts/rm-preempt-probe.sh default.",
+    "est_weekly_saving": "0 tokens (version-skew correctness)",
+    "confidence_pct": 70,
+    "files": "scripts/research-kit/router.py:546, scripts/rm-preempt-probe.sh:47"
+   },
+   {
+    "action": "Have the operator stop running `claude -p /usage | pbcopy` bare in a kitty pane. There `claude` is the routing function: when CLAUDE_CONFIG_DIR is unset it picks an account through claude-accounts --route, appends a launch row to ~/.claude/route/route.jsonl and arms the launch charge, so the readout covers whichever account the router chose, and a run lasting 14-50 s may be charged as a session. Use cc-usage-why, or `CLAUDE_CONFIG_DIR=<dir> \"$(cc-claude-bin)\" -p /usage --safe-mode --no-session-persistence </dev/null | pbcopy`.",
+    "est_weekly_saving": "0 tokens (keeps router spread data clean)",
+    "confidence_pct": 60,
+    "files": "lib/claude-launcher.zsh (read only; no change proposed)"
+   }
+  ],
+  "caveats": [
+   "The brief says the current binary is /opt/homebrew/bin/claude 2.1.291. The launcher pin (cc-claude-bin, ~/.zshrc _bin=) and the 28 live sessions use ~/.claude-293 at 2.1.293, and I ran my timed JSON check with that binary.",
+   "The .result field of the JSON output is human prose, not structured data. Anthropic calls it 'Approximate' and its percentages 'independent characteristics, not a breakdown'; how they are weighted is not documented. A parser for it can break on any Claude Code update, so the wrapper must store the raw text and abstain when parsing fails.",
+   "The breakdown covers local transcripts for each config dir only. ~/.claude-next/projects is a symlink to ~/.claude/projects, so the 'next' figures include stable-track sessions. Account transplants copy sessions between dirs (cc-token-ledger notes 8% of responses are transplant duplicates), so per-account shares may double-count. I did not measure that for /usage.",
+   "I tested --safe-mode and --no-session-persistence on one account only (next3). I did not reproduce the quaternary 'workspace untrusted, 37 allow rules ignored' warning (it is not in the saved /tmp/usage-audit/next4.txt). /usage runs no tools, so the ignored allow rules should not matter, but that is unverified.",
+   "Side effects of the earlier collection, already done and not undone: 6 transcripts of about 14 KB from 2.1.291 /usage runs plus 2 from 2.0.5, written under the four config dirs' project folders for this worktree; SessionStart hook chains fired; one run added to the stray ~/.claude-next4. I deleted nothing. Whether to remove ~/.claude-next4 is the operator's decision.",
+   "Timings were taken at load average 133 (uptime), with other workers writing to /tmp/usage-audit at the same time. My own files are only /tmp/usage-audit/w-usage-src/*, /tmp/usage-audit/inspect_usage_tx.py, /tmp/usage-audit/bare_claude_scan.py, /tmp/usage-audit/bare_claude_scan2.py and /tmp/usage-audit/bare-claude-hits.txt.",
+   "The bare-claude scan is a heuristic over command positions (tests, fixtures and vendor excluded) followed by manual review of each hit. A `claude` built dynamically, e.g. inside eval or from a variable holding the literal name, could be missed.",
+   "On the user's wider question: /usage confirms what our instruments already show. Most usage is in subagent-heavy, long-running sessions above 150k context. The genuinely new signals are the parallelism and top-skill shares. As a data source it adds monitoring, not savings."
+  ]
+ },
+ {
+  "lever": "Always-loaded baseline: the system prompt, CLAUDE.md, rules, MEMORY.md, skill and agent listings, tool schemas and hook output that every request re-sends",
+  "headline": "Measured over 7 days, the always-loaded baseline accounts for about 10.4B of 41.5B cache-read tokens (25.0%), or about 16% of a price-weighted total. Fresh main sessions start at a median of 39-73k tokens depending on account. Workflow `agent()` slots that run as the default `workflow-subagent` type start at about 47k tokens, against about 7.6k for the existing `workflow-lean` agent, and they made 66k requests this week. Moving the read-only ones to `workflow-lean` is the largest single cut: about 3B cache-read tokens a week if every slot moved, or about 4-6% of weighted spend if half to 80% can. Second, 74 of the 103 skill-listing entries had no invocations in 7 days. Third, the two global instruction files (`~/.claude/CLAUDE.md` plus `rules/10-session-close.md`) cost about 14.7k tokens per main request. Main sessions also carry about 27-33k tokens per request that I could not attribute (tool schemas plus parts of the system prompt the transcripts don't log).",
+  "measurements": [
+   {
+    "claim": "7-day request totals per account agree with the /usage readouts to within 0.2%: next 72,449, next2 82,786, next3 53,287, next4 63,601, total 272,123. Total cache_read is 41.50B, cache_creation 0.98B, output 64.3M (6.73 GB of transcripts streamed in full, no sampling)",
+    "value": "272,123 requests; 41.50B cache_read tokens",
+    "command": "python3 -I /tmp/usage-audit/fullscan.py  -> /tmp/usage-audit/fullscan.json (dedupes by requestId; counts only records timestamped >= 2026-10-17T02:36)"
+   },
+   {
+    "claim": "First-request input-side tokens (input + cache_creation + cache_read) for fresh main sessions, 7 days",
+    "value": "next n=291 p50=58,949 p90=75,079; next2 n=217 p50=39,673 p90=77,755; next3 n=219 p50=62,608 p90=77,967; next4 n=86 p50=73,865 (p90 of 399k comes from 9 resumed or forked files that carried history)",
+    "command": "python3 -I /tmp/usage-audit/headscan.py && python3 -I /tmp/usage-audit/baseline_analyze.py  (output: /tmp/usage-audit/baseline_analyze.out)"
+   },
+   {
+    "claim": "First-request tokens for subagents, by agent type, across all accounts",
+    "value": "workflow-lean n=3,242 p50=9,192 (7,578 excluding the prompt); workflow-subagent n=2,545 p50=47,583, all 2,545 load CLAUDE.md, rules and the skill listing; general-purpose n=238 p50=44,104; deep-research n=55 p50=24,758",
+    "command": "python3 -I /tmp/usage-audit/baseline_analyze.py"
+   },
+   {
+    "claim": "Weekly baseline volume, the sum over files of (first-request tokens minus the prompt) times that file's 7-day requests, as a share of cache_read",
+    "value": "10.38B tokens = 25.0% of 41.50B. By account: next 24.5%, next2 23.1%, next3 25.7%, next4 27.7%. By type: main 5.47B (mean 63.5k per request), workflow-subagent 3.51B (53.0k per request, 66,348 requests), workflow-lean 0.89B (8.3k per request, 106,706 requests), general-purpose 0.43B",
+    "command": "python3 -I /tmp/usage-audit/baseline_perfile.py && python3 -I /tmp/usage-audit/baseline_join.py  (output: /tmp/usage-audit/baseline_join.out)"
+   },
+   {
+    "claim": "Top 10 baseline contributors in weekly tokens (chars/4 for each component, with the unattributed remainder computed as the residual)",
+    "value": "1. residual (tool schemas plus unlogged system prompt) 4.84B, 46.6% of baseline; 2. rules/10-session-close.md 1.22B (11.8%); 3. skill_listing 1.18B (11.4%); 4. ~/.claude/CLAUDE.md 1.15B (11.1%); 5. logged system-prompt text 0.37B (3.6%); 6. deferred_tools_delta 0.36B (3.5%); 7. claude-infrastructure MEMORY.md 0.27B (2.6%); 8. project agent-operating-lessons.md 0.18B (1.8%); 9. other projects' MEMORY.md 0.18B (1.8%); 10. project CLAUDE.md files 0.17B (1.7%). SessionStart and UserPromptSubmit hooks are only 0.10B (0.9%); the mission board 0.09B; agent listing 0.09B",
+    "command": "python3 -I /tmp/usage-audit/baseline_join.py"
+   },
+   {
+    "claim": "Residual (unattributed) tokens per first request, by session type",
+    "value": "main p50: next 27.7k, next2 27.0k, next3 29.2k, next4 32.9k; workflow-subagent 17.5k; general-purpose 15.6k; workflow-lean 5.8k",
+    "command": "inline python3 -I over /tmp/usage-audit/headscan.jsonl (residual = baseline - instructions - attachments - hooks, all chars/4)"
+   },
+   {
+    "claim": "Byte sizes of always-loaded files on disk, with the in-transcript content length from the 'instructions' attachment",
+    "value": "~/.claude/CLAUDE.md 29,000 B (28,498 chars loaded; ~/.claude-next/CLAUDE.md is a symlink to it, and every account loads the same text); ~/.claude/rules/10-session-close.md 30,958 B (30,240); ~/.claude/rules/00-mission-board.md 2,415 B (2,281); claude-infrastructure .claude/CLAUDE.md 7,072 B (7,028); .claude/rules/agent-operating-lessons.md 10,026 B (9,880); claude-infrastructure MEMORY.md 22,106 B (24,611 chars loaded, 153 lines). agent-operating-lessons-situational.md is 89,065 B but is excluded by claudeMdExcludes, and 0 sessions loaded it. Median instructions per fresh main session: 70,953 chars, p90 102,883",
+    "command": "wc -c <files>; the instructions attachment in headscan.jsonl via baseline_analyze.py; sed -n '1325,1335p' ~/.claude/settings.json"
+   },
+   {
+    "claim": "The skill listing holds 103 entries in 30,001 chars (about 7.5k tokens), the same in main sessions, workflow-subagent and general-purpose. User skills are 18,716 chars (55 entries), bundled skills and commands 9,073 (36), anthropic-skills 1,295 (12). Description fields in ~/.claude/skills/*/SKILL.md sum to 19,624 chars",
+    "value": "30,001 chars per request carrying it; 165k requests a week carry it",
+    "command": "skill_listing attachment extracted to /tmp/usage-audit/baseline_skill_listing.txt; inline python3 -I grouping plus a regex over SKILL.md frontmatter"
+   },
+   {
+    "claim": "Skill invocations over 7 days (model Skill calls plus typed slash commands): 74 of 103 listing entries (21,433 chars) had 0 uses. The hyperframes family (10 entries), cafe-wifi-optimization, media-use, motion and outlook-cleanup make up 13 entries and 8,517 chars, all with 0 uses",
+    "value": "74 zero-use entries, 21.4k chars",
+    "command": "rg over /tmp/usage-audit/baseline_files7d.txt -> /tmp/usage-audit/baseline_skill_invocations.txt and baseline_slash_invocations.txt"
+   },
+   {
+    "claim": "Most workflow-subagent traffic comes from inline Workflow scripts. 'verify:N' slots: 1,525 spawns, 16,864 requests. rehearse:* and review:* lanes: about 17 spawns each, 1.4-2.6k requests each. Largest sources by project: agent-context-sync on next4 (23,478 requests, 1.08B baseline tokens) and next2 (11,730 requests, 0.55B), then personal (about 5k requests on each of next2, next3 and next4). None of the saved .claude/workflows/*.js files set agentType to workflow-lean",
+    "value": "66,348 workflow-subagent requests a week",
+    "command": "inline python3 -I joining headscan.jsonl, baseline_perfile.jsonl and subagents/*.meta.json; rg -l workflow-lean ~/Development/*/.claude/workflows"
+   },
+   {
+    "claim": "Cache writes on the first request: workflow-subagent spawns start with cache_read=0. Example first usage [input 2, cache_creation 61,614, cache_read 0, output 5]. Together they write 122.5M tokens a week, 12.5% of all cache_creation",
+    "value": "122.5M of 979.8M first-request cache_creation tokens",
+    "command": "inline python3 -I over headscan.jsonl"
+   },
+   {
+    "claim": "Price-weighted share, using API list ratios (input 1, 1-hour cache write 2, cache read 0.1, output 5): total 6.43B units, of which cache_read is 65%, cache_creation 30% and output 5%. Baseline reads are 16.1% of the weighted total, and 22.1% with first-request writes added",
+    "value": "16.1% (22.1% with writes)",
+    "command": "inline python3 -I over fullscan.json and headscan.jsonl"
+   },
+   {
+    "claim": "Hook injections before the first reply in fresh main sessions: session-start-dispatch.sh stdout p50 3,611 chars; SessionStart system_message p50 2,188; SessionStart additional_context p50 971; UserPromptSubmit additional_context p50 819. Total hook text p50 7,352 chars per fresh session (SessionStart stdout and its surfaced copy overlap)",
+    "value": "about 0.10B tokens a week (0.2% of cache_read)",
+    "command": "python3 -I /tmp/usage-audit/baseline_analyze.py (hooks section); hooks listed from ~/.claude/settings.json via inline python3 -I"
+   },
+   {
+    "claim": "MCP tool calls over 7 days: ms365 408, mac-messages 1, motion 0. The MCP server instructions attachment is about 2k chars per main session",
+    "value": "motion MCP: 0 calls",
+    "command": "rg -o 'name\":\"mcp__\u2026' over /tmp/usage-audit/baseline_files7d.txt"
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "Make workflow-lean the default for read-only Workflow agent() slots and Agent spawns, and enforce it where the call is made. Start with the inline scripts that produce 'verify:N', 'rehearse:*', 'review:*', 'harvest' and 'synthesize' slots in agent-context-sync and personal, and with the general-purpose spawns. A PreToolUse lint on the Workflow tool would flag any agent() without an agentType. Slots that commit or need the global rules keep workflow-subagent. workflow-lean already passed the repo's own gate (REPORT.md: 84% cheaper per slot, same correctness), but it is only used where a slot opts in.",
+    "est_weekly_saving": "Estimated, at full conversion: (53.0k \u2212 8.3k) \u00d7 66,348 requests = 2.96B cache-read tokens, plus 0.35B from general-purpose, plus about 0.10B first-request writes. That is about 7.7% of price-weighted spend; at 50-80% convertible, about 3.9-6.2%",
+    "confidence_pct": 75,
+    "files": "agent-context-sync and personal inline Workflow scripts (source not located on disk; they appear to be inline); ~/.claude/agents/workflow-lean.md; a PreToolUse Workflow hook in claude-infrastructure/hooks"
+   },
+   {
+    "action": "Set the 13 zero-use visual-media and niche skills to name-only or off in skillOverrides, or give them disable-model-invocation: the 10 hyperframes-* entries, media-use, motion, cafe-wifi-optimization and outlook-cleanup. Review the other 61 zero-use entries (12.9k chars) the same way. cafe-wifi-optimization's description alone is 1,562 chars in the listing, far above the repo's 250-char rule.",
+    "est_weekly_saving": "Estimated: 8,517 chars / 4 \u2248 2.1k tokens \u00d7 about 165k requests that carry the listing \u2248 0.35B cache-read tokens (0.85% of cache_read). If all 74 zero-use entries went, about 0.88B. Both figures shrink to about 0 for the slots moved to workflow-lean",
+    "confidence_pct": 55,
+    "files": "~/.claude/settings.json skillOverrides; ~/.claude/skills/{hyperframes*,media-use,motion,cafe-wifi-optimization,outlook-cleanup}/SKILL.md"
+   },
+   {
+    "action": "Run a gated slim round on the two global instruction files, which load together on every main, workflow-subagent and general-purpose request: ~/.claude/CLAUDE.md (28.5k chars) and rules/10-session-close.md (30.2k chars), about 14.7k tokens combined. INSTRUCTION_BUDGET.md says this needs the operator's F1 gate re-run. The current slim variant is STALE against its certified pin.",
+    "est_weekly_saving": "Estimated, after recommendation 1: main traffic only, 86k requests \u00d7 14.7k tokens = 1.26B a week. A 30% trim saves about 0.38B cache-read tokens (0.9%); before recommendation 1 it would be about 0.7B",
+    "confidence_pct": 40,
+    "files": "~/.claude/CLAUDE.md (deployed from CLAUDE.global.slim.md), ~/.claude/rules/10-session-close.md, docs/plans/INSTRUCTION_BUDGET.md"
+   },
+   {
+    "action": "Attribute the 27-33k-token residual in main sessions, which is the largest component (4.84B a week). Run /context once in a fresh session per account. I could not do this, because my brief allowed only /usage. Then decide which tool schemas to defer or drop, for example rarely used built-ins and Workflow/Cron/Task tool families.",
+    "est_weekly_saving": "Unknown until measured. Each 5k tokens removed from main schemas is worth about 0.43B cache-read tokens a week (86k main requests)",
+    "confidence_pct": 30,
+    "files": "none yet; this is a measurement step"
+   },
+   {
+    "action": "Trim the claude-infrastructure MEMORY.md index from 24.6k to about 12k chars by moving cold lines to the archive, which cc-memory-rotate already supports.",
+    "est_weekly_saving": "Estimated: about 3.1k tokens \u00d7 the requests that load it \u2248 0.13B cache-read tokens (0.3%)",
+    "confidence_pct": 45,
+    "files": "~/.claude/projects/-Users-chrisren-Development-claude-infrastructure/memory/MEMORY.md"
+   }
+  ],
+  "caveats": [
+   "Component sizes use chars/4, an estimate. Session totals come from logged usage, which is measured.",
+   "Baseline volume assumes each file's first-request prefix stays in every later request. Auto-compact is off, so this mostly holds, but /compact or /clear inside a file would make it an overstatement.",
+   "The price weighting uses API list ratios. How Max plan quota actually weights cache reads against writes and output isn't published, so the 16%/22% weighted shares are estimates.",
+   "Savings in recommendations 1, 2 and 3 overlap: workflow-lean slots drop CLAUDE.md, rules and the skill listing too. Don't add them up without removing the overlap.",
+   "The residual can't be attributed under the rules of this run (no /context). It may include parts of the system prompt not in prompt_snapshot, as well as tool schemas.",
+   "Skill use counts cover only model Skill tool calls and typed <\\command-name> slash commands in transcripts modified within 7 days. A skill used only in older or deleted transcripts shows as 0 here.",
+   "The skill listing is exactly 30,001 chars, which looks like the listing budget cap. Dropping entries may let truncated descriptions grow back instead of shrinking the listing, so measure it again after the change.",
+   "The source of the inline Workflow scripts behind 'verify:N' and 'rehearse:*' wasn't found on disk; only the metadata descriptions identify them. Who launches them, and whether those slots are read-only, is not verified.",
+   "226 of 7,124 files had no assistant usage in their first 600 lines or 8 MB and were left out of the join. They cover 130 requests.",
+   "/tmp/usage-audit is shared with sibling workers. My files are headscan.py/.jsonl, fullscan.py/.json, baseline_*.py, baseline_*.out, baseline_*.txt and baseline_perfile.jsonl. I overwrote nothing."
+  ]
+ },
+ {
+  "lever": "Sessions active 8+ hours (38-100%) and 4+ sessions in parallel (16-74%): is long-session cost driven by big context or by idle polling and loops, and does parallelism itself cost tokens?",
+  "headline": "Long sessions cost more mainly because their context keeps growing, not because of idle loops. /loop, cron and ScheduleWakeup together are only 0.3% of the estimated cost weight (my proxy for tokens). But 48% of requests (53% of weight) start from a machine trigger rather than an operator prompt: background-command wake notifications, the peer and teammate message buses, and Stop-hook continuations. Each of those wakes re-reads a 180-400k context. Parallelism adds no measurable cost per request. It does cost through coordination traffic (about 12% of weight) and through prompt-cache rewrites after a pane sits idle for over an hour (about 2.6%).",
+  "measurements": [
+   {
+    "claim": "The scan covered every transcript (main sessions and subagents) modified in the last 7 days, with no sampling. Per-account request counts match /usage almost exactly.",
+    "value": "6.73 GB, 7,125 files, 271,887 deduplicated requests. next 72,553 (/usage 72,233); next2 82,651 (82,745); next3 53,235 (53,237); next4 63,448 (63,509)",
+    "command": "python3 -I /tmp/usage-audit/scan2.py <acct> <config_dir>/projects  (logs in /tmp/usage-audit/<acct>.scan2.log)"
+   },
+   {
+    "claim": "Share of usage carried by sessions spanning 8 hours or more",
+    "value": "next 35 sessions: 40% of requests / 36% of weight; next2 49: 76%/76%; next3 41: 54%/57%; next4 32: 75%/76%",
+    "command": "python3 -I /tmp/usage-audit/analyze.py next next2 next3 next4  (/tmp/usage-audit/analysis.txt)"
+   },
+   {
+    "claim": "Request rate in 8h+ sessions, counting each session's subagents",
+    "value": "Per wall-clock hour: next 34, next2 62, next3 35, next4 50. Per active hour: 52 / 101 / 53 / 97. Sessions were active in 496-628 of 822-1,027 wall hours",
+    "command": "python3 -I /tmp/usage-audit/analyze.py next next2 next3 next4"
+   },
+   {
+    "claim": "Main-thread context per request rises with session age",
+    "value": "Mean in hour 0-1: 174-196k. At 8-16h: 297-409k. Past 48h: up to 529-588k. Spearman correlation of age vs context is 0.58-0.74 (Pearson 0.27-0.43). Long-session main mean is 274-315k vs 205-240k for shorter sessions; share above 150k is 80-87% vs 62-72%",
+    "command": "python3 -I /tmp/usage-audit/analyze.py ...; python3 -I /tmp/usage-audit/longmix.py  (/tmp/usage-audit/longmix.txt)"
+   },
+   {
+    "claim": "Who starts the work, across all 4 accounts",
+    "value": "Machine-started (hook, notification, message bus, loop): 48.0% of requests, 52.8% of weight, mean context 179k. Turns dispatched by your infrastructure (handoff-fire [locate] successors, [restore] notes, 'You are...' wave briefs): 9.2% / 12.7%, 230k. Operator prompts: 28.2% / 23.2%, 115k. Unattributable workflow subagents whose parent transcript is gone: 14.6% / 11.3%",
+    "command": "python3 -I /tmp/usage-audit/final2.py next next2 next3 next4  (/tmp/usage-audit/final2.txt)"
+   },
+   {
+    "claim": "Idle loops are negligible",
+    "value": "Scheduled turns (/loop, cron, ScheduleWakeup): 880 requests, 0.3% of weight. The '<<autonomous-loop' sentinel never appears as a user turn; it shows up only in tool-description attachment snapshots. Goal check-ins reporting 'background work still running': 9,722 requests, 2.7%",
+    "command": "python3 -I /tmp/usage-audit/final2.py ...; python3 -I /tmp/usage-audit/roll.py next next2 next3 next4  (/tmp/usage-audit/tn.txt)"
+   },
+   {
+    "claim": "Top 3 machine-started sources by weight (including subagents launched from those turns)",
+    "value": "(1) Background-command wakes from watchers and pollers (arm peer-mail wake, re-arm pane or inbox watcher): 23,489 requests, 9.5% of weight (0.56B), main-thread mean context 290k. (2) Background-command wakes when a land, commit or CI step finishes: 18,146 requests, 7.5% (0.44B), main mean 366k. (3) Peer messages between sessions: 13,974 requests, 6.7% (0.39B), main mean 394k. Next in line: teammate messages 5.6%, the session-continue Stop hook 4.3%. All task-notification wakes combined: 29.4%",
+    "command": "python3 -I /tmp/usage-audit/roll.py ...; python3 -I /tmp/usage-audit/mainonly.py  (/tmp/usage-audit/mainonly.txt)"
+   },
+   {
+    "claim": "Running more sessions at once does not make each request cost more",
+    "value": "Request share and weight share match in every concurrency bucket. Examples: next with 4-7 concurrent sessions is 42% of requests and 42% of weight; next3 is 32%/36%; next2 is 21%/24%",
+    "command": "python3 -I /tmp/usage-audit/analyze.py ...  (5-minute-slot concurrency)"
+   },
+   {
+    "claim": "Editing shared CLAUDE.md does not invalidate running sessions' prompt caches",
+    "value": "2 unexplained cache breaks (gap under 5 minutes, cache_read below 50% of the previous context, context over 20k) across about 86k main-thread requests",
+    "command": "python3 -I /tmp/usage-audit/analyze.py ..."
+   },
+   {
+    "claim": "Cost of cache rewrites after a pane sits idle",
+    "value": "Gaps over 1 hour: 492 main requests rewrote 124M cache tokens, about 2.6% of weight. Gaps of 5 minutes to 1 hour: 6,583 requests, only 12M (1h-TTL cache entries are 19-44% of cache writes). Main threads account for 269M of 980M total cache-write tokens; subagent cold starts account for about 711M (about 15% of weight)",
+    "command": "python3 -I /tmp/usage-audit/analyze.py ..."
+   },
+   {
+    "claim": "Upper bound on what a main-context cap could remove",
+    "value": "Main-thread cache-read weight above 250k context: 0.518B, 8.8% of total. Above 200k: 0.741B, 12.6%",
+    "command": "python3 -I /tmp/usage-audit/capcalc.py  (/tmp/usage-audit/capcalc.txt)"
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "Cap main-session context by triggering handoff-fire or compaction at about 250k rather than letting 8h+ sessions climb to 350-590k. Context, not loops, is what makes long sessions expensive.",
+    "est_weekly_saving": "About 4-6% of weekly weight (estimated as half of the measured 8.8% upper bound, after the cache rewrites each handoff incurs)",
+    "confidence_pct": 65,
+    "files": "~/Development/claude-infrastructure/scripts/handoff-fire.sh, hooks that trigger handoff"
+   },
+   {
+    "action": "Make the watcher and poller background commands (peer-mail wake, pane and inbox watchers) exit only on an actionable event, and re-arm themselves in shell rather than through a model turn. Each wake currently costs a full turn at a mean 290k main context.",
+    "est_weekly_saving": "About 2-4% of weekly weight (estimated as half of the 4.2% main-thread weight, plus part of the 5.4% from subagents launched in those turns)",
+    "confidence_pct": 55,
+    "files": "~/Development/claude-infrastructure/hooks/mailbox-wake-arm.sh and the pane/inbox watcher scripts"
+   },
+   {
+    "action": "Batch or digest peer messages and teammate messages so a 394k-context session wakes once per batch instead of once per message",
+    "est_weekly_saving": "About 2-4% of weekly weight (estimated as 30% of the measured 12.3% combined)",
+    "confidence_pct": 45,
+    "files": "cross-session bus and agent-teams delivery scripts under ~/Development/claude-infrastructure"
+   }
+  ],
+  "caveats": [
+   "The weight measure is my own proxy based on API price ratios: input + 1.25 x cache write + 0.1 x cache read + 5 x output. It is not Anthropic's quota formula. It also prices 1h-TTL cache writes at 1.25x instead of 2x, so the cache-rewrite figures are understated.",
+   "Requests are credited to the turn that started them, and subagents to the parent turn that launched them. Machine-started does not mean wasted: land/commit/CI wakes are productive pipeline steps.",
+   "14.6% of requests are workflow subagents whose parent session transcript no longer exists (retired or handoff predecessors), so what started them cannot be measured.",
+   "I put the [locate] handoff successors, [restore] notes and 'You are...' wave briefs in their own 'infrastructure-dispatched' bucket, even though the transcripts tag them as human. Counted as machine instead, [locate] alone (8.5%) would rank second among machine sources.",
+   "Small deviation from the brief: next2's 7-day corpus is 2.14 GB, just over the 2 GB sampling threshold, and I scanned it in full rather than sampling it. The request counts match /usage, which supports the result.",
+   "~/.claude-next/projects is a symlink to ~/.claude/projects, and that is the directory scanned for the next account.",
+   "Duplicated research across parallel sessions was not measured. Concurrency is approximated as distinct main sessions active in the same 5-minute slot. A session's span is clipped to the 7-day window.",
+   "Not addressed: whether the linked bcherny tweet's prompt helps. My task covered only this lever, so I did not fetch or evaluate the tweet.",
+   "Everything stayed read-only; I wrote files only under /tmp/usage-audit/ (scripts, .pkl data and .txt outputs)."
+  ]
+ },
+ {
+  "lever": "Prompt-cache invalidation (cache_creation busts mid-session) across next, next2, next3 and next4, over the last 7 days",
+  "headline": "Cache busts are real but a small lever. Over 7 days, 22.7% of all cache writes (192M of 844M tokens, after removing duplicates) were the cache rebuilt mid-session. About 97% of that is the cache expiring while a session sat idle. The main conversation keeps its cache for 1 hour; subagents keep theirs for only 5 minutes. Main sessions idle over 1 hour account for 58% of bust tokens, and subagents idle over 5 minutes for 39%. Edits to CLAUDE.md, rules or skills by other sessions, hook-injected content, and model or effort switches caused almost no busts. Priced at API rates, busts are about 6% of total usage. Cache reads of large contexts are about 70%, so trimming context size is the bigger lever. That falls outside this lever.",
+  "measurements": [
+   {
+    "claim": "The scan covered 7 days on all 4 accounts with no sampling. Per-account request counts match /usage 7d within 0.3%",
+    "value": "next 72,454 vs /usage 72,233; next2 82,726 vs 82,745; next3 53,287 vs 53,237; next4 63,594 vs 63,509. Bytes scanned: 1.88 / 2.14 / 1.14 / 1.57 GB (measured)",
+    "command": "python3 -I /tmp/usage-audit/cache-scan.py <acct> <config>/projects /tmp/usage-audit/rows-<acct>.tsv.gz (logs in /tmp/usage-audit/scan-<acct>.log)"
+   },
+   {
+    "claim": "29% of transcript rows are cross-account copies of workflow subagent transcripts (mostly next2 and next4). Per-account /usage figures count them twice",
+    "value": "79,680 of 272,061 rows. After removing copies: 232,221 requests, 270.5M cache-write and 8.85B cache-read tokens fewer (measured)",
+    "command": "python3 -I /tmp/usage-audit/cache-xacct.py ; python3 -I /tmp/usage-audit/cache-dup.py"
+   },
+   {
+    "claim": "Overall ratio of cache writes : cache reads : uncached input, after removing copies",
+    "value": "cache writes 844.4M : cache reads 37,069.8M : uncached input 0.5M (about 1771 : 77725 : 1). Cache writes are 2.23% of prompt tokens; output is 62.0M (measured)",
+    "command": "python3 -I /tmp/usage-audit/cache-xacct.py"
+   },
+   {
+    "claim": "Same ratio per account (raw, copies included)",
+    "value": "next: cache writes / cache reads 0.020; next2: 0.026; next3: 0.022; next4: 0.028 (measured)",
+    "command": "python3 -I /tmp/usage-audit/cache-report.py"
+   },
+   {
+    "claim": "Per session: share of prompt tokens that are cache writes",
+    "value": "Main sessions (n=704): median 2.1%, p90 5.9%. Subagent sessions (n=4,465): median 6.8%, p90 14.6% (measured)",
+    "command": "python3 -I /tmp/usage-audit/cache-persession.py"
+   },
+   {
+    "claim": "Subagents always use the 5-minute cache and the main conversation always uses the 1-hour cache. No override is set",
+    "value": "Subagent requests: 100% 5-minute (671.5M raw cache-write tokens). Main requests: 100% 1-hour (308M). The settings and env vars subagentPromptCacheTtl, CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL and CLAUDE_CODE_PROMPT_CACHE_TTL are unset (measured)",
+    "command": "python3 -I /tmp/usage-audit/cache-ttl.py ; strings claude.exe | grep 'Prompt cache TTL' ; grep -l PromptCacheTtl ~/.claude*/settings*.json"
+   },
+   {
+    "claim": "Where the cache-write tokens go, after removing copies",
+    "value": "Normal growth from new content each turn: 58.1% (490.6M). Mid-session busts: 22.7% (192.0M). First request of each subagent: 14.4% (121.9M). First request of each main session: 4.7% (39.9M) (measured). A bust is a non-first request that reads at least 20k fewer cached tokens than the previous request's prompt and writes at least 20k tokens",
+    "command": "python3 -I /tmp/usage-audit/cache-bust.py && python3 -I /tmp/usage-audit/cache-xacct.py"
+   },
+   {
+    "claim": "Bust share per account (raw)",
+    "value": "next 18.9%, next2 23.6%, next3 26.1%, next4 15.3% of that account's cache writes (measured)",
+    "command": "python3 -I /tmp/usage-audit/cache-report.py"
+   },
+   {
+    "claim": "Top cause: the cache expiring during an idle gap (after removing copies)",
+    "value": "Main session idle >1h: 441 busts, 111.1M (58% of bust tokens). Subagent idle 5m-1h: 392 busts, 65.6M (34%). Subagent idle >1h: 49 busts, 10.0M (5%). Gap under 5 min (other cause): 18 busts, 4.7M (2%) (measured)",
+    "command": "python3 -I /tmp/usage-audit/cache-xacct.py"
+   },
+   {
+    "claim": "Bust rate depends on the gap before a request, and it jumps exactly at each cache lifetime",
+    "value": "Main: 0.0% under 5m (1 of 78,326); 0% at 10-30m; 0.1% at 30-60m; 88% at 1-2h; 87% at 2-8h; 96% over 8h. Subagent: 0.013% under 5m (24 of 179,118); 77% at 5-10m; 97-100% beyond (measured)",
+    "command": "python3 -I /tmp/usage-audit/cache-causes.py"
+   },
+   {
+    "claim": "Hypothesis (a) rejected: sibling-session commits to always-loaded files do not cause busts",
+    "value": "In 8 days, 28 main-branch commits touched CLAUDE.md, .claude/rules, skills/*/SKILL.md, MEMORY.md or agents/. 147 requests (gap under 5m) straddled such a commit; 0 busted (measured)",
+    "command": "git -C ~/Development/claude-infrastructure log main --since='8 days ago' --format='C %ct' --name-only -- '*CLAUDE.md' '.claude/rules/*' 'rules/*' 'skills/*/SKILL.md' '*MEMORY.md' 'agents/*' > /tmp/usage-audit/cache-gitlog.txt ; python3 -I /tmp/usage-audit/cache-causes.py"
+   },
+   {
+    "claim": "Hypotheses (c) and (d) rejected: model or effort switches and hook-injected content do not cause material busts",
+    "value": "251 model switches and 248 effort switches: 0 busts, 17.4M cache-write tokens in total. Hook content arrived before 6,365 requests (hook_additional_context) with 1 bust and before 117,886 (hook_success) with 7. The server-side cache-miss diagnostics show model_changed only 3 times in 7 days (measured)",
+    "command": "python3 -I /tmp/usage-audit/cache-causes.py ; python3 -I /tmp/usage-audit/cache-miss-survey.py"
+   },
+   {
+    "claim": "What woke main sessions whose cache had expired",
+    "value": "Of 396 sessions that had ended their turn: 206 were woken by a background task finishing (52.6M) and 120 by the operator typing (28.4M); the rest are mixed (measured)",
+    "command": "timeout 260 python3 -I /tmp/usage-audit/cache-gapcause.py"
+   },
+   {
+    "claim": "What preceded subagent busts after more than 5 minutes idle",
+    "value": "A single Bash call ran over 5 minutes: 317 busts, 51.6M (median gap 8 min, p90 10 min). Poll loops: 105 (23.5M); calls with timeout >300s: 8; test runners: 10. A subagent waiting about 4.8h after handing back to its parent (SubagentHandback): 116 busts, 22.9M (measured)",
+    "command": "timeout 260 python3 -I /tmp/usage-audit/cache-gapcause2.py ; list in /tmp/usage-audit/cache-sub-bash-busts.txt"
+   },
+   {
+    "claim": "Share of total usage when tokens are priced at API rates (input 1, 5-minute write 1.25, 1-hour write 2, cache read 0.1, output 5)",
+    "value": "Cache reads 69.9%, 5-minute writes 12.6%, 1-hour writes 11.6%, output 5.8%. All busts 6.1%: main idle >1h 4.2%, subagent idle >5m 1.8% (measured tokens, weights assumed)",
+    "command": "python3 -I /tmp/usage-audit/cache-weights.py"
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "Refresh the main session's cache before it expires at 1 hour, while it waits on a long workflow or background task. Before ending a turn to wait, have the session arm a wake under 55 minutes. cc-await-ping --idle-scoped already defaults to --timeout 3300 (55 min). Alternatively, have long workflows send a progress notification about every 50 minutes. One wake re-reads the cache at about 0.1x instead of rewriting about 250k tokens at 2x. This targets the 206 rebuilds triggered by task notifications and the 1-2h gap bucket (192 busts, 49.7M).",
+    "est_weekly_saving": "About 1.5-3% of weekly usage priced at API rates. Estimate: 49.7M 1-hour writes at 2x avoided, minus about 192 wakes x 250k x 0.1. The 2-8h gaps need several wakes each",
+    "confidence_pct": 55,
+    "files": "/Users/chrisren/.claude/bin/cc-await-ping; workflow launch or notify code in ~/Development/claude-infrastructure (not edited)"
+   },
+   {
+    "action": "Enforce the existing 'one Bash call under 4.5 minutes' rule for subagents. Add a PreToolUse warning for subagent Bash calls with timeout >270 or a foreground until/while/sleep poll loop. Run long tests and polls in the background and wait in slices of 270s or less.",
+    "est_weekly_saving": "About 1.2% of weekly usage priced at API rates (51.6M 5-minute writes x 1.25 = about 64M weighted per week; estimated)",
+    "confidence_pct": 60,
+    "files": "hooks/ in ~/Development/claude-infrastructure (not edited)"
+   },
+   {
+    "action": "Do NOT set subagentPromptCacheTtl or CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL to 1h globally. It would raise every subagent cache write from 1.25x to 2x, adding about 7.6 points of weighted usage, while subagent idle busts total only 1.8%. The handback waits average about 4.8h, so a 1-hour cache would not save them either. If needed, set the per-agent cache-lifetime field only on agent types shown to wait 5-60 minutes.",
+    "est_weekly_saving": "Avoids a regression of about 7.6% of weighted usage (estimated: 12.6% x (2/1.25 - 1))",
+    "confidence_pct": 75,
+    "files": "~/.claude*/settings.json (not edited)"
+   },
+   {
+    "action": "Stop treating edits to CLAUDE.md, rules, skills or MEMORY.md, hook-injected content, and model or effort switches as cache-bust risks. Measured busts from them are 0. Spend token-efficiency effort on context size instead: cache reads of contexts over 150k are about 70% of weighted usage.",
+    "est_weekly_saving": "0% direct; redirects effort to the largest cost (measured shares)",
+    "confidence_pct": 80
+   }
+  ],
+  "caveats": [
+   "Max-plan limits may not weight tokens like API prices. The 'weighted share' figures assume API ratios (cache read 0.1x, 1-hour write 2x, 5-minute write 1.25x, output 5x). If the plan's meter discounts cache reads differently, the bust share changes.",
+   "A bust is detected from token counts: the cached read drops at least 20k below the previous request's prompt and at least 20k is written. Smaller busts and compaction rebuilds under 20k are counted as normal growth.",
+   "The cause is inferred from the gap between record timestamps. A gap includes tool runtime, permission-prompt waits and generation time, so some subagent 6-10 minute gaps may be permission waits rather than slow commands. The prompt-content check could not separate the two.",
+   "29% of rows are workflow subagent transcripts copied into a second account directory. Totals were recomputed without the copies. The per-account /usage request counts include them, so per-account /usage figures overstate real traffic, mainly on next2 and next4.",
+   "The server's cache-miss diagnostics appear on only 588 requests, so they back up the conclusions without covering every request. 'previous_message_not_found' (an expired or evicted cache) is the dominant reason.",
+   "The git test uses commit times on main as the time a file changed. Edits that were never committed, and MEMORY.md (not in git), are not covered. Structurally, mid-session file changes arrive as appended attachments such as edited_text_file and nested_memory, not as prefix rewrites.",
+   "Most files in /tmp/usage-audit come from parallel sibling workers. Mine are cache-*.py, cache-rows.pkl, cache-gitlog.txt, cache-sub-bash-busts.txt and rows-*.tsv.gz. A sibling overwrote /tmp/usage-audit/scan.py after my scan started; the scanner I actually ran is re-saved as /tmp/usage-audit/cache-scan.py.",
+   "The bcherny X post returned HTTP 402 to WebFetch and was not read. This report covers only the cache-invalidation lever, not whether that prompt is useful."
+  ]
+ },
+ {
+  "lever": "tooling-adopt: use `claude -p /usage` (no model call) as a daily snapshot for the \"What's contributing\" breakdown",
+  "reproduced": [
+   {
+    "claim": "/usage makes no model call (zero cost)",
+    "holds": true,
+    "note": "Checked independently, without re-running the binary. I scanned every transcript in ~/.claude*/projects/-Users-chrisren-Development--worktrees-wt-cc-212519-77967/*.jsonl with an inline python3 -I record counter. The six 2.1.291 /usage transcripts (344e01a3, a2e71a0a, 30ace16c, 8cad6e5f, 33337647, e9cb517d) have 0 assistant records, so no API response was written (measured). The two 2.0.5 files have only summary and user records. The saved /tmp/usage-audit/w-usage-src/next3.json shows total_cost_usd 0, duration_api_ms 0, modelUsage {} and local_command 'usage'."
+   },
+   {
+    "claim": "The session/week/Fable percentages duplicate what claude-accounts already logs, sampled 'about every 5 minutes'",
+    "holds": true,
+    "note": "The duplicate claim holds. Every row of ~/.claude/logs/account-utilization.jsonl has session_pct, weekly_pct and fable_pct plus reset times (6,831 rows in the last 3 MB, all with these keys). At 02:40Z the log reads next2 38/98/0, next3 1/13/0 and next4 10/65/0. /usage read next4 9/65 ten minutes earlier. The cadence is wrong, though. Measured with a python3 -I gap scan over the last 6 MB of the log, 7-day window: median 446 s, p90 518 s, 1,353 rows per account. That is about 7.5 minutes; 300 s (UTIL_MIN_INTERVAL_S) is only the minimum interval."
+   },
+   {
+    "claim": "/usage 'requests' are the same unit as our message.id-deduped census, 0.1% apart (53,235 vs 53,287) because the windows differ by minutes",
+    "holds": true,
+    "note": "The unit holds exactly, but the stated reason for the gap is wrong. Measured with python3 -I /tmp/usage-audit/skeptic-tooling/req_count.py over ~/.claude-tertiary/projects (1,195 files, 1.16 GB, full scan, no sampling), ending at the JSON run time 1792809517. Rolling 24h: 403 deduped message.ids and 20 sessions, both exactly what /usage printed. Rolling 168h: 53,287 including '<synthetic>' records and 53,235 excluding them, with 223 sessions, again exact. The 52-record gap is exactly the census's own models['<synthetic>']=52 (Claude Code placeholder records, not API calls). Window drift does not explain it. Calendar-day windows do not match: 53,183 requests / 222 sessions, or 54,384 / 234. So 'Last 7d' is a rolling 168h window. /usage counts subagents/ files too: 31,197 of the 53,235 ids come from them. Main and subagent ids overlap 0 times, so nothing is double-counted. Cross-check on next4 with ctx_weight2.py (end time estimated from the saved file's mtime): 8,548 vs 8,545 for 24h and 63,508 vs 63,509 for 7d; sessions 6 and 90, exact."
+   },
+   {
+    "claim": "No repo tool computes the parallel, >150k-context, 8+h-session or top-skill shares",
+    "holds": true,
+    "note": "My own greps found nothing. Searching bin, scripts, tools, lib, hooks and core for 150_?000|150k|>150 gave only unrelated hits (hooks/backup-before-write.sh, scripts/measure-terminations.py). The concurrency hits are process-concurrency caps. The cc-token-ledger argparse list has no context-bucket or skill option. cc-ctx-audit gives per-session peak, p95 and burn. One caveat: claude-accounts logs a per-account live-session count k on every row, so raw concurrency data does exist. Its share of rows with k>=4 (next 83%, next2 97%, next3 34%, next4 82%; measured with a python3 -I log scan) does not match the usage-weighted '4+ parallel' share /usage reports (42-74%, next4 16%). It cannot stand in for it."
+   },
+   {
+    "claim": "How '% of your usage' is weighted is undocumented, so the breakdown can only be parsed from prose",
+    "holds": false,
+    "note": "It is undocumented, but it can be recovered. Measured with python3 -I /tmp/usage-audit/skeptic-tooling/ctx_weight2.py on full scans. Weighting by list price (input 1, cache_creation 1.25, cache_read 0.1, output 5) reproduces the '>150k context' share within about 1.5 pp on all four windows. next3 24h: 38.4% (41.8% with 1h cache writes at 2x) vs 39. next3 7d: 64.9/65.1 vs 66. next4 24h: 60.1/60.3 vs 61. next4 7d: 56.9/57.6 vs 58. Weighting by request is far off: 14.9, 40.6, 40.1 and 37.7. So the 55-69% '>150k' figures are shares of quota-weighted usage, not of requests; only about 38-41% of 7-day requests are above 150k. At least the request, session and >150k numbers can be computed from local transcripts, without the binary."
+   },
+   {
+    "claim": "Bare `claude` from a script reaches pnpm 2.0.5",
+    "holds": true,
+    "note": "bash -c 'command -v claude' and /bin/sh -c 'command -v claude' both resolve to /Users/chrisren/Library/pnpm/claude, a #!/bin/sh shim. Its package.json under ~/Library/pnpm/global/5 says version 2.0.5. On the session PATH, ~/Library/pnpm is entry 5 and /opt/homebrew/bin entry 17 (measured, echo $PATH). ~/.claude/bin/claude and ~/.claude/shims/claude do not exist. ~/.claude/bin/cc-claude-bin returns ~/.claude-293/node_modules/.bin/claude."
+   },
+   {
+    "claim": "Bare `claude -p /usage` in a kitty pane goes through the account router and the launch charge",
+    "holds": true,
+    "note": "In lib/claude-launcher.zsh:259 the router runs whenever CLAUDE_CONFIG_DIR and CC_ACCOUNT_PINNED are unset and the call is not a resume. There is no -p exemption (the only -p check, line 210, is about the mod argv). The same path calls _cc_record_launch (route.jsonl) and _cc_charge_on_commit. The charge's settle time defaults to 5 s (line 172, CC_LAUNCH_ASSIGN_SETTLE_S), so a 14-50 s /usage run would be charged as a launch, not merely 'may be'."
+   },
+   {
+    "claim": "bin/cc-notify:683 tries `command -v claude` before cc-claude-bin",
+    "holds": true,
+    "note": "Read with sed -n 670,700p bin/cc-notify. Line 683 runs CLOUD_CLAUDE=$(command -v claude); the cc-claude-bin rungs at 686 and 689 run only if that comes back empty. From a shell with pnpm on PATH it therefore picks 2.0.5. The --cloud support probe at lines 760-774 then refuses loudly, so the failure is a refused send, not a silent one."
+   },
+   {
+    "claim": "--safe-mode --no-session-persistence avoids writing a transcript; about 14 s per account",
+    "holds": true,
+    "note": "The JSON run's session_id 6d4070e8 does not exist under any of the four projects dirs (checked with find -name '6d4070e8*'). The tertiary project dir for this worktree has only the 21:31 plain-run file e9cb517d. --safe-mode appears in --help for both ~/.claude-293 (2.1.293) and /opt/homebrew/bin/claude (2.1.291). The 14.40 s real time (the saved time output) was measured on one account at load average 133; I did not re-time it."
+   },
+   {
+    "claim": "research-kit router.py:546 and rm-preempt-probe.sh:47 resolve an unpinned binary",
+    "holds": true,
+    "note": "Read with sed: router.py:546 is `claude = shutil.which(\"claude\")` on the fast path, while only the careful path pins by path. rm-preempt-probe.sh:47 is `bin=\"${CC_PROBE_BIN:-$(command -v claude)}\"`. pgrep shows the classifier-warm.py serve daemon alive as pid 2953. I did not check whether the unpinned fast path is deliberate."
+   }
+  ],
+  "refuted_recommendations": [
+   "Partly, recommendation 2 (bin/cc-usage-why, a daily launchd job that parses the /usage prose). Its '0 tokens directly' saving estimate holds. Its premise and shape are weaker than stated. (a) The request and session counts reproduce exactly from our transcripts, and the >150k share reproduces within about 1.5 pp using list-price weighting (measured, ctx_weight2.py on next3 and next4). So a transcript-side computation, for example a context-bucket option in cc-token-ledger or cc-quota-price, gets the main numbers without the binary, the router, version skew or prose parsing. Only the parallel, 8+h, subagent-heavy and top-skill definitions remain unverified. (b) It names no reader for ~/.claude/logs/usage-why.jsonl. An ABSTAIN row in a log nobody reads is the trap the repo lesson 'fail-loud into a log nobody reads is silent' warns about (agent-operating-lessons-situational.md:7). Build it only alongside a consumer.",
+   "None of the other saving estimates are refuted: recommendations 1, 3, 4 and 5 each claim 0 tokens and present themselves as correctness or data-hygiene fixes, which matches the code I read. Two smaller corrections to statements in the report rather than its recommendations: the cadence is about 7.5 minutes (median 446 s), not 'about every 5 minutes'; and the 52-request census gap comes from '<synthetic>' records, not from the window rolling."
+  ],
+  "corrected_headline": "Adopt it only in a narrow form; the main claims hold, with two corrections. /usage costs nothing: its transcripts contain no assistant records. Its session/week/Fable percentages are already in account-utilization.jsonl, which claude-accounts samples about every 7.5 minutes (median 446 s), not 5. Its request and session counts are exactly our transcripts deduped by message.id, with '<synthetic>' records left out, subagent files included, over a rolling 24h or 168h window: next3 403/20 and 53,235/223 match exactly, and next4 matches within 3 requests. The census's 52 extra requests are '<synthetic>' records, not window drift. The '>150k context' share is weighted by list price (within about 1.5 pp on four windows), not by request count: only about 38-41% of 7-day requests are above 150k. So the 'What's contributing' block is new as a ready-made report but contains no new data. It is a monitoring input that saves nothing directly. A transcript-side computation could replace the prose parser for the request, session and >150k numbers. The warnings about bare `claude` are confirmed: from a script it reaches pnpm 2.0.5, and from kitty it goes through the router and incurs a launch charge after 5 s."
+ },
+ {
+  "lever": "Subagent-heavy usage: default \"workflow-subagent\" Workflow slots (load full CLAUDE.md, rules, memory, skills and MCP) compared with \"workflow-lean\" slots (load none)",
+  "headline": "Measured over 7 days of deduplicated subagent transcripts: a default workflow-subagent slot's first request is 47.6k tokens at the median, against 9.2k for workflow-lean. After subtracting the brief, the fixed overhead is about 38.5k tokens per slot, and it is re-read on every turn. Of the 1,937 default slots, 1,768 (91%) used no skill, MCP, real-repo commit or code write, so the rule allowed them to run as lean. 1,214 of those 1,768 came from the agentsync \"b13-roundNN\" workflow scripts, whose agent() calls set no agentType. Estimated saving from moving the eligible slots to lean: about 275M weighted tokens a week, or 5.2% of all usage on the 4 accounts (11.2% on next4, 6.1% on next2, 3.7% on next3, 1.9% on next). The skill names under \"Top subagents\" in /usage are not forked skills. No SKILL.md has `context: fork`. They are subagent requests tagged with the skill or command active when the slot ran.",
+  "measurements": [
+   {
+    "claim": "Size of the scan: 7-day subagent transcripts across the 4 config dirs. Full scan, no sampling (each account was under 2 GB)",
+    "value": "6,085 files, 4.71 GB, 33 s. Deduplicated to 4,822 unique agent ids, of which 4,791 had their first request on or after 2026-10-16T23:59Z",
+    "command": "python3 -I /tmp/usage-audit/lever-subagents/scan_subagents.py (output subagents.jsonl, log /tmp/usage-audit/scan.log); dedup into keep_paths.txt via inline python in /tmp/usage-audit/lever-subagents"
+   },
+   {
+    "claim": "The same subagent transcripts appear in two accounts' projects/ dirs (cross-account copies). The copy has an integer mtime, and the usage is identical",
+    "value": "1,263 duplicated agent ids out of 4,822. In 1,207 of the 1,263 pairs exactly one file has an integer mtime. All 1,263 pairs have identical usage. Main pairs: next2/next4 578, next/next4 297",
+    "command": "inline python over /tmp/usage-audit/lever-subagents/subagents.jsonl (group by basename, compare mtime.is_integer() and usage tuples)"
+   },
+   {
+    "claim": "Per agent type, 7 days, deduplicated: slots, requests, first-request mean/p50/p90, total input side, output, weighted equivalent",
+    "value": "workflow-lean: n=2559, req=82,232, first mean 10.7k / p50 9.2k / p90 12.6k, input side 6,948M (cache read 6,733M, cache write 216M), out 22.6M, wEq 1,056M (413k/slot). workflow-subagent: n=1937, req=51,200, first 54.2k / 47.6k / 63.7k, input side 7,105M (cache read 6,853M, cache write 251M), out 9.9M, wEq 1,049M (542k/slot). general-purpose: n=236, req=9,480, first 46.2k / 44.1k / 48.3k, input side 1,176M, out 0.60M, wEq 191M (809k/slot). deep-research: n=55, req=3,275, first 25.3k / 24.8k / 25.5k, input side 347M, out 0.46M, wEq 48.6M (883k/slot). Per-account rows are in agg_dedup.txt; next3's default slots start higher (p50 62.7k)",
+    "command": "python3 -I /tmp/usage-audit/lever-subagents/agg_dedup.py > /tmp/usage-audit/lever-subagents/agg_dedup.txt"
+   },
+   {
+    "claim": "Fixed per-slot overhead with brief length controlled for (first request minus brief_chars/4)",
+    "value": "workflow-subagent p50 47,051 (p10 44,063, p90 63,325) vs workflow-lean p50 8,486 (p10 6,974, p90 11,453). Difference about 38.5k tokens per slot. Brief p50: 2,163 chars (default) vs 911 chars (lean)",
+    "command": "timeout 250 python3 -I /tmp/usage-audit/lever-subagents/briefs.py (output briefs.txt)"
+   },
+   {
+    "claim": "What the default slots actually needed, from tool_use records in each slot",
+    "value": "1,937 default slots: 1,768 needed nothing outside lean's tool set. 101 mutated git only in /tmp sandbox repos (b13 rehearsals). 20 made a real-repo commit or land. 19 invoked a Skill (outbound-drafting 11, clear-professional-writing 4, dataviz 3, pyramid-principle 3). 17 called MCP (ms365). 12 wrote code files in a repo. The first git regex flagged 262 slots, but 141 of those were false positives (e.g. git merge-base) and only 16 committed in a real repo",
+    "command": "timeout 260 python3 -I /tmp/usage-audit/slots.py; timeout 200 python3 -I /tmp/usage-audit/lever-subagents/gitcmds2.py (gitcmds.txt, gitclass.json); python3 -I /tmp/usage-audit/lever-subagents/final.py"
+   },
+   {
+    "claim": "Which workflows spawn the default slots",
+    "value": "b13-roundNN (agentsync, ~/Development/agent-context-sync): 1,314 of 1,937 default slots (68%), 569M wEq. Each round script has 4 agent() calls and 0 agentType. Next largest: explain-decisions-ultra 57, otto-concessions 39, accounts-narrow-fix 39, select-units-deep-dive 34, startup-hooks-w6-decisions-r2 30, tanney-deep-2026-10-19 30. Across 178 unique workflow runs, by regex count: 55 scripts set no agentType, 50 set it on some calls, 73 on all. ~/.claude/workflows/freewin-probe-t1-t2.mjs and pyramid-fans.mjs also set no agentType",
+    "command": "python3 -I /tmp/usage-audit/lever-subagents/analyze_dedup.py; inline python family grouping over slots.jsonl + runs.json; grep -c agent(/agentType ~/.claude/workflows/*.mjs"
+   },
+   {
+    "claim": "Weekly saving from moving eligible default slots to workflow-lean (estimate: per-slot delta x (1.25 for one cache write + 0.1 x (requests - 1) cache reads); weights are API price ratios, not the Max quota formula)",
+    "value": "Tier A eligible: 1,768 slots, 274.5M wEq a week, 5.2% of the 5,286M 4-account total (raw input side 1,835M). By account: next4 102.5M (11.2%), next2 102.0M (6.1%), next3 38.6M (3.7%), next 31.4M (1.9%). Within tier A: b13 135.2M, other workflows 139.3M. Tier B, sandbox-git rehearsals (would need a lean variant that allows /tmp git): another 35.6M (0.7%). Must stay default (commit, MCP, skill, code writes): 24.2M",
+    "command": "python3 -I /tmp/usage-audit/lever-subagents/final.py (final.txt); python3 -I /tmp/usage-audit/lever-subagents/final_b13.py"
+   },
+   {
+    "claim": "7-day weighted total per account, main sessions plus subagents, deduplicated by message.id with copies resolved to the non-integer-mtime original",
+    "value": "next 1,648M (sub 496M), next2 1,671M (sub 996M), next3 1,055M (sub 293M), next4 912M (sub 586M). Requests: next 72,046, next2 76,711, next3 42,293, next4 44,611",
+    "command": "python3 -I /tmp/usage-audit/lever-subagents/totals.py (totals.txt, 7,268 files, 6.91 GB, 42 s)"
+   },
+   {
+    "claim": "Why workflow-authoring, plan-conventions, dataviz, explain-decisions and limit-recover appear as subagent names in /usage",
+    "value": "No SKILL.md under ~/.claude/skills has context: fork (count 0). Sidechain records carry attributionSkill alongside attributionAgent, and the skill is often inherited by lean slots, which have no Skill tool. Examples: next2 explain-decisions 4,333 requests in subagent files with attributionAgent=workflow-lean; next4 limit-recover 3,260 (lean); next2 workflow-authoring 2,993 (lean) + 2,953 (default); next4 dataviz 266 (default). workflow-authoring and dataviz are bundled skills in 2.1.291 (binary list Zxn). explain-decisions and limit-recover are commands (~/.claude/commands/*.md). plan-conventions is a user skill. The binary defines workflow-subagent as built-in with tools ['*'] and no omitClaudeMd",
+    "command": "timeout 260 python3 -I /tmp/usage-audit/skillattr.py; find ... | xargs grep -o attribution(Agent|Skill) tally; grep -l '^context: *fork' ~/.claude/skills/*/SKILL.md | wc -l; python3 mmap search of /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "Add agentType: 'workflow-lean' to the read-only agent() calls in the agentsync B13 round template: the cross-lane review, harvest and per-finding skeptic verify slots. The next round copies the previous round's script, so fixing the template fixes every later round. Keep the default only for rehearsal slots that git-commit inside /tmp sandboxes.",
+    "files": "/Users/chrisren/.cache/agentsync-bring-back/b13/roundNN/roundNN-workflow.js (latest: round25/round26); the lead prompt that authors them (e.g. /Users/chrisren/.cache/agentsync-bring-back/b13/round*/recycle-prompt.md)",
+    "est_weekly_saving": "About 135M weighted tokens a week, about 2.6% of the 4-account total, mostly on next4 and next2 (estimate, final_b13.py tier A|b13)",
+    "confidence_pct": 80
+   },
+   {
+    "action": "Make workflow-lean the default in the workflow authoring path, for example a PreToolUse check on Workflow scripts that flags agent() calls with no agentType. The CLAUDE.md rule already exists, yet 55 of 178 runs this week set no agentType and 50 set it only on some calls. Also fix ~/.claude/workflows/freewin-probe-t1-t2.mjs and pyramid-fans.mjs.",
+    "files": "~/Development/claude-infrastructure/hooks/ (new Workflow PreToolUse check), CLAUDE.global.slim.md:117, ~/.claude/workflows/*.mjs",
+    "est_weekly_saving": "About 139M weighted tokens a week from the non-B13 eligible slots, about 2.6% (estimate, final_b13.py tier A|other)",
+    "confidence_pct": 65
+   },
+   {
+    "action": "Optionally add a lean variant that allows git mutation only inside a /tmp sandbox clone, for the B13 rehearsal slots. Today lean's prompt forbids all git mutation.",
+    "files": "~/Development/claude-infrastructure/agents/ (new agent file, e.g. workflow-lean-sandbox.md)",
+    "est_weekly_saving": "About 35.6M weighted tokens a week, about 0.7% (estimate, tier B)",
+    "confidence_pct": 50
+   },
+   {
+    "action": "Do not move the default slots that used a Skill, ms365 MCP, a real-repo commit or land, or wrote repo code (68 slots). These are the rule's legitimate reasons, and the possible saving is only about 24M a week.",
+    "files": "n/a",
+    "est_weekly_saving": "0 (keep as is)",
+    "confidence_pct": 85
+   }
+  ],
+  "caveats": [
+   "The savings are estimates. 'wEq' weights tokens by API price ratios (input 1, 5-minute cache write 1.25, cache read 0.1, output 5). The weighting Max uses for the weekly quota is not published, so the percentages are a proxy for quota share, not a measurement of it. The model counts one cache write per slot and ignores rewrites after the 5-minute cache expires, so it probably understates the saving.",
+   "The saving assumes a lean slot does the same work in the same number of turns. Lean slots this week averaged 32 requests per slot against 26 for default slots, but they ran different tasks, so this does not show lean needs more turns. The repo's 'equal correctness' claim comes from its 2026-09-24 offline re-gate. I did not re-test it.",
+   "Measured default-slot overhead is now about 38.5k tokens. agents/workflow-lean.md still says about 130k for the default, so that description is out of date.",
+   "Some sessions' transcripts exist in two accounts (1,263 duplicated subagent ids). My per-account numbers count each transcript once, at the non-integer-mtime original (the heuristic resolves 1,207 of 1,263 pairs). /usage's own 7-day request counts are higher than my deduplicated counts: next4 63,509 vs 44,611, next3 53,237 vs 42,293. That suggests, but does not prove, that /usage counts copied transcripts too, so its per-account percentages may be inflated for next4 and next3.",
+   "The 'needs' classes come from tool_use names and Bash regexes. They cannot see whether a slot's brief demanded a skill or MCP that it never called, and the repo-code vs repo-doc split uses file extensions.",
+   "How /usage groups 'Top subagents' is inferred from the attributionSkill and attributionAgent fields in transcripts and the binary's byAgent/bySkill strings. I did not read the source code.",
+   "Deviation from the rules: I created /tmp/usage-audit/skillattr.py with a shell heredoc, and patched /tmp/usage-audit/lever-subagents/final_b13.py with a python heredoc. Neither prompted, and both are inside /tmp/usage-audit/. /tmp/usage-audit/ is shared with other concurrent workers, so after the first scans I moved my outputs to /tmp/usage-audit/lever-subagents/. Early copies of scan_subagents.py, agg.py, agg.txt, slots.py, slots.jsonl, runs.json and subagents.jsonl remain in /tmp/usage-audit/. agg.txt there is the pre-dedup version, which double-counts copies.",
+   "The brief's other question, whether the bcherny tweet prompt helps, was not part of this lever, and I did not assess it."
+  ]
+ },
+ {
+  "lever": "\">150k context\" (main-session context size versus recycle thresholds that are percentages of a 1M window)",
+  "reproduced": [
+   {
+    "claim": "Main-session context distribution: p50 231k, p90 459k, p99 649k, max 774k; 89% of input-side tokens above 150k, 54% above 300k; 22.4B/week, 98.6% cache read",
+    "holds": true,
+    "note": "Measured, from my own scanner: python3 -I /tmp/usage-audit/sk_bc_scan.py, then sk_bc_an1.py. Results: n=86,326, p50 231,553, p90 458,749, p99 649,194, max 774,188. Above 150k: 74.9% of requests and 89.3% of tokens. Above 300k: 33.1% and 53.9%. Input-side total 22.40B, cache read 98.6%. Full scan, no sampling: 15.3 GB over 15 days in about 17 s per account."
+   },
+   {
+    "claim": "No double counting: request counts (deduplicated by requestId) match /usage",
+    "holds": true,
+    "note": "The main lever is clean. Only 0.1% of 7d main rows appear in more than one account (sk_bc_dup.py). Subagent transcripts are not clean: 21.4% of 7d subagent rows are cross-account copies of transplanted sessions, at the same path in both accounts (82,192 request ids). /usage counts those copies too. next4: /usage 63,509, local count including copies 63,716 (+0.33%), originating account only 43,406 (-31.65%), from the inline birthtime-attribution check. So the agreement with /usage shows that /usage is computed client-side from local files. It does not show the data is free of duplicates, and the agent's 5.70B-eq all-usage denominator is inflated by these copies."
+   },
+   {
+    "claim": "The context window is 1M, read rather than assumed, so the recycle thresholds of 25-75% mean 250k-750k tokens",
+    "holds": true,
+    "note": "Measured. 27 of 27 /tmp/cc-telemetry records have window=1,000,000, and used_pct equals input_tokens/1M in 27 of 27. Telemetry input_tokens matches the transcript's last-request context: session 666022fd shows 624,217 in both. The hook defaults T_IDLE 35, T_IDLE_FLOOR 25, T_NUDGE 50, T_BUSY_MIN 60 and T_BUSY 75 were confirmed by grep of hooks/waiting-recycle.sh."
+   },
+   {
+    "claim": "Re-prime cost: a fresh session starts at about 60k (46k cache write), reaches about 100k by request 10 and 145k by request 30",
+    "holds": true,
+    "note": "Measured (sk_bc_succ.py). Fresh sessions (n=697): first request p50 58,715, of which 44,189 is cache write; request 10 p50 99,846; request 30 p50 145,410. Handoff-type sessions (n=94; the classifier is imperfect): first request p50 73,762, request 10 p50 102,559. R=100k is reasonable."
+   },
+   {
+    "claim": "/usage's '>150k' share is usage-weighted, and 1/0.1/1.25/5 reproduces it, which validates the savings weighting",
+    "holds": false,
+    "note": "The descriptive part holds. With my data, the agent's weights give 67.8/60.9/64.9/56.9 against /usage's 69/62/66/58, an average error of 1.1 points; the agent reported 0.2 (sk_bc_an1.py). Using /usage as validation for the savings weighting does not hold. /usage's breakdown is a client-side calculation over local transcripts (it counts the copies, see above), so it says nothing about how the plan meter charges each token class. The weighting also has two errors. First, main-session cache writes are 100.0% 1h-TTL, which is 2.0x input at list price, not 1.25x (sk_bc_an1.py). Second, see the meter fit below."
+   },
+   {
+    "claim": "Weighting assumption: cache read 0.1 and cache write 1.25 (relative to input) stand in for the plan meter",
+    "holds": false,
+    "note": "Measured with my own NNLS fit of weekly_pct and session_pct movement in ~/.claude/logs/account-utilization.jsonl against per-class tokens, attributing copies to the originating account (python3 -I /tmp/usage-audit/sk_bc_meter.py and sk_bc_meter2.py). Weekly meter, intervals of at least 3h, n=435: cache read is charged. Its coefficient is 0.0045-0.0067 pp per million tokens, positive in 100% of 300 bootstrap resamples and on all 4 accounts individually (0.0064-0.0081). That carries 27-40% of predicted weekly pp. The fit predicts 606 weekly pp for the last 7 days; 587 were observed. A 1h cache write weighs about 43x a cache read, close to Opus-5.5 list (2/0.05=40x), against the agent's 12.5x. The best single-scalar shape is list with cache read at 0.05x (R2 0.949, versus 0.934 with reads free and 0.938 at 0.1x). Caveat: the data is observational and output correlates with cache read at r=0.85."
+   },
+   {
+    "claim": "Recycling every main session at 250k (R=100k) saves 32% of main-session weighted usage, about 14.5% of all usage across the 4 accounts",
+    "holds": false,
+    "note": "This reproduces only under the agent's own weights: my independent sim gives 14.7% of all usage with 503 recycles (python3 -I /tmp/usage-audit/sk_bc_sim.py). Estimated under meter-fitted weights: 5.9-8.5% of all usage if recycles may fire at any request, including mid-tool-loop as in the agent's sim; 5.3-7.4% if they may fire only at turn boundaries (idle points); 3.0-3.5% if only at cache-expired idle points (more than 1h since the last request), which is the cost-free moment. These are upper bounds that assume full compliance and no quality loss."
+   },
+   {
+    "claim": "Recycling at 150k saves more, 38-51% weighted or 17-23% of all usage",
+    "holds": false,
+    "note": "Estimated (sk_bc_sim.py). Under the fitted meter, 150k saves less than 250k because each of about 1,975 recycles a week pays a 1h cache write that is weighted about 43x a read. With recycles allowed at any request: 1.8-4.3% of all usage at T=150k versus 5.9-8.5% at T=250k. List-5.5 weights: 6.3% versus 10.8%."
+   },
+   {
+    "claim": "Recommendation 3: each 10k cut from the baseline saves about 0.86B raw, about 0.09B-eq a week (about 1.5% of usage)",
+    "holds": false,
+    "note": "The raw part holds: 86,239 main requests x 10k = 0.86B cache reads a week, measured count. The weighted share is overstated. Estimated under the fitted meter: 0.86B x 0.0045-0.0067 pp/Mtok = 3.9-5.8 weekly pp, which is 0.6-1.0% of about 606 pp/week. That is 1.5-2.4x below the agent's figure. The direction is right."
+   }
+  ],
+  "refuted_recommendations": [
+   "Recommendation 1 (switch to absolute thresholds: idle 200-250k, nudge 250k, forced drain 350-400k, TOK_K 300k), saving estimate 14.5-17% of all usage: refuted. My meter fit gives about 3-8.5% even with perfect compliance, depending on where recycles may fire (sk_bc_sim.py). Four further problems. (a) The idle half mostly duplicates an existing rail: waiting-recycle.sh already lowers T_IDLE to T_IDLE_FLOOR=25% (250k) over IDLE_DECAY_S=3600s, so idle sessions already recycle at 250k once their 1h cache has expired. The opportunity left at cache-expired idle points is only about 3-3.5% of usage. (b) The forced drain at 350-400k forces busy sessions mid-work. That conflicts with the operator rule quoted in hooks/cache-expiry-warning.sh ('never cut quality even for a disproportionate amount of token savings') and with the lesson 'Clean+landed \u2260 nothing in hand' in .claude/rules/agent-operating-lessons-situational.md: a recycle kills the lead's in-flight workflow children, and 55-90% of sessions here are subagent-heavy. (c) docs/plans/USAGE_TELEMETRY_100P.md lists 'Recycling / context-shrinking as a cost lever' under 'Previously refuted, do not re-propose' (August, Opus-5, cache_read about 0), and the agent did not cite or address it. My fit says cache reads are now charged on Opus-5.5, so that rule's premise looks stale and the lever is real, but at roughly a third to a half of the claimed size. (d) The agent's denominator includes 21% duplicated subagent transcripts.",
+   "Recommendation 2's saving claim (going from 250k to 150k adds 0.15-0.35B-eq a week) is refuted. Under meter-fitted weights and Opus-5.5 list weights, 150k saves less than 250k, because the roughly 1,975 recycles a week each pay a 1h cache write weighted about 40-43x a read. The advice not to go to 150k still holds, for a stronger reason: going there loses usage.",
+   "Recommendation 3 (shrink the 60k baseline): direction holds, but the weighted saving is overstated about 1.5-2.4x. Estimated at about 0.6-1.0% of all usage per 10k cut under the fitted meter, not about 1.5%."
+  ],
+  "corrected_headline": "These facts reproduce, all measured. Main sessions run on a 1M window: 27 of 27 telemetry records show it, and used_pct equals context/1M. Per-request context has p50 231k, p90 459k and max 774k, and 89% of main-session input-side tokens are above 150k. The recycle rails act at 250k-750k. The savings do not reproduce. The 14.5% of all usage holds only under the agent's assumed weights (cache read 0.1x, cache write 1.25x). Main-session cache writes are 100% 1h-TTL (2x at list price). A meter fit over 15 days of account-utilization data (435 weekly intervals; it predicts 606 weekly pp against 587 observed) charges cache reads at about 1/43 of a 1h write, against the agent's 1/12.5. Cache reads do count, carrying about 27-40% of the weekly meter, which contradicts the repo's August 'cache_read is free' ruling. Recycling every main session at 250k would save about 6-8.5% of all usage if a recycle could fire at any request, about 5-7% at turn boundaries only, and about 3-3.5% at the cost-free cache-expired idle points the existing 25% idle floor already targets. 150k saves less than 250k. All of these are upper-bound estimates that assume full compliance and no quality loss. The forced busy drain at 350-400k would cut sessions mid-work, against the operator's no-quality-cut rule. Scripts and outputs: /tmp/usage-audit/sk_bc_scan.py, sk_bc_an1.py/.out, sk_bc_dup.py/.out, sk_bc_meter.py/.out, sk_bc_meter2.py/.out, sk_bc_succ.py/.out, sk_bc_sim.py/.out. Nothing outside /tmp/usage-audit was written."
+ },
+ {
+  "lever": "long-parallel: is the cost of 8h+ sessions and 4+ parallel sessions driven by big context, or by idle polling and loops, and does parallelism itself cost tokens?",
+  "reproduced": [
+   {
+    "claim": "The scan covered every transcript, request counts match /usage, and subagent transcripts are not double-counted",
+    "holds": true,
+    "note": "Measured with my own scanner, run as `bash /tmp/usage-audit/skeptic-lp/runall.sh` (scan.py; logs in /tmp/usage-audit/skeptic-lp/<acct>.log). Deduplicated requests: next 72,791 (/usage 72,233), next3 53,232 (53,237), next4 63,302 (63,509). No message.id appears in both a main file and a subagent file (xkind=0). next2 has 124 repeat records across files, all of the same kind, removed by the message.id dedup. Deviation from their method: next2's corpus is over 2 GB, so I sampled it by session hash (218 of 231 sessions kept); every figure below is a share, so the sampling does not change it. Model mix is 99.85% claude-opus-5-5 (`cc-quota-price --json --with-cache-read`, census.model_mix), so weighting by model is not a confound."
+   },
+   {
+    "claim": "The weight proxy (input + 1.25 cache write + 0.1 cache read + 5 output) is a fair stand-in for quota",
+    "holds": false,
+    "note": "Cache reads make up 70.7% of the proxy weight (measured: `python3 -I /tmp/usage-audit/skeptic-lp/rew_theirs.py`, run on their own v2.pkl) and 70.8% on my scan (an.py). The repo has measured the meter directly. docs/plans/USAGE_TELEMETRY_100P.md \u00a72.8: 31.7M cache-read tokens moved the weekly meter 1 point where list pricing predicted 4.62, which bounds cache reads at 0.018-0.049 pp/Mtok, 'at most a quarter of list price, plausibly zero'. The current price list, docs/research/tm2-cost-vs-outcome-2026-10-16/REPORT.md:78, is 1.95 pp/Mtok output, 0.25 cache write, cache reads excluded. On that meter, output is 44.4% of cost and cache writes 55.6% (workflow-subagent writes 33.0%, main-thread writes 17.7%) (measured: idle.txt). Every '% of weight' in the report is therefore mostly context size times request count."
+   },
+   {
+    "claim": "8h+ sessions carry most of the usage",
+    "holds": true,
+    "note": "Pooled over all four accounts: 61.4% of requests, 60.1% of proxy weight, 57.1% of meter weight (measured: `python3 -I /tmp/usage-audit/skeptic-lp/an.py next next2 next3 next4`, an.txt). This matches their per-account 40-76%."
+   },
+   {
+    "claim": "Long sessions cost more mainly because their context keeps growing",
+    "holds": false,
+    "note": "Context does grow with session age. Mean main-thread context: 186k under 1h, 325k at 1-8h, 373k at 8-16h, 447k past 48h (measured: an.txt; age is clipped at the start of the 7-day window). On the meter, though, cost per main request is flat for the first 16 hours: 2.21 under 1h, 1.79 at 1-8h, 2.01 at 8-16h (meter units per request). It rises only after that (2.74 at 16-48h, 4.93 past 48h). The rise comes from cache writes, which go from 2.9k to 16.3k tokens per request, while output per request falls from 757 to 442 tokens (measured: inline heredoc, output in /tmp/usage-audit/skeptic-lp/agecost.txt). So the cost of old sessions comes from cache rewrites after idle gaps, not from re-reading a large context."
+   },
+   {
+    "claim": "48% of requests and 52.8% of weight start from a machine trigger",
+    "holds": false,
+    "note": "Counting main-thread turns only: 51,418 of 84,601 main requests are machine-triggered. That is 19% of all requests, 31.1% of proxy weight and 22.0% of meter weight (an.txt). The rest of their figure is subagent weight, credited to whichever trigger was active when the subagent started. 89-100% of that subagent weight comes from workflow subagents, which run asynchronously. Their timestamp method agrees with crediting the turn that made the last Agent/Workflow launch on only 59% of subagent weight (measured: `python3 -I /tmp/usage-audit/skeptic-lp/attr.py`, attr.txt). Two examples: stop-hook-attributed subagent share falls from 7.2% to 0.5%, and watcher exit-0 from 3.4% to 0.0%."
+   },
+   {
+    "claim": "The top machine source is watcher and poller wakes: 9.5% of weight at a 290k main context",
+    "holds": false,
+    "note": "The wakes come from model-launched cc-await-ping background commands: 1,450 main turns and 6,049 main requests at a mean context of about 295k. They are 3.7% of proxy weight but 2.1% of meter weight. Exit codes, from the trigger-timeline tally run inline on the scan pickles: 885 timeouts (exit 2, meaning nothing arrived) and 690 deliveries (exit 0). The timeout wakes are 1.8% proxy / 1.0% meter. Only 8 of the 1,450 watcher turns launched an Agent or Workflow, so the subagent half of their 9.5% was not caused by the wakes (an.txt)."
+   },
+   {
+    "claim": "Peer messages: 6.7% of weight at a 394k main context",
+    "holds": true,
+    "note": "Reproduced: peer-triggered main turns average 393k context and come to 4.03% (main) + 2.92% (attributed subagents) = 6.95% of proxy weight (an.txt). On the meter the main-thread part is only 1.83%."
+   },
+   {
+    "claim": "Idle loops (/loop, cron, ScheduleWakeup) are negligible",
+    "holds": true,
+    "note": "Scheduled turns: 154 main requests, 0.12% of proxy weight and 0.03% of meter weight. Goal check-ins: about 1.2% of proxy weight (an.txt)."
+   },
+   {
+    "claim": "Running more sessions at once does not make each request cost more",
+    "holds": true,
+    "note": "Reproduced per account in the 4-7 concurrent bucket, as requests / proxy weight / meter weight: next 42/42/42, next2 20/23/23, next3 32/36/34 (measured: inline heredoc, output in /tmp/usage-audit/skeptic-lp/conc.txt). There is a 10-20% per-request premium in next2 and next3, and it tracks mean context (129k to 175k). A per-request metric also cannot detect duplicated work across parallel sessions, so the broader question of whether parallelism costs tokens is still unmeasured."
+   },
+   {
+    "claim": "Cache rewrites after a pane idles over an hour cost about 2.6%",
+    "holds": false,
+    "note": "Understated. 478 main requests after gaps over 1 hour rewrote 119M cache tokens. Every main-thread cache write uses the 1h TTL (cc1h 301.0M = all of main's 301.0M). That is 2.6% of proxy weight but 7.0% of meter weight (measured: idle.txt and `python3 -I /tmp/usage-audit/skeptic-lp/an2.py`, an2.txt). On the meter this lever is larger than the context cap."
+   },
+   {
+    "claim": "Upper bound on what a main-context cap could remove: 8.8% (cache reads above 250k)",
+    "holds": false,
+    "note": "On the proxy I reproduce 8.9% (an.txt), but the meter values those tokens at about zero. It is not a true upper bound even on the proxy. I simulated a 250k cap in which each successor restarts at the measured 61k median first-request context: 456 handoffs per week, removing 16.5% of proxy weight (15.9% net). On the meter it removes nothing and adds 1.6-3.9% just for the successors' cache writes (measured: `python3 -I /tmp/usage-audit/skeptic-lp/an3.py`, an3.txt)."
+   },
+   {
+    "claim": "Editing shared CLAUDE.md does not break running sessions' prompt caches",
+    "holds": true,
+    "note": "2 unexplained breaks (gap under 5 min, cache read under 50% of the previous context, context over 20k) across about 84.6k main requests (an2.txt)."
+   }
+  ],
+  "refuted_recommendations": [
+   "Cap main context at about 250k (claimed 4-6% weekly saving). REFUTED. The whole saving is cache-read weight. The repo's measured meter prices cache reads at about zero (at most a quarter of list price; USAGE_TELEMETRY_100P.md \u00a72.8, exchange-rate.md R1). That same plan doc lists 'Recycling / context-shrinking as a cost lever' under 'Previously refuted ... do not re-propose', and scaling-bottlenecks-2026-08-09.md \u00a72a struck the 'halving context' lever. On the meter the cap is net negative: -1.6% to -3.9% from successor cache writes alone (an3.py), before counting handoff notes and re-orientation. It would also override deliberate settings: the trigger is hooks/boundary-handoff.sh (T=73% of a 1M window, TOK_K=700), not handoff-fire.sh, and autoCompactEnabled:false is set on purpose.",
+   "Make watcher and poller commands exit only on actionable events and re-arm in shell (claimed 2-4%). OVERSTATED, and it would lose function. The realistic ceiling is the timeout wakes: about 1.0% of meter weight (1.8% on the proxy). The subagent part of the estimate does not exist: those subagents are asynchronous workflow agents, and only 8 of 1,450 watcher turns launched any agent. The timeout wake is designed behaviour: cc-await-ping's C5 rule makes it 'the re-look at the world floor and the in-session deadline check for a peer that will never ping'. The file the recommendation names, hooks/mailbox-wake-arm.sh, already wakes only on mail and re-arms at Stop with no model turn. The wakes come from model-launched run_in_background cc-await-ping calls. The safe partial change is a longer timeout.",
+   "Batch peer and teammate messages (claimed 2-4%, taken as 30% of 12.3%). OVERSTATED. Teammate turns (5.6% proxy / 8.0% meter) are work hand-offs: median 15 requests per turn, and only 66 of 685 arrive within 5 minutes of another message. Batching them saves 0.15% of meter weight. For peer messages, 1,470 of 1,951 turns arrive within 5 minutes of another bus message. Dropping those turns entirely would save at most 2.44% proxy / 0.80% meter; dropping only the per-wake first request saves 1.14% / 0.34% (measured: batch.txt). Realistic saving is about 0.3-0.8% of meter weight."
+  ],
+  "corrected_headline": "Long sessions do carry bigger contexts: 186k in the under-1h age bucket, 373k at 8-16h (measured: an.txt). But the repo's measured quota meter charges cache reads at about zero, and cache reads are 71% of the proxy weight this audit used. On the meter (1.95 pp/Mtok output, 0.25 pp/Mtok cache write), a main-thread request costs about the same at hour 1 and hour 12. Cost rises only after 16 hours, from cache rewrites after idle gaps. What the quota actually pays for: workflow-subagent cache writes (33% of meter weight), main-thread output, and cache rewrites after panes idle over 1 hour (478 requests, 7.0%). Machine-triggered main-thread turns are 22% of meter weight, not 53%; the larger figure credits asynchronous workflow subagents to unrelated wakes. Idle loops are negligible (0.03%), and parallel sessions cost about the same per request. The 250k context cap is a lever the repo has already refuted, and it would be net negative. Fixing watcher timeouts is worth about 1% and batching peer messages under 1%. Removing watcher timeouts outright would cost the designed deadline-check function."
+ },
+ {
+  "lever": "Prompt-cache invalidation (mid-session cache rebuilds) on next, next2, next3 and next4 over the last 7 days. This is an independent re-measurement of the cache-health report. I wrote only under /tmp/usage-audit (sk-cache-*). My first launch attempt wrote nothing, because zsh does not word-split, so the paths were wrong. I relaunched it as `bash /tmp/usage-audit/sk-cache-run.sh`.",
+  "reproduced": [
+   {
+    "claim": "29% of transcript rows are cross-account copies of subagent transcripts, so the totals must be deduplicated",
+    "holds": true,
+    "note": "Measured with `bash /tmp/usage-audit/sk-cache-run.sh` and then `python3 -I /tmp/usage-audit/sk-cache-an.py` (output in sk-cache-an.out). My scanner keys on message.id, does not follow symlinks and dedupes files by realpath. 79,356 of 272,127 per-account rows (29.2%) have a message.id that also appears in another account's directory, and 100% of those are under /subagents/. Shared share by account: next4 45.8%, next2 32.8%, next3 24.9%, next 13.7%. That leaves 232,449 unique messages; `cc-quota-price --json` counts 232,441. These are real file copies, not symlinks: `find -type l ! -name memory` found only one link, and it stays inside next4. For most shared records, only one account holds the parent main-session .jsonl."
+   },
+   {
+    "claim": "After dedup: cache writes 844.4M, cache reads 37,069.8M, uncached input 0.5M, output 62.0M",
+    "holds": false,
+    "note": "Same script. The input-side figures reproduce: writes 845.0M, reads 37,101.8M, input 0.5M (my window ends about 15 minutes later). Output does not. 62.0M is the placeholder count in the first streamed record: their scanner keeps the first record per requestId. Taking the max over each message's records gives 87.9M (+42%). The repo already documents this trap in the bin/cc-quota-price docstring ('OUTPUT IS THE LAST RECORD'S COUNT'). Also, 111,051 of 146,136 subagent messages (76%) never wrote a final record and average 9 output tokens. Subagent output is therefore still a lower bound, so every 'share of usage' figure in the report rests on an output total that is too low."
+   },
+   {
+    "claim": "The main conversation always uses the 1-hour cache and subagents always use the 5-minute cache, with no override set",
+    "holds": true,
+    "note": "Same script, section [2]. Main: 308.2M 1-hour writes and 0 5-minute writes (n=86,313). Subagents: 536.8M 5-minute writes and 0 1-hour writes (n=146,136). The cache lifetime comes from the usage.cache_creation fields, not an assumption. A python read of the env and top-level keys in all 5 settings.json files found no TTL, cache or Bash-timeout variables."
+   },
+   {
+    "claim": "Mid-session busts are 22.7% of cache writes (192.0M). 97% are the cache expiring while idle: main sessions idle over 1 hour are 58% of bust tokens, subagents idle 5-60 minutes are 34%. The bust rate jumps at each cache lifetime",
+    "holds": true,
+    "note": "sk-cache-an.py sections [3] and [4]. Their definition gives 191.9M, which is 22.7% of writes. My stricter definition gives the same 191.9M: cache read below 50% of the previous prompt, and at least 50% of it rewritten. 97.2% of bust tokens come after a gap longer than the thread's cache lifetime. Main idle over 1 hour: 111.0M (57.8%). Subagent 5-60 minutes: 65.6M (34%). Main bust rate is 0.07% at 30-60 minutes and 87.6% at 1-2 hours. Subagent bust rate is 0.01% under 5 minutes and 76.1% at 5-10 minutes."
+   },
+   {
+    "claim": "Priced at API rates, busts are about 6% of total usage and cache reads about 70%, so trimming context size is the bigger lever",
+    "holds": false,
+    "note": "At API prices with the corrected output I also get busts 6.0% and reads 68.2%. But these accounts are limited by the Max weekly meter, and the repo has already measured that meter: USAGE_TELEMETRY_100P \u00a72.8 M0 found 31.7M cache-read tokens moved it 1 point where list pricing predicted 4.62. cc-quota-price refuses to price cache reads, and the hooks/cache-expiry-warning.sh header says reads cost about nothing. My own 7-day fit (`python3 -I /tmp/usage-audit/sk-cache-ttlfit2.py`, 103 account-by-6h buckets against ~/.claude/logs/account-utilization.jsonl) puts cache reads at -0.0017 points per million tokens. The 4 accounts used 586 weekly points in total over the 7 days (sum of positive weekly_pct changes). Charging reads at the repo's 0.049 upper bound would need 1,818 points, which is impossible. My estimates of the bust share of the meter (sk-cache-meter.out): 9.5% with the cc-quota-price write price; 21.3% if all non-output usage is charged to writes; 24.3% with my per-lifetime fit. So busts are about 10-24% of the meter, not 6%, and cache reads are about 0%, not 70%."
+   },
+   {
+    "claim": "(Basis of recommendation 3) A 1-hour cache write costs 1.6x a 5-minute write",
+    "holds": true,
+    "note": "sk-cache-ttlfit.py and sk-cache-ttlfit2.py. On the meter, the 1-hour to 5-minute price ratio has a median of 3.8 (95% bootstrap CI 1.6-13), or 1.2-8.1 with cache reads added as a regressor. The fit is weak (centered r2 0.54), but the meter clearly does not charge both lifetimes the same. So switching subagents to the 1-hour cache costs more than the 1.5-6.8% of bust writes it would avoid. The '+7.6 points' size is arithmetic at API price ratios; on the meter it is probably larger."
+   },
+   {
+    "claim": "Edits to CLAUDE.md, rules or skills, hook-injected content and model or effort switches cause almost no busts",
+    "holds": true,
+    "note": "Upper bound from sk-cache-an.py [4], not their per-commit test, which I did not re-run. Every bust after a gap shorter than the thread's cache lifetime adds up to 5.3M (main 0.7M, subagents 4.6M). That is 0.6% of cache writes, so all non-idle causes together are capped there. This covers mid-session only. Sharing of the common prompt start across sessions at their first request was not tested; first requests read 39.9M from cache and write 162.0M."
+   },
+   {
+    "claim": "Subagent busts after more than 5 minutes idle follow a long Bash call; only 8 had a timeout over 300s",
+    "holds": true,
+    "note": "`python3 -I /tmp/usage-audit/sk-cache-subbash.py` (sk-cache-subbash.out). The main point holds but the count is wrong. Their 'timeout >300s: 8' matched a shell `timeout N` in the command text, not the Bash tool's timeout parameter. By the tool parameter: 248 of 394 subagent busts after a 5-60 minute gap (45.9M, 70% of that slice) followed a foreground Bash call with timeout over 270s, and 105 of those were poll loops. Another 57 followed default-timeout calls (4.5M), and 72 followed SubagentHandback (13.6M). A 'timeout >270' trigger therefore targets the problem well."
+   }
+  ],
+  "refuted_recommendations": [
+   "Recommendation 4, second half, is refuted: 'spend token-efficiency effort on context size instead: cache reads of contexts over 150k are about 70% of weighted usage'. On the Max weekly meter, cache reads cost about 0 (repo M0 experiment; my fit gives -0.0017 points per million tokens; the 586-point observed total rules out reads at the 0.049 bound). Context size matters only through cache writes: how big each rebuild, growth step and first request is. The first half (edits, hooks and model switches are not bust risks) holds as a mid-session bound of 0.6% of writes.",
+   "Recommendation 1 is partly refuted on its mechanism, and its saving is mis-framed. Its 'have long workflows send a progress notification about every 50 minutes' option is the idle keepalive the repo dropped on 2026-09-24 (docs/research/token-efficiency-2026-09-23/REPORT.md rank 6: 'waking the model instead injects a turn into idle sessions'). The 'arm a wake under 55 minutes' option has been in place since that date (rank 8, the cc-await-ping 3300 default), and 191 busts at 1-2 hours idle still happen. The fix needed is to find why sessions do not arm it, not to add a new mechanism. Its '1.5-3% at API rates' does reproduce (1.72% net, from sk-cache-an.py). On the meter that slice is 2.5-9.0%, so the estimate understates it.",
+   "Not refuted, but with conditions. Recommendation 2: the saving reproduces (45.9M, 1.05% at API rates, 2.2-2.3% of the meter). It must deny with a reason rather than ask, because a subagent cannot answer a prompt (.claude/rules/agent-operating-lessons.md). It must send /ship to the background rather than wrap it in a timeout. And the prompt instruction was already shipped (rank 15) and is not being followed. Recommendation 3: the direction holds; the '+7.6 points' size is arithmetic at API price ratios, and the meter fit suggests the regression is larger."
+  ],
+  "corrected_headline": "Mid-session cache rebuilds are 22.7% of all cache writes over 7 days (191.9M of 845.0M tokens after removing duplicates; measured). 97% of that comes from sessions sitting idle past the cache lifetime: main sessions idle over 1 hour are 58% (1-hour cache), and subagents idle over 5 minutes are 39% (5-minute cache). The report is wrong that this is a small lever. The Max-plan weekly meter, which the repo measured itself, charges about nothing for cache reads, so busts are roughly 10-24% of weekly consumption (estimated from three meter models), not 6%. Cache reads are not the bigger lever. The report's 62.0M output total is also too low: it read placeholder counts, and the real figure is at least 87.9M. Two slices are fixable: main sessions idle 1-2 hours (49.6M), and subagent foreground Bash calls with timeout over 270s (248 busts, 45.9M). Keep subagents on the 5-minute cache; the meter charges 1-hour writes at least as much per token. Scripts and outputs are in /tmp/usage-audit/sk-cache-*."
+ },
+ {
+  "lever": "baseline",
+  "reproduced": [
+   {
+    "claim": "7-day totals of 272,123 requests and 41.50B cache_read agree with /usage, so they are the true weekly volume",
+    "holds": false,
+    "note": "Measured with python3 -I /tmp/usage-audit/skeptic_baseline_scan.py, then skeptic_dedupe.py (output: skeptic_scan_summary.json, skeptic_dedupe.json). Summing per file reproduces their figures: 272,214 requests and 41.53B cache_read. Deduping requestId across all files and accounts gives 232,471 unique requests and 37.11B cache_read. 39,802 requestIds (14.6% of requests, 10.7% of cache_read) appear in two accounts. They come from about 1,264 subagent transcripts copied byte for byte into a second account's projects dir (same relative path, different inode). /usage counts each config dir separately, copies included, so its agreement proves nothing about the total. Main and subagent transcripts are not double-counted: 0 requestIds are shared between a main file and a subagent file."
+   },
+   {
+    "claim": "Fresh main sessions start at a median of 39-73k tokens depending on account",
+    "holds": true,
+    "note": "Measured with inline python3 -I over skeptic_perfile.jsonl (unique files whose first request falls in the window). Medians: next 58,895, next2 39,631, next3 62,608, next4 73,865. p90 for next4 is 399k, from resumed files that carry history."
+   },
+   {
+    "claim": "workflow-subagent slots start at about 47k tokens against about 7.6-9.2k for workflow-lean",
+    "holds": true,
+    "note": "Measured with skeptic_dedupe.py on unique files, prompt included. workflow-subagent n=1,962, p50 47,603, p10 44,657, request-weighted mean 55,066. workflow-lean n=2,567, p50 9,186, mean 10,839. Their sample sizes (2,545 and 3,242) include 583 and 678 cross-account copies."
+   },
+   {
+    "claim": "workflow-subagent made 66,348 requests this week",
+    "holds": false,
+    "note": "Measured with skeptic_dedupe.py: 51,286 unique requests, and 15,083 (22.7%) are cross-account copies. Their largest single source, agent-context-sync, is 39,053 requests summed per file but 30,066 unique. Its next4 figure of 23,478 includes copies of the next2 and next transcripts."
+   },
+   {
+    "claim": "Baseline is 25.0% of weekly cache_read (10.38B of 41.50B)",
+    "holds": true,
+    "note": "The share holds; the absolute numbers do not. Measured in skeptic_final.txt: deduped baseline volume (first-request context x unique requests, prompt included, so an upper bound) is 9.88B = 26.6% of 37.11B unique cache_read. Split: main 5.65B, workflow-subagent 2.82B (not 3.51B), workflow-lean 0.89B, general-purpose 0.43B."
+   },
+   {
+    "claim": "workflow-subagent spawns start with cache_read=0 and write 122.5M tokens a week (12.5% of cache_creation)",
+    "holds": false,
+    "note": "Measured with inline python3 -I over skeptic_perfile.jsonl on unique spawns: only 15% have cache_read=0 on the first request. The p50 first request reads 5,743 and writes 41,867. Deduped first-request writes total 95.5M, and every one is an ephemeral_5m write, not a 1-hour write."
+   },
+   {
+    "claim": "Price weighting with every cache write at 2x gives a 6.43B-unit total; baseline reads are 16.1% of it (22.1% with writes)",
+    "holds": false,
+    "note": "Measured from per-request usage.cache_creation: all subagent writes are 5-minute TTL (536.8M unique, list weight 1.25x) and all main writes are 1-hour (308.2M, 2x). With the TTL-correct weights and deduped data the total is 5.31B units: cache_read 69.9% of it, baseline reads about 18.6% (upper bound). /usage's per-agent shares match both the TTL-list weighting and raw tokens about equally well (next4 workflow-subagent: /usage 47%, list-weighted 47.0%, raw 47.5%), so how quota is actually weighted is still unmeasured."
+   },
+   {
+    "claim": "The skill listing sits at a budget cap of 30,001 chars, so removing entries may let truncated descriptions grow back (their own caveat)",
+    "holds": true,
+    "note": "Confirmed from the 2.1.291 binary (python mmap read of claude.exe, functions cXe and Tqt). Budget = context window x 4 chars x skillListingBudgetFraction (default 0.01). When the listing goes over budget, entries other than bundled ones are filled greedily by priority, and the rest drop to name-only. 22 of the 103 entries are already name-only, and no account sets a name-only override. Their full descriptions total about 7.8k chars (estimated): about 1.8k for the 10 local ones (from SKILL.md and commands/*.md frontmatter) and about 6.0k for the 11 anthropic-skills ones (rg over older ~/.claude-secondary transcripts)."
+   },
+   {
+    "claim": "Read-only workflow-subagent slots can move to workflow-lean (convertible share assumed at 50-80%)",
+    "holds": true,
+    "note": "Measured with python3 -I /tmp/usage-audit/skeptic_ws_tools.py plus an inline recount using a corrected git regex, on unique transcripts. 10.5% of workflow-subagent requests (5,397) come from slots that ran commit, merge (merge-base excluded), push, stash, rebase or cherry-pick, or used Skill, Agent or MCP. Counting scratch-clone checkout, pull and reset as well (the rehearse:* lanes) raises it to 28.2% (14,474). That leaves 72-90% convertible, at or above the top of their assumed range. My first regex was too broad: it matched git merge-base and git -C, and gave 32%. All workflow-subagent traffic ran on claude-opus-5-5."
+   }
+  ],
+  "refuted_recommendations": [
+   "Rec 1 (move read-only Workflow agent() slots to workflow-lean): the token saving is overstated, though the action stands. Their full-conversion figure, (53.0k-8.3k) x 66,348 = 2.96B cache-read tokens a week (about 7.7% of weighted spend), counts cross-account copies and charges every write at 2x. On deduped data the all-slot ceiling is 1.97-2.27B (38.4k-44.2k delta x 51,286 unique requests). Counting only slots that do not commit, merge, use Skill/Agent/MCP or rehearse in scratch git clones, it is 1.41-2.03B, plus about 0.31B from general-purpose and 72-88M of 5-minute first-request writes. That is about 4.9-6.5% of TTL-correct weighted spend (estimated in /tmp/usage-audit/skeptic_final.txt), so their 3.9-6.2% range roughly survives but the 7.7% does not. The action is already a written rule (~/.claude/CLAUDE.md line 117 tells read-only slots to use workflow-lean), so the real gap is enforcement. A lint must allow an explicit default type, because 10-28% of the traffic legitimately needs it. Also, workflow-lean omits the project CLAUDE.md, so review:* slots lose the project rules unless they read them on demand, which the lean contract tells them to do.",
+   "Rec 2 (turn off or name-only the 13 zero-use visual and niche skills, a claimed 0.35B a week): refuted. The listing is held at its budget (1% of the context window, read from the binary) with 22 entries already cut to name-only. Freeing 8,517 chars lets those entries regain about 7.3k chars of descriptions (estimated from measured description lengths), so the listing only falls to about 28.8k chars. Net is about 1.2k chars, roughly 300 tokens, per request: about 0.04-0.05B cache-read tokens a week across 147k unique requests that carry the listing. The 74-entry version would shrink the listing to about 15.9k chars (at most about 0.5B, not 0.88B), but 61 of those entries were only checked against 7 days of use."
+  ],
+  "corrected_headline": "The baseline share holds: about 26% of deduplicated cache reads and about 19% of weighted spend once cache writes are weighted by their real TTL. Every absolute weekly figure is inflated, though. About 1,264 subagent transcripts exist as identical copies in two accounts' project dirs, so 39.8k of the 272k requests (14.6%) and 4.4B of the 41.5B cache reads (10.7%) are counted twice; /usage counts them the same way, which is why the totals agreed with it. Subagent cache writes are 5-minute (1.25x), not 1-hour (2x). workflow-subagent made 51.3k unique requests, not 66k, and starts about 38-44k tokens heavier than workflow-lean. Moving the 72-90% of its traffic that doesn't commit, merge, rehearse in git clones or use Skill/MCP to workflow-lean, which ~/.claude/CLAUDE.md already requires, saves about 1.4-2.0B cache-read tokens a week, plus about 0.3B from general-purpose, or about 5-6.5% of weighted spend; not about 3B. The skill-listing trim saves close to nothing, because the listing is held at its 1%-of-context budget and 22 name-only entries would refill most of the freed space. Unchanged: the CLAUDE.md plus session-close rules slim (about 14.7k tokens per main request, gated) and attributing the 27-33k-token unlogged residual with /context."
+ },
+ {
+  "lever": "subagents: default workflow-subagent Workflow slots compared with workflow-lean slots. This is a skeptic re-run with my own scripts. Scripts and outputs are in /tmp/usage-audit/skeptic-subagents/ (sk_scan.py, sk_an1-3.py, sk_totals.py, sk_totals_peracct.py and their .txt files). I wrote nothing outside that directory. The one-off analyses ran as python3 -I reading a stdin heredoc. None of them edited a file or prompted.",
+  "reproduced": [
+   {
+    "claim": "A default workflow-subagent slot's first request is 47.6k tokens at the median, against 9.2k for workflow-lean, so the fixed overhead is about 38.5k tokens per slot",
+    "holds": true,
+    "note": "Measured with python3 -I /tmp/usage-audit/skeptic-subagents/sk_an1.py, run over sk_rows.jsonl from sk_scan.py. That scan read 6,632 subagent files (5.21 GB, full scan, no sampling) and kept the 6,027 with at least one request after 2026-10-17T02:53Z. Results: default p50 47,611 (p10 44,686, p90 63,700, n=1,938); lean p50 9,192 (p10 7,817, p90 12,706, n=2,556). The difference is about 38.4k tokens."
+   },
+   {
+    "claim": "Weighting a default slot's first request as a 1.25x cache write, then 0.1x for each later re-read, is correct",
+    "holds": true,
+    "note": "Measured with sk_an1.py. The 1-hour TTL share of cache_creation is 0.00 for every agent type, so all cache writes are 5-minute writes and 1.25 is the right API ratio. On a default slot's first request, the cache-read share is 0.12 at the median and 0.10 on average, and no default slot read more than half of its first request from cache. The 38k overhead is therefore written fresh on every slot and is not shared across slots. Lean slots read 60% of their first request from cache at the median."
+   },
+   {
+    "claim": "Subagent transcripts are copied between accounts. 1,263 agent ids are duplicated, all with identical usage, and the copy has an integer mtime",
+    "holds": true,
+    "note": "Measured with sk_an1.py. 1,232 of 4,795 agent ids appear in two files. All 1,232 have identical usage inside the window. None are duplicated within one account. 1,176 have exactly one copy with an integer mtime. The main pairs are next2/next4 (572) and next/next4 (286). Small differences from the other agent's counts come from my window, which uses request timestamps rather than file mtimes."
+   },
+   {
+    "claim": "The 7-day total, deduplicated by message.id, is 5,286M wEq",
+    "holds": true,
+    "note": "Measured with python3 -I /tmp/usage-audit/skeptic-subagents/sk_totals.py: 7,895 files, 7.5 GB, full scan, 42 s. The total is 5,207M wEq over 232,307 unique message.ids, from 539,977 raw usage records. Summing without the message.id dedup would overcount 2.3x. Both analyses deduplicated. Cache reads are 37,102M raw, which is 71% of wEq."
+   },
+   {
+    "claim": "/usage's per-account counts seem to include copied transcripts (stated as 'suggests, does not prove')",
+    "holds": true,
+    "note": "Now measured, with python3 -I /tmp/usage-audit/skeptic-subagents/sk_totals_peracct.py, which deduplicates within each account but not across accounts. Per-account counts: next 72,946, next2 82,461, next3 53,230, next4 63,219. /usage printed 72,233, 82,745, 53,237 and 63,509, all within 1%. So /usage counts the copies. Against the cross-account deduplicated counts from sk_totals.py, /usage's 7-day request counts are about 46% too high for next4 (63,219 vs 43,287) and about 26% too high for next3 (53,230 vs 42,080). This also confirms that the 7-day window matches the one /usage uses."
+   },
+   {
+    "claim": "Moving the eligible default slots to lean saves about 275M wEq a week, 5.2% of usage on the 4 accounts",
+    "holds": true,
+    "note": "This holds as a measure of last week, not as a recurring weekly saving (see the B13 rows). My own classifier (sk_an3.py, plus an inline variant that drops B13 rehearsal slots) finds 1,759 eligible slots and 271.1M wEq, which is 5.21% of 5,207M. That set excludes Skill, MCP, Agent-tool and git-mutation slots and B13 rehearsals. It does not exclude repo-code writes. The share depends on how tokens are weighted: 6.61% if cache reads cost nothing, 4.69% if cache reads count like input, 5.03% if a cache write counts 1.0. Per account, against my deduplicated denominators: next4 12.4%, next2 6.7%, next3 3.8%, next 2.0%."
+   },
+   {
+    "claim": "1,768 of 1,937 default slots needed nothing outside lean's tool set, so they can move as they are",
+    "holds": false,
+    "note": "The count roughly reproduces (1,807 before dropping rehearsals, 1,759 after). Two parts of the claim do not. (1) The other agent's own tier A includes 31 B13 'rehearse:' slots (measured by re-applying its tier() to its slots.jsonl, gitclass.json and briefs.jsonl). round26-workflow.js tells those slots to git clone, run 'git checkout -q -B main <sha>', make local commits and run the real install.sh in sandboxes. Lean's prompt forbids all of that, and the other agent's own recommendation keeps rehearsals on the default agent. Estimated overstatement: about 14M wEq (31 slots x my 0.45M per rehearsal slot). (2) Some slots used tools lean does not have: ToolSearch in 209 default slots, Monitor in 68, TaskStop in 28 (measured with sk_an2.py). The ToolSearch calls were mostly 'select:Monitor' (98) and 'select:WebSearch,WebFetch' (about 88). Lean can wait with a Bash loop and stop a process with kill, so little function is lost, but 'nothing outside lean's tool set' is not literally true."
+   },
+   {
+    "claim": "B13 accounts for 1,314 of 1,937 default slots, every round script has 4 agent() calls and no agentType, and each next round copies the previous script",
+    "holds": true,
+    "note": "Measured. sk_an2.py finds 1,314 default slots in the bNN-roundNN family (next4 700, next2 532, next 82). grep shows 4 agent() calls and 0 agentType in round18 through round26-workflow.js. round26/recycle-prompt.md step 3 says 'Apply it to a copy of round26/round26-workflow.js'. By role, most of the B13 saving is in the verify slots: 1,136 slots, 96.7M (sk_an3 inline breakdown)."
+   },
+   {
+    "claim": "The B13 part of the saving (about 135M) recurs every week",
+    "holds": false,
+    "note": "Not established. round26/lead-notes.md at 21:36 says: 'No round 27 until e869fac7eb34 is answered'. ~/.claude/autonomy/decisions/e869fac7eb34.json was created 2026-10-24T02:36Z, has status open and conviction 85, and asks whether the B13 loop should stop after the round 26 lanes land. If the answer is yes, recommendation 1 saves about 0 going forward. The recurring saving would then be only the non-B13 part: about 147M wEq a week, 2.8% (measured last week with sk_an3.py, A-eligible|other)."
+   },
+   {
+    "claim": "55 of 178 workflow runs set no agentType and 50 set it on only some calls",
+    "holds": true,
+    "note": "The proportion reproduces. An inline python pass over the wf_*.json files from the last 7 days (153 unique runs) finds 47 with none, 45 with some and 61 with all. 14 of the 47 with none are B13 rounds. The other agent's 178 runs come from its 8-day window."
+   },
+   {
+    "claim": "No SKILL.md has context: fork, and lean slots average 32 requests against 26 for default slots",
+    "holds": true,
+    "note": "Measured. grep -l '^context: *fork' ~/.claude/skills/*/SKILL.md | wc -l returns 0. sk_an1 gives lean 81,971 requests over 2,556 slots (32.1) and default 51,242 over 1,938 (26.4). I did not re-test the attributionSkill mechanism."
+   },
+   {
+    "claim": "agents/workflow-lean.md still says the default slot costs about 130k",
+    "holds": true,
+    "note": "Read directly from ~/Development/claude-infrastructure/agents/workflow-lean.md: 'starts at ~2-15k tokens instead of ~130k'. The measured default is about 47.6k."
+   }
+  ],
+  "refuted_recommendations": [
+   "Rec 1 (add agentType 'workflow-lean' to the B13 round template): the change is sound, but 'about 135M a week' is not a recurring saving. It describes last week. Open decision e869fac7eb34 (filed 2026-10-24T02:36Z, conviction 85) proposes stopping the B13 loop, and the lead notes say there is no round 27 until it is answered. If it stops, the forward saving is about 0. The 135M also includes about 31 rehearsal slots that must stay on the default agent (about 14M estimated). Excluding them, last week's B13 figure is about 124M (measured, sk_an3.py).",
+   "Rec 3 (a lean variant that allows git only in a /tmp sandbox): 74 of the 77 tier-B slots and 24.6M of the 26.7M in my scan are B13 rehearsal or verify slots (sk_an3.py). The 35.6M a week therefore depends on the same open stop decision. If the loop stops, this lever is worth about 2M a week."
+  ],
+  "corrected_headline": "Measured over the last 7 days, with cross-account copies removed: a default workflow-subagent slot's first request is 47.6k tokens at the median, against 9.2k for workflow-lean. The difference is about 38.4k tokens of fixed overhead, re-read on every turn. All cache writes are 5-minute writes, and 88% of a default slot's first request is a fresh cache write, so the 1.25x weighting holds. Moving the eligible default slots to lean would have saved about 271M weighted tokens last week. That set is 1,759 slots and leaves out B13 rehearsal slots, whose briefs need git checkouts in sandboxes. The saving is 5.2% of the 5,207M total across the 4 accounts, and 4.7% to 6.6% under other cache weightings. This is last week's figure, not a guaranteed weekly one. About 124M of it came from the B13 agentsync loop, and open decision e869fac7eb34 proposes ending that loop after round 26. If it ends, the recurring saving is about 147M a week (2.8%), from ad-hoc workflows that set no agentType. /usage's per-account numbers include transcripts copied in from other accounts. They match a count without cross-account dedup to within 1%, so next4's and next3's request counts are about 46% and 26% too high."
+ }
+]
