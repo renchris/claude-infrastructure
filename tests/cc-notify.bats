@@ -1161,8 +1161,8 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   # shellcheck disable=SC2016  # the launcher's own line is literal text, $HOME unexpanded
   printf 'claude() {\n  local _bin="$HOME/.claude-999/node_modules/.bin/claude"\n}\n' > "$BATS_TEST_TMPDIR/zshrc"
   export CC_ZSHRC="$BATS_TEST_TMPDIR/zshrc"
-  printf '#!/bin/bash\necho OLD >> "%s"\nexit 1\n' "$BATS_TEST_TMPDIR/old.log" > "$BATS_TEST_TMPDIR/oldpath/claude"
-  chmod +x "$BATS_TEST_TMPDIR/oldpath/claude"
+  load helpers/cc-stub
+  cc_stub "$BATS_TEST_TMPDIR/oldpath" claude "$(printf '#!/bin/bash\necho OLD >> "%s"\nexit 1' "$BATS_TEST_TMPDIR/old.log")"
   export PATH="$BATS_TEST_TMPDIR/oldpath:$PATH"
   run "$NOTIFY" --cloud "$CLOUD_ID" "pinned binary"
   [ "$status" -eq 0 ]

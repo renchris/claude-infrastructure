@@ -846,7 +846,8 @@ router_py() { /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/rese
   # shellcheck disable=SC2016  # the launcher's own line is literal text, $HOME unexpanded
   printf 'claude() {\n  local _bin="$HOME/.claude-293/node_modules/.bin/claude"\n}\n' > "$HOME/.zshrc"
   mkdir -p "$BATS_TEST_TMPDIR/bin"
-  printf '#!/bin/bash\necho old\n' > "$BATS_TEST_TMPDIR/bin/claude"; chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  load helpers/cc-stub
+  cc_stub "$BATS_TEST_TMPDIR/bin" claude "$(printf '#!/bin/bash\necho old')"
   unset CC_RESEARCH_CLASSIFIER CC_CLAUDE_BIN
   run env PATH="$BATS_TEST_TMPDIR/bin:/usr/bin:/bin" /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit/lib','$REPO/scripts/research-kit']; import router; print(router.classifier_argv('fast')[0])"
   [ "$status" -eq 0 ]
