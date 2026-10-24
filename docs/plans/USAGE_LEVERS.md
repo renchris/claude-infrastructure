@@ -9,7 +9,7 @@ Scope (frozen): act on the verified usage-efficiency levers surfaced by `claude 
 implementing what clears 90% conviction and running the one cheap test each remaining lever needs,
 each wave landed via `/ship` and converged live.
 
-## Phase 0 — Agent Team Orchestration
+## Phase 0 — Agent Team Orchestration — DONE (W0–W4 fired and landed 2026-10-24; remainder is W5)
 
 **Execution locus per wave**
 
@@ -20,6 +20,7 @@ each wave landed via `/ship` and converged live.
 | W2 cache-read quota probe | S | — |
 | W3 idle-cache redesign (shadow mode) | S | — |
 | W4 context-recycle thresholds | S | — (gated) |
+| W5 switch-on decisions from shadow logs | S | — (gated; earliest 2026-10-31) |
 
 **Task size per unit:** 40–150K output tokens (≈30–75 min, 3–6 files). W1 is three small tasks in
 one unit because each alone is under 20K; W2 and W3 are one task each.
@@ -150,3 +151,16 @@ Landed `b6c6b8e9f` (pin), `2086f6774` (reword), `baf1c3185` (shadow hook), `75a7
   Expect ≈38 would-advise turns/day.
 - **Decision `43da49891e75`** (class C, conviction 75): keep 25/35% vs 150k after 15 idle min.
   Acting on it also needs a wake at idle minute 15 (W3's idle keepalive), since an idle pane runs no hook.
+
+## W5 — switch-on decisions from the shadow logs — PENDING (gated; earliest 2026-10-31)
+Nothing here is drivable before its gate; checked 2026-10-24 with all of W0–W4 on trunk.
+- **Operator gates, filed:** migration 0077 registers the idle keepalive (backlog `63335887df76`);
+  migration 0078 registers the Workflow shadow hook (backlog `25661bbbd8fc`); neither had run on
+  2026-10-24 (no `workflow-lean-shadow.jsonl`, neither hook in `~/.claude/settings.json`). The W4
+  ruling is decision `43da49891e75`.
+- **Readouts, once their data exists:** (1) keepalive wake mode, from `cc-idle-cache-readout --days 7`
+  over the gap ledger (rows since 2026-10-24) plus timer rows after 0077; (2) subagent long-Bash deny,
+  per class, against the 0.2% bar, same read-out; (3) Workflow deny mode, from ≥3 days of
+  `workflow-lean-shadow.jsonl` after 0078; (4) idle recycle at 150k/15 min, from
+  `idle-recycle-shadow.jsonl`, only after `43da49891e75` is ruled yes.
+- Backlog `fa0304864f4e` (this plan) is parked not-yet-true until 2026-10-31.
