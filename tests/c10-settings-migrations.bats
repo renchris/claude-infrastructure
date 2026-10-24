@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2016,SC2088  # fixture strings carry literal $HOME/~ exactly as settings.json stores them
-# Migrations 0046 (autoMode.environment "$defaults"), 0047 (read-before-write hook registration) and
-# 0048 (named soft_deny rules) — the shared-settings c10 trio staged by the c10-activation wave.
+# Migrations 0046 (autoMode.environment "$defaults"), 0047 (read-before-write hook registration),
+# 0048 (named soft_deny rules) — the shared-settings c10 trio staged by the c10-activation wave — and
+# 0077 (the log-only Workflow shadow hook, docs/plans/USAGE_LEVERS.md W1.3; its own cases are at the end).
 #
 # Pinned for each: --check passes on a fleet whose account dirs all LINK to one shared settings.json
 # and refuses with rc 3 (writing nothing) on a FORKED fixture; --confirm writes the one real file,
@@ -43,10 +44,11 @@ mig() { bash "$REPO/migrations/$1"*.sh "${@:2}"; }
   [ "$(shasum "$HOME/.claude/settings.json")" = "$before" ]
 }
 
-@test "0046/0047/0048: a FORKED account ⇒ rc 3, nothing written anywhere" {
+@test "0046/0047/0048/0077: a FORKED account ⇒ rc 3, nothing written anywhere" {
   forkit
+  : > "$HOME/.claude/hooks/workflow-lean-shadow.py"   # so 0077 reaches the parity check, not rc 4
   local a b; a="$(shasum "$HOME/.claude/settings.json")"; b="$(shasum "$HOME/.claude-next/settings.json")"
-  for m in 0046 0047 0048; do
+  for m in 0046 0047 0048 0077; do
     run mig "$m" --check;  [ "$status" -eq 3 ] || { echo "$m check: $status $output"; false; }
     run mig "$m" --confirm settings.json; [ "$status" -eq 3 ] || { echo "$m apply: $status"; false; }
     run mig "$m" --verify; [ "$status" -ne 0 ]
@@ -92,8 +94,25 @@ mig() { bash "$REPO/migrations/$1"*.sh "${@:2}"; }
 }
 
 @test "usage: bare invocation outside the converger and an unnamed --confirm are refused (rc 2)" {
-  for m in 0046 0047 0048; do
+  for m in 0046 0047 0048 0077; do
     run env -u CC_MIGRATION_STATE bash -c "bash $REPO/migrations/$m*.sh"; [ "$status" -eq 2 ]
     run mig "$m" --confirm; [ "$status" -eq 2 ]
   done
+}
+
+@test "0077: appends a log-only Workflow entry through its interpreter, PreToolUse[0] untouched, idempotent" {
+  : > "$HOME/.claude/hooks/workflow-lean-shadow.py"
+  run mig 0077 --confirm settings.json; [ "$status" -eq 0 ]
+  [ "$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$HOME/.claude/settings.json")" = "~/.claude/hooks/unit-gate.sh" ]
+  [ "$(jq -c '[.hooks.PreToolUse[] | select(.matcher == "Workflow") | .hooks[]] ' "$HOME/.claude/settings.json")" \
+    = '[{"type":"command","command":"/usr/bin/env python3 ~/.claude/hooks/workflow-lean-shadow.py","timeout":5}]' ]
+  all_linked
+  run mig 0077 --verify; [ "$status" -eq 0 ]
+  run mig 0077 --confirm settings.json; [[ "$output" == *"already applied"* ]] || false
+  [ "$(jq '[.hooks.PreToolUse[] | select(.matcher == "Workflow")] | length' "$HOME/.claude/settings.json")" -eq 1 ]
+}
+
+@test "0077: refuses (rc 4) while the live hook file is absent, and --verify is false before it runs" {
+  run mig 0077 --check; [ "$status" -eq 4 ]
+  run mig 0077 --verify; [ "$status" -ne 0 ]
 }
