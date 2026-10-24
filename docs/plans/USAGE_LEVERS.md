@@ -9,6 +9,14 @@ Scope (frozen): act on the verified usage-efficiency levers surfaced by `claude 
 implementing what clears 90% conviction and running the one cheap test each remaining lever needs,
 each wave landed via `/ship` and converged live.
 
+Scope (grown, 2026-10-24): **operator ruling — yes to all four recommendations** of
+`docs/research/usage-levers-2026-10-23/decisions-2026-10-24/TESTS.md` (idle recycle at 200k after 15
+idle min with guards `43da49891e75`; Workflow block-once `a4c54d1744d1`; busy-scoped keepalive
+`c0f9d5368147`; subagent poll-loop deny `3df527edd333`), **plus telemetry and a hillclimb loop**
+(method: claude.dev "Automating eval design and hillclimbing") that quantifies each change's net
+impact so it is rolled back or continued on evidence. Packets close with `cc-decide action` as each
+change lands. Design: § "W7+ — telemetry, hillclimb and the approved switch-ons".
+
 ## Phase 0 — Agent Team Orchestration — DONE (W0–W4, W6 fired and landed 2026-10-24; remainder is W5)
 
 **Execution locus per wave**
