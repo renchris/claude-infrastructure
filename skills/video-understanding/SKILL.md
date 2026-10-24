@@ -51,6 +51,10 @@ says*. Never run the expensive tier blind.
 ```bash
 # 0-1 · metadata + media  (check yt-dlp is CURRENT — a stale build reports a bogus
 #        format list; the real cause is "nsig extraction failed")
+#        Another stale-build symptom: HTTP 403 on every media format while the
+#        subtitles download fine, so a partial run looks healthy. Measured
+#        2026-10-24: 2026.07.04 got 403; the current release fixed it at once:
+#        uvx --from 'yt-dlp[default]@latest' yt-dlp <same args>
 yt-dlp --dump-json "$URL" > meta.json
 yt-dlp -f "137+bestaudio/best[height<=1080]" --merge-output-format mp4 \
        --write-auto-subs --sub-langs "en-orig,en" -o "video.%(ext)s" "$URL"

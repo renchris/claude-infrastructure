@@ -303,3 +303,14 @@ The other 25 had smaller fixes, in five recurring classes:
 - OpenRouter's modality tags are third-party metadata; 90 of 469 models accept video, and accepting video says nothing about understanding it (`C1:222-224`).
 - Thin axes remain: Chinese closed APIs beyond Qwen and Seed (Baidu ERNIE 5.0), video-platform vendors (Cloudinary, api.video, Bitmovin), media incumbents (Moments Lab, Sieve), and streaming benchmarks (OVO-Bench, StreamingBench) (`C1:205-224`).
 - Many open-model and research entries are older than 6 months: Qwen3-Omni, InternVL3.5, the legacy video LLMs, DVD, VideoRAG, M3-Agent, Vidi2.5, PE-A-Frame. They are flagged where listed.
+
+## 8. Follow-up: NVIDIA VSS GTC 2026 talk (2026-10-24)
+
+The operator asked whether NVIDIA's GTC 2026 session "Visual AI Agents for Real-Time Video Understanding" (`youtube.com/watch?v=3yPQHcEZDaI`, the VSS blueprint plus Cosmos Reason) is applicable. Verdict: **partly**, and only as a source of ideas (`agents/V3-applicability-verdict.md`, reviewed in `agents/V4-skeptic.md`).
+
+- **Not usable on our Macs.** Every VSS deployment needs a local NVIDIA GPU. It has no speech-to-text, screen OCR or speaker separation, and its evaluation licence bars production use (DOCUMENTED, `V2`, `V4`).
+- **Cosmos Reason does not help.** NVIDIA's own tables put it below its Qwen3-VL-8B base on OCR and hallucination. Community MLX/GGUF builds exist, but there is no reason to prefer it over the base model (DOCUMENTED, `V3`, `V4`).
+- **Meeting recordings: nothing new.** Every VSS retrieval pattern already has a built equivalent in the agentsync design (`V3` U2).
+- **Where it ranks:** first choice for self-hosted, agent-driven analytics over camera fleets on NVIDIA GPUs (CCTV, warehouse, factory) where video must stay on premises. NVIDIA publishes latency and throughput only, no accuracy numbers.
+- **What the talk added beyond the docs:** NVIDIA's coding-agent demo is Claude Code with Opus 4.6; the live demo ran Qwen 3.5, not NVIDIA models (MEASURED from the talk, `V1`). Running our skill on it found a stale-yt-dlp 403 symptom, now in `skills/video-understanding/SKILL.md`.
+- **Dropped after review:** VSS's per-claim critic (about 45-50% conviction once the skeptic showed its mechanism fixes none of our 5 measured detail errors), and a test of NVIDIA's hosted Nemotron Omni for audio events (40%).
