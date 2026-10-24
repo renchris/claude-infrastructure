@@ -961,7 +961,7 @@ If the operator rules yes on the pass-boundary restart request (W2 lever 11), th
 
 ## W12b: the typed-relaunch hold (TR; slot C; part 2 after the TR ruling)
 
-**Status**: IN PROGRESS — part 1 LANDED `ac25e898e`; owed: the typed-relaunch rig group (Tier-L queue row `bbe7b5b1ba63`), then the `debt:typed-relaunch` row; part 2 waits on packet `db44ab0ebc55`
+**Status**: DONE — part 1 LANDED `ac25e898e`; packet `db44ab0ebc55` closed on its class-B default "Retry only, keep the wait" (2026-10-24), which part 1 already carries (stage retry on, mode default `load`), so part 2 flips nothing and `debt:typed-relaunch` stays as accepted debt. The `terminal` Tier-L run is owed only if the packet reopens (`docs/research/tr-ruling-default-applied-2026-10-24.md`)
 
 - **Goal.** Remove the last gate on the recovery path that waits for load to fall.
   - Today a move that cannot stage its successor holds `HELD:load` whenever load is above 24/core at the commit and 20/core at the precheck (`handoff-fire.sh:4150-4194`, decision 600709c5fe4b).
