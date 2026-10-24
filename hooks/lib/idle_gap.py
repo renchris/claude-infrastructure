@@ -14,7 +14,11 @@ row per idle gap so the keepalive can be judged before it is ever allowed to wak
               opens the next one with the context size at the gap start. Writes kind=gap rows.
   would-wake  (hooks/idle-keepalive.sh, the timer) records the moment the keepalive would have
               woken an idle session, with the context size and whether a mailbox watcher was armed
-              at that moment. Writes kind=wake rows. It never wakes.
+              at that moment. Writes kind=wake rows. It never wakes. Since W6 the row also says
+              whether the session's own background job was running at that moment (busy, by the
+              launching tool) and whether a watcher already running would fire on its own before
+              the cache expires (watcher_fires_before_ttl): the busy-scoped redesign wakes only
+              when busy and not watcher_fires_before_ttl. Both come from hooks/lib/session_jobs.py.
 
 COST MODEL (weekly-meter pp per Mtok; reads are charged, round 3):
   a keepalive wake = one cache read of the context + a short turn (~300 written, ~150 output tokens)
@@ -308,6 +312,31 @@ def cmd_stop(payload):
     )
 
 
+def _session_jobs():
+    """hooks/lib/session_jobs.py, beside this file's REAL path (-I drops the script dir from
+    sys.path, and a brand-new lib file has no ~/.claude/hooks/lib symlink until install.sh runs)."""
+    import importlib.util
+
+    p = os.path.join(os.path.dirname(os.path.realpath(__file__)), "session_jobs.py")
+    spec = importlib.util.spec_from_file_location("session_jobs", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def jobs_at_wake(transcript, t, gap_start):
+    """Busy and watcher state at the wake moment; {} when the transcript cannot be read."""
+    if not transcript:
+        return {}
+    try:
+        sj = _session_jobs()
+        return sj.state_at(
+            sj.jobs(sj.records(transcript, TAIL_BYTES)), t, ttl_end=gap_start + TTL_S
+        )
+    except Exception:
+        return {}
+
+
 def cmd_would_wake(sid, launch, watcher, n):
     if not SID_RX.match(sid):
         return
@@ -315,23 +344,23 @@ def cmd_would_wake(sid, launch, watcher, n):
     st = load_state(sid) or {}
     ctx = int(st.get("ctx") or 0)
     wk = sorted(round(wake_cost(ctx, r), 6) for r in READ_PP)
-    append(
-        dict(
-            kind="wake",
-            v=1,
-            ts=iso(t),
-            sid=sid,
-            acct=st.get("acct") or acct(),
-            n=int(n),
-            gap_start=iso(float(launch)),
-            late_s=round(t - (float(launch) + int(n) * WAKE_S), 1),
-            ctx=ctx,
-            model=st.get("model"),
-            watcher_armed={"true": True, "false": False}.get(watcher),
-            wake_pp=wk,
-            mode="shadow",
-        )
+    row = dict(
+        kind="wake",
+        v=2,
+        ts=iso(t),
+        sid=sid,
+        acct=st.get("acct") or acct(),
+        n=int(n),
+        gap_start=iso(float(launch)),
+        late_s=round(t - (float(launch) + int(n) * WAKE_S), 1),
+        ctx=ctx,
+        model=st.get("model"),
+        watcher_armed={"true": True, "false": False}.get(watcher),
+        wake_pp=wk,
+        mode="shadow",
     )
+    row.update(jobs_at_wake(st.get("transcript"), t, float(launch)))
+    append(row)
 
 
 def main(argv):

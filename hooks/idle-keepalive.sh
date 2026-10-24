@@ -17,11 +17,13 @@
 # ── WHAT IT DOES ─────────────────────────────────────────────────────────────────────────────────
 # Registered on Stop with asyncRewake (migrations/0077), so the harness runs it in the background
 # and does not reap it at the turn's end. At launch — the gap start — it notes the transcript size,
-# then sleeps until gap start + CC_KEEPALIVE_WAKE_S (3300). If anything was appended to the
-# transcript meanwhile, the gap is over and it exits (idle-scoped: one timer per gap, and a new
-# Stop launches the next one). If the session is still idle, it writes a kind=wake row through
-# hooks/lib/idle_gap.py — context size, and whether a mailbox watcher is armed right then — and
-# exits 0. CC_KEEPALIVE_MAX_WAKES (1) bounds the wakes per gap ("about one wake per gap").
+# then sleeps until gap start + CC_KEEPALIVE_WAKE_S (3300). If a new user or assistant record was
+# appended meanwhile, the gap is over and it exits (idle-scoped: one timer per gap, and a new Stop
+# launches the next one). Any OTHER record is not a turn: the away_summary system record that lands
+# ~190 s into a gap used to end 52% of timers, because the old test was "the file grew" (W6). If
+# the session is still idle, it writes a kind=wake row through hooks/lib/idle_gap.py — context
+# size, whether a mailbox watcher is armed right then, whether the session's own background job was
+# running and whether a running watcher would fire before the cache TTL — and exits 0. CC_KEEPALIVE_MAX_WAKES (1) bounds the wakes per gap ("about one wake per gap").
 #
 # SHADOW IS STRUCTURAL, NOT A FLAG. asyncRewake wakes the model only on exit 2, and the EXIT trap
 # below forces 0 on every path; there is no wake branch to switch on. The kind=gap rows (gap
@@ -92,6 +94,16 @@ _launch="$(date +%s)"
 sleep "$_settle"
 _size() { stat -f %z "$1" 2>/dev/null || stat -c %s "$1" 2>/dev/null || echo x; }
 _size0="$(_size "$_tp")"
+# Did a new turn start? A user or assistant main-thread record past the snapshot. Rescanning from
+# the snapshot each poll costs only what an idle gap appends, and never splits a record.
+_turned() {
+  [ "$(_size "$_tp")" != "$_size0" ] || return 1
+  case "$_size0" in ''|*[!0-9]*) return 0 ;; esac
+  tail -c +$(( _size0 + 1 )) "$_tp" 2>/dev/null \
+    | jq -Rne '[inputs | fromjson? | objects
+                | select((.type == "user" or .type == "assistant") and .isSidechain != true)]
+               | length > 0' >/dev/null 2>&1
+}
 
 # Is a mailbox watcher armed right now? Recorded, never obeyed: coexistence is the point.
 _watcher() {
@@ -117,7 +129,7 @@ while [ "$_n" -lt "$_max" ]; do
     [ $(( _now - _launch )) -lt "$_bound" ] || exit 0
     _left=$(( _due - _now )); [ "$_left" -le "$_poll" ] || _left="$_poll"
     sleep "$_left"
-    [ "$(_size "$_tp")" = "$_size0" ] || exit 0      # the gap ended: a new turn wrote the transcript
+    ! _turned || exit 0                               # the gap ended: a new turn wrote the transcript
   done
   _n=$(( _n + 1 ))
   /usr/bin/env python3 -I "$_lib/idle_gap.py" would-wake "$_sid" "$_launch" "$(_watcher)" "$_n" \

@@ -14,6 +14,8 @@
 # RED-proof: new behaviour. Mutants checked by hand on scratch copies: dropping the tracker's
 # idle_gap call fails (1); dropping the timer's transcript-size check fails (5); dropping the
 # headless guard fails (6).
+# W6 RED-proof (2026-10-24): against the base hook and ledger (git show 11f7f87fa:…), (8) fails at its
+# one-wake-row assertion: the away_summary record grew the file, and the old size test ended the gap.
 #
 # Hermetic: $HOME, the ledger, the state dir and the mailbox dir are fixtures; the timer's harness
 # argv and fd 1 come through the same seams mailbox-wake-arm.sh uses.
@@ -139,4 +141,38 @@ PY
   CC_IDLE_KEEPALIVE=off timer
   [ "$status" -eq 0 ]
   [ ! -s "$CC_IDLE_KEEPALIVE_LOG" ]
+}
+
+# tool_use <epoch> <id> <name> <input json> ; tool_result <epoch> <id> <text>
+tool_use() { jq -nc --arg t "$(iso "$1")" --arg id "$2" --arg n "$3" --argjson i "$4" \
+  '{type:"assistant",timestamp:$t,message:{model:"claude-opus-5-5",content:[{type:"tool_use",id:$id,name:$n,input:$i}],
+    usage:{input_tokens:2,cache_creation_input_tokens:500,cache_read_input_tokens:150000,output_tokens:98}}}' >> "$TX"; }
+tool_result() { jq -nc --arg t "$(iso "$1")" --arg id "$2" --arg c "$3" \
+  '{type:"user",timestamp:$t,message:{content:[{type:"tool_result",tool_use_id:$id,content:$c}]}}' >> "$TX"; }
+wake_row() { jq -r "select(.kind==\"wake\") | $1" "$CC_IDLE_KEEPALIVE_LOG" | tail -1; }
+
+@test "(8) W6 timer: an away_summary mid-gap does not end it; the row says busy and whether a watcher fires before the TTL" {
+  now=$(date +%s)
+  tool_use $((now - 20)) tu_b Bash '{"command":"bats tests/x.bats","run_in_background":true}'
+  tool_result $((now - 19)) tu_b "Command running in background with ID: bx1q2w3e4"
+  tool_use $((now - 18)) tu_m Monitor '{"command":"tail -f x.log","description":"x","timeout_ms":1800000}'
+  tool_result $((now - 17)) tu_m "Monitor started with ID: mx1q2w3e4"
+  tracker
+  ( sleep 0.5; printf '{"type":"system","subtype":"away_summary","content":"You asked…","timestamp":"%s"}\n' "$(iso "$now")" >> "$TX" ) &
+  timer
+  wait
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  [ "$(grep -c '"kind":"wake"' "$CC_IDLE_KEEPALIVE_LOG")" -eq 1 ]
+  [ "$(wake_row '[.v,.busy,(.busy_kinds|join("+")),.watcher_running,.watcher_fires_before_ttl] | join(" ")')" \
+    = "2 true bash true true" ]
+  # the job finishes (its notice carries a status) and only a long cc-await-ping watcher remains:
+  # not busy, and that watcher does not fire before the cache expires
+  printf '{"type":"user","timestamp":"%s","message":{"content":"<task-notification>\\n<task-id>bx1q2w3e4</task-id>\\n<tool-use-id>tu_b</tool-use-id>\\n<status>completed</status>\\n</task-notification>"}}\n' "$(iso $((now - 10)))" >> "$TX"
+  printf '{"type":"user","timestamp":"%s","message":{"content":"<task-notification>\\n<task-id>mx1q2w3e4</task-id>\\n<status>completed</status>\\n</task-notification>"}}\n' "$(iso $((now - 9)))" >> "$TX"
+  tool_use $((now - 8)) tu_w Bash '{"command":"cc-await-ping abc --timeout 14340","run_in_background":true}'
+  tool_result $((now - 7)) tu_w "Command running in background with ID: bw1q2w3e4"
+  tracker
+  timer
+  [ "$status" -eq 0 ]
+  [ "$(wake_row '[.busy,(.busy_kinds|length),.watcher_running,.watcher_fires_before_ttl] | join(" ")')" = "false 0 true false" ] || { cat "$CC_IDLE_KEEPALIVE_LOG"; false; }
 }
