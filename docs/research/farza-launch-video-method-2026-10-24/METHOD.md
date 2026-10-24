@@ -62,7 +62,7 @@ A principle can carry more than one grade.
 | P12 | A demo is a mini story with beats and a turn. Keep the story moving; don't chase attention. | [24:04] (host), [37:06] (host), [37:31]-[37:36] | Measured (A1); partly corroborated (X1) | 3 of 4 demos have a turn, and v2 has comic beats instead. The problem is always stated as his own. TikTok (2020) and Wistia (2018) both put story above polish. |
 | P13 | Show your face clearly, and talk to the one person who would find it cool. | [12:30]-[12:52] | Measured, partly (A1) | In the raw takes his face is on screen 100% of the time, but only as a bubble. In the edited videos it is 32-62%. |
 | P14 | Take a thousand shots. Post what you think is bad; zero views is fine. | [20:25], [16:56], [14:38] | Corroborated for hit rate, contested for skill (X1) | Buffer: posting more grows the tail, but median views stay flat. |
-| P15 | Audio quality is the most important thing in any video. | [41:46]-[42:27] | Corroborated (X1); unverified in his own hits | Newman & Schwarz (2018). Limit: much feed video plays muted. A1 did not check which mic v1 and v2 used. v1 is an un-normalized raw take at -32 dBFS, and v2's webcam bubble shows white earbuds (R4 §3), which his own rule says "don't count". |
+| P15 | Audio quality is the most important thing in any video. | [41:46]-[42:27] | Corroborated (X1); unverified in his own hits | Newman & Schwarz (2018). Limit: much feed video plays muted. A1 did not check which mic v1 and v2 used. v1 is an un-normalized raw take at -32 dBFS. v2's webcam bubble shows white earbuds (R4 §3); if they were the mic, his own rule says they "don't count". |
 | P16 | Every channel converts differently, so measure conversion per channel. | [31:03]-[33:18] | Anecdote; his numbers contested (X1) | "Like 20" percent on YouTube is implausible as a views-to-downloads rate. |
 | P17 | Make each video for one primary platform, then cross-post. X wants 16:9. | [33:23]-[33:39] | Measured (A1), confounded | On X, horizontal posts reached 0.63-3.83M views and vertical ones 65-73K. But v6 came from @heyclicky (15,584 followers), not @FarzaTV (129,259) (W1 §4). The only same-account vertical post, v5, is n=1 and on another topic. |
 | P18 | Be cringe first: start before you are good. | [28:12]-[28:28], [44:56] | Anecdote | He gives the same advice in his 2026-01 Substack (W1 S11), so it is a stable belief. |
@@ -78,7 +78,7 @@ Steps are numbered across the whole section so that §5 can refer to them. Each 
 1. **Write down your tiers.** These are the defaults, from his practice:
    - a demo whenever something new works, ideally several a week ("demos every single day almost" [16:06]);
    - a team "everything we built" update, every two weeks [26:51] or weekly (the clip is titled "this week" [24:52]; W1 S13 planned "one weekly update");
-   - a polished launch about once a quarter [15:57], "something I'm really proud of", made with his filmmaker (§3.12);
+   - a polished launch about once a quarter, "something I'm really proud of" [15:57]-[16:02], made with his filmmaker (§3.12);
    - optionally, a one-line teaser with a short clip the day before a release, then a livestream on the day (W1 S5).
 
    His quarterly tier is a produced video with the founder on camera. It is not our launch-film skill, which rules out a human shoot (§6).
@@ -117,7 +117,7 @@ Steps are numbered across the whole section so that §5 can refer to them. Each 
 8. **Every week, ask "what are we launching this week?"** and work backwards from that launch [03:55]-[03:59]. A launch is "we did something new at the company, we talk about it" [18:49]. If more than one person might see it, post it [18:54].
 9. **Every day, take 10 minutes.** Ask what you did today that made you smile or was interesting. Talk about it, show it, post it, close the app, and go back to work [28:44]-[28:56].
 10. **Make the team update in one of two versions.** It started as accountability, "kind of like stand up right but in front of the world" [26:48]. It has "no hook there's no attention there's no story" [25:12]-[25:18], and it is aimed at existing users ("our users have been loving it" [24:41]).
-    - **The 10-minute version.** Prompt each person with "what are you doing today?" and keep the effort to about 10 minutes [26:30]-[26:36]. A phone selfie with a handheld mic is enough. Example: the "shipping a ton" clip, a group selfie at the Transamerica Pyramid (R1 Insert D).
+    - **The 10-minute version.** Prompt each person with "what are you doing today?" and keep the effort to about 10 minutes [26:30]-[26:36]. INFERRED: a phone selfie with a handheld mic is enough. The "shipping a ton" clip looks like this, a group selfie at the Transamerica Pyramid with Farza holding a DJI mic (R1 Insert D), though its effort is not stated.
     - **The produced version.** This is what the interview shows (R3 I12): three speakers in about 22 s, each giving one line about one shipped change, a graded group shot outdoors, B-roll from several places over each line, one big title card, and captions throughout. Its edit time is not stated, and it is plainly more than 10 minutes (R3, INFERRED).
     - **Reach.** The host says one has "almost a million views on Instagram" [25:22], which is not shown. The YouTube copies have 1,900 views ("this is everything we shipped.") and 913 ("shipping a ton and fixing 200+ bugs") (MEASURED, C1 yt-dlp). The second showed 787 in the cold open (R1).
 11. **Spend one-shot channels only on substantive releases.** YC gives each company one Launch HN (DOCUMENTED, X1 §2.1). Product Hunt reportedly expects about six months between launches (forum post, search summary, X1 §2.1). The split is X1's advice, though it matches his own: daily demos plus a polished launch "maybe once a quarter" [15:57]. A one-shot channel takes whatever finished asset the release has, the produced demo or a launch-film hero (§6). The copy follows the channel's own rules. HN's guide says "Don't write in a marketing, sales, or PR style" (X1 §2.1).
@@ -139,7 +139,7 @@ The host names this "demo-driven development": work backwards from the demo you 
     - "If I can't really explain it in 280 characters, then it's probably too complicated" (S14).
 
     Use it as a clarity check, not a hit predictor; his own predictions are weak (§7.1). If you cannot state the feature in a caption that excites you, rethink the feature or its angle.
-13. **Pick one grounding frame.** This is the single image the video exists to show, an idea he took from Miyazaki (W1 S7). For the October 2025 precursor demo it was "this cute blue cursor popping in from the right side of my Mac's screen, and saying hi" (W1 S7, S31). The grounding frame is not the first frame. v1's first frame is Xcode, chosen for the audience [09:13]-[09:22]. The blue cursor arrives as the zoom at 2.2 s (A1; the link to S7 is INFERRED).
+13. **Pick one grounding frame.** This is the single image the video exists to show, an idea he took from Miyazaki (W1 S7). For the October 2025 precursor demo it was "this cute blue cursor popping in from the right side of my Mac's screen, and saying hi" (W1 S7, S31). The grounding frame is not the first frame. v1's first frame is Xcode, chosen for the audience [09:13]-[09:22]. The zoom at 2.2 s brings the blue cursor into view (A1; the link to S7 is INFERRED).
 14. **Build toward the "check this out" moment.** That is the moment you turn to a teammate or co-founder and say it [15:31]-[15:43], and that raw "check this out" is how to present yourself online [15:43]-[15:48]. When it first works, record it, and do not stop to check whether someone did it first [36:25]-[36:31]. Show your own first real use [36:36]-[36:42].
 15. **Optionally, set a same-day posting deadline.** If the full feature is not working by then, cut to an angle you can demo today. This rests on one 2025 anecdote, where a feature failed at 5 PM and he posted a smaller angle that evening (W1 S7). His biggest hit broke the rule: he "had been sitting on the Clicky demo for a few weeks" (W1 S3) and "tabled it for another two weeks" (W1 S19).
 
@@ -155,7 +155,7 @@ A1 measured the first three registers on his own posts. The others were seen ins
 | **Fast-cut progress reel** | Vertical, cuts about every 0.7-1.3 s, real proof on screen (a usage chart) (R4 I-14, I-15) | "It has been 9 weeks", "Two weeks ago…" (seen in the interview only) | Not stated | "The audience that just has no attention span" [37:53] |
 | **Team update** | See step 10. | "everything we built this week" (R3 I12) | 10 minutes [26:30], or more for the produced version | Weekly or every two weeks, for existing users. |
 | **Niche call-out** | Opens by naming the viewer's role (described only; no TikTok was shown, R4 #8). | Design-agency TikToks, about 4,000 views each, about 50 leads [30:33]-[30:48] | Unknown | A B2B niche on consumer feeds (step 52). |
-| **Long-form YouTube story** | A scripted, narrated story of making something (W1 S14, 7 min 24 s) | "the art of making something from nothing." (53K views) | About 8 h: script 30 min, shoot and edit 5 h, thumbnails 3 h (W1 S10) | A story that outlasts the feed. YouTube. |
+| **Long-form YouTube story** | A scripted, narrated story of making something (W1 S14) | His first YouTube video in a decade (2025-04, about a quarter million views across platforms, W1 S10); "the art of making something from nothing." (7 min 24 s, 53K views, W1 S14) | About 8 h for the first: script 30 min, shoot and edit 5 h, thumbnails 3 h (W1 S10) | A story that outlasts the feed. YouTube. |
 | **Teaser, then livestream** | "Something new. See you tomorrow, link below." with a 33-66 s clip, then a stream on launch day (W1 S5) | Apr 22 and May 13 2026 teasers (174K, 102K views) | Not stated | A dated release. |
 
 The minimum version of any register is a selfie: "hi, this is what I'm working on, check this out", then turn the camera to show the screen [22:19]-[22:24]. He adds "I think the effect may not have been as big" [22:28]. His standing advice to anyone starting is a 30-second selfie video [27:30]-[27:37]. The 30-day challenge (§3.13) asks for 10 minutes a day and gives no length.
@@ -373,7 +373,7 @@ The host frames it: "Everyone wants a story, and so how can a demo just be a min
     The aim is to keep the story moving: "I'm not trying to keep your attention, that's actually the wrong way to look at it." [37:36]
 36. **At each beat, ask from the viewer's seat: "am I here? am I still watching?"** [38:27]. Some videos are cut fast on purpose, for "the audience that just has no attention span" [37:53]. The "9 weeks" reel cuts about every 0.7-1.3 s (MEASURED, R4 I-14), but that rests on 3 luma cuts in a roughly 10 s excerpt.
 37. **Place self-deprecation after a success beat.** Examples: v6's "a pretty meh idea", v4's "It's a little bit buggy" in its CTA (A1, pattern 5), and the reel's "an idea ... I thought was actually kind of terrible" [21:26]. The host notes the same quality in younger founders' hooks [23:48]-[24:00].
-38. **Admit the product's mistakes in public (P20).** In v1, Clicky recommends a Sony LUT for Blackmagic RAW footage at 75 s. At 86.8 s he says on camera "I'm not sure why I recommended the Sony LUT for a Blackmagic thing, but ignoring that, that's clicky." C1 guessed "I" was an ASR slip for "it". I re-transcribed 84-93 s three ways in this run: whisper-cli large-v3-turbo, the q5_0 model, and a pass slowed to 0.6×. All three read "I recommended", with the "I" lasting about 0.04 s (MEASURED, `/tmp/farza-S1/`). Either way, the wrong recommendation was the product's, and he left it in and named it. The replies do the same (W1 S2, A1): "High chance I run of credits lol", "a bit dumb right now (only 10 messages of memory)", "It only plays AC/DC on Spotify right now. I'll fix tomorrow I'm going to sleep lol."
+38. **Admit the product's mistakes in public (P20).** In v1, Clicky recommends a Sony LUT for Blackmagic RAW footage at 75 s. At 86.8 s he says on camera "I'm not sure why I recommended the Sony LUT for a Blackmagic thing, but ignoring that, that's clicky." C1 guessed "I" was an ASR slip for "it". I re-transcribed 84-93 s three ways in this run: whisper-cli large-v3-turbo, the q5_0 model, and a pass slowed to 0.6×. All three read "I recommended", with the "I" lasting about 0.04 s (MEASURED, `/tmp/farza-S1/`). Either way, the wrong recommendation was the product's, and he left it in and named it. The replies do the same (W1 S2, A1): "High chance I run of credits lol", "a bit dumb right now (only 10 messages of memory)", and under v2, "I'll fix tomorrow I'm going to sleep lol".
 39. **Show what you're doing and why, never your life.** "You'll never catch me making those videos about this is my day as a YC founder." [25:52]-[25:59]
 40. **Keep a swipe file.** Watch Reels "not for entertainment, just to kind of study" [22:54]. When a hook works on you, note its device (lighting, caption placement, a "two months ago" curiosity gap) and turn it into a template for your own story [23:05]-[23:26].
 
@@ -424,7 +424,7 @@ The host frames it: "Everyone wants a story, and so how can a demo just be a min
     - views count impressions, not people;
     - 7,000 is his recall;
     - the post had no link for 4 h 42 min;
-    - the repo went public the next day (7,772 stars now, W1 S4), so the downloads cannot be attributed to the X post.
+    - he announced the open-source repo the next day (7,772 stars now, W1 S4), so the downloads cannot be attributed to the X post alone.
 
     A stronger test from his vlog is a Stripe link right after the demo, with a target of 25 paying customers (W1 S15).
 51. **Compare channels on conversion, not views, and only once the sample can bear it** [32:38]-[33:13]. Use the per-post tags and product events from steps 4-5. Views are still his early signal: the 30-day challenge picks the next video by which one passed 1,000 views [46:22]-[46:36]. INFERRED decision rule: outcomes are heavy-tailed (X1 §2.7), so compare channels after 4-6 weeks (X1 §2.9) and several posts each, on medians of tracked conversions, never on one post.
@@ -433,7 +433,7 @@ The host frames it: "Everyone wants a story, and so how can a demo just be a min
     - YouTube "will keep on performing" as a library;
     - turn the winner into a paid ad, as he did with the 20.9M reel on Facebook;
     - build the landing page from demo clips, as heyclicky.com does with .mov windows such as "nohandstricklol.mov" (R1 Insert E);
-    - treat open-sourcing as a second launch: the repo went public the day after the launch post (W1 S4).
+    - treat open-sourcing as a second launch: he announced the repo the day after the launch post (W1 S4).
 
     INFERRED caution: over-promotion is a top reason people unfollow brands (Sprout Social, X1 §2.1). Reuse what shows something new, not the same ask.
 
@@ -610,7 +610,7 @@ The agent can take most of the work around the founder: planning, measurement, e
 
 ## 6. Boundary with our launch-film and demo-recording skills
 
-**What each one is.** His quarterly "polished launch" [15:57] is "something I'm really proud of", made with a filmmaker whose job covers "shooting to picking the set to editing" [43:41]-[43:47]. It is the produced register of this method at higher effort. It is not launch-film, which rules out "a human shoot or studio" (launch-film §0.11).
+**What each one is.** His quarterly "polished launch" is "something I'm really proud of" [15:57]-[16:02], made with a filmmaker whose job covers "shooting to picking the set to editing" [43:41]-[43:47]. It is the produced register of this method at higher effort. It is not launch-film, which rules out "a human shoot or studio" (launch-film §0.11).
 
 | | launch-film | demo-recording | This method |
 | --- | --- | --- | --- |
@@ -764,42 +764,27 @@ C1 reviewed S0's draft in 97 verdict rows and checked 167 quoted timestamps. Ver
 | Verdict | Rows |
 | --- | --- |
 | OVERSTATED (3 of them for an overstated label) | 40 |
-| SUPPORTED (8 needing no change; 15 with a dropped caveat or tension) | 23 |
+| SUPPORTED (8 needing no change; 15 still asking for a fix, such as a dropped caveat) | 23 |
 | CONTRADICTED | 14 |
 | MISATTRIBUTED | 5 |
 | UNSUPPORTED | 4 |
 | MISQUOTED | 2 |
 | MISAPPLIED | 2 |
 | ARITHMETIC | 1 |
-| Omission, incomplete, or tension dropped | 6 |
+| Omission, incomplete, or a tension dropped or unresolved | 6 |
 | MIS-TIMESTAMPED | 0 (161 of 167 exact; 6 cite the sentence start) |
 
-**Main corrections applied:**
-- **Boundary redrawn (§6, steps 1, 11).** His quarterly polished launch is the produced, founder-on-camera register, not launch-film, which bans a human shoot. Launch HN and Product Hunt follow one rule in step 11 and §6. demo-recording is added as the third sibling. "Stills" is no longer listed as an operator gate; it is internal (launch-film §4). This departs from the brief's wording, which listed stills, because the skill file is the primary source.
-- **Claims his own behavior contradicts.** "Never by views" is out of the summary: the challenge picks by views. "Forgotten by the time I hit post" now stands beside a new thread step (49), since A1 measured replies hours and days later.
-- **Survivor habits.** Step 29 is now a per-video table. The "turn by 25%" norm is gone (v3 is at 43%). "Key detail moving by 3 s" is limited to screen takes (1 of 6). The same-template control (2.9M against 294K) and a list of unmeasured lower performers (§4d) are added, and the n=1 and n=4 caveats are stated in the templates and the summary.
-- **Account confound.** v6 came from @heyclicky (15.6K followers) and the others from @FarzaTV (129K). This is added to P17, §4a and the reading of the tables.
-- **Measurement made runnable.** Posts are tagged, not just profiles (step 4), and a product-events step is added (step 5). The 0.23% is relabeled as a ratio of unlike numbers whose attribution the next-day open-source release confounds.
-- **Agent overclaims in §5.** Instagram and TikTok numbers need the founder's export. A1's method is not an automatic check. The static feed mock is a weaker proxy. Script authorship becomes a test.
-- **Factual fixes.**
-  - YouTube channel age is contradicted by upload dates.
-  - Title periods: 3 of 11 long-form, 0 of 8 Shorts.
-  - The setup range is 14-28 s for 140 s.
-  - The 30-second selfie is his standing advice, not the challenge.
-  - The niche call-out was described, never shown.
-  - "Vikrant" is seen on screen in a UI tile.
-  - The mute-test line is now the article's own wording.
-  - v2's 151-character copy is shown.
-  - The "try it for free" end card is v3 only.
-  - The music dip lines up with the turn in v3 only.
-  - The Mic 3 price was out of stock.
-  - The Resolve sale end date is third-party.
-- **Regrades.** P4 and P6 are Anecdote; P5 carries the copying risk; P7 is n=1; P8 and P10 report per video; P12 is 3 of 4; P15 is unverified in his own hits; P19 carries "closed by choice".
-- **Attribution.** The caption gate (step 12) and grounding frame (13) are credited to W1, and the frame to the precursor demo. The same-day deadline (15) is optional and was broken by his biggest hit. Steps 11, 24, 30 and 55 are labeled as X1's or the synthesis's advice.
-- **Added from the readers' material (C1 P2).** Instagram captions and YouTube titles (step 22), the show-one-person gate, niche discovery (52), reuse and second launches (53), three registers (§3.3), length data (43), redaction and music checks (46), the channel decision rule (51), the hiring trigger (57), what to do when no video passes 1,000 views (64), a time budget (§3.1), and Reddit and fuller LinkedIn rows.
+**Main corrections:**
+- **Boundary (§6, steps 1, 11).** The quarterly polished launch is this method's produced register, not launch-film, which bans a human shoot. Launch HN and Product Hunt follow one rule. demo-recording is added. "Stills" is not an operator gate (launch-film §4), which departs from the brief's wording; the skill file wins.
+- **Contradicted by his own behavior.** "Never by views" is gone from the summary, and a thread step (49) answers "forgotten by the time I hit post".
+- **Survivor habits.** Step 29 reports per video. "Turn by 25%" is dropped, and "key detail moving by 3 s" is limited to screen takes. The 2.9M-against-294K control and unmeasured lower performers (§4d) are added.
+- **Confounds and measurement.** The @heyclicky account confound is in P17 and §4a. Posts are tagged and product events added (steps 4-5). The 0.23% is a ratio of unlike numbers.
+- **Facts.** Channel age, title periods, 14-28 s, the 30-second selfie, the call-out never shown, the Vikrant tile, the mute-test wording, v2's 151 characters, the end card, the music dip, and the mic and Resolve labels.
+- **Grades and attribution.** P4-P8, P10, P12, P15, P17 and P19 are regraded. Steps 12, 13 and 15 are credited to W1, and steps 11, 24, 30 and 55 are marked as X1's or the synthesis's advice. §5's agent claims are narrowed.
+- **Added (C1 P2).** Instagram and YouTube copy, the one-person gate, niche discovery, reuse, three registers, length, redaction and music checks, a channel decision rule, a hiring trigger, the no-1,000-views case, a time budget, and Reddit and LinkedIn rows.
 
-**Where I departed from C1 after checking the primary source:**
-- **Row 59.** C1 guessed that "I recommended the Sony LUT" was an ASR slip for "it". Three re-transcriptions in this run all read "I". The substance C1 drew still holds, since the recommendation was Clicky's (75 s), so the line is kept as heard and becomes step 38 and P20.
-- **Row 2.** The on-screen tile confirms the spelling "Vikrant". That the tile names the filmmaker is INFERRED.
-- **Row 7.** P4 is graded Anecdote as C1 asked, but the phrase appears in raw takes (v1, v2) as well as scripted ones, so it is not described as only scripted.
-- **Not done.** Measuring 4-6 lower performers (C1 P0 item 3) is a new measurement, beyond a synthesis pass. It is open question 7.
+**Departures from C1, after checking the primary source:**
+- **Row 59.** Three re-transcriptions read "I recommended", not "it". The recommendation was still Clicky's, so the line becomes step 38 and P20.
+- **Row 2.** The tile confirms the spelling; that it names the filmmaker is INFERRED.
+- **Row 7.** P4 is Anecdote, but the phrase occurs in raw takes as well as scripted ones.
+- **Not done.** Measuring lower performers (C1 P0 item 3) is new fieldwork; see §8 Q7.
