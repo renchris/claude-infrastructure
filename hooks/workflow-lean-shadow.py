@@ -34,7 +34,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-TIMEOUT_S = 5  # the registered hook timeout (migrations/0077); a hook past it lets the call through
+TIMEOUT_S = 5  # the registered hook timeout (migrations/0078); a hook past it lets the call through
 SELF_BOUND_S = 3  # abandon parsing well inside it, and log that instead
 REWRITE = "agentType: 'workflow-lean'"
 MARKERS = {

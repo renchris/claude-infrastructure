@@ -1,12 +1,12 @@
 #!/bin/bash
 # migration-class: c10
-# migration-step: migration 0077 — register hooks/workflow-lean-shadow.py as a PreToolUse hook on the Workflow tool (its own "Workflow" entry) in ~/.claude/settings.json, which every account links to. It is LOG-ONLY: it never denies, and records per agent() call whether a deny-mode lean-agent hook would refuse it, whether the brief names commit/ship/Skill/MCP, and the hook's latency against its 5 s timeout — the 3-day shadow data the deny decision waits on. It writes settings.json, which is C10.
-# migration-run: bash ~/Development/claude-infrastructure/migrations/0077-workflow-lean-shadow-registration.sh --confirm settings.json
+# migration-step: migration 0078 — register hooks/workflow-lean-shadow.py as a PreToolUse hook on the Workflow tool (its own "Workflow" entry) in ~/.claude/settings.json, which every account links to. It is LOG-ONLY: it never denies, and records per agent() call whether a deny-mode lean-agent hook would refuse it, whether the brief names commit/ship/Skill/MCP, and the hook's latency against its 5 s timeout — the 3-day shadow data the deny decision waits on. It writes settings.json, which is C10.
+# migration-run: bash ~/Development/claude-infrastructure/migrations/0078-workflow-lean-shadow-registration.sh --confirm settings.json
 # migration-subject: hooks/workflow-lean-shadow.py
 # migration-verify: /usr/bin/env python3 "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.PreToolUse[]? | select(.matcher == "Workflow") | .hooks[]?.command] | any(((. // "") | cmd_bare) == "~/.claude/hooks/workflow-lean-shadow.py")' "$HOME/.claude/settings.json" >/dev/null
 # cmd_bare: a hook command may carry its interpreter (/usr/bin/env python3 ~/.claude/hooks/x.py) since 0070.
 #
-# ══ 0077 — the Workflow lean-agent shadow hook (docs/plans/USAGE_LEVERS.md W1.3) ══
+# ══ 0078 — the Workflow lean-agent shadow hook (docs/plans/USAGE_LEVERS.md W1.3) ══
 # A read-only Workflow slot run as the default agent loads CLAUDE.md, rules, memory and skills; as
 # `agentType: 'workflow-lean'` it starts ~84% cheaper. A deny-mode hook is the candidate enforcement
 # (65% conviction, docs/research/usage-levers-2026-10-23/round2/REPORT.md), and round 2 found the
@@ -21,16 +21,16 @@
 # Revert: delete the entry, set CC_WORKFLOW_SHADOW=off in the environment, or restore the printed
 # backup. Takes effect in NEW sessions.
 #
-# Usage: bash migrations/0077-workflow-lean-shadow-registration.sh --dry-run
-#        bash migrations/0077-workflow-lean-shadow-registration.sh --check    # preflight, writes nothing
-#        bash migrations/0077-workflow-lean-shadow-registration.sh --verify   # is the effect live?
-#        bash migrations/0077-workflow-lean-shadow-registration.sh --confirm settings.json
+# Usage: bash migrations/0078-workflow-lean-shadow-registration.sh --dry-run
+#        bash migrations/0078-workflow-lean-shadow-registration.sh --check    # preflight, writes nothing
+#        bash migrations/0078-workflow-lean-shadow-registration.sh --verify   # is the effect live?
+#        bash migrations/0078-workflow-lean-shadow-registration.sh --confirm settings.json
 # Exit: 0 applied / already applied / preflight ok · 1 failure, nothing written · 2 usage ·
 #       3 REFUSED, an account settings.json is still forked (run 0037 first) · 4 REFUSED, live hook absent
 # bash 3.2-safe.
 set -uo pipefail
 
-N=0077
+N=0078
 # shellcheck disable=SC2088  # the literal "~/" is what settings.json stores; Claude Code expands it
 CMD='~/.claude/hooks/workflow-lean-shadow.py'
 MATCHER='Workflow'
