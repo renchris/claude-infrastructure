@@ -680,15 +680,18 @@ if [ "$CLOUD_GIVEN" = 1 ]; then
   if [ -n "${CC_CLAUDE_BIN+set}" ]; then
     CLOUD_CLAUDE="$CC_CLAUDE_BIN"
   else
-    CLOUD_CLAUDE="$(command -v claude 2>/dev/null || true)"
-    # bin/cc-claude-bin is this repo's own resolver for the pinned track (a `claude` that is only a
-    # shell function is invisible to `command -v` in a script; that resolver knows the real paths).
-    if [ -z "$CLOUD_CLAUDE" ] && [ -n "$_sd" ] && [ -x "$_sd/cc-claude-bin" ]; then
-      CLOUD_CLAUDE="$("$_sd/cc-claude-bin" 2>/dev/null || true)"
+    # bin/cc-claude-bin FIRST: it resolves the binary the interactive launcher runs (a `claude` that
+    # is only a shell function is invisible to `command -v` in a script). `command -v claude` is the
+    # last resort, never the first: in a script it resolved to ~/Library/pnpm/claude 2.0.5, which has
+    # no --cloud at all (docs/research/usage-levers-2026-10-23/REPORT.md, "Wrong binary").
+    CLOUD_CLAUDE=""
+    if [ -n "$_sd" ] && [ -x "$_sd/cc-claude-bin" ]; then
+      CLOUD_CLAUDE="$(cc_run "$_sd/cc-claude-bin" 2>/dev/null || true)"
     fi
     if [ -z "$CLOUD_CLAUDE" ] && [ -x "$HOME/.claude/bin/cc-claude-bin" ]; then
       CLOUD_CLAUDE="$(cc_run "$HOME/.claude/bin/cc-claude-bin" 2>/dev/null || true)"
     fi
+    [ -n "$CLOUD_CLAUDE" ] || CLOUD_CLAUDE="$(command -v claude 2>/dev/null || true)"
   fi
   if [ -z "$CLOUD_CLAUDE" ] || [ ! -x "$CLOUD_CLAUDE" ]; then
     verdict cloud-transport-unavailable reason=no-claude-binary "cloud=$CLOUD_ID"

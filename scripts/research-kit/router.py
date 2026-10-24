@@ -498,6 +498,32 @@ def careful_claude(expand: bool = True) -> str:
     return os.path.expanduser(path) if expand else path
 
 
+_FAST_CLAUDE: List[Optional[str]] = []
+
+
+def fast_claude() -> Optional[str]:
+    """The claude binary the fast call runs: bin/cc-claude-bin (the launcher's pin; it honours
+    CC_CLAUDE_BIN), else `claude` on PATH. PATH alone gave a script ~/Library/pnpm/claude 2.0.5 or
+    the stock /opt/homebrew install, never the launcher's (docs/plans/USAGE_LEVERS.md W1.1).
+    Resolved once per process."""
+    if not _FAST_CLAUDE:
+        found: Optional[str] = None
+        resolver = HERE.parent.parent / "bin" / "cc-claude-bin"
+        if os.access(str(resolver), os.X_OK):
+            try:
+                out = subprocess.run(
+                    ["/bin/bash", str(resolver)],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                ).stdout.strip()
+                found = out if out and os.access(out, os.X_OK) else None
+            except (OSError, subprocess.SubprocessError):
+                found = None
+        _FAST_CLAUDE.append(found or shutil.which("claude"))
+    return _FAST_CLAUDE[0]
+
+
 def claude_version(path: str) -> str:
     """The version a claude binary is: its package's package.json beside the real file, else a hash
     of its bytes (a stub, a single-file install); "missing" when there is no such file."""
@@ -543,7 +569,7 @@ def classifier_argv(kind: str = "careful") -> Optional[List[str]]:
         if not os.access(str(claude), os.X_OK):
             return None
     else:
-        claude = shutil.which("claude")
+        claude = fast_claude()
     if not claude:
         return None
     return [claude] + classifier_flags(kind)
@@ -882,6 +908,8 @@ def classify(
         if os.environ.get("CC_RESEARCH_CLASSIFY_TRACE")
         else None
     )
+    if os.environ.get("CC_RESEARCH_WARM") == "0" or not warm_sock().exists():
+        fast_claude()  # both calls go cold: resolve now so the fast one starts beside the careful one
     tick = threading.Event()
     texts = {k: BRIEFS[k].format(cert=cert, prompt=prompt) for k in KINDS}
     votes = {k: Vote(Call(k, texts[k], deadline, tick)) for k in KINDS}

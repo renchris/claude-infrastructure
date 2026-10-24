@@ -44,7 +44,9 @@ done
 here="$(cd "$(dirname "$p")/.." && pwd)"
 hook="$here/hooks/rm-prompt-preempt.sh"
 cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-bin="${CC_PROBE_BIN:-$(command -v claude)}"
+# The launcher's pinned binary first (bin/cc-claude-bin); bare PATH gave a script ~/Library/pnpm/claude
+# 2.0.5 (docs/plans/USAGE_LEVERS.md W1.1), which would probe a binary no session runs.
+bin="${CC_PROBE_BIN:-$(/bin/bash "$here/bin/cc-claude-bin" 2>/dev/null || command -v claude)}"
 wait_s="${CC_PROBE_WAIT_S:-300}"
 pass_s="${CC_PROBE_PASS_S:-30}"
 MARK='Denied at once by the rm-prompt-preempt hook'

@@ -838,6 +838,21 @@ router_py() { /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/rese
   [ "${lines[1]}" = "$BATS_TEST_TMPDIR/bin/claude" ]
 }
 
+@test "the fast call runs the launcher's pinned claude (bin/cc-claude-bin), not an older claude first on PATH" {
+  # Regression 2026-10-24 (docs/plans/USAGE_LEVERS.md W1.1): the fast call took shutil.which("claude"),
+  # which in a script is ~/Library/pnpm/claude 2.0.5 or the stock /opt/homebrew install.
+  # RED-proof: on the pre-fix router this prints the PATH stub.
+  plant_claude "$HOME/.claude-293" 2.1.293
+  # shellcheck disable=SC2016  # the launcher's own line is literal text, $HOME unexpanded
+  printf 'claude() {\n  local _bin="$HOME/.claude-293/node_modules/.bin/claude"\n}\n' > "$HOME/.zshrc"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/bash\necho old\n' > "$BATS_TEST_TMPDIR/bin/claude"; chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  unset CC_RESEARCH_CLASSIFIER CC_CLAUDE_BIN
+  run env PATH="$BATS_TEST_TMPDIR/bin:/usr/bin:/bin" /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit/lib','$REPO/scripts/research-kit']; import router; print(router.classifier_argv('fast')[0])"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/.claude-293/node_modules/.bin/claude" ]
+}
+
 @test "the real classifier call: the fast call's model from model-config (sonnet_latest), the careful call pinned (wave E1m), local settings only, an empty cwd, the inner guard set" {
   state certified
   unset CC_RESEARCH_CLASSIFIER
@@ -854,6 +869,8 @@ STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/claude"
   export STUB_ARGS="$BATS_TEST_TMPDIR/args"
   export CC_RESEARCH_CAREFUL_CLAUDE="$BATS_TEST_TMPDIR/bin/claude"   # the pinned binary's test seam
+  # the fast call resolves through bin/cc-claude-bin, whose rung 3 is the REAL claude-latest on PATH
+  export CC_CLAUDE_BIN="$BATS_TEST_TMPDIR/bin/claude"
   PATH="$BATS_TEST_TMPDIR/bin:$PATH" prompt "are we done?" >/dev/null
   [ "$(label)" = completeness ]
   # Since wave E1g the classifier is two calls. Since wave E1m the careful one's model and effort are

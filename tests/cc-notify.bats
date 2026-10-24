@@ -1150,6 +1150,27 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   [[ "$output" == *"UNVERIFIED, not invalid"* ]] || false
 }
 
+@test "--cloud: with CC_CLAUDE_BIN unset, the launcher's pinned binary beats an OLD claude first on PATH" {
+  # Regression 2026-10-24 (docs/plans/USAGE_LEVERS.md W1.1): `command -v claude` was tried FIRST and
+  # in a script resolves to ~/Library/pnpm/claude 2.0.5, so cc-claude-bin (the launcher's pin) was
+  # never reached. RED-proof: on the pre-fix order the OLD stub takes the call and this test fails.
+  declare_cloud
+  unset CC_CLAUDE_BIN
+  mkdir -p "$HOME/.claude-999/node_modules/.bin" "$BATS_TEST_TMPDIR/oldpath"
+  cp "$CLAUDE_STUB" "$HOME/.claude-999/node_modules/.bin/claude"
+  # shellcheck disable=SC2016  # the launcher's own line is literal text, $HOME unexpanded
+  printf 'claude() {\n  local _bin="$HOME/.claude-999/node_modules/.bin/claude"\n}\n' > "$BATS_TEST_TMPDIR/zshrc"
+  export CC_ZSHRC="$BATS_TEST_TMPDIR/zshrc"
+  printf '#!/bin/bash\necho OLD >> "%s"\nexit 1\n' "$BATS_TEST_TMPDIR/old.log" > "$BATS_TEST_TMPDIR/oldpath/claude"
+  chmod +x "$BATS_TEST_TMPDIR/oldpath/claude"
+  export PATH="$BATS_TEST_TMPDIR/oldpath:$PATH"
+  run "$NOTIFY" --cloud "$CLOUD_ID" "pinned binary"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=cloud-queued"* ]] || false
+  [ ! -f "$BATS_TEST_TMPDIR/old.log" ]
+  grep -qF -- "-p pinned binary" "$CLOUD_LOG"
+}
+
 @test "--cloud: refuses to be combined with a pane target — they are different address KINDS" {
   declare_cloud
   run "$NOTIFY" --cloud "$CLOUD_ID" --role desk "which one?"
