@@ -86,7 +86,28 @@ into this plan, or at 35% fill while idle, whichever comes first.
 - Report, readings table, scripts and data: `docs/research/usage-levers-2026-10-23/round3-probe.md`,
   `round3/`.
 
-## W3 — idle-cache redesign, shadow mode (S, unblocked by W2: use the meter-weight branch)
+## W3 — idle-cache redesign, shadow mode — DONE (2026-10-24): shadow live; switch-on decision due ≈2026-10-31
+- Landed `af0043319` (keepalive + gap ledger + migration 0077), `d9ffc3964` (subagent count-only
+  rule), `5982877c4` (read-out); converged live the same day. Nothing wakes and nothing denies.
+- **Gap ledger (live now):** `hooks/cache-expiry-tracker.sh`, already on Stop, runs
+  `hooks/lib/idle_gap.py`: one row per main-session idle gap in `~/.claude/logs/idle-keepalive.jsonl`
+  with duration, context at the gap start, what the first request after it paid (`obs_cw`, so the
+  1 h TTL is checked, not assumed), and the priced outcome of one wake at gap start + 3300 s.
+  Round 3 weights; break-even ≈2.7–3.5% of woken gaps must be rescued. Non-interactive sessions skipped.
+- **Timer (needs 0077):** `hooks/idle-keepalive.sh`, its own asyncRewake Stop group, so the
+  `mailbox-wake-arm.sh:203` claim guard cannot suppress it; logs a would-wake row (with
+  `watcher_armed`) and exits 0, which asyncRewake cannot turn into a wake. Registration is
+  operator-owned: backlog `63335887df76`, `migrations/0077-…--confirm settings.json`.
+- **Subagent rule (live now):** `hooks/subagent-long-bash-shadow.sh`, piped by `validate-bash.sh` only
+  for a subagent's foreground call with a timeout; logs broad (timeout > 270 s) and narrow (poll loop,
+  sleep ≥ 270, waiter, long runner, with `why`) to `~/.claude/logs/subagent-long-bash.jsonl`.
+- **Read-out:** `cc-idle-cache-readout [--days 7]`: per account and day, would-wakes and net pp; the
+  subagent rows joined to real runtime and next-request cache write, priced per class and as
+  first-offense-per-agent, with the ACCEPT line against the 0.2% bar.
+- Switch-on decision after ~7 days of logs: keepalive wake mode if net pp is positive per account
+  and timer rows match long gaps; subagent deny only for the classes the read-out prices under 0.2%.
+- Known, not mine: `tests/validate-bash-differential.bats` was already red on the base (its site
+  fixture predates the hook's current line numbers).
 - Cause (reproduced): the mailbox watcher (`--timeout 14340`) exits silently on timeout, and the
   3300 s wake floor stands down while that hook is registered (`hooks/session-continue.sh:688`);
   a keepalive added beside it does nothing because `mailbox-wake-arm.sh:203` exits when a watcher
