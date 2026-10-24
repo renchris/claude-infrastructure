@@ -418,13 +418,14 @@ case "$SWEEP_T0" in ''|*[!0-9]*) SWEEP_T0=0 ;; esac
 # row whose elapsed_s exceeds its own cumulative_s delta across consecutive rows is the tell.
 SWEEP_CP_LAST="$SWEEP_T0"
 # The first segment holds the strand rung (§0-strand, 2026-10-10), §0a-i (the ~4 s config-parity
-# read, hoisted 2026-09-09), §0a-ii (custody deathwatch, hoisted 2026-10-22) AND §0a, because the
+# read, hoisted 2026-09-09), § ARMS FIRST (drain-revival + strand-fill, hoisted 2026-10-24), §0a-ii
+# (custody deathwatch, hoisted 2026-10-22) AND §0a, because the
 # first checkpoint is `sweep_yield 0b-author-death-join`. The label names them all rather than only
 # the last, so their cost is not silently attributed to the cloud-return pass — a per-phase meter
 # whose first bucket is mislabelled
 # would misdirect exactly the re-measurement this meter exists to inform (the arms above the first
 # checkpoint are what the self-bound keeps hitting).
-SWEEP_CP_PHASE="${CC_SWEEP_CP_PHASE0:-0-strand-page+0-classb-actuate+0a-i-config-parity+0a-ii-custody-deathwatch+0a-cloud-return}"
+SWEEP_CP_PHASE="${CC_SWEEP_CP_PHASE0:-0-strand-page+0-classb-actuate+0a-i-config-parity+0-arms-first+0a-ii-custody-deathwatch+0a-cloud-return}"
 SWEEP_PHASE_LOG_MIN_S="${CC_SWEEP_PHASE_LOG_MIN_S:-5}"
 case "$SWEEP_PHASE_LOG_MIN_S" in ''|*[!0-9]*) SWEEP_PHASE_LOG_MIN_S=5 ;; esac
 
@@ -754,6 +755,51 @@ if [ -x "$_flow" ]; then
   # ticks the week stays red — see the subject's header for why that is not a cosmetic choice.
   [ "$_flow_verdict" = "net-positive" ] && _bounded bash "$_flow" --file >/dev/null 2>&1
 fi
+
+# ── ARMS FIRST — the drain-revival and strand-fill arms, hoisted 2026-10-24 (backlog b6fb791b88fa) ─
+# Same argument as § DETECTORS FIRST, with new numbers. At §2b-v-b/c these two journaled on 2 ticks
+# from 2026-10-18 to 10-24: 90% of ticks self-bounded at `0b`/`1`, and once the inline branch pruner
+# moved out of the tick (scripts/branch-prune-pass.sh, same date) the live ticks still stopped at
+# `2b-ii` — the join and backlog-health each cost 120-170 s at load ~70. Both arms are cheap
+# (~11 s and ~1 s measured, and the strand-fill arm self-paces to one evaluation per 30 min), make
+# their own reads, and depend on nothing computed below, so they move rather than the budget.
+
+# ── 2b-v-b. THE DRAIN-REVIVAL ARM — the actuator the check above never had (backlog c109e9e850fb) ──
+# 2b-v DETECTS a dead chain and files one row; nothing ever restarted the chain, so it waited for a
+# human (dead 2026-08-16, 2026-09-09, and since recycle #336 on 2026-09-22). scripts/drain-revival-arm.sh
+# revives it: verdict==dead from drain-chain-assert.sh only, a 3600 s cooldown stamp claimed BEFORE any
+# fire, fail-closed on every unreadable input. CC_DRAIN_AUTOFIRE selects the mode — off (kill switch),
+# would-fire (the DEFAULT: decides and journals, fires nothing, spends nothing) or on. It ships in
+# would-fire so it lands without a ruling on unattended quota spend; the operator rules the default
+# after 7 days of these journal lines (count them: grep '"drain-revival-arm"' ~/.claude/autonomy/idl.jsonl).
+# THE PRODUCTION DEFAULT LIVES ON THE NEXT LINE and nowhere else: this site passes the mode
+# explicitly, so the arm's own fallback only governs a hand-run. Ruling the default = editing it here.
+_dra_mode="${CC_DRAIN_AUTOFIRE:-would-fire}"
+_dra="${CC_SWEEP_DRAIN_ARM_BIN:-$_SWEEP_DIR/drain-revival-arm.sh}"
+_dra_out=""
+if [ -f "$_dra" ]; then _dra_out="$(CC_DRAIN_AUTOFIRE="$_dra_mode" _bounded bash "$_dra" --tick 2>/dev/null | tail -1)"; fi
+log_idl drain-revival-arm "$(jq -nc --arg o "${_dra_out:-}" --arg m "${_dra_mode:-}" '{drain_autofire_mode:$m, drain_revival:(try ($o|fromjson) catch null)}')"
+
+# ── 2b-v-c. THE STRAND-FILL ARM — turn a forecast weekly shortfall into work (post-mortem §4 item 1) ──
+# Week ending 2026-10-18: `next` stranded 21 points of its weekly limit while its forecast showed the
+# shortfall from Oct 12, because nothing acted on a forecast (docs/research/weekly-strand-next-2026-10-18/
+# REPORT.md §2). scripts/strand-fill-arm.sh decides per account on a pace rule, holds on a fresh
+# capacity ALARM, KMAX and cc_capacity_admit (caller strand-fill), and claims a cooldown before any
+# fire. CC_STRAND_FILL selects the mode exactly as CC_DRAIN_AUTOFIRE does above — off, would-fire (the
+# DEFAULT: decides and journals, launches nothing, spends nothing) or on. Turning it on is the
+# operator's ruling, not an agent's. Every decision is its own IDL line (count them:
+# grep '"strand-fill-arm"' ~/.claude/autonomy/idl.jsonl); the arm self-paces to one evaluation per
+# 30 min and journals a single `interval-held` line on the ticks between.
+# THE PRODUCTION DEFAULT LIVES ON THE NEXT LINE and nowhere else, as for the drain arm.
+_sfa_mode="${CC_STRAND_FILL:-would-fire}"
+_sfa="${CC_SWEEP_STRAND_FILL_BIN:-$_SWEEP_DIR/strand-fill-arm.sh}"
+_sfa_out=""
+if [ -f "$_sfa" ]; then _sfa_out="$(CC_STRAND_FILL="$_sfa_mode" _bounded bash "$_sfa" --tick 2>/dev/null)"; fi
+[ -n "$_sfa_out" ] || _sfa_out="null"
+while IFS= read -r _sfa_line; do
+  [ -n "$_sfa_line" ] || continue
+  log_idl strand-fill-arm "$(jq -nc --arg o "$_sfa_line" --arg m "$_sfa_mode" '{strand_fill_mode:$m, strand_fill:(try ($o|fromjson) catch null)}')"
+done <<<"$_sfa_out"
 
 # ── 0a-ii. CUSTODY DEATHWATCH — the arm that runs when NOBODY IS HOME (was §2e) ────────────────────
 # 🚨 HOISTED 2026-10-22 on §0a-i's argument, with §0a-i's numbers repeated on a new day: at §2e it
@@ -2147,42 +2193,8 @@ _drain="$_SWEEP_DIR/drain-chain-assert.sh"
 if [ -x "$_drain" ]; then _bounded bash "$_drain" --file >/dev/null 2>&1; _drain_rc=$?; fi
 fi
 
-# ── 2b-v-b. THE DRAIN-REVIVAL ARM — the actuator the check above never had (backlog c109e9e850fb) ──
-# 2b-v DETECTS a dead chain and files one row; nothing ever restarted the chain, so it waited for a
-# human (dead 2026-08-16, 2026-09-09, and since recycle #336 on 2026-09-22). scripts/drain-revival-arm.sh
-# revives it: verdict==dead from drain-chain-assert.sh only, a 3600 s cooldown stamp claimed BEFORE any
-# fire, fail-closed on every unreadable input. CC_DRAIN_AUTOFIRE selects the mode — off (kill switch),
-# would-fire (the DEFAULT: decides and journals, fires nothing, spends nothing) or on. It ships in
-# would-fire so it lands without a ruling on unattended quota spend; the operator rules the default
-# after 7 days of these journal lines (count them: grep '"drain-revival-arm"' ~/.claude/autonomy/idl.jsonl).
-# THE PRODUCTION DEFAULT LIVES ON THE NEXT LINE and nowhere else: this site passes the mode
-# explicitly, so the arm's own fallback only governs a hand-run. Ruling the default = editing it here.
-_dra_mode="${CC_DRAIN_AUTOFIRE:-would-fire}"
-_dra="${CC_SWEEP_DRAIN_ARM_BIN:-$_SWEEP_DIR/drain-revival-arm.sh}"
-_dra_out=""
-if [ -f "$_dra" ]; then _dra_out="$(CC_DRAIN_AUTOFIRE="$_dra_mode" _bounded bash "$_dra" --tick 2>/dev/null | tail -1)"; fi
-log_idl drain-revival-arm "$(jq -nc --arg o "${_dra_out:-}" --arg m "${_dra_mode:-}" '{drain_autofire_mode:$m, drain_revival:(try ($o|fromjson) catch null)}')"
-
-# ── 2b-v-c. THE STRAND-FILL ARM — turn a forecast weekly shortfall into work (post-mortem §4 item 1) ──
-# Week ending 2026-10-18: `next` stranded 21 points of its weekly limit while its forecast showed the
-# shortfall from Oct 12, because nothing acted on a forecast (docs/research/weekly-strand-next-2026-10-18/
-# REPORT.md §2). scripts/strand-fill-arm.sh decides per account on a pace rule, holds on a fresh
-# capacity ALARM, KMAX and cc_capacity_admit (caller strand-fill), and claims a cooldown before any
-# fire. CC_STRAND_FILL selects the mode exactly as CC_DRAIN_AUTOFIRE does above — off, would-fire (the
-# DEFAULT: decides and journals, launches nothing, spends nothing) or on. Turning it on is the
-# operator's ruling, not an agent's. Every decision is its own IDL line (count them:
-# grep '"strand-fill-arm"' ~/.claude/autonomy/idl.jsonl); the arm self-paces to one evaluation per
-# 30 min and journals a single `interval-held` line on the ticks between.
-# THE PRODUCTION DEFAULT LIVES ON THE NEXT LINE and nowhere else, as for the drain arm.
-_sfa_mode="${CC_STRAND_FILL:-would-fire}"
-_sfa="${CC_SWEEP_STRAND_FILL_BIN:-$_SWEEP_DIR/strand-fill-arm.sh}"
-_sfa_out=""
-if [ -f "$_sfa" ]; then _sfa_out="$(CC_STRAND_FILL="$_sfa_mode" _bounded bash "$_sfa" --tick 2>/dev/null)"; fi
-[ -n "$_sfa_out" ] || _sfa_out="null"
-while IFS= read -r _sfa_line; do
-  [ -n "$_sfa_line" ] || continue
-  log_idl strand-fill-arm "$(jq -nc --arg o "$_sfa_line" --arg m "$_sfa_mode" '{strand_fill_mode:$m, strand_fill:(try ($o|fromjson) catch null)}')"
-done <<<"$_sfa_out"
+# ── 2b-v-b / 2b-v-c. THE DRAIN-REVIVAL AND STRAND-FILL ARMS now run at the top of the tick
+# (§ ARMS FIRST, above §0a-ii) — this site was reached on 2 ticks in 6 days (backlog b6fb791b88fa).
 
 # ── 2b-vi. THE FLOW REPORT (BACKLOG_DRAIN_24_7 §6) — is the draining WINNING? ─────────────────────
 # The arm above asks whether anything is draining; this asks whether the draining is winning, and a

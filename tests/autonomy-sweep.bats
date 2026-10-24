@@ -1983,6 +1983,42 @@ STUB
   [ -n "$(jq -r 'select(.disposition=="config-parity")|.settings_drift_rc // .detail.settings_drift_rc // "x"' "$CC_IDL" | tail -1)" ]
 }
 
+@test "ARMS FIRST · a maximally-truncated tick STILL journals the drain-revival and strand-fill arms" {
+  # backlog b6fb791b88fa: below the checkpoints these two ran on 2 ticks in 6 days.
+  export CLAUDE_CONFIG_DIR="$HOME/.claude"
+  export CC_SWEEP_DRAIN_ARM_BIN="$BATS_TEST_TMPDIR/dra"
+  printf 'echo "{\\"decision\\":\\"no-op\\"}"\n' > "$CC_SWEEP_DRAIN_ARM_BIN"
+  export CC_SWEEP_STRAND_FILL_BIN="$BATS_TEST_TMPDIR/sfa"
+  printf 'echo "{\\"decision\\":\\"on-pace\\",\\"acct\\":\\"next\\"}"\n' > "$CC_SWEEP_STRAND_FILL_BIN"
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=400 "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.disposition=="self-bound")|.stopped_before' "$CC_IDL" | tail -1)" = "0b-author-death-join" ]
+  grep -q '"drain_revival":{"decision":"no-op"}' "$CC_IDL"
+  grep -q '"strand_fill":{"decision":"on-pace","acct":"next"}' "$CC_IDL"
+  # ONE row each: the arms moved, they were not duplicated.
+  [ "$(grep -c '"disposition":"drain-revival-arm"' "$CC_IDL")" -eq 1 ]
+  [ "$(grep -c '"disposition":"strand-fill-arm"' "$CC_IDL")" -eq 1 ]
+
+  # CONTROL: the parent commit's sweep, same fixture, never reaches either arm.
+  : > "$CC_IDL"
+  ln -sfn "$REPO/scripts/lib" "$BATS_TEST_TMPDIR/lib"
+  SRC="$SWEEP" DST="$BATS_TEST_TMPDIR/pre-hoist.sh" python3 - <<'PY'
+import os
+s = open(os.environ['SRC']).read()
+a = s.index('# ── ARMS FIRST')
+b = s.index('# ── 0a-ii. CUSTODY DEATHWATCH')
+block = s[a:b]
+s = s[:a] + s[b:]
+c = s.index('# ── 2b-v-b / 2b-v-c.')
+s = s[:c] + block + s[c:]
+open(os.environ['DST'], 'w').write(s)
+PY
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=400 "${SWEEP_TO[@]}" bash "$BATS_TEST_TMPDIR/pre-hoist.sh"
+  [ "$status" -eq 0 ]
+  ! grep -q '"disposition":"drain-revival-arm"' "$CC_IDL" || false
+  ! grep -q '"disposition":"strand-fill-arm"' "$CC_IDL" || false
+}
+
 # build_preorder_mutant <dst> — the sweep with the parity block MOVED back below the checkpoints.
 build_preorder_mutant() {
   # rung 1 of the lib ladder, exactly as the real script resolves it — a copy in BATS_TEST_TMPDIR
