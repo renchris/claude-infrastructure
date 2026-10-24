@@ -467,6 +467,87 @@ _bsj="$(jq -cn --argjson tx "$tx_mb" --argjson rss "$rss_mb" --argjson st "$SIZE
 # shellcheck disable=SC2034  # consumed by indirection in hooks/lib/idl-log.sh (idl_init merge-var slot)
 if [ -n "$_bsj" ] && printf '%s' "$_bsj" | jq -e 'type=="object"' >/dev/null 2>&1; then SIZE_JSON="$_bsj"; elif [ -z "$RETRY_NOTE" ]; then SIZE_JSON='{}'; fi
 
+# ── IDLE-RECYCLE SHADOW (2026-10-24, docs/plans/USAGE_LEVERS.md W4) — LOG-ONLY ─────────────────────
+# The W4 simulation (docs/research/usage-levers-2026-10-23/w4/REPORT.md) found that recycling a session
+# once it has sat idle for IRS_N minutes at IRS_K thousand tokens or more would save about 20pp of
+# weekly quota across the four accounts, against today's 35%/25% practice. Changing the advisory is
+# the operator's call, so this block only RECORDS, at each Stop, whether the idle gap that opened the
+# turn just finished would have earned that advisory. It prints nothing, never blocks or abstains, and
+# writes one line to its own log ($IRS_LOG), never the IDL. The decision, the advisory and the latch
+# below are byte-identical with it on or off.
+#
+# What it measures is the simulation's own predicate, so the log calibrates the simulation:
+#   gap_s       = first request of this turn − last request before it (the idle gap)
+#   ctx_at_idle = the context of that last request (input + cache read + cache write tokens)
+#   v           = ok, or why no gap could be read: the gap began outside the IRS_TAIL window, no
+#                 request in reach, no timestamp. A session's first turn has no gap and logs nothing.
+#   busy_notice = the turn was opened by a background job's completion notice (not a cc-await-ping
+#                 watcher or a Monitor): the session was waiting on its own work, so a recycle at
+#                 minute N would have killed that job. Such a gap never counts.
+# It cannot see a job that was still running when the operator typed (the notice came later); that
+# case is over-counted, so read would_advise as an upper bound.
+#
+# COST GATE, weaker than the predicate by construction: context only grows inside a session, so the
+# telemetry's current `input_tokens` is at least the context at idle. Below IRS_K now ⇒ below IRS_K
+# then ⇒ no fork at all. A compaction during the turn is the one way through it, in the safe direction
+# (this block then measures and logs a turn the gate could have skipped). CC_IRS=off disables it.
+IRS_K="${CC_IRS_K:-150}"; IRS_N="${CC_IRS_N_MIN:-15}"
+IRS_LOG="${CC_IRS_LOG:-$HOME/.claude/logs/idle-recycle-shadow.jsonl}"
+IRS_TAIL="${CC_IRS_TAIL_BYTES:-2000000}"
+case "$IRS_K" in ''|*[!0-9]*) IRS_K=150 ;; esac
+case "$IRS_N" in ''|*[!0-9]*) IRS_N=15 ;; esac
+case "$IRS_TAIL" in ''|*[!0-9]*) IRS_TAIL=2000000 ;; esac
+if [ "${CC_IRS:-on}" != off ] && [ "$_tk" -ge $(( IRS_K * 1000 )) ] 2>/dev/null && [ -f "$tp" ]; then
+  # The whole transcript fits in the window (ce_size measured it above): a turn with no request
+  # before it is then the session's FIRST turn, a fact with no idle gap, not a gap outside the tail.
+  _irs_whole=false; { [ "${_txb:-0}" -gt 0 ] && [ "${_txb:-0}" -le "$IRS_TAIL" ]; } 2>/dev/null && _irs_whole=true
+  _irs="$(tail -c "$IRS_TAIL" "$tp" 2>/dev/null | jq -nRc \
+    --argjson k "$IRS_K" --argjson n "$IRS_N" --argjson now "$now" --arg sid "$sid" --argjson whole "$_irs_whole" \
+    --arg cfg "${CLAUDE_CONFIG_DIR:-}" '
+    def tsec: (.timestamp // "") | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch null);
+    [ inputs | fromjson? | objects | select(.isSidechain != true)
+      | if .type == "assistant" then
+          (.message.usage // null) as $u
+          | if ($u | type) == "object" and (.message.model // "") != "<synthetic>" then
+              {k: "a", t: tsec, c: (($u.input_tokens // 0) + ($u.cache_read_input_tokens // 0)
+                                    + ($u.cache_creation_input_tokens // 0))}
+            else empty end
+        elif .type == "user" then
+          (.message.content // "") as $c
+          | if ($c | type) == "array" and any($c[]; type == "object" and .type == "tool_result") then {k: "x"}
+            else ($c | if type == "string" then . else tostring end) as $s
+              | {k: "o", t: tsec,
+                 job: (($s | contains("<task-notification>\n<task-id>"))
+                       and (($s | test("cc-await-ping|Monitor")) | not))}
+            end
+        else empty end ] as $r
+    | [range(0; $r | length)] as $ix
+    | ([$ix[] | select($r[.].k == "a")] | last) as $la
+    | (if $la == null then {v: "no-request"} else
+        ([$ix[] | select(. < $la and $r[.].k == "o")] | last) as $lo
+        | if $lo == null then {v: "turn-start-outside-tail"} else
+            ([$ix[] | select(. < $lo and $r[.].k == "a")] | last) as $pa
+            | if $pa == null then {v: (if $whole then "first-turn" else "idle-start-outside-tail" end)} else
+                ([$ix[] | select(. > $lo and $r[.].k == "a")] | first) as $fr
+                | $r[$pa].t as $t0 | $r[$fr].t as $t1
+                | if $t0 == null or $t1 == null then {v: "no-timestamp"} else
+                    ([$ix[] | select(. > $pa and . <= $lo and $r[.].k == "o" and $r[.].job)] | length > 0) as $busy
+                    | (($t1 - $t0) | floor) as $gap
+                    | {v: "ok", idle_start: $t0, turn_start: $t1, gap_s: $gap, ctx_at_idle: $r[$pa].c,
+                       busy_notice: $busy,
+                       would_advise: ($gap >= $n * 60 and $r[$pa].c >= $k * 1000 and ($busy | not))}
+                  end
+              end
+          end
+      end)
+    | select(.v != "first-turn" and (.v != "ok" or .gap_s >= $n * 60))
+    | {ts: $now, sid: $sid, config_dir: $cfg, k_thousand: $k, n_min: $n} + .' 2>/dev/null || true)"
+  if [ -n "$_irs" ]; then
+    [ -d "${IRS_LOG%/*}" ] || mkdir -p "${IRS_LOG%/*}" 2>/dev/null || true
+    printf '%s\n' "$_irs" >> "$IRS_LOG" 2>/dev/null || true
+  fi
+fi
+
 # ── FREE-WIN ARM (2026-08-03) — the ✅-ledger recycle, so a quiet session drains ITSELF ───────────
 #
 # THE GAP THIS CLOSES. CLAUDE.md § Context Stewardship: "Idle at ≥~35% fill is a FREE WIN: recycle

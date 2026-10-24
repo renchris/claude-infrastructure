@@ -18,6 +18,7 @@ setup() {
   export CC_BOUNDARY_LATCH_DIR="$BATS_TEST_TMPDIR/latch"
   export CC_CONTINUE_SENTINEL="$BATS_TEST_TMPDIR/no-such-sentinel"   # compose-guard bypass (not armed)
   export CC_RECYCLE_RETRY_DIR="$BATS_TEST_TMPDIR/recycle-retry"       # the retry arm reads only this
+  export CC_IRS_LOG="$BATS_TEST_TMPDIR/irs.jsonl"                     # the W4 idle-recycle shadow log (HOME is real here)
   # The ✅-ledger FREE-WIN arm is OFF by default here so each threshold/size case below stays a
   # function of the axis it names. The fixture repo is clean + landed — RUNG=✅ — so leaving the arm
   # live would make every ≥35% case fire on the LEDGER and silently re-label the size-axis reason:
