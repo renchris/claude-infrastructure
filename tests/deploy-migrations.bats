@@ -73,6 +73,19 @@ setup() {
   [ "$found" -gt 0 ] || { echo "no migrations found under $MIGS — the mechanism has zero instances"; false; }
 }
 
+@test "3b: no two migrations share a number (NNNN is how operators, docs and tests name one)" {
+  # 2026-10-24: two sessions each landed a 0077 the same hour. The ledger keys on the full name so
+  # both still ran, but every `migration 0077` in a doc, a backlog row or a `mig 0077` test glob then
+  # named two files — c10-settings-migrations.bats ran the wrong one.
+  # RED-proof: at origin/main 75a74ae8b (both 0077 files present) this prints "0077" and fails.
+  # A RATCHET: 0009, 0016, 0021 and 0055 were shared before this test, and renaming one now would
+  # change its ledger key (applied/<name>.json) so the converger would run it again.
+  local dups
+  dups="$(cd "$MIGS" && for f in [0-9][0-9][0-9][0-9]-*.sh; do printf '%s\n' "${f%%-*}"; done | sort | uniq -d \
+          | grep -vxE '0009|0016|0021|0055' || true)"
+  [ -z "$dups" ] || { echo "duplicate migration number(s): $dups — take the next free number"; false; }
+}
+
 @test "4: every c10 migration carries the operator step it will file" {
   # A staged step with no text is an item nobody can act on — it would render as a blank line in the
   # operator's close block, which is worse than not filing it at all.
