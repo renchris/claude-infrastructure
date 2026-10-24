@@ -80,6 +80,15 @@ IFS=$'\t' read -r _P_SID _P_BG _P_AID _P_TS <<<"$_META"
 # the pad cell's placeholder for absent/empty, never a real id.
 [ -n "${_P_AID:-}" ] || _P_AID="-"
 
+# COUNT-ONLY passenger (docs/plans/USAGE_LEVERS.md § W3): a subagent's foreground Bash that carries a
+# timeout goes to hooks/subagent-long-bash-shadow.sh, which logs the would-deny candidates and never
+# decides anything. Its output is discarded and its status ignored, so it cannot change a verdict
+# below; the main thread pays two string tests and no fork. Off: CC_SUBAGENT_LONG_BASH=off.
+if [ "$_P_AID" != "-" ] && [ "$_P_BG" != "true" ] && [[ $INPUT == *'"timeout"'* ]] \
+   && [ "${CC_SUBAGENT_LONG_BASH:-shadow}" != off ] && [ -f "${BASH_SOURCE[0]%/*}/subagent-long-bash-shadow.sh" ]; then
+  printf '%s' "$INPUT" | /bin/bash "${BASH_SOURCE[0]%/*}/subagent-long-bash-shadow.sh" >/dev/null 2>&1 || true
+fi
+
 # Source the argv-aware flag detector. If unavailable, caller can force
 # legacy mode; otherwise fall back silently on a per-call basis below.
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
