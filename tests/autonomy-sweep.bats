@@ -219,6 +219,10 @@ SH
   # HERMETIC strand-fill arm: unstubbed it reads the router's live cache through the real
   # claude-accounts. Absent by default (the sweep journals a null decision); one case stubs it.
   export CC_SWEEP_STRAND_FILL_BIN="$BATS_TEST_TMPDIR/no-strand-fill-arm"
+  # HERMETIC drain-revival arm, for the same reason: unstubbed it runs the real drain-chain-assert
+  # against the live drain state (it journalled the live recycle number, 337) and cost ~19 s of a
+  # ~22 s fixture tick, which put whole cases past the 30 s wrap at load ~26 (b6fb791b88fa).
+  export CC_SWEEP_DRAIN_ARM_BIN="$BATS_TEST_TMPDIR/no-drain-revival-arm"
 }
 notify_count() { [ -f "$CC_NOTIFY_BIN.log" ] && wc -l < "$CC_NOTIFY_BIN.log" | tr -d ' ' || echo 0; }
 osa_count()    { [ -f "$OSA_LOG" ] && wc -l < "$OSA_LOG" | tr -d ' ' || echo 0; }
