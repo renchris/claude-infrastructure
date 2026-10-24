@@ -9,7 +9,7 @@ Scope (frozen): act on the verified usage-efficiency levers surfaced by `claude 
 implementing what clears 90% conviction and running the one cheap test each remaining lever needs,
 each wave landed via `/ship` and converged live.
 
-## Phase 0 — Agent Team Orchestration — DONE (W0–W4 fired and landed 2026-10-24; remainder is W5)
+## Phase 0 — Agent Team Orchestration — DONE (W0–W4, W6 fired and landed 2026-10-24; remainder is W5)
 
 **Execution locus per wave**
 
@@ -185,7 +185,22 @@ None clears 90%; all are sign-off class. Replay of the shadow logic over 14-30 d
   foreground `timeout 260 bash -c …`, never `run_in_background` (trips the /goal gate; 86 of 798 poll
   loops ran under a goal); exempt commands with an inner timeout < 300 s.
 
-## W6 — make the shadows measure correctly (S; behavior-neutral, no sign-off needed)
+## W6 — make the shadows measure correctly — DONE (2026-10-24): landed `1b3a9b3dc`..`809299a35`
+Scope (frozen): items 1-4 below exactly as listed; everything log-only, settings.json unchanged.
+- **Landed:** (3) `1b3a9b3dc`, (2) `473e5f109`, (1) `6897f9eb2`, (4) `809299a35`; each change has
+  a bats case that fails on the base (RED-proof lines in the four suites).
+- **New shared reader** `hooks/lib/session_jobs.py`: background-job intervals by launching tool
+  (bg Bash / Agent / Workflow / harness-moved foreground Bash; Monitors and cc-await-ping are
+  watchers with deadlines), and the G4 pending-question test. Used by items 1 and 4.
+- **New log fields, for W5's readouts:** keepalive wake rows v2 `busy`, `busy_kinds`,
+  `watcher_fires_before_ttl`; Workflow rows `resume_from_run_id`, `script_sha`, `repeat_in_session`,
+  slot `needs_default`; subagent rows v2 `would_deny_class`, `exempt`, `inner_timeout_s` (exempt rows
+  are `narrow:false`, so `cc-idle-cache-readout`'s narrow/ACCEPT numbers already exclude them; its
+  `by_why` table still keys on `why`); IRS lines `would_advise_k2` (200k), `busy_tool`,
+  `pending_question`/`pq_why`, `guarded`/`guarded_k2`.
+- **Learning:** the poll-loop pattern missed loops opened by a quote (`bash -c 'until …'`), the very
+  form the proposed deny message recommends; widened in item 3.
+
 Every item stays log-only; none wakes, denies or changes an advisory.
 1. `hooks/idle-keepalive.sh`: end a gap only on a new user/assistant record (not `away_summary`);
    log whether the session's own background job was running and whether a watcher would fire before
