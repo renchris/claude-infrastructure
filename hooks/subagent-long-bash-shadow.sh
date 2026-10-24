@@ -15,6 +15,11 @@
 #           sleep of 270 s or more, a waiter (cc-await-ping, cc-wait, gh run watch, --watch,
 #           tail -f, bare wait, timeout ≥ 270), or a known long runner (bats, ship-land, deploy-live,
 #           pytest, test/build scripts, cargo, xcodebuild, make, ffmpeg, render). `why` names the class.
+# W6 (decision re-research 2026-10-24): `would_deny_class` splits the narrow rows into the three
+# classes a deny would be judged by — poll-loop, long-runner, waiter (a long sleep is a waiter) —
+# and a command whose every inner `timeout N` is under 300 s is EXEMPT from the count: it bounds
+# itself under the cache's life (765 such calls, 6 followed by a rebuild). An exempt row keeps its
+# `why` and `inner_timeout_s` and is logged with narrow:false and would_deny_class:null.
 # bin/cc-idle-cache-readout joins each row to the call's real runtime and the next request's cache
 # write (from the subagent transcript), prices wrongly denied calls against rebuilds avoided per
 # class, and reports the one acceptance number: wrong-deny cost under 0.2% of weekly usage.
@@ -51,7 +56,8 @@ _to="${_to%%.*}"
 
 # ── narrow: does the command itself say it will wait? ───────────────────────────────────────────
 _why=""
-_rx_loop='(^|[;&|[:space:]])(while|until|for)[[:space:]].*sleep[[:space:]]'
+# a quote or paren may open the loop too: `bash -c 'until …; do sleep …'` is the same poll loop (W6)
+_rx_loop="(^|[;&|[:space:]'\"(])(while|until|for)[[:space:]].*sleep[[:space:]]"
 _rx_sleep='(^|[;&|[:space:]])sleep[[:space:]]+([0-9]+)'
 _rx_wait='cc-await-ping|cc-wait([[:space:]]|$)|gh[[:space:]]+run[[:space:]]+watch|--watch([[:space:]]|$)|tail[[:space:]]+-[A-Za-z]*[fF]|(^|[;&|][[:space:]]*)wait([[:space:]]*($|[;&|]))'
 _rx_timeout='(^|[;&|[:space:]])g?timeout[[:space:]]+(-[^[:space:]]+[[:space:]]+)*([0-9]+)([sm]?)[[:space:]]'
@@ -69,6 +75,20 @@ elif [[ $_cmd =~ $_rx_long ]]; then
   _why="long-runner"
 fi
 
+# ── exemption: the largest inner `timeout N` (s); every one under 300 ⇒ the call bounds itself ─────
+_inner=-1; _rest="$_cmd"; _k=0
+while [ "$_k" -lt 20 ] && [[ $_rest =~ $_rx_timeout ]]; do
+  _tn=$(( 10#${BASH_REMATCH[3]} )); [ "${BASH_REMATCH[4]}" = m ] && _tn=$(( _tn * 60 ))
+  [ "$_tn" -gt "$_inner" ] && _inner="$_tn"
+  _rest="${_rest#*"${BASH_REMATCH[0]}"}"; _k=$(( _k + 1 ))
+done
+_class=""; _exempt=""
+case "$_why" in
+  poll-loop|long-runner|waiter) _class="$_why" ;;
+  long-sleep) _class="waiter" ;;
+esac
+if [ -n "$_class" ] && [ "$_inner" -ge 0 ] && [ "$_inner" -lt 300 ]; then _class=""; _exempt="inner-timeout"; fi
+
 _log="${CC_SUBAGENT_LONG_BASH_LOG:-$HOME/.claude/logs/subagent-long-bash.jsonl}"
 mkdir -p "${_log%/*}" 2>/dev/null || exit 0
 # The direct binary, never `shasum` (a #! perl script: hooks/lib/shasum-direct.sh).
@@ -78,7 +98,10 @@ _acct="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _acct="${_acct%/}"; _acct="${_acct#
 jq -nc --arg ts "$(date -u +%FT%TZ)" --arg acct "$_acct" --arg sid "$_sid" --arg aid "$_aid" \
   --arg atype "$_atype" --arg tuid "$_tuid" --argjson to "$_to" --arg why "$_why" \
   --arg head "${_cmd:0:160}" --arg sha "$_sha" --arg tp "$_tp" \
-  '{kind:"subagent_bash",v:1,ts:$ts,acct:$acct,sid:$sid,agent_id:$aid,agent_type:$atype,
-    tool_use_id:$tuid,timeout_ms:$to,broad:true,narrow:($why != ""),why:(if $why == "" then null else $why end),
+  --arg cls "$_class" --arg ex "$_exempt" --argjson inner "$_inner" \
+  'def nul: if . == "" then null else . end;
+   {kind:"subagent_bash",v:2,ts:$ts,acct:$acct,sid:$sid,agent_id:$aid,agent_type:$atype,
+    tool_use_id:$tuid,timeout_ms:$to,broad:true,narrow:($cls != ""),why:($why|nul),
+    would_deny_class:($cls|nul),exempt:($ex|nul),inner_timeout_s:(if $inner < 0 then null else $inner end),
     would:"count",cmd_head:$head,cmd_sha256:$sha,transcript_path:$tp}' >> "$_log" 2>/dev/null
 exit 0

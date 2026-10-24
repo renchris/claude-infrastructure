@@ -6,6 +6,8 @@
 # that its host hooks/validate-bash.sh feeds it without changing a verdict.
 # RED-proof: new behaviour. Mutants checked by hand on scratch copies: dropping the 270000 bound
 # fails (2); dropping the validate-bash passenger block fails (4).
+# W6 RED-proof (2026-10-24): against the base hook (git show 11f7f87fa:…) (5) fails: no
+# would_deny_class field, and `bash -c '<loop>'` was not a poll loop.
 #
 # Hermetic: $HOME and the log are fixtures; validate-bash runs with the same isolation its own
 # suites use (CC_SHARED_CHECKOUT, CC_VB_DECISION_LOG, no kitty).
@@ -91,4 +93,26 @@ EOF
   # the main thread's call never reaches the rule
   vb "$(payload 'sleep 400' 600000 '')"
   [ "$(wc -l < "$CC_SUBAGENT_LONG_BASH_LOG")" -eq 2 ]
+}
+
+@test "(5) W6: would-deny splits by class, and an inner timeout under 300 s is exempt from the count" {
+  # want: would_deny_class|narrow|exempt|inner_timeout_s|command
+  while IFS='|' read -r cls nar ex inner cmd; do
+    feed "$cmd"
+    [ "$status" -eq 0 ]; [ -z "$output" ]
+    got="$(tail -1 "$CC_SUBAGENT_LONG_BASH_LOG" | jq -r '[(.would_deny_class // "-"), .narrow, (.exempt // "-"), (.inner_timeout_s // "-")] | join("|")')"
+    [ "$got" = "$cls|$nar|$ex|$inner" ] || { echo "cmd=[$cmd] want=$cls|$nar|$ex|$inner got=$got"; false; }
+  done <<'ROWS'
+poll-loop|true|-|-|until [ -f /tmp/done ]; do sleep 30; done
+long-runner|true|-|-|bats tests/foo.bats
+waiter|true|-|-|cc-await-ping abc --timeout 3300
+waiter|true|-|-|sleep 600
+waiter|true|-|900|timeout 900 ./run.sh
+-|false|inner-timeout|260|timeout 260 bash -c 'until [ -f /tmp/done ]; do sleep 30; done'
+-|false|inner-timeout|240|timeout 4m bats tests/foo.bats
+poll-loop|true|-|600|timeout 260 ./a.sh; timeout 600 bash -c 'while :; do sleep 20; done'
+-|false|-|60|timeout 60 curl -s example.com
+ROWS
+  # the original class stays visible on an exempt row
+  [ "$(jq -sr '[.[] | select(.exempt) | .why] | join(",")' "$CC_SUBAGENT_LONG_BASH_LOG")" = "poll-loop,long-runner" ]
 }
