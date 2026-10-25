@@ -37,11 +37,15 @@ verdict. Every track runs its own direct suites, asserts the `1..N` plan line, a
 
 | Track | Worktree / branch | Status | Landed shas |
 |---|---|---|---|
-| A scope floor | `lkw-scope-floor` | pending | |
-| B subject nudge | `lkw-subject-nudge` | pending | |
-| C decide + grant code | `lkw-decide-grant` | pending | |
-| D rule text | `lkw-rule-text` | pending (fires after A, C) | |
+| A scope floor | `lkw-scope-floor` | fired 2026-10-24 (next3, pane 297) | |
+| B+C subject nudge + decide/grant code | `lkw-nudge-decide` | fired 2026-10-25 (next2, pane 303) | |
+| D rule text | `lkw-rule-text` | pending (fires after A, B+C) | |
 | E re-gate | `lkw-regate` | pending (fires after D) | |
+
+Learning (2026-10-25): B and C were merged into one session because the fire capacity gate held the box at its
+active-session ceiling (8 mid-turn at ~40 load/core) for over 30 min; one session with two disjoint teammate groups
+needs one slot. The B+C fire used the gate's one-fire raise (`CC_FIRE_ACTIVE_CEILING=9`) because the firing lead is
+counted only while mid-turn and goes idle once the track runs, so the fire swaps the lead's slot for the track's.
 
 ## Definition of done (per track)
 
