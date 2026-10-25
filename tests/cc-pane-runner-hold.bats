@@ -60,7 +60,7 @@ printf "%s\n" "$*" >> "$T/kitty-log"'
 # A held runner ignores every catchable signal, so a failed background arm would leave it holding
 # forever: KILL whatever an arm started (its process group too, for A1g).
 teardown() {
-  if [ -n "${pid:-}" ]; then kill -KILL -- "-$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null; fi
+  if [ -n "${pid:-}" ]; then kill -KILL -- "-$pid" 2>/dev/null || true; kill -KILL "$pid" 2>/dev/null || true; fi
   return 0
 }
 
