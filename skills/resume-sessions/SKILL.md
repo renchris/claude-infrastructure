@@ -42,6 +42,30 @@ recorded. A clean exit is left out, and its neighbour takes its space without mo
 - **Rows from somewhere else** (lr-select, a hand-built TSV): pipe them to
   `cc-resume-layout.sh --desktops --restore`, not to the default or plain `--desktops` path. It finds
   each session's recorded tree by session id, so a 4-column TSV is enough.
+  ```
+  bash ~/.claude/bin/cc-resume-layout.sh --desktops --restore [--tree <dead kitty's hb.kitty-ls.json>] < rows.tsv
+  ```
+  Pass no `--stagger`: the restore default (2 s) is the tested one, and capacity is already gated per
+  row. `--stagger 20` is a third of the 2026-10-25 restore's four minutes.
+- **What the restore guarantees, and how it is checked** (2026-10-25; this is the only layout path):
+  - one fullscreen OS window per macOS Desktop, created in the recorded window order, each toggled
+    fullscreen as soon as its first pane opens, on its recorded display (kitty
+    `--os-window-position`, no Accessibility needed). A window with no record goes to the display
+    the recorded ones were on. Nothing waits windowed on Desktop 1 for the rest of the batch.
+  - each session in its recorded pane. A resume argv in the record is proof, then the roster pane
+    when its Claude process cwd agrees, then the one pane recorded in the row's cwd. Teammate panes
+    never take a session.
+  - recorded split proportions: a pane left out gives its space to the rest in their recorded
+    proportions, so a recorded even row stays even. With no record, panes are even.
+  - no placeholder shells: a recorded pane that held no session is left out unless `--keep-shells`.
+  - verdict by census: `bin/cc-panes` reads every planned row back from kitty (the pane exists, it is
+    Claude Code resuming that session, at a prompt or working). Any row that is not becomes
+    `verdict=failed census=fail`, exit 4, whatever the launch counts say.
+  ```
+  cc-panes --to unix:/tmp/kitty-<pid>     # every pane: Desktop, window, columns, kind, session, state
+  ```
+  If widths of live windows are uneven, `KITTY_WINDOW_ID=<any pane in it> kitty @ --to unix:/tmp/kitty-<pid>
+  action --self layout_action equalize` evens them in place; it only resizes, nothing restarts.
 - **Sessions already resumed in the wrong places** (by hand, or by an older recovery): move them back
   without restarting them.
   ```
@@ -65,6 +89,13 @@ recorded. A clean exit is left out, and its neighbour takes its space without mo
   back in the right windows at best, and in different pane positions. The crash page's
   `cc-restore --after-crash` row was never run. Diagnosis:
   `docs/research/kitty-crash-2026-10-15/resume-pane-positions.md`.
+- **Why the guarantees above are in code (2026-10-25 reboot).** The restore of 10 sessions reported
+  `launched=10`. On screen, every window sat windowed on Desktop 1 for about four minutes: the
+  fullscreen pass ran only after the whole batch (10 rows × `--stagger 20` plus a capacity wait).
+  Two windows went fullscreen on the wrong display: one Accessibility move missed, and one window
+  had no record. Two-pane windows split 1/3 : 2/3. The 03:45 tree was even (73 columns × 4), but a
+  pane left out kept its pair's recorded bias (kitty writes an even a|b|c|d as 1/4, 1/3, 1/2).
+  Eleven session-less panes came back as bare shells. No step had read a pane back.
 
 ## Phase 1 — Anchor the crash & find the open sessions
 
@@ -163,7 +194,14 @@ high while its statusline still read "Fable 5". Omit the flag and prior behaviou
 below.** They only group by project, so every pane comes back somewhere new (2026-10-15). They are
 for sessions no kitty heartbeat recorded.
 
-🚨 **Layout — ONE OS WINDOW PER MONITOR, split panes inside each. Do not hand-roll it; pipe the
+🚨 **Layout: every batch of resumes goes through `cc-resume-layout.sh --desktops --restore`
+(Phase 0), with or without a recorded tree.** Rows no tree places come back as one row of panes per
+fullscreen window on the recorded display, read back by the census. The paths below (per-monitor,
+plain `--desktops` 2x2, iTerm2, hand-placed kitty splits) are RETIRED for resume batches since
+2026-10-25 and kept only as history of the traps they hit. `kitty-split-launch.sh` stays the way to
+open ONE extra pane beside yourself.
+
+**Retired — layout: ONE OS WINDOW PER MONITOR, split panes inside each. Do not hand-roll it; pipe the
 winners into `bin/cc-resume-layout.sh`** (operator ruling 2026-08-24):
 
 ```
