@@ -123,7 +123,21 @@ case "$_harness" in
     if [ "${CC_WAKE_ARM_HARNESS_FD1+x}" = x ]; then
       _fd1="$CC_WAKE_ARM_HARNESS_FD1"
     elif [ -n "$_harness_pid" ]; then
-      _fd1="$(lsof -w -a -p "$_harness_pid" -d 1 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
+      # fd 1 from libproc, never lsof: lsof lstat-scans /dev for device names, the walk that hung
+      # every caller on 2026-10-25 (DESIGN.md I4). PROC_PIDLISTFDS returns each fd's TYPE only and
+      # reads no vnode; a vnode stdout (type 1) on a process whose ctty is a pty (tdev 16/N, printed
+      # with no lookup) is the TUI's terminal. A pipe or socket stdout is not.
+      _fd1=""
+      _tdev="$(ps -o tdev= -p "$_harness_pid" 2>/dev/null | tr -d ' ')"
+      case "$_tdev" in
+        16/[0-9]*)
+          _fdt="$(python3 -I -c 'import ctypes, sys
+lp = ctypes.CDLL("/usr/lib/libproc.dylib"); b = ctypes.create_string_buffer(32768)
+n = lp.proc_pidinfo(int(sys.argv[1]), 1, 0, b, len(b))
+print(next((int.from_bytes(b.raw[i + 4:i + 8], "little") for i in range(0, max(n, 0), 8)
+            if int.from_bytes(b.raw[i:i + 4], "little", signed=True) == 1), -1))' "$_harness_pid" 2>/dev/null)"
+          [ "$_fdt" = 1 ] && printf -v _fd1 '/dev/ttys%03d' "${_tdev#16/}" ;;
+      esac
     else
       _fd1=""
     fi

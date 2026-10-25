@@ -33,11 +33,25 @@ ps_scope_all() {  # → "<pid> <ppid> <command…>" per line
   fi
 }
 
+# The cwd of each pid from libproc PROC_PIDVNODEPATHINFO (struct vnode_info_path: 152-byte vnode_info,
+# then the 1024-byte path), never lsof: lsof lstat-scans /dev for device names, the walk that hung every
+# caller on 2026-10-25 (DESIGN.md I4). It reads only the cwd and root DIRECTORY vnodes. Matched lsof
+# -d cwd byte for byte on six live pids when written.
+_PS_SCOPE_CWD_PY='import ctypes, sys
+lp = ctypes.CDLL("/usr/lib/libproc.dylib")
+for a in sys.argv[1:]:
+    b = ctypes.create_string_buffer(2352)
+    p = int(a)
+    if lp.proc_pidinfo(p, 9, 0, b, 2352) == 2352:
+        c = b.raw[152:1176].split(b"\0", 1)[0].decode("utf-8", "replace")
+        if c: print("%d\t%s" % (p, c))'
+
 ps_scope_cwd_of() {  # <pid> → its cwd, or empty when unknowable (a process we may not inspect)
   if   [ -n "${CC_PROC_SCOPE_CWD:-}" ];   then "$CC_PROC_SCOPE_CWD" "$1"; return 0
   elif [ -n "${CC_GATE_CLEANUP_CWD:-}" ]; then "$CC_GATE_CLEANUP_CWD" "$1"; return 0
   fi
-  lsof -a -d cwd -p "$1" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
+  case "${1:-}" in ''|*[!0-9]*) return 0 ;; esac
+  python3 -I -c "$_PS_SCOPE_CWD_PY" "$1" 2>/dev/null | cut -f2- | head -1
 }
 
 ps_scope_physical() {  # <dir> → its PHYSICAL path (empty when the dir does not exist)
@@ -112,12 +126,12 @@ EOF
   printf '%s' "$_sel"
 }
 
-ps_scope_cwd_map() {  # <space-separated pids> → "<pid><TAB><cwd>" per line, in ONE lsof call.
+ps_scope_cwd_map() {  # <space-separated pids> → "<pid><TAB><cwd>" per line, in ONE libproc call.
                       # WHY THIS EXISTS: gate-cleanup resolves cwd only for the handful of pids that
                       # already passed an argv-position name test, so per-pid `lsof` is free there.
                       # session-busy's classifier is the INVERSE — everything that is not
                       # infrastructure is work — so its candidate set is the whole process table,
-                      # and per-pid lsof turned a 0.6 s ledger read into minutes. Same two facts,
+                      # and per-pid lsof (since replaced by libproc) turned a 0.6 s ledger read into minutes. Same two facts,
                       # same seams; only the number of forks changes.
                       # The per-pid SEAM still wins when set, so a fixture that stubs cwd resolution
                       # keeps driving the same code path it always did.
@@ -127,8 +141,7 @@ ps_scope_cwd_map() {  # <space-separated pids> → "<pid><TAB><cwd>" per line, i
     for p in $pids; do printf '%s\t%s\n' "$p" "$(ps_scope_cwd_of "$p")"; done
     return 0
   fi
-  for p in $pids; do csv="$csv,$p"; done
-  lsof -a -d cwd -p "${csv#,}" -Fpn 2>/dev/null | awk '
-    /^p/ { pid = substr($0,2); next }
-    /^n/ { if (pid != "" && !seen[pid]++) printf "%s\t%s\n", pid, substr($0,2) }'
+  for p in $pids; do case "$p" in *[!0-9]*) ;; *) csv="$csv $p" ;; esac; done
+  # shellcheck disable=SC2086  # word-split on purpose: one argv entry per pid
+  python3 -I -c "$_PS_SCOPE_CWD_PY" $csv 2>/dev/null
 }
