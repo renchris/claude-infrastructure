@@ -649,6 +649,50 @@ fi
 # 24 hours away — which is what 2026-08-07 was, and a whole day of accrual is a high price for a
 # few minutes of overlap. A bounded backoff costs nothing when the lock is free (the first attempt
 # wins) and recovers the night when it is not. It is bounded, so it can never become a spin.
+# ── LOCKUP HOLD (incident 2026-10-25, DESIGN.md C6) ───────────────────────────────────────────────
+# At 13:31 on the boot after the 2026-10-25 lockup this sweep removed 49 worktrees, 11 of them the
+# cwds of sessions still to be resumed: each read "clean · idle · landed", which is exactly what an
+# interrupted session's worktree looks like. So for the boot that follows a lockup, every worktree a
+# session of the previous boot ran in is excluded (CC_WTGC_EXCLUDE, the janitor's own never-touch
+# list). A lockup boot is one the classifier filed LOCKUP_* (lockwatch/boot-<epoch>.json) or one
+# whose snapshot boot-resume distrusted (boot-resume/distrust-<epoch>). The sessions: the shutdown
+# tombstones, the alarm roster and the heartbeat rosters of the 24 h before the boot. The next boot
+# reads CLEAN and the hold ends. CC_WTGC_LOCKUP_HOLD=off is the rollback.
+lockup_hold() {
+  [ "${CC_WTGC_LOCKUP_HOLD:-on}" = off ] && return 0
+  local boot cls why="" auto="${CC_WTGC_AUTONOMY_DIR:-$HOME/.claude/autonomy}" f d p held="" n=0
+  boot="${CC_WTGC_BOOTTIME:-$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/^{ sec = \([0-9]*\).*/\1/p')}"
+  case "$boot" in ''|*[!0-9]*) return 0 ;; esac
+  cls="$(jq -r '.class // empty' "${CC_LOCKWATCH_DIR:-$auto/lockwatch}/boot-$boot.json" 2>/dev/null)"
+  case "$cls" in LOCKUP_*) why="boot class $cls" ;; esac
+  [ -n "$why" ] || { [ -s "${CC_BOOT_RESUME_STATE_DIR:-$auto/boot-resume}/distrust-$boot" ] && why="boot-resume: $(head -n 1 "${CC_BOOT_RESUME_STATE_DIR:-$auto/boot-resume}/distrust-$boot")"; }
+  [ -n "$why" ] || return 0
+  while IFS= read -r d; do
+    [ -n "$d" ] && [ -d "$d" ] || continue
+    p="$d"                                  # the worktree holding that cwd: the nearest dir with a .git
+    while [ "$p" != / ] && [ ! -e "$p/.git" ]; do p="$(dirname "$p")"; done
+    [ "$p" = / ] && continue
+    case ":$held:" in *":$p:"*) continue ;; esac
+    held="${held:+$held:}$p"; n=$((n + 1))
+  done <<EOF
+$( { for f in "${CC_SHUTDOWN_TOMB_DIR:-$auto/shutdown-tombstones}"/*.json; do
+       [ -f "$f" ] && jq -r --argjson lo "$((boot - 86400))" --argjson hi "$boot" \
+         'select((.endedAt // 0) > $lo and (.endedAt // 0) <= $hi) | .cwd // empty' "$f" 2>/dev/null
+     done
+     for f in "$auto"/reboot-*.roster.json "${CC_HEARTBEAT_DIR:-$auto/heartbeat}"/*/*/hb.roster.json; do
+       [ -f "$f" ] || continue
+       st="$(head -n 1 "$(dirname "$f")/hb.start" 2>/dev/null || head -n 1 "${f%.roster.json}.start" 2>/dev/null)"
+       st="${st%% *}"; case "$st" in ''|*[!0-9]*) continue ;; esac
+       [ "$st" -gt $((boot - 86400)) ] && [ "$st" -le "$boot" ] && jq -r '.[]? | .cwd // empty' "$f" 2>/dev/null
+     done; } | sort -u )
+EOF
+  [ "$n" -gt 0 ] || return 0
+  export CC_WTGC_EXCLUDE="${CC_WTGC_EXCLUDE:+$CC_WTGC_EXCLUDE:}$held"
+  PREV_NOTE="${PREV_NOTE:+$PREV_NOTE }lockup_hold=$n"
+  printf '%s\n' "worktree-gc-infra: lockup hold ($why) — $n worktree(s) of the previous boot's sessions are excluded this boot: $held" >> "$LOG" 2>/dev/null
+}
+lockup_hold
+
 _attempt=0
 while : ; do
   # ${GC_DIRT_FLAG:+...} — an EMPTY switch must expand to NO argument at all, never to an empty
