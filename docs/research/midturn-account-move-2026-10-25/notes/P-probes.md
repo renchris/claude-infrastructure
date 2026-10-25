@@ -131,11 +131,46 @@ Live census, one `/bin/ps -axww -o args=` read at 03:07 CDT: 42 interactive Clau
 `~/.claude/mods/<name>/`, I2). So a lane-binding module shipped inside an already-loaded mod reaches ≈95% of the live
 fleet with no restart; the rest adopt at their next natural launch.
 
+## P11 — DECISIVE: per-request routing from a mod hook, mid-turn, no credential rewrite
+
+`p11p.py` (`-p` mode; the TUI attempt sat on a blank screen for 90 s at load ≈700 and is not counted). A throwaway
+mod `mtam-step` with one hook — `turn.step` (runs before EVERY model request, main or subagent) — reads a route file
+and calls `$.env.set('CLAUDE_SECURESTORAGE_CONFIG_DIR', <route>)`; debug log: `hooks module mtam-step@inline loaded
+(worker, …, tier user); events: turn.step` and `plugin.register: mtam-step … admitted`. Session launched on lane A
+(next2 copy); after call 1 only the ROUTE FILE was rewritten to lane B (next3 copy). No credential was written mid-turn.
+
+| call | client bearer | billed org | 7d |
+|---|---|---|---|
+| 1 | 9f8496d402 (next2) | fb09ef51 | 0.02 |
+| 2, 3, 4 | 838040557e (next3, its token refreshed at 03:58) | 1a71eca0 | 0.18 |
+
+Result `DONE 1792919529 1792919533 1792919536`, `is_error false`, 4 turns. ⇒ the billing account is a per-request
+property selected by a hook, with the credential stores untouched. With POINTER lanes (route = an account's real
+home config dir, sharing its keychain item, refresh lock and CAS like a native session) the same hook needs no token
+copy at all; the one difference from this probe is the per-session keychain read cache (`PK()` @3738325, one slot per
+host, `cPt=30000`), which can serve the previous account's token for ≤30 s after a pointer change — source-derived,
+not probed here, because pointing a throwaway at a real account store could write that account's keychain item.
+
 ## P9 — ACCRUING: does an account's own refresh revoke its previous access token?
 
 `revoke-watch.py` (started 02:31:38 CDT, bounded 9,000 s; the held token expires ≈04:02 CDT) holds next3's current
 access token in memory only, polls next3's keychain item read-only every 60 s, and on the first fingerprint change
 (next3's own sessions refresh within 5 min of expiry, so ≈03:57 CDT) sends one prompt through the official client with the OLD token, then the NEW one as
 positive control, then the OLD one again after 2 min. Log: `/tmp/mtam/probe/revoke-watch.log`. Third-party
-report (S09: claude-swap #381) says refresh revokes the old access token immediately. The design does not
-depend on the answer (the 401 → re-read → retry path in `Khe()` at 12388136 recovers either way, see REPORT §4).
+report (S09: claude-swap #381) says refresh revokes the old access token immediately.
+
+**RESULT (03:58–04:00 CDT): an account's own refresh REVOKES the previous access token at once.**
+
+```
+03:58:14 REFRESH SEEN new_fp=838040557e new_expires_in_s=28773 old_had_s_left=262
+03:58:22 OLD-after-refresh fp=cf40551134 rc=1 result='Failed to authenticate: OAuth token revoked. …' is_error=True
+03:58:31 NEW-control fp=838040557e rc=0 result='OK' is_error=False
+04:00:40 OLD-after-refresh+2min fp=cf40551134 rc=1 result='Failed to authenticate: OAuth token revoked. …' is_error=True
+```
+
+So every inference-only COPY of an account's access token dies the moment that account's own sessions refresh
+(≈ every 8 h per account, 28,773 s lifetime here). The client's 401 path tolerates this only briefly: `Khe()`
+(@12388136) re-reads the store after a 401 and retries, but with the token unchanged it gives up after `wur=2`
+attempts (@12384870) and the request fails. A copy-based lane therefore needs its broker to re-copy within ≈2–3 s
+of every source refresh — or a running turn errors out. This is what moves the design from COPY lanes to POINTER
+lanes (REPORT §4).
