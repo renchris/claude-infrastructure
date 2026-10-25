@@ -178,6 +178,26 @@ WHY
   [ "$(jq -r '[.[].session_id] | join(" ")' "$r")" = s3 ] || false
 }
 
+@test "an ok census that names none of a kitty's sessions keeps the rows whose pid still runs (2026-10-25)" {
+  # From 08:41 on 2026-10-25 every ok census left kitty 1881 at [] while 13 of its session pids ran;
+  # the reboot then restored nobody. RED-proof: against origin/main's restore-heartbeat.sh the second
+  # tick writes [].
+  echo "[$(sess s1 "$KP" 1),$(sess s2 "$KP" "$DEADP")]" > "$D/sessions.json"
+  hb hb_tick
+  r="$(dir UUID-A "$KP")/hb.roster.json"
+  [ "$(jq -r '[.[].session_id] | join(" ")' "$r")" = "s1 s2" ] || false
+  printf '    1     0 /sbin/launchd\n' > "$D/ps.txt"                      # s1's pid is alive, s2's is not
+  echo '[]' > "$D/sessions.json"
+  CC_HB_NOW=1784800300 hb hb_tick
+  [ "$(jq -r '[.[].session_id] | join(" ")' "$r")" = s1 ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.census")" = "ok 1784800300" ] || false
+  [[ "$output" == *"named no session of kitty $KP, but 1 of its last roster still run"* ]] || false
+  # once that pid is gone too, the roster empties as before
+  printf '    2     0 /sbin/other\n' > "$D/ps.txt"
+  CC_HB_NOW=1784800600 hb hb_tick
+  [ "$(jq -r 'length' "$r")" = 0 ] || false
+}
+
 @test "the census bound is 30 s on an idle box, at most 75 s under any load, and CC_HB_SESSIONS_TIMEOUT overrides it" {
   CC_HB_LOAD1=0.5 hb _hb_census_bound
   [ "$output" = 30 ] || false

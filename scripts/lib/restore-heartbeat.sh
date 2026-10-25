@@ -542,6 +542,21 @@ hb_tick() {
     if [ "$census" = ok ]; then
       jq --argjson k "$kp" '[.[] | select(((.kitty_pid // 0) | tonumber? // 0) == $k and ((.session_id // "") != ""))]' \
         "$tmpd/all.json" > "$dir/.hb.roster.json.tmp" 2>/dev/null
+      # A census that answers but names NONE of this kitty's sessions, while rows of the last roster
+      # still have a live pid, is not evidence they ended (2026-10-25: from 08:41 every `ok` census
+      # left kitty 1881 at [], with 13 of its session pids alive at 13:11, and the reboot then
+      # restored nobody). The rows whose pid is alive are kept, as a carried tick keeps them.
+      if jq -e 'length == 0' "$dir/.hb.roster.json.tmp" >/dev/null 2>&1 && [ "$alive" != null ] \
+         && jq -e 'type == "array" and length > 0' "$dir/hb.roster.json" >/dev/null 2>&1; then
+        jq --argjson alive "$alive" '[.[]? | select((.session_id // "") != "")
+               | select(((.pid // "") | tostring) as $p | $alive[$p] == true)]' \
+          "$dir/hb.roster.json" > "$dir/.hb.roster.keep.tmp" 2>/dev/null
+        if jq -e 'type == "array" and length > 0' "$dir/.hb.roster.keep.tmp" >/dev/null 2>&1; then
+          mv "$dir/.hb.roster.keep.tmp" "$dir/.hb.roster.json.tmp"
+          echo "restore-heartbeat: the census named no session of kitty $kp, but $(jq length "$dir/.hb.roster.json.tmp") of its last roster still run — kept" >&2
+        fi
+        rm -f "$dir/.hb.roster.keep.tmp"
+      fi
     else
       { cat "$dir/hb.roster.json" 2>/dev/null || echo '[]'; } | jq --argjson alive "$alive" \
         '[.[]? | select((.session_id // "") != "")
