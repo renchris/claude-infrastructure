@@ -125,9 +125,23 @@ done
 HUSK_PANE="${HUSK_PANE:-}"; ASSUME_YES="${ASSUME_YES:-0}"
 [ -n "$MODE" ] || { echo "lr-fleet: one of --locate | --recover | --one SID | --enqueue | --duplicates | --retire-husks | --report is required" >&2; exit 2; }
 
-lf_acct_of_cfg() { # $1=cfg dir → account name (next|next2|…) via the generated map, else the basename
-  local n
+# THE SHARED STORE NAMES ITS ACCOUNT BY WHERE ITS SESSIONS LIVE, NOT BY ITS DIR NAME (2026-10-24).
+# ~/.claude-next/projects is a symlink to ~/.claude/projects, so a session found in the ~/.claude
+# store belongs to `next`, but the map knows no `.claude` basename and this answered `.claude`. The
+# not-the-source checks in lf_pick_target then compared candidates against `.claude`, let `next`
+# through, and lr-handoff refused it: "target 'next' shares the source account's session store". A
+# basename the map misses is therefore resolved by session-store realpath against every declared
+# account before the basename is used as is.
+lf_acct_of_cfg() { # $1=cfg dir → account name (next|next2|…) via the map, else by session-store realpath, else the basename
+  local n a src
   n="$(cc_acct_name_for_dir_basename "$(basename "${1%/}")" 2>/dev/null || true)"
+  if [ -z "$n" ] && command -v cc_acct_dir_for_name >/dev/null 2>&1 \
+     && src="$(cd -P "${1%/}/projects" 2>/dev/null && pwd -P)" && [ -n "$src" ]; then
+    for a in ${CC_ACCT_NAMES:-}; do
+      cc_acct_dir_for_name "$a" 2>/dev/null || continue
+      [ "$(cd -P "$CC_ACCT_DIR/projects" 2>/dev/null && pwd -P)" = "$src" ] && { n="$a"; break; }
+    done
+  fi
   [ -n "$n" ] && printf '%s' "$n" || printf '%s' "$(basename "${1%/}")"
 }
 lf_now() { date -u +%FT%TZ; }

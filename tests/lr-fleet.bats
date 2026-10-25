@@ -1309,6 +1309,44 @@ _pick() { # <source acct> <tier> <sid> → lf_pick_target's answer, with only wh
   [[ "$output" == *"SKIPPED=next3 next4"* ]]
 }
 
+# ── THE SHARED ~/.claude STORE IS `next`, NOT AN ACCOUNT CALLED `.claude` (2026-10-24) ────────────
+# ~/.claude-next/projects is a symlink to ~/.claude/projects. A session found in the ~/.claude store
+# came through as source `.claude`, so lf_pick_target's not-the-source checks let `next` through and
+# lr-handoff refused it: "target 'next' shares the source account's session store".
+_acct_of() { # <cfg dir> → lf_acct_of_cfg's answer, with the real account map loaded
+  sed -n '/^lf_acct_of_cfg() {/,/^}/p' "$FLEET" > "$BATS_TEST_TMPDIR/acct.sh"
+  bash -c '. "$1"; . "$2"; lf_acct_of_cfg "$3"' _ \
+    "$REPO/lib/account-map.generated.sh" "$BATS_TEST_TMPDIR/acct.sh" "$1"
+}
+_shared_store() {
+  mkdir -p "$HOME/.claude/projects/$SLUG" "$HOME/.claude-next"
+  ln -s "$HOME/.claude/projects" "$HOME/.claude-next/projects"
+}
+
+@test "[RED] 2026-10-24: a source in the shared ~/.claude store resolves to its account, next" {
+  _shared_store
+  [ "$(_acct_of "$HOME/.claude")" = next ] || { _acct_of "$HOME/.claude"; false; }
+  [ "$(_acct_of "$HOME/.claude/")" = next ]
+  [ "$(_acct_of "$HOME/.claude-secondary")" = next2 ]      # CONTROL: the map still answers first
+}
+
+@test "[RED] 2026-10-24: a source given as the ~/.claude path never yields target next" {
+  _shared_store
+  cc_stub "${CC_ACCOUNTS_BIN%/*}" "${CC_ACCOUNTS_BIN##*/}" - <<'SH'
+#!/bin/bash
+case "$*" in *--rank*) printf 'next 0.95\nnext2 0.9\n' ;; esac
+exit 0
+SH
+  run _pick "$(_acct_of "$HOME/.claude")" claude-opus-5 "$SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == next2* ]] || { echo "$output"; false; }
+}
+
+@test "2026-10-24 CONTROL: a dir that shares no declared store keeps its basename" {
+  mkdir -p "$BATS_TEST_TMPDIR/elsewhere/.claude-x/projects"
+  [ "$(_acct_of "$BATS_TEST_TMPDIR/elsewhere/.claude-x")" = .claude-x ]
+}
+
 # ── D1.3 (LIMIT_RECOVER_FLEET_V2 W6b): the router's own 3 s window is not a routing answer ─────────
 # bin/claude-accounts counts --max-wait from its PROCESS start, so a loaded box can spend it on
 # Python start-up and exit 3 with no answer; two sessions parked that way at the 06:30Z reset.
