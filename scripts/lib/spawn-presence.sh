@@ -131,6 +131,17 @@ cc_sp_ready() {
 
 cc_sp_is_int() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
 
+# → path of a coreutils timeout | rc 1. Resolved by absolute path too, because launchd's PATH omits
+# Homebrew (the pane-placement.sh resolver, same order).
+cc_sp_timeout_bin() {
+  local c
+  for c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
 # ── the population: live session TREES, matched at the command position ──────────────────────────
 # This awk is the one in scripts/capacity-alarm.sh `census()` (:608-624), and it is here rather than
 # re-invented because that function already paid for THREE measured census defects, every one of
@@ -426,9 +437,15 @@ EOF
   # claude/claude.exe process, and subagents share their lead's — so counting rows would report two
   # ACTIVE units for one session tree. It would also be the wrong DIRECTION for this term: the whole
   # census is a proven lower bound, and a duplicate is not evidence of a second concurrent turn.
+  #
+  # BOUNDED. Under a 15-40/core load a `ps -p <list>` can wedge for good: on 2026-10-25 four
+  # handoff-fire.sh runs sat 37 min each inside this very call, and a fresh one wedged again 10 min
+  # after the first were killed — while the same pids, queried one at a time, all answered. A timed-out
+  # sample is empty, so the positive control above turns it into `return 1` (blind), never into 0.
+  local tb; tb="$(cc_sp_timeout_bin)" || tb=""
   n="$(printf '%s\n@@\n%s\n@@\n%s' \
-        "$(TZ=UTC ps -o pid=,lstart= -p "$$${pids}" 2>/dev/null)" \
-        "$(ps -o pid=,lstart= -p "$$${pids}" 2>/dev/null)" \
+        "$(TZ=UTC ${tb:+"$tb" "${CC_SP_PS_TIMEOUT:-15}"} ps -o pid=,lstart= -p "$$${pids}" 2>/dev/null)" \
+        "$(${tb:+"$tb" "${CC_SP_PS_TIMEOUT:-15}"} ps -o pid=,lstart= -p "$$${pids}" 2>/dev/null)" \
         "$pairs" | awk -v self="$$" '
     function norm(s) { gsub(/[ \t]+/, " ", s); sub(/^ /, "", s); sub(/ $/, "", s); return s }
     /^@@$/ { sec++; next }
