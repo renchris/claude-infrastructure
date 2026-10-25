@@ -139,6 +139,19 @@ if [ "${N:-0}" = 0 ]; then status "ok acct=- messages=0 candidates=0 admitted=0 
 
 # ── the model: no tools, redacted text on stdin, JSON on stdout ──
 { cat "$PROMPT"; printf '\n<messages>\n'; cat "$WORK/redacted.json"; printf '\n</messages>\n'; } > "$WORK/prompt.txt"
+# ── BROWNOUT (lockup incident 2026-10-25, DESIGN C4 R3): a headless model call is discretionary work,
+# so it waits out a brownout rather than adding API streams and tool forks to a box showing the
+# lockup's precursors. Run through /bin/bash, never by path (kalloc leak per #! exec). Observe mode
+# (the default until the shadow audit arms it) logs and proceeds. An absent library proceeds, loudly.
+BO_LIB="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/capacity-admit.sh"
+[ -f "$BO_LIB" ] || BO_LIB="$HOME/.claude/scripts/lib/capacity-admit.sh"
+if [ -f "$BO_LIB" ]; then
+  bo_rc=0; /bin/bash "$BO_LIB" --brownout-check discretionary dl-sweep || bo_rc=$?
+  # Only 75 is a refusal; any other non-zero is the check failing, which must not cancel the night.
+  if [ "$bo_rc" = 75 ]; then status "skip brownout: refused by the brownout term (exit 75) — no model call tonight"; exit 75; fi
+else
+  echo "dl-sweep: capacity-admit.sh absent — proceeding UNGATED by brownout" >&2
+fi
 ACCT=fixture
 if [ -n "${DL_SWEEP_CLAUDE:-}" ]; then
   bash -c "$DL_SWEEP_CLAUDE" < "$WORK/prompt.txt" > "$WORK/out.txt" 2> "$WORK/claude.err"; rc=$?

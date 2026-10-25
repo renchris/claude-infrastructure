@@ -48,6 +48,23 @@ if [ ! -f "$daemon" ]; then
   exit 1
 fi
 py="${CC_RESEARCH_PYTHON:-/usr/bin/python3}"
+
+# BROWNOUT (lockup incident 2026-10-25, DESIGN C4 R3). A warm classifier is discretionary work, so it
+# does not start while the brownout term refuses one. It SLEEPS AND ASKS AGAIN, and never exits 75:
+# this job runs under KeepAlive with ThrottleInterval 30 (com.claude.research-classifier-warm.plist),
+# so an exit would only be a restart every 30 s. The check runs through /bin/bash, never by path, and
+# only its exit 75 holds; an absent library or a failed check starts the classifier as before.
+# Seams: CC_RESEARCH_WARM_BROWNOUT_LIB · CC_RESEARCH_WARM_BROWNOUT_WAIT (60 s).
+bo_lib="${CC_RESEARCH_WARM_BROWNOUT_LIB:-$here/../../lib/capacity-admit.sh}"
+bo_wait="${CC_RESEARCH_WARM_BROWNOUT_WAIT:-60}"
+if [ -f "$bo_lib" ]; then
+  while :; do
+    bo_rc=0; /bin/bash "$bo_lib" --brownout-check discretionary classifier-warm 2>/dev/null || bo_rc=$?
+    [ "$bo_rc" = 75 ] || break
+    echo "classifier-warm: brownout — not starting a classifier; asking again in ${bo_wait}s" >&2
+    /bin/sleep "$bo_wait"
+  done
+fi
 accounts_bin="${CC_RESEARCH_WARM_ACCOUNTS:-$HOME/Development/claude-infrastructure/bin/claude-accounts}"
 accounts_json="${CC_RESEARCH_WARM_ACCOUNTS_JSON:-$HOME/.claude/accounts.json}"
 rank_wait="${CC_RESEARCH_WARM_RANK_WAIT:-60}"

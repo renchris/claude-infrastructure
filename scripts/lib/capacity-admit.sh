@@ -63,6 +63,9 @@
 # moved here) to keep an ungated spawn out of the admitted-and-measured population. §9.5.1's rule
 # `queued` (a refusal charged to no counter) and `queue-expired` (its clock release) are the
 # lr-wake 2026-10-18 additions for a request that waits in the durable queue (see _cc_admit_spend).
+# `brownout` and `loadband` (lockup incident 2026-10-25, DESIGN C4) name a refusal by the brownout
+# term or the load band: both refuse WITHOUT a budget charge, so neither can become `budget-expired`
+# (see THE BROWNOUT TERM below). As a `term` they also tell those refusals apart from the box terms.
 # applies verbatim to all seven and is the whole reason
 # the field exists: this gate FAILS OPEN on an unreadable sysctl/vm_stat, so a dead probe otherwise
 # manufactures a 100%-admit population indistinguishable from a quiet box — the gate deleted,
@@ -103,6 +106,9 @@
 #      CC_ADMIT_ACTIVE_SIGNAL(cpu|beat) · CC_ADMIT_ACTIVE_PER_CORE(0.8) ·
 #      CC_ADMIT_ACTIVE_CPU_FILE(~/.claude/autonomy/active-cpu.json) ·
 #      CC_ADMIT_ACTIVE_CPU_MIN_CORES(0.25) · CC_ADMIT_ACTIVE_CPU_MAX_AGE_S(90) — see _cc_admit_active_cpu
+#      CC_ADMIT_BROWNOUT(observe until the shadow audit arms it | on | off) · CC_ADMIT_LOADBAND(observe |
+#      enforce | off) · CC_ADMIT_LOADBAND_PER_CORE(50) — see THE BROWNOUT TERM and THE LOAD BAND
+# Also a COMMAND: `/bin/bash capacity-admit.sh --brownout-check <class> [caller]` → 0 proceed · 75 refused.
 # Pure definitions only — safe to source under `set -u`. bash 3.2-safe, BSD+GNU portable, no eval.
 # shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
 if [ -f "${BASH_SOURCE[0]%/*}/./cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/./cc-run.sh"; else cc_run() { "$@"; }; fi
@@ -479,6 +485,8 @@ cc_capacity_admit_short() {
       a="${d%% live session trees*}"; lim="${d##*= }"; lim="${lim%% *}"
       if cc_hw_is_int "$a" && cc_hw_is_int "$lim"; then printf 'sessions %s/%s' "$(( a + 1 ))" "$lim"; return 0; fi ;;
   esac
+  [ "$t" = brownout ] && { printf 'brownout (%s)' "${CC_BO_VOTES:-?}"; return 0; }
+  [ "$t" = loadband ] && { printf 'load band (15-min > %s/core)' "${CC_ADMIT_LOADBAND_PER_CORE:-50}"; return 0; }
   printf 'box busy (%s)' "${t:-capacity}"
 }
 
@@ -523,6 +531,7 @@ _cc_admit_emit() { # $1=verdict admit|refuse  $2=basis  $3=caller  $4=what  $5=d
          --arg sid "${CC_ADMIT_SID:-?}" --arg pres "${CC_ADMIT_PRESENCE:-}" \
          --arg rsv "${CC_ADMIT_RESERVE:-}" --arg tms "${CC_ADMIT_TERMS:-}" \
          --arg bld "${CC_ADMIT_BLIND:-}" --arg tok "${CC_ADMIT_TOKEN_NOTE:-}" \
+         --arg bo "${CC_ADMIT_BROWNOUT_NOTE:-}" \
     '{ts:$ts,hook:"capacity-admit",sid:$sid,disposition:$disp,reason:"capacity",
       gate:"capacity-admit",verdict:$v,basis:$b,caller:$c,what:$w,detail:$d}
      + (if $t    == "" then {} else {term:$t} end)
@@ -530,7 +539,8 @@ _cc_admit_emit() { # $1=verdict admit|refuse  $2=basis  $3=caller  $4=what  $5=d
      + (if $rsv  == "" then {} else {reserve:$rsv} end)
      + (if $tms  == "" then {} else {terms:$tms} end)
      + (if $bld  == "" then {} else {blind:$bld} end)
-     + (if $tok  == "" then {} else {token:$tok} end)' >> "$idl" 2>/dev/null || true
+     + (if $tok  == "" then {} else {token:$tok} end)
+     + (if $bo   == "" then {} else {brownout:$bo} end)' >> "$idl" 2>/dev/null || true
   return 0
 }
 
@@ -1292,6 +1302,315 @@ _cc_admit_page() { # $1=text
   return 0
 }
 
+# ══ THE BROWNOUT TERM (lockup incident 2026-10-25; ~/incident-2026-10-25/solution/DESIGN.md C4) ═══
+# A refusal for DISCRETIONARY spawns while the box shows the lockup's precursors, keyed on LIVENESS
+# evidence that other processes already wrote down, never on a probe of the sick resource. Every input
+# is a regular file under ~/.claude: no `ps`, no /dev, no `kitty @` (fleet-governor.md §7: a gate that
+# probes what hung hangs with it, and a probe killed by its own timeout reads as blind, then admits).
+#
+#   V1  lockwatch/state.json `level` >= 1, and lockwatch/hb written within CC_BO_HB_FRESH_S (10 s).
+#       A stale hb gives NO vote: a dead watchdog is Hammerspoon's page, not a refusal here.
+#   V2  2 of 3 over the last 20 capacity-alarm rows: newest `sessions` >= 40 · newest `coal_procs`
+#       >= 600 · fewer than 10 rows in the last 900 s. Replayed over the real rows: first fire 10-24
+#       21:57:50Z, 10.8 h before the collapse; 0% of 10-15's rows and 0.8% of 10-23's
+#       (tests/capacity-admit-brownout.bats pins those numbers). Fitted after the fact to n=1, so
+#       every decision logs its inputs for a re-fit; never quote 40/600/10 as measured ceilings.
+#   V4  ~/.claude/autonomy/brownout.json `surface_unavailable_since` under 30 min old (cc-dispatch on
+#       a handoff-fire rc 76, rescue.sh, or the operator's "Brownout hold" with by=operator).
+#   V5  lockwatch/boot-<epoch>.json `class` LOCKUP_* written this boot, uptime under 30 min: the
+#       recovery fires are spaced so boot-resume does not rebuild the same 40-session fleet at once.
+#   (V3, the alarm's output age, is DROPPED: stale for hours on three non-lockup days. DESIGN §12.)
+#
+# POLICY BY CALLER CLASS (_cc_bo_class), while any vote is true:
+#   discretionary  REFUSED. Not charged to CC_ADMIT_BUDGET, so it can never become `budget-expired`,
+#                  and no CC_ADMIT_*_TERM=off and no CC_ADMIT_GATE=off reaches it.
+#   recovery       at most one admit per CC_BO_RECOVERY_SPACING_S (300 s); the bound stays finite.
+#   operator       a handoff-fire typed at a TTY: refused with the reason; CC_ADMIT_BROWNOUT=off
+#                  for that one fire is the override.
+#   exempt         a --recycle (net-zero panes).
+# THE BOUND (this file's own law, header lines 31-35): CC_BO_ESCALATE_S (30 min) of continuous
+# brownout pages an escalation once per episode; the rising edge pages once. Pages only when armed.
+#
+# MODE, CC_ADMIT_BROWNOUT: unset ⇒ `observe` (logs would-refuse / would-space and ADMITS) until
+# lockwatch/shadow-audit.json reads pass_gate:true AND pass_band:true, which arms it (`on`) with no
+# human step (DESIGN §7 phase 2). `observe` / `on` force a mode; `off` is the operator kill switch.
+#
+# Seams: CC_ADMIT_BROWNOUT_NOW · CC_ADMIT_BROWNOUT_BOOTTIME · CC_ADMIT_BROWNOUT_ALARM_LOG ·
+#   CC_LOCKWATCH_DIR · CC_ADMIT_BROWNOUT_LATCH · CC_ADMIT_BROWNOUT_LOG · CC_BO_SESSIONS(40) ·
+#   CC_BO_COAL(600) · CC_BO_ROWS(10) · CC_BO_WINDOW_S(900) · CC_BO_HB_FRESH_S(10) ·
+#   CC_BO_LATCH_MAX_S(1800) · CC_BO_BOOT_MAX_S(1800) · CC_BO_RECOVERY_SPACING_S(300) · CC_BO_ESCALATE_S(1800)
+CC_BO_VOTES=""; CC_BO_NOTE=""; CC_BO_REASON=""; CC_BO_VERDICT=""; CC_BO_MODE=""; CC_BO_CLASS=""
+
+# THE ONE PREDICATE, shared by the live read and the replay so a test of one is a test of the other.
+# Each vote is its own parenthesised term so a per-site mutant can delete exactly one of them.
+_CC_BO_AWK_FN='function bo_v2(s, c, rows) { return ((s >= S) + (c >= C) + (rows < R)) >= 2 }'
+
+_cc_bo_int() { # $1=value $2=default → an integer on stdout
+  case "${1:-}" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac
+}
+_cc_bo_now() { _cc_bo_int "${CC_ADMIT_BROWNOUT_NOW:-$(date +%s 2>/dev/null)}" 0; }
+_cc_bo_dir() { printf '%s' "${CC_LOCKWATCH_DIR:-$HOME/.claude/autonomy/lockwatch}"; }
+
+# The caller-id → class table. Ids are the ones the callers already pass; no caller opts in.
+_cc_bo_class() { # $1=caller id → discretionary|recovery|operator|exempt
+  case "${1:-}" in
+    cc-dispatch|strand-fill|lr-move-batch|lr-move-worker|lr-fleet|lr-reset-poller|agent-tool) printf discretionary ;;
+    discretionary|headless|headless-*|dl-sweep|classifier-warm) printf discretionary ;;
+    operator) printf operator ;;
+    recycle|exempt) printf exempt ;;
+    *) printf recovery ;;
+  esac
+}
+
+_cc_bo_mode() { # → off|observe|on
+  case "${CC_ADMIT_BROWNOUT:-}" in
+    off)        printf off; return 0 ;;
+    on|enforce) printf on; return 0 ;;
+    observe)    printf observe; return 0 ;;
+  esac
+  if [ -f "$(_cc_bo_dir)/shadow-audit.json" ] \
+     && jq -e '.pass_gate == true and .pass_band == true' "$(_cc_bo_dir)/shadow-audit.json" >/dev/null 2>&1; then
+    printf on
+  else
+    printf observe
+  fi
+}
+
+# Replay: stdin "epoch<TAB>sessions<TAB>coal_procs" in time order → "epoch vote sessions coal rows"
+# per row, evaluating each row as it arrived over the 20 rows ending at it (the live read's window).
+cc_brownout_v2_replay() {
+  awk -F'\t' -v W="$(_cc_bo_int "${CC_BO_WINDOW_S:-}" 900)" -v S="$(_cc_bo_int "${CC_BO_SESSIONS:-}" 40)" \
+      -v C="$(_cc_bo_int "${CC_BO_COAL:-}" 600)" -v R="$(_cc_bo_int "${CC_BO_ROWS:-}" 10)" "$_CC_BO_AWK_FN"'
+    NF >= 3 { k++; E[k % 20] = $1; m = (k < 20 ? k : 20); rows = 0
+      for (i = k - m + 1; i <= k; i++) if (E[i % 20] > $1 - W) rows++
+      printf "%s %d %s %s %d\n", $1, bo_v2($2, $3, rows), $2, $3, rows }'
+}
+
+# cc_brownout — evaluate the votes. rc 0 = brownout (CC_BO_VOTES non-empty) · 1 = clear.
+# CC_BO_NOTE carries every input that was readable, for the decision row.
+cc_brownout() {
+  local now dir log out v s c rows st hb hbt age lvl latch since by boot bt cls f sysctl_bin
+  now="$(_cc_bo_now)"; dir="$(_cc_bo_dir)"
+  CC_BO_VOTES=""; CC_BO_NOTE=""
+  # V1 — the watchdog's level, believed only while its heartbeat is fresh.
+  st="$dir/state.json"; hb="$dir/hb"
+  if [ -f "$st" ]; then
+    hbt="$(_cc_admit_mtime "$hb")"
+    if [ -n "$hbt" ] && [ "$now" -gt 0 ]; then
+      age=$(( now - hbt ))
+      if [ "$age" -le "$(_cc_bo_int "${CC_BO_HB_FRESH_S:-}" 10)" ]; then
+        lvl="$(jq -r '.level // 0' "$st" 2>/dev/null)"; lvl="$(_cc_bo_int "$lvl" 0)"
+        CC_BO_NOTE="v1:level=${lvl},hb_age=${age}s"
+        [ "$lvl" -ge 1 ] && CC_BO_VOTES="V1"
+      else
+        CC_BO_NOTE="v1:hb-stale(${age}s)-no-vote"
+      fi
+    else
+      CC_BO_NOTE="v1:hb-absent-no-vote"
+    fi
+  fi
+  # V2 — the capacity alarm's last 20 rows. A row that does not parse is dropped, never zeroed.
+  log="${CC_ADMIT_BROWNOUT_ALARM_LOG:-$HOME/.claude/logs/capacity-alarm.jsonl}"
+  if [ -f "$log" ] && [ "$now" -gt 0 ]; then
+    out="$(tail -n 20 "$log" 2>/dev/null \
+      | jq -rR 'fromjson? | select(type == "object") | (.ts | fromdateiso8601?) as $e
+                | [$e, (.sessions // -1), (.coal_procs // -1)] | @tsv' 2>/dev/null \
+      | awk -F'\t' -v now="$now" -v W="$(_cc_bo_int "${CC_BO_WINDOW_S:-}" 900)" \
+            -v S="$(_cc_bo_int "${CC_BO_SESSIONS:-}" 40)" -v C="$(_cc_bo_int "${CC_BO_COAL:-}" 600)" \
+            -v R="$(_cc_bo_int "${CC_BO_ROWS:-}" 10)" "$_CC_BO_AWK_FN"'
+          NF >= 3 { n++; s = $2; c = $3; if ($1 > now - W && $1 <= now) rows++ }
+          END { if (!n) exit; printf "%d %s %s %d\n", bo_v2(s, c, rows + 0), s, c, rows + 0 }')"
+    if [ -n "$out" ]; then
+      read -r v s c rows <<EOF
+$out
+EOF
+      CC_BO_NOTE="${CC_BO_NOTE:+$CC_BO_NOTE }v2:sessions=${s},coal=${c},rows900=${rows}"
+      [ "$v" = 1 ] && CC_BO_VOTES="${CC_BO_VOTES:+$CC_BO_VOTES,}V2"
+    fi
+  fi
+  # V4 — the surface-unavailable latch: an epoch, or an ISO-8601 Z string.
+  latch="${CC_ADMIT_BROWNOUT_LATCH:-$HOME/.claude/autonomy/brownout.json}"
+  if [ -f "$latch" ] && [ "$now" -gt 0 ]; then
+    out="$(jq -r '[(.surface_unavailable_since | if type == "number" then floor
+                      elif type == "string" then ((tonumber? // fromdateiso8601?) // empty) else empty end),
+                   (.by // "?")] | @tsv' "$latch" 2>/dev/null)"
+    since="${out%%	*}"; by="${out#*	}"
+    case "$since" in ''|*[!0-9]*) : ;; *)
+      age=$(( now - since ))
+      CC_BO_NOTE="${CC_BO_NOTE:+$CC_BO_NOTE }v4:age=${age}s,by=${by}"
+      if [ "$age" -ge 0 ] && [ "$age" -lt "$(_cc_bo_int "${CC_BO_LATCH_MAX_S:-}" 1800)" ]; then
+        CC_BO_VOTES="${CC_BO_VOTES:+$CC_BO_VOTES,}V4"
+      fi ;;
+    esac
+  fi
+  # V5 — a lockup boot, young. The glob costs no fork; sysctl runs only when a boot file exists.
+  boot=""
+  for f in "$dir"/boot-*.json; do [ -f "$f" ] && boot="$f"; done
+  if [ -n "$boot" ] && [ "$now" -gt 0 ]; then
+    bt="${CC_ADMIT_BROWNOUT_BOOTTIME:-}"
+    if [ -z "$bt" ]; then
+      sysctl_bin="$(cc_hw_resolve_sysctl "${CC_ADMIT_SYSCTL:-}")"
+      bt="$("$sysctl_bin" -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9][0-9]*\).*/\1/p')"
+    fi
+    bt="$(_cc_bo_int "$bt" 0)"
+    f="$(_cc_admit_mtime "$boot")"; f="$(_cc_bo_int "$f" 0)"
+    if [ "$bt" -gt 0 ] && [ "$f" -ge "$bt" ]; then
+      cls="$(jq -r '.class // ""' "$boot" 2>/dev/null)"
+      age=$(( now - bt ))
+      case "$cls" in LOCKUP_*)
+        CC_BO_NOTE="${CC_BO_NOTE:+$CC_BO_NOTE }v5:class=${cls},uptime=${age}s"
+        [ "$age" -lt "$(_cc_bo_int "${CC_BO_BOOT_MAX_S:-}" 1800)" ] && CC_BO_VOTES="${CC_BO_VOTES:+$CC_BO_VOTES,}V5" ;;
+      esac
+    fi
+  fi
+  [ -n "$CC_BO_VOTES" ]
+}
+
+_cc_bo_state() { # $1=name → a path in the admission state dir, or nothing
+  local d="${CC_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-admit}"
+  mkdir -p "$d" 2>/dev/null || return 0
+  printf '%s/brownout.%s' "$d" "$1"
+}
+
+# One row per decision taken WHILE a vote was true (a clear evaluation writes nothing: the alarm log
+# already holds every input on healthy minutes). jq-encoded, never a raw append.
+_cc_bo_log() { # $1=caller $2=what
+  local f="${CC_ADMIT_BROWNOUT_LOG:-$HOME/.claude/logs/brownout.jsonl}"
+  command -v jq >/dev/null 2>&1 || return 0
+  mkdir -p "$(dirname "$f")" 2>/dev/null || true
+  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" --arg c "$1" --arg w "$2" \
+         --arg cl "$CC_BO_CLASS" --arg m "$CC_BO_MODE" --arg v "$CC_BO_VERDICT" \
+         --arg vo "$CC_BO_VOTES" --arg n "$CC_BO_NOTE" --arg p "${_CC_ADMIT_PROBE:-0}" \
+    '{ts:$ts, gate:"brownout", term:"brownout", caller:$c, what:$w, class:$cl, mode:$m,
+      verdict:$v, votes:$vo, inputs:$n, probe:($p == "1")}' >> "$f" 2>/dev/null || true
+  return 0
+}
+
+# The episode: rising edge pages once, CC_BO_ESCALATE_S of continuous brownout pages once more.
+# Only an armed, non-probe evaluation writes or pages; observe never pages (it refuses nothing).
+_cc_bo_episode() { # $1=brownout(1|0) $2=now
+  local f start paged esc
+  [ "$CC_BO_MODE" = on ] && [ "${_CC_ADMIT_PROBE:-0}" != 1 ] || return 0
+  f="$(_cc_bo_state episode)"; [ -n "$f" ] || return 0
+  if [ "$1" = 0 ]; then rm -f "$f" 2>/dev/null; return 0; fi
+  start=""; paged=0; esc=0
+  [ -f "$f" ] && read -r start paged esc < "$f" 2>/dev/null
+  start="$(_cc_bo_int "$start" "$2")"; paged="$(_cc_bo_int "$paged" 0)"; esc="$(_cc_bo_int "$esc" 0)"
+  if [ "$paged" = 0 ]; then
+    _cc_admit_page "🟠 brownout ON (${CC_BO_VOTES}): discretionary spawns are refused, recovery spaced 1 per $(_cc_bo_int "${CC_BO_RECOVERY_SPACING_S:-}" 300)s — ${CC_BO_NOTE}. Kill switch: CC_ADMIT_BROWNOUT=off"
+    paged=1
+  fi
+  if [ "$esc" = 0 ] && [ $(( $2 - start )) -ge "$(_cc_bo_int "${CC_BO_ESCALATE_S:-}" 1800)" ]; then
+    _cc_admit_page "🔴 brownout has held $(( ($2 - start) / 60 )) min (${CC_BO_VOTES}) — the box is not recovering on its own. ${CC_BO_NOTE}. Look now: lockwatch/state.json, capacity-alarm.jsonl."
+    esc=1
+  fi
+  printf '%s %s %s\n' "$start" "$paged" "$esc" > "$f" 2>/dev/null || true
+}
+
+# THE POLICY — the one decision every caller shares (cc_capacity_admit, handoff-fire's capacity_gate,
+# --brownout-check). rc 0 = proceed to the ordinary terms · 75 = refused by brownout.
+# CC_BO_VERDICT: off · exempt · clear · would-refuse · would-space · spaced-admit · refuse · space.
+# THE ONE ENTRY POINT: the brownout votes first, then the load band. rc 0 proceed · 75 refused.
+# CC_BO_TERM names the term that refused (brownout | loadband).
+CC_BO_TERM=""
+cc_brownout_decide() { # $1=caller $2=class (optional; derived from the caller id) $3=what
+  local rc=0
+  CC_BO_TERM=""
+  _cc_bo_decide_votes "$@" || rc=$?
+  if [ "$rc" = 75 ]; then CC_BO_TERM=brownout; return 75; fi
+  rc=0; _cc_loadband_decide "${1:-unknown}" "$CC_BO_CLASS" "${3:-spawn}" || rc=$?
+  if [ "$rc" = 75 ]; then CC_BO_TERM=loadband; CC_BO_REASON="$CC_LB_REASON"; return 75; fi
+  return 0
+}
+
+# ── THE LOAD BAND (lead ruling 2026-10-25 16:27 on RCA §5/R11; class-B decision 888ad4830b80) ────
+# RCA.md §5 asks for a refusal of autonomous fires on SUSTAINED load; DESIGN C4 and fleet-governor §5
+# reject load as a trigger (healthy days run 15-40/core, the operator's design point). The ruling:
+# build it OBSERVE-ONLY, above that band: the 15-min load average over CC_ADMIT_LOADBAND_PER_CORE (50)
+# per core, for AUTONOMOUS callers only (the discretionary class, and a handoff fire with no operator
+# at a TTY). In `observe` (the default) it refuses nothing, charges no budget, and writes one
+# `gate:"loadband"` would-refuse row to the IDL per evaluation over the band, with the load and the
+# caller, so 7 days of rows can decide enforcement (revisit 2026-11-01). CC_ADMIT_LOADBAND=enforce
+# refuses (rc 75, never budget-charged); `off` evaluates nothing. Seam: CC_ADMIT_LOADBAND_LOAD15.
+CC_LB_VERDICT=""; CC_LB_REASON=""
+_cc_loadband_decide() { # $1=caller $2=class $3=what → 0 proceed · 75 refused (enforce only)
+  local mode="${CC_ADMIT_LOADBAND:-observe}" ceil sysctl_bin ncpu l15 over per
+  CC_LB_VERDICT=""; CC_LB_REASON=""
+  [ "$mode" = off ] && { CC_LB_VERDICT=off; return 0; }
+  [ "$mode" = enforce ] || mode=observe
+  case "$2" in
+    discretionary) : ;;
+    recovery) [ "$1" = handoff-fire ] || { CC_LB_VERDICT=n/a; return 0; } ;;
+    *) CC_LB_VERDICT=n/a; return 0 ;;
+  esac
+  ceil="${CC_ADMIT_LOADBAND_PER_CORE:-50}"; cc_hw_is_num "$ceil" || ceil=50
+  sysctl_bin="$(cc_hw_resolve_sysctl "${CC_ADMIT_SYSCTL:-}")"
+  ncpu="$(cc_hw_ncpu "$sysctl_bin")"
+  l15="${CC_ADMIT_LOADBAND_LOAD15:-$("$sysctl_bin" -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{ print $3 }')}"
+  if ! cc_hw_is_int "$ncpu" || [ "$ncpu" = 0 ] || ! cc_hw_is_num "$l15"; then CC_LB_VERDICT=blind; return 0; fi
+  per="$(awk -v l="$l15" -v n="$ncpu" 'BEGIN { printf "%.2f", l / n }')"
+  over="$(awk -v p="$per" -v c="$ceil" 'BEGIN { print (p > c) ? 1 : 0 }')"
+  [ "$over" = 1 ] || { CC_LB_VERDICT=clear; return 0; }
+  CC_LB_REASON="load band: 15-min load ${l15} on ${ncpu} cores = ${per}/core > ${ceil}/core (autonomous ${2} caller)"
+  if [ "$mode" = enforce ]; then CC_LB_VERDICT=refuse; else CC_LB_VERDICT=would-refuse; fi
+  command -v jq >/dev/null 2>&1 && jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
+      --arg c "$1" --arg cl "$2" --arg w "$3" --arg m "$mode" --arg v "$CC_LB_VERDICT" \
+      --arg l "$l15" --arg n "$ncpu" --arg p "$per" --arg x "$ceil" --arg pr "${_CC_ADMIT_PROBE:-0}" \
+    '{ts:$ts, hook:"capacity-admit", gate:"loadband", term:"loadband", reason:"loadband", disposition:"observed",
+      verdict:$v, mode:$m, caller:$c, class:$cl, what:$w, load15:($l|tonumber), ncpu:($n|tonumber),
+      per_core:($p|tonumber), ceiling_per_core:($x|tonumber), probe:($pr == "1")}' \
+    >> "${CC_ADMIT_IDL:-$HOME/.claude/autonomy/idl.jsonl}" 2>/dev/null
+  [ "$mode" = enforce ] && return 75
+  return 0
+}
+
+_cc_bo_decide_votes() { # $1=caller $2=class $3=what — the brownout term alone
+  local caller="${1:-unknown}" what="${3:-spawn}" now f last gap sp
+  CC_BO_MODE="$(_cc_bo_mode)"; CC_BO_CLASS="${2:-$(_cc_bo_class "$caller")}"
+  CC_BO_REASON=""; CC_BO_VOTES=""; CC_BO_NOTE=""
+  if [ "$CC_BO_MODE" = off ]; then CC_BO_VERDICT=off; return 0; fi
+  if [ "$CC_BO_CLASS" = exempt ]; then CC_BO_VERDICT=exempt; return 0; fi
+  now="$(_cc_bo_now)"
+  if ! cc_brownout; then CC_BO_VERDICT=clear; _cc_bo_episode 0 "$now"; return 0; fi
+  _cc_bo_episode 1 "$now"
+  if [ "$CC_BO_CLASS" = recovery ]; then
+    sp="$(_cc_bo_int "${CC_BO_RECOVERY_SPACING_S:-}" 300)"
+    if [ "$CC_BO_MODE" = on ]; then f="$(_cc_bo_state recovery-last)"; else f="$(_cc_bo_state recovery-last.observe)"; fi
+    last=""; [ -n "$f" ] && [ -f "$f" ] && read -r last < "$f" 2>/dev/null
+    last="$(_cc_bo_int "$last" 0)"; gap=$(( now - last ))
+    if [ "$last" -gt 0 ] && [ "$gap" -ge 0 ] && [ "$gap" -lt "$sp" ]; then
+      CC_BO_REASON="brownout (${CC_BO_VOTES}): recovery spawns are spaced 1 per ${sp}s and the last was ${gap}s ago — ${CC_BO_NOTE}"
+      if [ "$CC_BO_MODE" = on ]; then CC_BO_VERDICT=space; _cc_bo_log "$caller" "$what"; return 75; fi
+      CC_BO_VERDICT=would-space; _cc_bo_log "$caller" "$what"; return 0
+    fi
+    [ -n "$f" ] && [ "${_CC_ADMIT_PROBE:-0}" != 1 ] && { printf '%s\n' "$now" > "$f"; } 2>/dev/null
+    CC_BO_REASON="brownout (${CC_BO_VOTES}): recovery spawn admitted to the ordinary terms (spaced 1 per ${sp}s) — ${CC_BO_NOTE}"
+    CC_BO_VERDICT=spaced-admit; _cc_bo_log "$caller" "$what"; return 0
+  fi
+  CC_BO_REASON="brownout (${CC_BO_VOTES}): ${CC_BO_CLASS} spawn refused — ${CC_BO_NOTE}"
+  if [ "$CC_BO_MODE" = on ]; then CC_BO_VERDICT=refuse; _cc_bo_log "$caller" "$what"; return 75; fi
+  CC_BO_VERDICT=would-refuse; _cc_bo_log "$caller" "$what"; return 0
+}
+
+# cc_capacity_admit's arm of the policy: 0 = proceed · 9 = refused (the row is written here).
+# Sets CC_ADMIT_BROWNOUT_NOTE, which rides on whatever row this evaluation writes.
+CC_ADMIT_BROWNOUT_NOTE=""
+_cc_admit_brownout() { # $1=caller $2=what
+  local rc=0
+  CC_ADMIT_BROWNOUT_NOTE=""
+  cc_brownout_decide "$1" "" "$2" || rc=$?
+  case "$CC_BO_VERDICT" in off|exempt|clear) : ;; *) CC_ADMIT_BROWNOUT_NOTE="${CC_BO_MODE}:${CC_BO_VERDICT} ${CC_BO_VOTES} ${CC_BO_NOTE}" ;; esac
+  [ "$rc" = 75 ] || return 0
+  if [ "$CC_BO_TERM" = loadband ]; then
+    CC_ADMIT_REASON="capacity-admit: REFUSING ${2} — ${CC_BO_REASON}. Not charged to the refusal budget. Kill switch: CC_ADMIT_LOADBAND=observe"
+  else
+    CC_ADMIT_REASON="capacity-admit: REFUSING ${2} — ${CC_BO_REASON}. Not charged to the refusal budget; it clears when the votes do. Operator kill switch: CC_ADMIT_BROWNOUT=off"
+  fi
+  CC_ADMIT_REFUSED_TERM="$CC_BO_TERM"; CC_ADMIT_REFUSED_DETAIL="$CC_BO_REASON"
+  _cc_admit_emit refuse "$CC_BO_TERM" "$1" "$2" "$CC_BO_REASON" "$CC_BO_TERM"
+  return 9
+}
+
 # ── the gate ───────────────────────────────────────────────────────────────────────────────────
 cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   local caller="${1:-unknown}" what="${2:-spawn}"
@@ -1304,12 +1623,16 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # the gate carries four terms, `basis` (shared with capacity_gate, which has two) can no longer say
   # which were in force, and a ratio computed without that split is the §9.5.1 defect.
   CC_ADMIT_TERMS=""; CC_ADMIT_BLIND=""; CC_ADMIT_REFUSAL=""; CC_ADMIT_REFUSED_TERM=""; CC_ADMIT_REFUSED_DETAIL=""
+  CC_ADMIT_BROWNOUT_NOTE=""
   [ "${CC_ADMIT_LOAD_TERM:-on}"     = off ] || CC_ADMIT_TERMS="load"
   [ "${CC_ADMIT_HEADROOM_TERM:-on}" = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}headroom"
   [ "${CC_ADMIT_SEGMENT_TERM:-on}"  = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}segments"
   [ "${CC_ADMIT_ACTIVE_TERM:-on}"   = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}active"
 
   if [ "${CC_ADMIT_GATE:-on}" = off ]; then
+    # THE BROWNOUT TERM IS NOT A TERM THIS SWITCH REACHES (DESIGN C4): its only kill switch is
+    # CC_ADMIT_BROWNOUT=off, so the whole-gate override still meets it (it writes its own row).
+    _cc_admit_brownout "$caller" "$what" || return 9
     # Recorded, never silent: an operator override or a pinned test suite must not read back later
     # as a healthy admit. This is the row that keeps "the gate was OFF" out of the measured population.
     CC_ADMIT_REASON="capacity-admit: OFF (CC_ADMIT_GATE=off) — no term evaluated"
@@ -1369,6 +1692,12 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
     # this evaluation writes, so "the launcher evaluated fresh" always carries WHY.
     :
   fi
+
+  # ── THE BROWNOUT TERM (lockup incident 2026-10-25, DESIGN C4) ──────────────────────────────────
+  # After token redemption (a redeemed token is a decision already taken, brownout included, by the
+  # driver's probe) and BEFORE every per-caller term switch, so no CC_ADMIT_*_TERM=off reaches it.
+  # A refusal here is NOT charged to the budget: _cc_admit_spend never sees it.
+  _cc_admit_brownout "$caller" "$what" || return 9
 
   # Probes + defaults come from the SHARED TERMS above — the same resolver, the same reads and the
   # same literals capacity_gate() expands, so a PATH fix or a ceiling change lands once. The
@@ -1851,3 +2180,24 @@ _cc_admit_spend() { # $1=caller $2=what $3=budget $4=detail $5=term → 0 admit 
   _cc_admit_emit refuse measured "$caller" "$what" "${detail} (refusal ${n} of budget ${budget})" "$term"
   return 9
 }
+
+# ── RUN AS A COMMAND: the headless jobs' one-liner (DESIGN C4 R3) ──────────────────────────────
+#   /bin/bash "$HOME/.claude/scripts/lib/capacity-admit.sh" --brownout-check <class> [caller] || exit 75
+# exit 0 proceed · 75 refused by brownout · 64 usage. Run through /bin/bash, never by path: each #!
+# exec leaks kernel memory on this macOS (lesson 1). Sourcing the file defines functions only.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    --brownout-check)
+      _bo_rc=0
+      cc_brownout_decide "${3:-${2:-discretionary}}" "$(_cc_bo_class "${2:-discretionary}")" "${3:-${2:-discretionary}} run" || _bo_rc=$?
+      if [ "$_bo_rc" = 75 ]; then
+        printf 'capacity-admit: %s — refused (exit 75). Kill switch: CC_ADMIT_%s\n' "$CC_BO_REASON" \
+          "$( [ "$CC_BO_TERM" = loadband ] && echo LOADBAND=observe || echo BROWNOUT=off )" >&2
+      else
+        case "$CC_BO_VERDICT" in would-*) printf 'capacity-admit: observe — %s (%s; proceeding)\n' "$CC_BO_REASON" "$CC_BO_VERDICT" >&2 ;; esac
+        [ "$CC_LB_VERDICT" = would-refuse ] && printf 'capacity-admit: observe — %s (would-refuse; proceeding)\n' "$CC_LB_REASON" >&2
+      fi
+      exit "$_bo_rc" ;;
+    *) printf 'usage: capacity-admit.sh --brownout-check <discretionary|recovery|class-id> [caller]\n' >&2; exit 64 ;;
+  esac
+fi

@@ -104,6 +104,48 @@ STREAM_FLAGS = [
 ]
 
 
+# how long a refused fill waits before asking the brownout term again
+BROWNOUT_WAIT_S = 60.0
+# the check reads files only; past this it is abandoned, never waited on
+BROWNOUT_CHECK_S = 20.0
+
+
+def brownout_refuses() -> bool:
+    """True when the brownout term refuses a discretionary spawn (lockup incident 2026-10-25, DESIGN
+    C4 R3). Asked before EACH worker spawn, because `serve` spawns workers in-process long after the
+    runner's own check. Run through /bin/bash, never by path (each #! exec leaks kernel memory here).
+    Only exit 75 refuses: an absent library, a crash or an abandoned check lets the spawn proceed."""
+    lib = Path(
+        os.environ.get("CC_RESEARCH_WARM_BROWNOUT_LIB")
+        or HERE.parent / "lib" / "capacity-admit.sh"
+    )
+    if not lib.is_file():
+        return False
+    try:
+        p = subprocess.Popen(
+            [
+                "/bin/bash",
+                str(lib),
+                "--brownout-check",
+                "discretionary",
+                "classifier-warm",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return False
+    deadline = time.monotonic() + BROWNOUT_CHECK_S
+    while time.monotonic() < deadline:
+        rc = p.poll()
+        if rc is not None:
+            return rc == 75
+        time.sleep(0.05)
+    return False  # abandoned: the parent owns the deadline and never waits past it (DESIGN I2)
+
+
 def sock_path() -> Path:
     env = os.environ.get("CC_RESEARCH_WARM_SOCK")
     return Path(env) if env else kit.research_home() / "classifier-warm" / "sock"
@@ -215,6 +257,7 @@ class Pool:
         self.wake = threading.Event()
         self.stop = False
         self.early_deaths = 0
+        self.held_until = 0.0  # brownout: no spawn and no new check before this time
 
     def take(self) -> Optional[Child]:
         with self.lock:
@@ -251,6 +294,19 @@ class Pool:
                 c.end()
             if need > 0 and self.early_deaths:
                 self.wake.wait(min(60.0, 2.0 ** min(self.early_deaths, 6)))
+            if (
+                need > 0
+                and not self.stop
+                and (time.time() < self.held_until or brownout_refuses())
+            ):
+                # No worker while the box is in brownout; the pool refills when the votes clear. The
+                # hold is a TIMESTAMP, not one long wait: take() sets `wake` every 0.2 s while the
+                # canary looks for a worker, and each wake must not become another check.
+                if time.time() >= self.held_until:
+                    self.held_until = time.time() + BROWNOUT_WAIT_S
+                self.wake.wait(1.0)
+                self.wake.clear()
+                continue
             for _ in range(max(need, 0)):
                 if self.stop:
                     break
@@ -560,6 +616,9 @@ def probe(timeout: float) -> int:
     got: Dict[str, str] = {}
 
     def one(kind: str) -> None:
+        if brownout_refuses():
+            got[kind] = "the brownout term refuses a new classifier process right now"
+            return
         try:
             child = Child(argvs[kind] or [], kind)
         except OSError as e:
