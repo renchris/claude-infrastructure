@@ -55,10 +55,17 @@ FLOWS = {
         kind="pp_wk", min_act=1.0, model_runs=False, built=True, wave="S7a"
     ),
     "d1_recycle": dict(
-        kind="pp_wk", min_act=1.0, model_runs=False, built=False, wave="S7b"
+        kind="pp_wk", min_act=1.0, model_runs=False, built=True, wave="S7b"
     ),
+    # the real hook the predicate replays is part of the harness: its _rx_* lines are what a D4
+    # round changes, so an approved hillclimb must not see them move under it
     "d4_pollloop": dict(
-        kind="pp_wk", min_act=1.0, model_runs=False, built=False, wave="S7b"
+        kind="pp_wk",
+        min_act=1.0,
+        model_runs=False,
+        built=True,
+        wave="S7b",
+        extra=("hooks/subagent-long-bash-shadow.sh",),
     ),
     "d1_successor": dict(
         kind="points", min_act=10.0, model_runs=True, built=False, wave="S9"
@@ -249,6 +256,8 @@ def harness_files(flow):
         for fn in fns:
             if fn.endswith((".py", ".json", ".sh", ".js")) and "__pycache__" not in dp:
                 out.append(os.path.join(dp, fn))
+    repo = os.path.dirname(os.path.dirname(EVALS))
+    out.extend(os.path.join(repo, p) for p in FLOWS[flow].get("extra", ()))
     return sorted(out)
 
 
@@ -268,8 +277,7 @@ def approve_harness(flow, confirm):
     sha = harness_sha(flow)
     if not confirm or confirm != sha[:12]:
         raise HarnessError(
-            "--confirm must be %s (the current %s harness sha)"
-            % (sha[:12], flow)
+            "--confirm must be %s (the current %s harness sha)" % (sha[:12], flow)
         )
     st = load_state(flow)
     st["harness"] = dict(sha=sha, approved_at=utc(), by=os.environ.get("USER", "?"))

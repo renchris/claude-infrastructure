@@ -14,12 +14,13 @@ usage:
   cc-lever-eval score <flow> --candidate JSON [--split train|test --unseal]
   cc-lever-eval failures <flow> [--params JSON]                 train rows only
   cc-lever-eval check <flow> [all|repro|oracle|null|aa|served-model|truncation] [--ref CASES]
+  cc-lever-eval check d4_pollloop --population                 PASS|PARK; PARK exits 1
   cc-lever-eval round <flow> --candidate JSON [--text FILE]
   cc-lever-eval report <flow>
   cc-lever-eval approve-harness <flow> --confirm <sha12>        the operator's act
   cc-lever-eval harness-sha <flow>
 
-flows: d3_keepalive (built); d1_recycle, d4_pollloop (S7b), d1_successor (S9), d2_lean (S10).
+flows: d3_keepalive (S7a), d1_recycle and d4_pollloop (S7b) built; d1_successor (S9), d2_lean (S10).
 exit: 0 ok / a verdict was computed · 1 a check failed · 2 usage · 3 flow not built yet ·
       4 refused (harness not approved, sealed split, leak, more than one change)
 """
@@ -125,7 +126,8 @@ def cmd_run(a, F):
         cases, meta = F.import_cases(a.cases)
         wkf = F.wk(meta)
     prm = F.validate_params(params_arg(a.params))
-    for pol in a.policy or ["literal", "r2_busy", "candidate", "perfect_foresight", "never"]:
+    default = getattr(F.policy, "DEFAULT", ("literal", "r2_busy", "candidate", "perfect_foresight", "never"))
+    for pol in a.policy or default:
         for rn, r in F.policy.READS:
             print(F.policy.line("%s %s" % (pol, rn), F.policy.run(cases, pol, r, wk=wkf, params=prm)))
     return 0
@@ -155,7 +157,28 @@ def cmd_failures(a, F):
     return 0
 
 
+def cmd_population(a, F):
+    """The population gate (plan §2 D4): PASS or PARK, with its numbers. It reads the WHOLE build
+    (a gate on the target population, not a hillclimb analysis), and it fails closed: no build, an
+    empty one, or a replay that cannot be trusted prints PARK and exits 1."""
+    if not hasattr(F, "check_population"):
+        raise Refused("flow %s has no population gate (it is D4's)" % a.flow)
+    try:
+        cases = hc.read_jsonl(os.path.join(hc.flow_dir(a.flow), "cases.jsonl"))
+        meta = build_meta(a.flow)
+    except (OSError, ValueError) as e:
+        print("PARK population: no data (%s) — run `cc-lever-eval build %s` first" % (
+            getattr(e, "filename", None) or e, a.flow))
+        return 1
+    ok, rows = F.check_population(cases, meta)
+    for r in rows:
+        print(r)
+    return 0 if ok else 1
+
+
 def cmd_check(a, F):
+    if a.population:
+        return cmd_population(a, F)
     want = CHECKS if a.which == "all" else (a.which,)
     ok_all = True
     train = None
@@ -279,6 +302,7 @@ def parser():
     p = sub("check", cmd_check)
     p.add_argument("which", nargs="?", default="all", choices=("all",) + CHECKS)
     p.add_argument("--ref")
+    p.add_argument("--population", action="store_true")
     p = sub("round", cmd_round)
     p.add_argument("--candidate", required=True)
     p.add_argument("--text")
