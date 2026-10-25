@@ -390,8 +390,8 @@ case "${1:-}" in --print-boottime) printf '%s\n' "$BOOT"; exit 0 ;; esac
 
 log_idl() { # <disposition> <extra-json>
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  printf '{"ts":"%s","tool":"boot-resume","disposition":"%s","boot":"%s","mode":"%s","source":"%s","retired_skipped":%s%s}\n' \
-    "$(now_iso)" "$1" "$BOOT" "$MODE" "$SOURCE" "${n_retired:-0}" \
+  printf '{"ts":"%s","tool":"boot-resume","disposition":"%s","boot":"%s","mode":"%s","source":"%s","tomb_joined":%s,"reg_joined":%s,"tree_joined":%s,"retired_skipped":%s%s}\n' \
+    "$(now_iso)" "$1" "$BOOT" "$MODE" "$SOURCE" "${TOMB_JOINED:-0}" "${REG_JOINED:-0}" "${TREE_JOINED:-0}" "${n_retired:-0}" \
     "${EVENT:+,\"event\":$EVENT,\"kind\":\"$EVENT_KIND\",\"plan_only\":$([ "$PLAN_ONLY" = 1 ] && echo true || echo false)}${2:-}" \
     >> "$IDL" 2>/dev/null || true
 }
@@ -688,6 +688,121 @@ if [ -z "$SOURCE" ] && [ -n "$roster" ]; then
     SRC_FILES="$roster"
     read_rows "$rows"
   fi
+fi
+
+# 1b. A SNAPSHOT THAT SAYS LESS THAN THE SHUTDOWN (2026-10-25). The 13:09:42 heartbeat of kitty 1881
+#    listed nobody, so DETECT answered "nothing was live" and restored nothing — while 28 sessions of
+#    that kitty wrote their shutdown tombstones at 13:15:02-07, after the snapshot. The roster had
+#    only shrunk: kitty remote control had stopped answering at 03:45, so no tick could put a row
+#    back (restore-heartbeat.sh, carried rosters). A snapshot cannot list a session that ended
+#    after it was taken and that it never saw, so every session in the shutdown burst whose
+#    tombstone is NEWER than the snapshot joins the set. With no such tombstone the snapshot stands,
+#    empty or not ("listing nobody is an answer" still holds). Reboots only: an event is restored
+#    from its own kitty's heartbeat, and inside a running boot a tombstone is a closed pane.
+TOMB_JOINED=0
+if [ -n "$SOURCE" ] && [ -z "$EVENT" ] && [ -d "$TOMB_DIR" ]; then
+  have_sids="$(printf '%s' "$GHOSTS" | cut -f3 | jq -Rsc 'split("\n") | map(select(. != ""))' 2>/dev/null)"
+  [ -n "$have_sids" ] || have_sids='[]'
+  late_rows="$(for t in "$TOMB_DIR"/*.json; do
+                 [ -f "$t" ] && jq -c 'select(type == "object")' "$t" 2>/dev/null
+               done | jq -rs --arg pad "$TSV_PAD" --argjson lo "$ANCHOR" --argjson hi "$BOOT" \
+                     --argjson burst "$TOMB_BURST" --argjson have "$have_sids" "$JQ_CELL"'
+        [ .[] | select((.session_id // "") != "" and ((.endedAt // 0) | type) == "number")
+              | select(.endedAt > $lo and .endedAt <= $hi) ]
+        | (if any(.[]; .hostShutdown == true) then map(select(.hostShutdown == true)) else . end)
+        | if length == 0 then empty else
+            (map(.endedAt) | max) as $last
+            | map(select(.endedAt >= $last - $burst)) | group_by(.session_id) | map(max_by(.endedAt))[]
+            | select(.session_id as $s | $have | index($s) | not)
+            | [(.account|cell), (.cwd|cell), (.session_id|cell), (.name|cell), (.branch|cell),
+               (.endedAt|tostring)] | @tsv
+          end' 2>/dev/null)"
+  if [ -n "$late_rows" ]; then
+    TOMB_JOINED="$(printf '%s\n' "$late_rows" | grep -c .)"
+    read_rows "$late_rows"
+    # The sessions died at the shutdown, not at the snapshot: that is the classifier's anchor.
+    t_last="$(printf '%s\n' "$late_rows" | awk -F'\t' '$6 > m { m = $6 } END { print m + 0 }')"
+    [ "$t_last" -gt "$ANCHOR" ] && ANCHOR="$t_last"
+    SOURCE_LABEL="${SOURCE_LABEL} + ${TOMB_JOINED} from shutdown tombstones newer than it"
+    echo "boot-resume: the ${SOURCE} snapshot missed ${TOMB_JOINED} session(s) that wrote shutdown tombstones after it — they join the set" >&2
+  fi
+fi
+# A snapshot proven stale by those tombstones may have missed sessions that left none either (a
+# session hung with kitty writes no SessionEnd): 568f7c83 and 509e3aad on 2026-10-25. Two more
+# witnesses then join: the registry ghosts (the step-3 rule: started before this boot, transcript
+# written within RECENCY_WINDOW of it), and a session the snapshot's own kitty tree shows a pane
+# RESUMING (an exact argv token after a resume launcher or --resume) or LEADING (the
+# --parent-session-id of a live teammate). The classifier below still decides which of them resume.
+REG_JOINED=0; TREE_JOINED=0
+if [ "$TOMB_JOINED" -gt 0 ]; then
+  have="$(printf '%s' "$GHOSTS" | cut -f3)"
+  if [ -d "$REGISTRY_DIR" ]; then
+    for f in "$REGISTRY_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      row="$(jq -r --arg pad "$TSV_PAD" "$JQ_CELL"'
+               [((.startedAt // 0) | cell), (.account | cell), (.cwd | cell),
+                (.session_id | cell), (.name | cell)] | @tsv' "$f" 2>/dev/null)" || continue
+      [ -n "$row" ] || continue
+      IFS=$'\t' read -r started_ms g_acct g_cwd g_sid g_name <<GHOST_ROW
+$row
+GHOST_ROW
+      started_ms="$(unpad "$started_ms")"
+      case "$started_ms" in ''|*[!0-9]*) continue ;; esac
+      [ "$((started_ms / 1000))" -lt "$BOOT" ] || continue
+      [ "$g_sid" != "$TSV_PAD" ] || continue
+      printf '%s\n' "$have" | grep -qxF -- "$g_sid" && continue
+      mt="$(transcript_mtime "$(unpad "$g_acct")" "$(unpad "$g_sid")" "$(unpad "$g_cwd")")"
+      { [ -n "$mt" ] && [ "$mt" -gt "$((BOOT - RECENCY_WINDOW))" ]; } || continue
+      add_row "$g_acct" "$g_cwd" "$g_sid" "$g_name" "$TSV_PAD"; have="$have
+$g_sid"; REG_JOINED=$((REG_JOINED + 1))
+    done
+  fi
+  while IFS= read -r hd; do
+    [ -n "$hd" ] && [ -f "$hd/hb.kitty-ls.json" ] || continue
+    tree_rows="$(python3 -c '
+import json, os, re, sys
+U = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+RES = ("reso-resume-one", "lr-fire-resume")
+have = set(sys.argv[2].split()); out = {}
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+for o in data if isinstance(data, list) else []:
+    for t in o.get("tabs") or []:
+        for w in t.get("windows") or []:
+            for p in w.get("foreground_processes") or []:
+                a = [str(x) for x in p.get("cmdline") or []]
+                launcher = any(os.path.basename(x) in RES for x in a[:2])
+                for i, x in enumerate(a):
+                    prev = a[i - 1] if i else ""
+                    if U.match(x) and x not in have and (launcher or prev in ("--resume", "-r", "--parent-session-id")):
+                        # a launcher argv is: <launcher> <account> <cwd> <sid>; else the pane cwd
+                        cwd = a[i - 1] if launcher and i >= 2 and a[i - 1].startswith("/") else (p.get("cwd") or w.get("cwd") or "")
+                        out.setdefault(x, cwd)
+for sid, cwd in out.items():
+    print("%s\t%s" % (sid, cwd))
+' "$hd/hb.kitty-ls.json" "$(printf '%s' "$have" | tr '\n' ' ')" 2>/dev/null)"
+    while IFS=$'\t' read -r t_sid t_cwd; do
+      [ -n "$t_sid" ] || continue
+      printf '%s\n' "$have" | grep -qxF -- "$t_sid" && continue
+      # The account is the store holding its transcript; one with none is no session to resume.
+      # At projects/<cwd slug>/<sid>.jsonl: a glob over every project dir is ~73,000 stats (R6).
+      t_acct=""; t_slug="$(printf '%s' "$t_cwd" | tr -c 'A-Za-z0-9' '-')"
+      for c in "$HOME"/.claude-*/projects; do
+        [ -n "$t_cwd" ] && [ -f "$c/$t_slug/$t_sid.jsonl" ] && { t_acct="$(basename "$(dirname "$c")" | sed 's/^\.//')"; break; }
+      done
+      [ -n "$t_acct" ] || continue
+      add_row "$t_acct" "${t_cwd:-$TSV_PAD}" "$t_sid" "$TSV_PAD" "$TSV_PAD"; have="$have
+$t_sid"; TREE_JOINED=$((TREE_JOINED + 1))
+    done <<TREE_ROWS
+$tree_rows
+TREE_ROWS
+  done <<HBD
+$HB_DIRS
+HBD
+  [ "$REG_JOINED" -gt 0 ] && SOURCE_LABEL="${SOURCE_LABEL} + ${REG_JOINED} registry ghosts"
+  [ "$TREE_JOINED" -gt 0 ] && SOURCE_LABEL="${SOURCE_LABEL} + ${TREE_JOINED} from its kitty tree"
 fi
 
 # 2. shutdown tombstones (hooks/session-deregister.sh). reason=other also fires when the operator

@@ -1803,3 +1803,71 @@ cc-resume-layout: verdict=ok launched=2 shed=0 failed=0 windows=1 fullscreen_ok=
   [ "$status" -eq 0 ]
   [ ! -e "$CC_TASKPOLICY_BIN.log" ]
 }
+
+# ── 2026-10-25 reboot: an empty heartbeat taken BEFORE the shutdown is no answer ─────────────────────
+# Kitty 1881's 13:09:42 heartbeat listed nobody (remote control dead since 03:45, so no tick could put
+# a row back), DETECT took that as "nothing was live", and the 28 tombstones those sessions wrote at
+# 13:15:02-07 were never read. Fixture: tests/fixtures/boot-resume-incident-2026-10-25/tombs/ (the 28
+# real tombstones, fields DETECT reads), the minimized 03:45 tree (kitty-reboot-2026-10-25), and the
+# 10-row plan the incident resumed (plan.sids). Epochs are shifted onto this suite's fixed boot.
+# Of the 10, 7 left tombstones, 568f7c83 a registry row, 509e3aad a resume argv in the tree;
+# a85a7863 left none of those (its registry row was reaped 24 h after its start), so DETECT cannot
+# see it and the case pins 9.
+# RED-proof: against origin/main's boot-resume.sh, case 1 logs reason no-open-sessions, n_open 0.
+INC_FIX="$BATS_TEST_DIRNAME/fixtures/boot-resume-incident-2026-10-25"
+INC_SHIFT=$((1784800000 - 1792952212))          # incident boot → this suite's boot
+inc_tombs() { # copy the 28 tombstones, shifted
+  local f
+  for f in "$INC_FIX"/tombs/*.json; do
+    jq --argjson d "$INC_SHIFT" '.endedAt += $d' "$f" > "$CC_SHUTDOWN_TOMB_DIR/$(basename "$f")"
+  done
+}
+inc_label() { grep -o 'source: [^"]*' "$CC_NOTIFY_BIN.log" | head -1; }
+
+@test "reboot 2026-10-25: an empty heartbeat older than the shutdown burst is no answer — tombstones, registry and tree join it" {
+  hbeat UUID-PREV 1881 $((1792951782 + INC_SHIFT)) '[]'
+  cp "$BATS_TEST_DIRNAME/fixtures/kitty-reboot-2026-10-25/hb.kitty-ls.json" "$CC_HEARTBEAT_DIR/UUID-PREV/1881/"
+  inc_tombs
+  reg_entry 568f7c83-11e9-42c7-ac2f-acd5dcfec451 $(((1792913780 + INC_SHIFT) * 1000)) claude-quaternary /Users/chrisren/Development/.worktrees/wt-pool-3 wt-pool-3-301
+  reg_entry 502bd860-8623-4de6-947e-fbb850acd755 $(((1792900000 + INC_SHIFT) * 1000)) claude-next /Users/chrisren/Development/agent-context-sync dup-of-a-tombstone
+  slug="$(printf '%s' /Users/chrisren/Development/voiceink | tr -c 'A-Za-z0-9' '-')"
+  mkdir -p "$HOME/.claude-quaternary/projects/$slug"; : > "$HOME/.claude-quaternary/projects/$slug/509e3aad-fe8e-4645-8a44-61d07e3adeff.jsonl"
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  ! grep -q 'no-open-sessions' "$CC_IDL" || false
+  grep -q '"source":"heartbeat","tomb_joined":28,"reg_joined":1,"tree_joined":1' "$CC_IDL"
+  grep -q '"n_open":30' "$CC_IDL"
+  # 9 of the 10 the incident resumed are in the set; a85a7863 left no witness DETECT can read
+  n=0
+  while read -r s; do
+    case "$s" in a85a7863-*) continue ;; esac
+    { [ -f "$CC_SHUTDOWN_TOMB_DIR/$s.json" ] || [ -f "$CC_REGISTRY_DIR/$s.json" ] || [ "$s" = 509e3aad-fe8e-4645-8a44-61d07e3adeff ]; } && n=$((n + 1))
+  done < "$INC_FIX/plan.sids"
+  [ "$n" -eq 9 ]
+  grep -q 'lkw-scope-floor-297' "$CC_NOTIFY_BIN.log"             # a tombstone row reached the page
+}
+
+@test "reboot 2026-10-25: a tombstone OLDER than the snapshot joins nothing — an empty roster taken after it still stands" {
+  tomb closed-before 1784799500
+  hbeat UUID-PREV 1881 1784799600 '[]'
+  reg_entry g1 1784700000000 claude-quaternary
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'no-open-sessions' "$CC_IDL"
+  grep -q '"tomb_joined":0,"reg_joined":0,"tree_joined":0' "$CC_IDL"
+}
+
+@test "reboot 2026-10-25: a shrunken heartbeat gains the newer tombstones it lacks, once each" {
+  hbeat UUID-PREV 1881 1784799600 "[$(rrow h1 claude-next /x/h1 HB-ONE)]"
+  tomb h1 1784799890
+  tomb t2 1784799893
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q '"tomb_joined":1,' "$CC_IDL"
+  grep -q '"n_open":2' "$CC_IDL"
+  grep -q 'HB-ONE' "$CC_NOTIFY_BIN.log"; grep -q 'T-t2' "$CC_NOTIFY_BIN.log"
+  ! grep -q 'T-h1' "$CC_NOTIFY_BIN.log" || false                  # h1 kept its heartbeat row
+}
