@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""cc-lever-guard — the usage levers' auto-rollback (docs/plans/USAGE_LEVERS.md § W7+ §3 row
+"Auto-rollback"; wave S6). launchd runs `tick` every 600 s (launchd/staged/com.claude.lever-guard.plist).
+
+  cc-lever-guard [tick] [--json]     one guard pass; prints one line (or the JSON tick row)
+  cc-lever-guard status [--json]     the last tick, the NO-DATA counters and the heartbeat age
+
+WHAT A TICK READS — small stores only, never a transcript: the guard verdicts of
+`cc-lever-score guards` (scripts/lib/lever_guards.py over the ledger rows the hourly
+com.claude.lever-score job merges, claude-crashes.jsonl, lever-judge.jsonl and a listing of the four
+roots), computed in-process so one python start serves the whole tick, plus the latest
+lever-score.jsonl verdict row per lever.
+
+WHAT IT DOES, per lever:
+  BREACH (a guard)                    trip, cause breach — at ANY stage, S0 included: at pct 0 there
+                                      is nothing to demote, but the trip still latches and pages.
+  REVERT / NOT-MERGED (lever-score,   trip, cause revert — only while the lever is live (pct > 0 or
+    a verdict row since the stage     mode live): the plan sends both back to pct 0.
+    began, at the current stage)
+  NO-DATA / PLUMBING, or a tick that  counted; the second CONSECUTIVE one trips, cause blind — only
+    could not evaluate at all         while the lever is live. At pct 0 a blind guard protects
+                                      nothing, and a blind latch there would only be load noise
+                                      that blocks the next raise.
+  OK / IDLE                           the NO-DATA count resets.
+A trip is bin/cc-lever's guard_trip(): the same flock, tmp+rename and audit row as the operator's
+verbs (never a second writer). It sets pct 0, holdback 0, mode shadow, keeps the stage label, and
+latches a trip id that only `cc-lever ack` releases (once per stage occupancy; see guard_trip). Each
+NEW latch writes ~/.claude/autonomy/pages/lever-<L>.page. The guard NEVER raises a lever, never
+acks, and never edits settings or code.
+
+HEARTBEAT. The tick touches ~/.claude/state/levers/guard.heartbeat (lever_flags.heartbeat_path)
+last, and only when every trip it attempted was written. A guard that cannot write its demotion
+therefore goes silent, and the dead-man in lever_flags drops every lever to pct 0 after
+CC_LEVER_DEADMAN_S (1800 s). cc-lever refuses a raise without a fresh heartbeat.
+
+BOUND. ≤ 60 s: the evaluation runs under SIGALRM at CC_LEVER_GUARD_EVAL_S (40 s); a timeout is a
+NO-DATA tick for every lever, never a crash. The lock wait inside guard_trip is 10 s. Standard QoS.
+Rows: one kind=tick row per tick (no `lever` field, so cc-lever-score report keeps reading the
+hourly kind=guard rows) and one kind=trip row per trip attempt, both in lever-guard.jsonl, ≤ 2 KB.
+State: ~/.claude/state/levers/guard-state.json (the NO-DATA counters), written tmp+rename.
+Exit: 0 tick done (trips included) · 1 a trip could not be written (no heartbeat) · 2 usage.
+Env (tests): CC_NOW, CC_LEVER_STATE_DIR, CC_LEVER_FLAGS, CC_LEVER_HEARTBEAT, CC_LEVER_LOG_DIR,
+CC_LEVER_PAGES_DIR, CC_LEVER_GUARD_EVAL_S, plus scripts/lib/lever_events.py's seams.
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import os
+import signal
+import sys
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+STATE_NAME = "guard-state.json"
+MAX_ROW = 2048
+BLIND_TICKS = 2
+STOP_VERDICTS = ("REVERT", "NOT-MERGED")
+
+
+def _load(name, path):
+    """Import a bin/ script (no .py suffix) as a module, so the tick shares its code in-process."""
+    loader = importlib.machinery.SourceFileLoader(name, path)
+    spec = importlib.util.spec_from_loader(name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+lever = _load("cc_lever", os.path.join(HERE, "cc-lever"))
+score = _load("cc_lever_score", os.path.join(HERE, "cc-lever-score"))
+lf, le = lever.lf, score.le
+
+
+class EvalTimeout(Exception):
+    pass
+
+
+def _alarm(signum, frame):
+    raise EvalTimeout()
+
+
+def pages_dir():
+    return os.environ.get("CC_LEVER_PAGES_DIR") or os.path.join(lf.home(), ".claude", "autonomy", "pages")
+
+
+def state_path():
+    return os.path.join(lf.state_dir(), STATE_NAME)
+
+
+def eval_budget():
+    return max(1, lf._int_env("CC_LEVER_GUARD_EVAL_S", 40))
+
+
+def read_state():
+    try:
+        with open(state_path(), "rb") as f:
+            st = json.loads(f.read().decode("utf-8"))
+        if isinstance(st, dict) and isinstance(st.get("nodata"), dict):
+            return st
+    except (OSError, ValueError):
+        pass
+    return {"v": 1, "nodata": {}}
+
+
+def append_row(row):
+    row = dict(row, v=1, ts=le.iso(score.now()))
+    line = json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
+    if len(line) > MAX_ROW:
+        row.pop("detail", None)
+        row.pop("levers", None)
+        row["truncated"] = True
+        line = json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
+    path = le.log_path(score.GUARD_LOG)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, line.encode("utf-8"))      # one write(), ≤ 2 KB
+    finally:
+        os.close(fd)
+
+
+def write_page(L, res, why):
+    os.makedirs(pages_dir(), exist_ok=True)
+    p = os.path.join(pages_dir(), "lever-%s.page" % L)
+    body = "%d\n%s %s tripped (%s): %s\nNow pct 0, mode %s; trip %s latches it until you release it.\n" \
+           "Read: cc-lever status · cc-lever-score report --lever %s\nRelease: cc-lever ack %s --reason \"<why>\" --confirm\n" % (
+               int(score.now()), L, lf.DECISIONS[L], res["cause"], why, (res.get("to") or {}).get("mode"),
+               res["trip_id"], L, res["trip_id"])
+    lf._write_atomic(p, body)
+    return p
+
+
+def latest_scores(flags):
+    """→ {L: the latest kind=score row at the lever's current stage, written since the stage began}."""
+    rows = score.read_store(score.SCORE_LOG)
+    out = {}
+    for r in rows:
+        L = r.get("lever")
+        e = ((flags or {}).get("levers") or {}).get(L) if L in lf.LEVERS else None
+        if not isinstance(e, dict) or r.get("kind", "score") != "score" or r.get("stage") != e.get("stage"):
+            continue
+        if str(r.get("ts", "")) < str(e.get("stage_started_at") or ""):
+            continue
+        out[L] = r
+    return out
+
+
+def evaluate():
+    """→ (guard results {L: {...}} or None, error text or None). Bounded by SIGALRM."""
+    old = signal.signal(signal.SIGALRM, _alarm)
+    signal.alarm(eval_budget())
+    try:
+        cfg, _ = score.load_cfg()
+        t_now = score.now()
+        res, _ = score.lg.run(cfg, t_now - cfg["guards"]["window_d"] * 86400, t_now, look=False)
+        return res, None
+    except EvalTimeout:
+        return None, "guard evaluation exceeded %d s" % eval_budget()
+    except Exception as x:            # a broken store or config is a blind tick, never a crash
+        return None, "guard evaluation failed: %s: %s" % (type(x).__name__, str(x)[:200])
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
+def is_live(e):
+    return isinstance(e, dict) and ((e.get("pct") or 0) > 0 or e.get("mode") == "live")
+
+
+def tick(args):
+    t0 = time.time()
+    doc, src = lf.read_flags()
+    st = read_state()
+    res, err = evaluate()
+    try:
+        scores = latest_scores(doc) if src == "file" else {}
+    except Exception:
+        scores = {}
+    out = {"kind": "tick", "flag_src": src, "eval": "ok" if err is None else "blind", "error": err,
+           "levers": {}, "trips": [], "failed": []}
+    for L in lf.LEVERS:
+        e = ((doc or {}).get("levers") or {}).get(L)
+        g = (res or {}).get(L) or {}
+        verdict = g.get("verdict") if res is not None else "NO-DATA"
+        live = is_live(e)
+        cause, why = None, None
+        if verdict in ("NO-DATA", "PLUMBING"):
+            st["nodata"][L] = int(st["nodata"].get(L) or 0) + 1
+        else:
+            st["nodata"][L] = 0
+        if verdict == "BREACH":
+            bad = sorted(k for k, v in (g.get("guards") or {}).items() if isinstance(v, dict) and v.get("status") == "breach")
+            cause, why = "breach", "guard breach %s at %s (treat %s / ctrl %s sessions)" % (
+                ",".join(bad) or "?", g.get("stage"), (g.get("sessions") or {}).get("treat"),
+                (g.get("sessions") or {}).get("ctrl"))
+        elif live and (scores.get(L) or {}).get("verdict") in STOP_VERDICTS:
+            r = scores[L]
+            cause, why = "revert", "lever-score verdict %s at %s (%s)" % (r.get("verdict"), r.get("stage"), r.get("ts"))
+        elif live and st["nodata"][L] >= BLIND_TICKS:
+            cause, why = "blind", "guards blind for %d consecutive ticks (%s)" % (
+                st["nodata"][L], err or "verdict %s" % verdict)
+        out["levers"][L] = {"verdict": verdict, "live": live, "nodata": st["nodata"][L]}
+        if cause is None:
+            continue
+        try:
+            r = lever.guard_trip(L, cause, why, {"verdict": verdict, "tick_eval": out["eval"]})
+        except Exception as x:          # Refused (lock held, unreadable flags) or an I/O fault
+            out["failed"].append(L)
+            append_row({"kind": "trip", "lever": L, "cause": cause, "ok": False, "reason": why,
+                        "error": "%s: %s" % (type(x).__name__, str(x)[:300])})
+            continue
+        page = write_page(L, dict(r, cause=cause), why) if r["latched"] else None
+        out["trips"].append({"lever": L, "trip_id": r["trip_id"], "cause": cause, "latched": r["latched"],
+                             "demoted": r["demoted"]})
+        if r["latched"] or r["demoted"]:      # a held trip re-seen each tick is in the tick row only
+            append_row({"kind": "trip", "lever": L, "cause": cause, "ok": True, "reason": why,
+                        "trip_id": r["trip_id"], "latched": r["latched"], "demoted": r["demoted"],
+                        "page": page, "from": r["from"], "to": r["to"]})
+    st.update(v=1, last_tick=le.iso(score.now()), last_eval=out["eval"])
+    try:
+        lf._write_atomic(state_path(), json.dumps(st, sort_keys=True) + "\n")
+    except OSError:
+        pass
+    out["elapsed_s"] = round(time.time() - t0, 2)
+    out["heartbeat"] = not out["failed"]
+    append_row(out)
+    if out["heartbeat"]:
+        hb = lf.heartbeat_path()
+        os.makedirs(os.path.dirname(hb), exist_ok=True)
+        lf._write_atomic(hb, le.iso(score.now()) + "\n")
+    if args.json:
+        print(json.dumps(out, sort_keys=True))
+    else:
+        print("lever-guard: eval %s · %s · trips %s · heartbeat %s · %.1f s%s" % (
+            out["eval"], " ".join("%s:%s" % (L, v["verdict"]) for L, v in out["levers"].items()),
+            ",".join("%s(%s)" % (t["lever"], t["cause"]) for t in out["trips"]) or "none",
+            "written" if out["heartbeat"] else "WITHHELD (a trip could not be written)", out["elapsed_s"],
+            "" if err is None else " · " + err))
+    return 0 if out["heartbeat"] else 1
+
+
+def status(args):
+    st = read_state()
+    out = {"state": state_path(), "last_tick": st.get("last_tick"), "last_eval": st.get("last_eval"),
+           "nodata": st.get("nodata"), "heartbeat_age_s": lf.heartbeat_age(), "deadman_s": lf.deadman_s()}
+    if args.json:
+        print(json.dumps(out, sort_keys=True))
+    else:
+        a = out["heartbeat_age_s"]
+        print("lever-guard: last tick %s (%s) · heartbeat %s · no-data %s" % (
+            out["last_tick"] or "never", out["last_eval"] or "-",
+            "absent" if a is None else "%d s old%s" % (a, " (DEAD)" if a > out["deadman_s"] else ""),
+            " ".join("%s:%s" % kv for kv in sorted((out["nodata"] or {}).items())) or "-"))
+    return 0
+
+
+def main(argv):
+    p = argparse.ArgumentParser(prog="cc-lever-guard", description=__doc__.split("\n\n")[0])
+    p.add_argument("verb", nargs="?", default="tick", choices=("tick", "status"))
+    p.add_argument("--json", action="store_true")
+    try:
+        args = p.parse_args(argv)
+    except SystemExit as e:
+        return 2 if e.code else 0
+    return tick(args) if args.verb == "tick" else status(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

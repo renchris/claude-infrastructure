@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.lever-score — the usage levers' hourly scorer (docs/plans/USAGE_LEVERS.md § W7+ §3 rows
+  "Scorer" and "Auto-rollback", wave S6). Every 3600 s it runs `cc-lever-score job`: `score write`, which
+  appends each lever's verdict to lever-score.jsonl (the row a cc-lever raise reads) and merges the
+  per-session ledger, then `guards write`, which appends the hourly guard rows. The 10-min
+  com.claude.lever-guard tick reads that ledger and those verdicts; without this job the ledger goes
+  stale past 7200 s and every live lever's guards read NO-DATA, which the guard demotes as blind.
+  (The verbs take double-hyphen flags; an XML comment cannot carry a double hyphen.)
+
+  SELF-BOUND AT 540 s, UNDER THE REAPER'S 600: bin/cc-reaper (~:574) TERMs any launchd-parented bash older
+  than 600 s. The wrapper therefore execs python (no bash survives), and the job arms SIGALRM at
+  CC_LEVER_SCORE_BUDGET_S (540 s) and exits 124 with a `job: TIMEOUT` line if the transcript scan overruns;
+  each store it writes is one append or one rename, so a timeout leaves nothing half-written.
+  /usr/bin/python3 -I: the system interpreter, no PYTHON* environment, no user site-packages.
+
+  STANDARD BAND, ON PURPOSE: in the Background band the same scan stretches 4-84x (MEMORY
+  bound-must-fit-the-band-not-the-bench), and a 540 s bound would then be a permanent non-verdict. Not
+  RunAtLoad: the first score lands at the first interval, keeping the scan off the login storm.
+
+  `bash -c` so $HOME expands; Standard*Path cannot take $HOME, hence the literals. Its `job:` line per run
+  is the fleet sensor.
+
+  WHY launchd/staged/: as com.claude.lever-guard — only the operator's migrations/0079-lever-jobs-activate.sh
+  loads it. Stop: launchctl bootout gui/$(id -u)/com.claude.lever-score.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.lever-score</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /usr/bin/python3 -I "$HOME/.claude/bin/cc-lever-score" job</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>      <string>Standard</string>
+
+    <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/lever-score.out.log</string>
+    <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/lever-score.err.log</string>
+</dict>
+</plist>

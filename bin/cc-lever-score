@@ -34,6 +34,14 @@ Wave S4 built the core (ledger, plumbing, selftest); wave S5 the statistics, gua
   cc-lever-score guards [--look] [--write] [--json]
       T1-T5 from ledger rows only (scripts/lib/lever_guards.py), one-sided 99% Holm (95% with
       --look); exit 0 OK/IDLE, 1 BREACH, 4 NO-DATA/PLUMBING. --write appends lever-guard.jsonl.
+  cc-lever-score job
+      The hourly launchd entry (launchd/staged/com.claude.lever-score.plist, wave S6): `score
+      --write` (which also merges the ledger the guards read), then `guards --write`, in ONE
+      process that bounds itself at CC_LEVER_SCORE_BUDGET_S (540 s): bin/cc-reaper TERMs a
+      launchd-parented bash older than 600 s, so the plist execs python and this stays under it.
+      Prints one `job:` line; exit 124 when the bound fired (nothing half-written: each store's
+      write is one append or one rename), else score's exit, else 0 (a guard BREACH or blind
+      verdict is the guard tick's input, not a job failure).
   cc-lever-score selftest [--keep DIR]
       Builds a synthetic fleet with a planted effect, scores it twice in fresh processes, and
       requires: byte-identical output, the effect recovered, dedupe across roots, hook denies split
@@ -56,6 +64,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -118,8 +127,23 @@ def fit_row(row):
     return line if len(line) + 1 <= MAX_ROW else None
 
 
+LEDGER_RETAIN_D_MIN = 35
+
+
+def ledger_retain_s():
+    """The ledger keeps a session row while its last_ts is younger than CC_LEVER_LEDGER_RETAIN_D
+    (default 42 d, never below 35 d: the plan's 28-d windows plus a week of slack). It is rewritten
+    whole under its lock, so the bound lives here, in its writer, not in the mv-rotator."""
+    try:
+        d = int(os.environ.get("CC_LEVER_LEDGER_RETAIN_D", "42"))
+    except ValueError:
+        d = 42
+    return max(LEDGER_RETAIN_D_MIN, d) * 86400
+
+
 def write_ledger(lines):
     path = le.log_path(le.LEDGER_LOG)
+    floor = le.iso(now() - ledger_retain_s())[:19]    # last_ts is scan()'s naive UTC, 19 chars
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path + ".lock", "a") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
@@ -129,8 +153,10 @@ def write_ledger(lines):
                 for raw in f:
                     try:
                         r = json.loads(raw)
+                        if str(r.get("last_ts") or "")[:19] < floor:
+                            continue        # aged out of retention; never re-read by a window
                         merged[r["sid"]] = raw.rstrip("\n")
-                    except (ValueError, KeyError, TypeError):
+                    except (ValueError, KeyError, TypeError, AttributeError):
                         continue  # a damaged old row is replaced or dropped, never kept as-is
         except FileNotFoundError:
             pass
@@ -1070,6 +1096,41 @@ def cmd_guards(a):
     return 4 if vs & {"NO-DATA", "PLUMBING"} else 0
 
 
+class JobTimeout(Exception):
+    pass
+
+
+def cmd_job(a):
+    """score --write, then guards --write, under one self-imposed bound (see the module doc)."""
+    try:
+        budget = max(1, int(os.environ.get("CC_LEVER_SCORE_BUDGET_S", "540")))
+    except ValueError:
+        budget = 540
+    t0, step, rcs = time.time(), "score", []
+
+    def fire(signum, frame):
+        raise JobTimeout()
+
+    signal.signal(signal.SIGALRM, fire)
+    signal.alarm(budget)
+    try:
+        rcs.append(main(["score", "--write"]))
+        step = "guards"
+        rcs.append(main(["guards", "--write"]))
+    except JobTimeout:
+        print("job: TIMEOUT at %s after %.0f s (bound %d s); score rc %s" % (
+            step, time.time() - t0, budget, rcs[0] if rcs else "-"))
+        sys.stdout.flush()
+        return 124
+    finally:
+        signal.alarm(0)
+    # guards' 1 (BREACH) and 4 (blind) are verdicts, written to the store the guard tick acts on; the
+    # job failed only if a verb could not run (score refused: 3, usage: 2)
+    rc = rcs[0] or (0 if rcs[1] in (0, 1, 4) else rcs[1])
+    print("job: score rc %d · guards rc %d · %.1f s (bound %d s)" % (rcs[0], rcs[1], time.time() - t0, budget))
+    return rc
+
+
 # ── selftest ──────────────────────────────────────────────────────────────────────────────────
 ST_BASE = 1790812800  # 2026-10-01T00:00:00Z: fixture time, fixed so two runs see one world
 ST_EFFECT = 0.20      # treated D1 lineages cost 20% less
@@ -1298,6 +1359,7 @@ def main(argv):
     p = sub.add_parser("report")
     p.add_argument("--lever")
     p.add_argument("--json", action="store_true")
+    sub.add_parser("job")
     p = sub.add_parser("guards")
     p.add_argument("--look", action="store_true")
     p.add_argument("--write", action="store_true")
@@ -1307,7 +1369,8 @@ def main(argv):
     except SystemExit as e:
         return 2 if e.code else 0
     verbs = {"ledger": cmd_ledger, "plumbing": cmd_plumbing, "selftest": cmd_selftest, "score": cmd_score,
-             "aa": cmd_aa, "report": cmd_report, "failures": cmd_failures, "guards": cmd_guards}
+             "aa": cmd_aa, "report": cmd_report, "failures": cmd_failures, "guards": cmd_guards,
+             "job": cmd_job}
     try:
         if a.verb in verbs:
             return verbs[a.verb](a)

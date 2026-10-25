@@ -38,12 +38,14 @@ CC_TOKEN_LEDGER_WORKERS.
 """
 
 import calendar
+import gzip
 import importlib.machinery
 import importlib.util
 import json
 import os
 import re
 import sys
+import time
 from collections import defaultdict
 
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -171,37 +173,74 @@ def extra_roots():
 
 
 # ── jsonl stores ──────────────────────────────────────────────────────────────────────────────
+ROTATION_RE = re.compile(r"\.(\d{8}T\d{6}Z)(\.gz)?$")
+
+
+def rotations(path, since=None):
+    """scripts/rotate-autonomy-logs.sh's rotations of `path` (<path>.<YYYYmmddTHHMMSSZ>[.gz]) that
+    can hold a row at or after `since`, oldest first. A rotation stamped T holds rows written
+    before T, so one stamped before `since` holds nothing in the window and is skipped unread."""
+    d, base = os.path.split(path)
+    out = []
+    try:
+        names = os.listdir(d or ".")
+    except OSError:
+        return out
+    for n in names:
+        if not n.startswith(base + "."):
+            continue
+        m = ROTATION_RE.match(n[len(base) :])
+        if not m:
+            continue
+        t = calendar.timegm(time.strptime(m.group(1), "%Y%m%dT%H%M%SZ"))
+        if since is None or t >= since:
+            out.append((m.group(1), os.path.join(d, n)))
+    return [p for _, p in sorted(out)]
+
+
 def read_jsonl(path, since=None, until=None, ts_key="ts"):
     """→ (rows in window, {lines, bad, missing}). bad = not JSON, not an object, or an unparseable
-    timestamp. Each kept row gains "_t" (epoch)."""
+    timestamp. Each kept row gains "_t" (epoch). Rotated copies inside the window are read first
+    (rotations()), so a rotation never hides rows the window asks for (retention, wave S6)."""
     rows, st = [], {"lines": 0, "bad": 0, "missing": False}
+    for rp in rotations(path, since):
+        try:
+            fh = gzip.open(rp, "rb") if rp.endswith(".gz") else open(rp, "rb")
+            with fh:
+                _read_rows(fh, since, until, ts_key, rows, st)
+        except (OSError, EOFError):
+            st["bad"] += 1  # an unreadable rotation counts against the parse rate
     try:
         fh = open(path, "rb")
     except OSError:
         st["missing"] = True
         return rows, st
     with fh:
-        for raw in fh:
-            if not raw.strip():
-                continue
-            st["lines"] += 1
-            try:
-                r = json.loads(raw)
-            except ValueError:
-                st["bad"] += 1
-                continue
-            if not isinstance(r, dict):
-                st["bad"] += 1
-                continue
-            t = parse_ts(r.get(ts_key))
-            if t is None:
-                st["bad"] += 1
-                continue
-            if (since is not None and t < since) or (until is not None and t >= until):
-                continue
-            r["_t"] = t
-            rows.append(r)
+        _read_rows(fh, since, until, ts_key, rows, st)
     return rows, st
+
+
+def _read_rows(fh, since, until, ts_key, rows, st):
+    for raw in fh:
+        if not raw.strip():
+            continue
+        st["lines"] += 1
+        try:
+            r = json.loads(raw)
+        except ValueError:
+            st["bad"] += 1
+            continue
+        if not isinstance(r, dict):
+            st["bad"] += 1
+            continue
+        t = parse_ts(r.get(ts_key))
+        if t is None:
+            st["bad"] += 1
+            continue
+        if (since is not None and t < since) or (until is not None and t >= until):
+            continue
+        r["_t"] = t
+        rows.append(r)
 
 
 def log_path(name):

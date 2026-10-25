@@ -46,3 +46,24 @@ history.jsonl|16|-|rotate
 logs/auth-timeseries.jsonl|32|-|rotate: already in rotate-autonomy-logs.sh DEFAULT_TARGETS (25 MiB, keep 8) — a breach here means the rotator is not running, not that the store is misbehaving
 logs/account-utilization.jsonl|32|-|rotate: already in rotate-autonomy-logs.sh DEFAULT_TARGETS (25 MiB, keep 8)
 logs/accounts-local.*.log|5|-|append-only diagnostics; truncate with : > ~/.claude/logs/accounts-local.out.log (the stamp is the liveness evidence)
+# Usage levers (docs/plans/USAGE_LEVERS.md § W7+ §6, wave S6; 2026-10-25). These stores feed 28-d
+# scoring windows, so their bound is a RETENTION, not a ratchet on today's size: each glob takes the
+# live file plus its rotations, which scripts/rotate-autonomy-logs.sh deletes only past 42 d
+# (never under 35). Caps are 42 d at the measured rate with headroom: subagent-long-bash ~1.2 MB/d,
+# idle-keepalive ~0.85 MB/d, the rest well under 0.3 MB/d. lever-ledger is bounded by its writer
+# (cc-lever-score write_ledger), the per-session state dirs by the rotator's mtime prune.
+logs/lever-arms.jsonl*|32|-|rotate-autonomy-logs.sh lever pass (64 MiB gate, age-retained 42 d); a breach means the rotator is not running
+logs/lever-flags.jsonl*|4|-|same; one audit row per cc-lever write — a breach means a writer is looping
+logs/lever-ledger.jsonl|32|-|cc-lever-score write_ledger drops rows past CC_LEVER_LEDGER_RETAIN_D (42 d); a breach means the hourly job stopped writing or the floor moved
+logs/lever-score.jsonl*|16|-|rotate-autonomy-logs.sh lever pass
+logs/lever-guard.jsonl*|16|-|rotate-autonomy-logs.sh lever pass; ~145 tick rows/day from cc-lever-guard plus the hourly guard rows
+logs/lever-judge.jsonl*|16|-|rotate-autonomy-logs.sh lever pass
+logs/lever-rounds.jsonl*|8|-|rotate-autonomy-logs.sh lever pass
+logs/idle-keepalive.jsonl*|64|-|rotate-autonomy-logs.sh lever pass
+logs/idle-recycle-shadow.jsonl*|16|-|rotate-autonomy-logs.sh lever pass
+logs/subagent-long-bash.jsonl*|96|-|rotate-autonomy-logs.sh lever pass
+logs/workflow-lean-shadow.jsonl*|16|-|rotate-autonomy-logs.sh lever pass
+state/levers/arms/*|8|-|rotate-autonomy-logs.sh prunes files past 42 d by mtime
+state/levers/proc/*|8|-|same
+state/levers/lineage/*|4|-|same
+state/levers/d4-pending/*|8|-|same

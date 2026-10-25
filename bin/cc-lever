@@ -11,6 +11,9 @@ precedence in hooks/lib/lever_flags.py. Only the operator raises a stage; the gu
   cc-lever promote <Dn> --confirm                the candidate's params become the incumbent's
   cc-lever ack <trip_id> --reason R --confirm    releases a latched trip; raises nothing
   cc-lever history [--lever Dn] [-n N] [--json]  the audit rows (~/.claude/logs/lever-flags.jsonl)
+  cc-lever trip <Dn> --cause breach|blind|revert --reason R [--detail JSON]
+                                                 the guard's verb (bin/cc-lever-guard): pct 0, mode
+                                                 shadow, latch a trip; lowers only, needs no gate
 
 A RAISE (stage up, candidate, promote) is refused (exit 3) unless all hold: --confirm (bare, or
 naming the lever), the latest lever-score row for that lever at its current stage, written since
@@ -144,12 +147,12 @@ def snap(e):
             "mode": e.get("mode"), "params_id": e.get("params_id")}
 
 
-def commit(doc, verb, lever, before, e, reason, verdict_ref=None, detail=None):
+def commit(doc, verb, lever, before, e, reason, verdict_ref=None, detail=None, by="operator:cc-lever"):
     doc["rev"] = int(doc.get("rev") or 0) + 1
     doc["updated_at"] = lf.utc_now()
-    doc["updated_by"] = "operator:cc-lever"
+    doc["updated_by"] = by
     write_doc(doc)
-    audit({"rev": doc["rev"], "by": "operator:cc-lever", "verb": verb, "lever": lever, "from": before,
+    audit({"rev": doc["rev"], "by": by, "verb": verb, "lever": lever, "from": before,
            "to": snap(e) if e is not None else None, "reason": reason, "verdict_ref": verdict_ref,
            "detail": detail})
 
@@ -358,6 +361,54 @@ def cmd_ack(args):
     return 0
 
 
+GUARD_BY = "guard:cc-lever-guard"
+TRIP_CAUSES = ("breach", "blind", "revert")
+
+
+def guard_trip(lever, cause, reason, detail=None):
+    """The guard's one write, under the same lock and audit as every other verb. It only lowers:
+    pct 0, holdback 0, mode shadow (an `off` lever stays off), the stage label kept, so re-entering
+    that stage reads as a raise (cmd_stage). It latches at most one trip per stage occupancy: an
+    open trip is kept, and an acked one whose `at` is at or after stage_started_at is not re-minted,
+    because the guard window still holds the evidence that tripped it and an ack would otherwise be
+    undone on the next tick. A raise clears the trip and restarts the stage, so new evidence trips
+    again. → {lever, trip_id, latched, demoted, from, to}."""
+    if lever not in lf.LEVERS:
+        raise Refused("unknown lever %s" % lever)
+    if cause not in TRIP_CAUSES:
+        raise Refused("--cause must be one of %s" % ", ".join(TRIP_CAUSES))
+    with Locked():
+        doc = load_or_init()
+        e = entry_of(doc, lever)
+        before = snap(e)
+        mode = "off" if e.get("mode") == "off" else "shadow"
+        demoted = (e.get("pct"), e.get("holdback"), e.get("mode")) != (0, 0, mode)
+        t = e.get("trip") if isinstance(e.get("trip"), dict) else None
+        if t is not None and (lf.trip_open(e) or str(t.get("at") or "") >= str(e.get("stage_started_at") or "")):
+            tid, latched = t.get("id"), False
+        else:
+            now = lf.utc_now()
+            tid = "trip-%s-%s-%s" % (lever, now.replace("-", "").replace(":", ""), secrets.token_hex(2))
+            e["trip"] = {"id": tid, "at": now, "by": GUARD_BY, "cause": cause, "stage": e.get("stage"),
+                         "from": before, "reason": (reason or "")[:300], "detail": detail}
+            latched = True
+        if not (demoted or latched):
+            return {"lever": lever, "trip_id": tid, "latched": False, "demoted": False, "from": before, "to": before}
+        e.update(pct=0, holdback=0, mode=mode)
+        commit(doc, "trip", lever, before, e, reason, detail={"trip_id": tid, "cause": cause, "latched": latched},
+               by=GUARD_BY)
+        return {"lever": lever, "trip_id": tid, "latched": latched, "demoted": demoted, "from": before, "to": snap(e)}
+
+
+def cmd_trip(args):
+    try:
+        detail = json.loads(args.detail) if args.detail else None
+    except ValueError:
+        raise Refused("--detail is not JSON")
+    print(json.dumps(guard_trip(args.lever, args.cause, args.reason, detail), sort_keys=True))
+    return 0
+
+
 def cmd_history(args):
     ensure_default()
     rows = []
@@ -400,11 +451,15 @@ def parser():
     s.add_argument("--confirm", nargs="?", const=True)
     s = sub.add_parser("history"); s.add_argument("--lever", choices=lv); s.add_argument("-n", type=int, default=20)
     s.add_argument("--json", action="store_true")
+    s = sub.add_parser("trip"); s.add_argument("lever", choices=lv)
+    s.add_argument("--cause", choices=list(TRIP_CAUSES), required=True); s.add_argument("--reason", default="")
+    s.add_argument("--detail")
     return p
 
 
 VERBS = {"status": cmd_status, "stage": cmd_stage, "off": cmd_off, "candidate": cmd_candidate,
-         "promote": cmd_promote, "ack": cmd_ack, "history": cmd_history}
+         "promote": cmd_promote, "ack": cmd_ack, "history": cmd_history,
+         "trip": cmd_trip}
 
 
 def main(argv):

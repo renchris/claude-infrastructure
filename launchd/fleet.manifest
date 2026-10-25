@@ -625,3 +625,12 @@ com.claude.research-soak          | staged | 3600   | auto | - | 0058-research-s
 # round-trips, so S4 reads those FAILING. The plist stays in launchd/staged/: loading it is still
 # only the operator's migration 0059.
 com.claude.research-classifier-warm | run | 900 | ~/.claude/autonomy/research/classifier-warm/answered | - | 0059-research-classifier-warm.sh
+# ── com.claude.lever-guard / com.claude.lever-score (2026-10-25, docs/plans/USAGE_LEVERS.md § W7+ §3
+# "Auto-rollback", wave S6) ────────────────────────────────────────────────────────────────────────────
+# The usage levers' 10-min auto-rollback tick and its hourly scorer. `staged`: SSOT in launchd/staged/,
+# loaded only by the operator's migrations/0079-lever-jobs-activate.sh. The guard's evidence is its
+# heartbeat, which it rewrites at the end of every tick that could write its demotions (a tick that
+# could not exits 1 and leaves it to age, so S4 and S5 both see that failure). The scorer prints one
+# `job:` line per run, so `auto` is a real sensor; it exits 124 when its 540 s self-bound fires.
+com.claude.lever-guard            | staged | 600  | ~/.claude/state/levers/guard.heartbeat | - | 0079-lever-jobs-activate.sh
+com.claude.lever-score            | staged | 3600 | auto | - | 0079-lever-jobs-activate.sh

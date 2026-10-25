@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.lever-guard — the usage levers' auto-rollback tick (docs/plans/USAGE_LEVERS.md § W7+ §3 row
+  "Auto-rollback", wave S6). Every 600 s it runs bin/cc-lever-guard tick: the S5 guard verdicts and the latest
+  lever-score verdict per lever, read from small stores only (never a transcript), then a demotion to pct 0
+  with a latched trip and a page in ~/.claude/autonomy/pages/lever-<L>.page when a guard breaches, a live
+  lever's verdict is REVERT or NOT-MERGED, or a live lever's guards are blind for two ticks running. It
+  never raises a lever and never edits settings or code. Its last act is the heartbeat
+  ~/.claude/state/levers/guard.heartbeat: without a fresh one lever_flags drops every lever to pct 0 after
+  1800 s, and cc-lever refuses every raise. So loading this job is what makes any raise possible at all.
+
+  exec, not a child: the bash wrapper replaces itself with python, so no launchd-parented bash outlives
+  the tick (bin/cc-reaper TERMs one older than 600 s), and the tick bounds itself at 60 s (its evaluation
+  under SIGALRM at 40 s, the flag lock wait at 10 s). /usr/bin/python3 -I: the system interpreter, with
+  no PYTHON* environment and no user site-packages, so what runs is the repo's code and nothing else.
+
+  STANDARD BAND, ON PURPOSE: the tick is a safety actuator with a 60 s bound, and a demoted band stretches
+  it for reasons that are about the band (MEMORY bound-must-fit-the-band-not-the-bench). RunAtLoad true so
+  the heartbeat exists within seconds of activation rather than ten minutes later.
+
+  `bash -c` so $HOME expands (launchd expands neither ~ nor $HOME in ProgramArguments); Standard*Path
+  cannot take $HOME at all, hence the literals. Its stdout line per tick is the fleet sensor.
+
+  WHY launchd/staged/: install.sh copies launchd/*.plist into ~/Library/LaunchAgents on every converge and
+  launchd loads that directory at the next login, so a plist there would start with no operator decision.
+  The only way in is the operator's migrations/0079-lever-jobs-activate.sh.
+
+  Stop: launchctl bootout gui/$(id -u)/com.claude.lever-guard (every live lever then falls to pct 0 within
+  1800 s by the dead-man; nothing needs undoing).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.lever-guard</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /usr/bin/python3 -I "$HOME/.claude/bin/cc-lever-guard" tick</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>ProcessType</key>      <string>Standard</string>
+
+    <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/lever-guard.out.log</string>
+    <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/lever-guard.err.log</string>
+</dict>
+</plist>

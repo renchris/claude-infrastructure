@@ -510,6 +510,100 @@ for _t in "${TARGETS[@]}"; do
   [ -n "$_t" ] && rotate_one "$_t"
 done
 
+# ── USAGE-LEVER STORES: retained by AGE, never by count (docs/plans/USAGE_LEVERS.md § W7+ §6, wave S6)
+# The lever telemetry and the four shadow logs feed 28-d scoring windows, so their rule is not the
+# rest of this list's "keep 8 rotations": a rotation is deleted only once its stamp is older than
+# ROTATE_LEVER_RETAIN_D (default 42, never below 35), and since a rotation stamped T holds rows
+# written before T, nothing younger than the retention is ever deleted. The size gate is
+# ROTATE_LEVER_MAX_BYTES (default 64 MiB), and the scorer reads the rotations inside its window
+# (scripts/lib/lever_events.py rotations()), so a rotation never hides a row either. Measured
+# 2026-10-25: subagent-long-bash.jsonl grows ~1.2 MB/day, idle-keepalive.jsonl ~0.85 MB/day — at
+# the 25 MiB keep-8 rule above the live file would hold ~21 days.
+# NOT HERE: lever-ledger.jsonl is rewritten whole under its lock by cc-lever-score, so an mv would
+# race that rename; its writer drops rows older than the same retention (write_ledger). The
+# per-session state under state/levers/{arms,proc,lineage,d4-pending}/ is one small file per
+# session, lineage or agent, so it is pruned by mtime at the same retention instead of rotated (a
+# session resumed after that re-resolves its lineage, the documented fallback in lever_flags.py).
+# Runs on the default invocation only, or when ROTATE_LEVER_TARGETS / ROTATE_LEVER_STATE_DIR name a
+# scratch store, so a caller passing its own targets never touches the live lever stores.
+LEVER_MAX_BYTES="${ROTATE_LEVER_MAX_BYTES:-67108864}"
+LEVER_RETAIN_D="${ROTATE_LEVER_RETAIN_D:-42}"
+case "$LEVER_RETAIN_D" in ''|*[!0-9]*) LEVER_RETAIN_D=42 ;; esac
+[ "$LEVER_RETAIN_D" -lt 35 ] && LEVER_RETAIN_D=35
+LEVER_DEFAULT_TARGETS="$HOME/.claude/logs/lever-arms.jsonl
+$HOME/.claude/logs/lever-flags.jsonl
+$HOME/.claude/logs/lever-score.jsonl
+$HOME/.claude/logs/lever-guard.jsonl
+$HOME/.claude/logs/lever-judge.jsonl
+$HOME/.claude/logs/lever-rounds.jsonl
+$HOME/.claude/logs/idle-keepalive.jsonl
+$HOME/.claude/logs/idle-recycle-shadow.jsonl
+$HOME/.claude/logs/subagent-long-bash.jsonl
+$HOME/.claude/logs/workflow-lean-shadow.jsonl"
+lever_rotated=0
+lever_pruned=0
+lever_state_pruned=0
+lever_summary=""
+
+# prune_lever_one <path>: delete <path>.<stamp>[.gz] rotations whose stamp is older than the retention.
+prune_lever_one() {
+  local f="$1" g st floor
+  local e=$(( $(date +%s) - LEVER_RETAIN_D * 86400 ))
+  floor="$(date -u -r "$e" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -d "@$e" +%Y%m%dT%H%M%SZ 2>/dev/null)"
+  [ -n "$floor" ] || return 0                      # no clock, no deletion
+  for g in "$f".*; do
+    [ -e "$g" ] || continue
+    st="${g#"$f".}"; st="${st%.gz}"
+    case "$st" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;; *) continue ;; esac
+    [[ "$st" < "$floor" ]] || continue
+    rm -f "$g" 2>/dev/null && lever_pruned=$((lever_pruned + 1))
+  done
+}
+
+rotate_lever_one() { # <path> — rotate_one's create-mode steps, at the lever size gate, age-pruned
+  local f="$1" sz stamp mode
+  sz="$(filesize "$f")"
+  if [ "$sz" -ge "$LEVER_MAX_BYTES" ]; then
+    stamp="$(now_stamp)"
+    mode="$(filemode "$f")"
+    if mv "$f" "$f.$stamp" 2>/dev/null; then
+      if [ ! -e "$f" ]; then
+        : > "$f" 2>/dev/null || true
+        chmod "$mode" "$f" 2>/dev/null || true
+      fi
+      if [ "$DO_GZIP" = "1" ] && command -v gzip >/dev/null 2>&1; then
+        gzip -f "$f.$stamp" 2>/dev/null || echo "rotate-autonomy-logs: gzip failed for $f.$stamp (left plain)" >&2
+      fi
+      lever_rotated=$((lever_rotated + 1))
+      [ -n "$lever_summary" ] && lever_summary="$lever_summary,"
+      lever_summary="$lever_summary{\"file\":\"$(basename "$f")\",\"bytes\":$sz}"
+    else
+      echo "rotate-autonomy-logs: mv failed for $f — skipping" >&2
+    fi
+  fi
+  prune_lever_one "$f"
+}
+
+do_lever=0
+if [ "$#" -eq 0 ] && [ -z "${ROTATE_TARGETS:-}" ]; then do_lever=1; fi
+if [ -n "${ROTATE_LEVER_TARGETS:-}" ] || [ -n "${ROTATE_LEVER_STATE_DIR:-}" ]; then do_lever=1; fi
+if [ "$do_lever" -eq 1 ]; then
+  if [ -z "${ROTATE_LEVER_TARGETS:-}" ] && [ -n "${ROTATE_LEVER_STATE_DIR:-}" ]; then _lts=""
+  else _lts="${ROTATE_LEVER_TARGETS:-$LEVER_DEFAULT_TARGETS}"; fi
+  while IFS= read -r _line; do
+    [ -n "$_line" ] && rotate_lever_one "$_line"
+  done <<EOF
+$(printf '%s' "$_lts" | tr '[:blank:]' '\n')
+EOF
+  if [ -z "${ROTATE_LEVER_STATE_DIR:-}" ] && [ -n "${ROTATE_LEVER_TARGETS:-}" ]; then _lsd=""
+  else _lsd="${ROTATE_LEVER_STATE_DIR:-$HOME/.claude/state/levers}"; fi
+  for _sub in arms proc lineage d4-pending; do
+    [ -n "$_lsd" ] && [ -d "$_lsd/$_sub" ] || continue
+    _n="$(find "$_lsd/$_sub" -maxdepth 1 -type f -mtime +"$LEVER_RETAIN_D" -print -delete 2>/dev/null | wc -l | tr -d ' ')"
+    lever_state_pruned=$((lever_state_pruned + ${_n:-0}))
+  done
+fi
+
 # THE periodic seal (part 1 of the coupling): extend the chain over everything written since the
 # last run — including any epoch_close emitted above, which is what makes the epochs continuous.
 # Runs whether or not anything rotated, so sealing tracks the job's cadence and not the rotation
@@ -525,7 +619,8 @@ drain_health_check
 # One audit record per run (lands in the freshly-recreated idl.jsonl when idl was a rotated target).
 extra=""
 [ -n "$summary" ] && extra=",\"files\":[$summary]"
+[ "$do_lever" -eq 1 ] && extra="$extra,\"lever\":{\"rotated\":$lever_rotated,\"pruned\":$lever_pruned,\"state_pruned\":$lever_state_pruned,\"retain_d\":$LEVER_RETAIN_D,\"files\":[$lever_summary]}"
 log_idl "$extra"
 
-echo "rotate-autonomy-logs: rotated=$rotated skipped=$skipped seal=$seal_note drain=$drain_note (max=${MAX_BYTES}B keep=$KEEP)"
+echo "rotate-autonomy-logs: rotated=$rotated skipped=$skipped seal=$seal_note drain=$drain_note (max=${MAX_BYTES}B keep=$KEEP) lever=$([ "$do_lever" -eq 1 ] && echo "rotated:$lever_rotated,pruned:$lever_pruned,state_pruned:$lever_state_pruned,retain:${LEVER_RETAIN_D}d" || echo off)"
 exit 0
