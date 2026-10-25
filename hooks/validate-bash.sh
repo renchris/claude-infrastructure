@@ -66,10 +66,10 @@ if ! _PAYLOAD=$(printf '%s' "$INPUT" | jq -r '
       ((.session_id | cell("-")) + "\t"
         + (.tool_input.run_in_background | cell("false")) + "\t"
         + (.agent_id | cell("-")) + "\t"
-        + (now | todateiso8601) + "\t"
         + (now | floor | tostring) + "\t"
         + ((.tool_input.command // "") as $c
-           | "\($c | length)-\(($c[0:2048] + $c[-2048:]) | reduce explode[] as $x (7; (. * 31 + $x) % 2147483647))")),
+           | "\($c | length)-\(($c[0:2048] + $c[-2048:]) | reduce explode[] as $x (7; (. * 31 + $x) % 2147483647))")
+        + "\t" + (now | todateiso8601)),
       (.tool_input.command // empty)' 2>/dev/null); then
   abstain_unclear "unparseable PreToolUse payload on stdin"
 fi
@@ -77,7 +77,9 @@ _META=${_PAYLOAD%%$'\n'*}
 if [[ "$_PAYLOAD" == *$'\n'* ]]; then CMD=${_PAYLOAD#*$'\n'}; else CMD=""; fi
 # _P_NOW (epoch) and _P_CKEY (length + a polynomial hash of the command's first and last 2 KiB) feed
 # the LOCKWATCH goal-loop guard below without a fork: bash 3.2 has no `%(%s)T` and no hash builtin.
-IFS=$'\t' read -r _P_SID _P_BG _P_AID _P_TS _P_NOW _P_CKEY <<<"$_META"
+# Both are never empty, and they sit BEFORE the stamp on purpose: the stamp stays LAST, so an empty
+# stamp leaves _P_TS empty (and the audit logger's `date` fallback fires) instead of collapsing a tab.
+IFS=$'\t' read -r _P_SID _P_BG _P_AID _P_NOW _P_CKEY _P_TS <<<"$_META"
 [ -n "${_P_SID:-}" ] || _P_SID="-"
 [ -n "${_P_BG:-}" ] || _P_BG="false"
 # `agent_id` is present only when the call comes from a SUBAGENT (Agent tool); the main thread and a
