@@ -2,6 +2,8 @@
 # lr-page.sh — the liveness-free operator page (FLEET_V2 W6 resolution 13, D6.3). Every leg is a stub:
 # no test posts a real notification or reaches Pushover.
 
+load helpers/cc-stub
+
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME"
@@ -179,4 +181,55 @@ creds() { # $1=mode — a credentials file the way the operator would write it
   [ ! -e "$BATS_TEST_TMPDIR/pwned" ]
   PUSHOVER_TOKEN=e PUSHOVER_USER=e run bash "$PAGE" "x"
   [ "$(cat "$BATS_TEST_TMPDIR/push.creds")" = "e e" ]
+}
+
+# agent-secrets stub: injects the keys named in SEC_KEYS into its child, as `agent-secrets run -- cmd`
+# does, and records that it was asked. The real store is never read.
+secrets_stub() {
+  cc_stub "$STUB" agent-secrets - <<'EOF'
+#!/bin/bash
+echo "$1" >"$BATS_TEST_TMPDIR/secrets.called"
+[ "$1" = run ] && [ "$2" = -- ] || exit 2
+shift 2
+if [ -n "${SEC_KEYS:-}" ]; then export PUSHOVER_TOKEN=tok-from-store PUSHOVER_USER=usr-from-store; fi
+exec "$@"
+EOF
+  export LR_PAGE_SECRETS_BIN="$STUB/agent-secrets"
+}
+
+@test "no env and no file: the keys come from agent-secrets, into push-send's process only" {
+  secrets_stub
+  # push-send's INERT contract: keys unset ⇒ exit 3
+  cc_stub "$STUB" push-send.sh - <<'EOF'
+#!/bin/bash
+[ -n "${PUSHOVER_TOKEN:-}" ] || exit 3
+printf '%s %s\n' "$PUSHOVER_TOKEN" "$PUSHOVER_USER" >"$BATS_TEST_TMPDIR/push.creds"
+EOF
+  SEC_KEYS=1 run bash "$PAGE" "held draft"
+  [ "$status" -eq 0 ]
+  [ "$output" = "lr-page: verdict=posted os=posted phone=sent" ]
+  [ "$(cat "$BATS_TEST_TMPDIR/push.creds")" = "tok-from-store usr-from-store" ]
+  # a store without the two names reads skipped, as no credentials always has — not failed
+  rm -f "$BATS_TEST_TMPDIR/push.creds"
+  run bash "$PAGE" "x"
+  [ "$output" = "lr-page: verdict=posted os=posted phone=skipped" ]
+  [ ! -e "$BATS_TEST_TMPDIR/push.creds" ]
+  run bash "$PAGE" --failures
+  [ "$output" = "0" ]
+}
+
+@test "the file and the env outrank agent-secrets, which is then never asked" {
+  secrets_stub
+  creds 600
+  SEC_KEYS=1 run bash "$PAGE" "x"
+  [ "$(cat "$BATS_TEST_TMPDIR/push.creds")" = "tok-from-file usr-from-file" ]
+  [ ! -e "$BATS_TEST_TMPDIR/secrets.called" ]
+}
+
+@test "a refusing push through agent-secrets reads failed and is counted" {
+  secrets_stub
+  export LR_PAGE_OS_CHANNEL=off PUSH_RC=1
+  SEC_KEYS=1 run bash "$PAGE" "x"
+  [ "$status" -eq 1 ]
+  [ "$output" = "lr-page: verdict=failed os=off phone=failed" ]
 }

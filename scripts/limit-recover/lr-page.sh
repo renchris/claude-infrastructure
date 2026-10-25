@@ -22,8 +22,12 @@
 #          PUSHOVER_TOKEN and PUSHOVER_USER are both set, in the environment or else in
 #          ~/.config/lr-page/pushover.env (LR_PAGE_CREDS; KEY=VALUE lines, read, never sourced;
 #          launchd daemons inherit no shell env). That file must be yours and mode 0600, or the
-#          leg is `refused` and counted. No credentials at all ⇒ skipped silently: wiring them is
-#          an operator step (D6.9).
+#          leg is `refused` and counted. With neither, the keys may live in agent-secrets (the
+#          house store for API keys: `agent-secrets add PUSHOVER_TOKEN` / `PUSHOVER_USER`); push-send
+#          then runs under `agent-secrets run`, so the values exist only in that child, and its
+#          egress allowlist applies (api.pushover.net must be on it, or the leg reads failed).
+#          push-send's own exit 3 (keys unset) reads skipped. No credentials at all ⇒ skipped
+#          silently: wiring them is an operator step (D6.9, incident 2026-10-25 DESIGN H5).
 #
 # Verdict (stdout): `lr-page: verdict=<posted|failed> os=<posted|failed|off> phone=<sent|failed|skipped|refused>`
 # Exit: 0 = at least one leg put the page in front of a human · 1 = no leg did (counted) · 2 = usage.
@@ -33,7 +37,8 @@
 # Env: LR_PAGE_OS_CHANNEL=auto|on|off (default: CC_SUP_OS_CHANNEL, else auto — `off` is the switch
 # for a box where Notification Center is the wrong surface) · LR_PAGE_OSASCRIPT_BIN (osascript) ·
 # LR_PAGE_PUSH_BIN (push-send.sh beside this repo's scripts/) · LR_PAGE_TIMEOUT_BIN (timeout(1),
-# set-but-empty runs unbounded) · LR_PAGE_LOG (~/.reso/limit-recover/pages.log).
+# set-but-empty runs unbounded) · LR_PAGE_LOG (~/.reso/limit-recover/pages.log) ·
+# LR_PAGE_SECRETS_BIN (~/bin/agent-secrets; set-but-empty turns that rung off).
 # bash 3.2-safe: launchd runs /bin/bash.
 
 _lr_page_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -126,6 +131,24 @@ _lr_page_creds_file() {
   return 0
 }
 
+# The agent-secrets rung: no env, no file. push-send runs as `agent-secrets run`'s child, so the keys
+# are decrypted into that one process and never pass through this shell. A store without the two
+# names makes push-send exit 3 (its INERT code), which reads skipped, as no credentials always has.
+_lr_page_phone_secrets() { # $1=push-send $2=title-tail $3=message → echoes sent|failed|skipped
+  local sec="${LR_PAGE_SECRETS_BIN-$HOME/bin/agent-secrets}" rc
+  if [ -z "$sec" ] || [ ! -x "$sec" ]; then
+    echo skipped
+    return 0
+  fi
+  _lr_page_bounded 30 "$sec" run -- bash "$1" send --title "Claude fleet — $2" --message "$3" >/dev/null 2>&1
+  rc=$?
+  case "$rc" in
+    0) echo sent ;;
+    3) echo skipped ;;
+    *) echo failed ;;
+  esac
+}
+
 _lr_page_phone() { # $1=title-tail $2=message → echoes sent|failed|skipped|refused
   local push="${LR_PAGE_PUSH_BIN:-$_lr_page_here/../push-send.sh}"
   _LR_PAGE_TOKEN="${PUSHOVER_TOKEN:-}"
@@ -140,7 +163,7 @@ _lr_page_phone() { # $1=title-tail $2=message → echoes sent|failed|skipped|ref
     esac
   fi
   if [ -z "$_LR_PAGE_TOKEN" ] || [ -z "$_LR_PAGE_USER" ]; then
-    echo skipped
+    _lr_page_phone_secrets "$push" "$1" "$2"
     return 0
   fi
   # push-send bounds its own curl (--max-time 8); the outer bound only catches a wedged interpreter.
