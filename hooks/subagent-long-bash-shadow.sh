@@ -23,6 +23,23 @@
 # bin/cc-idle-cache-readout joins each row to the call's real runtime and the next request's cache
 # write (from the subagent transcript), prices wrongly denied calls against rebuilds avoided per
 # class, and reports the one acceptance number: wrong-deny cost under 0.2% of weekly usage.
+# W7+ S3 (plan § W7+ §2 D4 "Arm"/"First", §3 "Telemetry rows") bumps the row to v:3, still log-only:
+#   arm      lever D4's arm for this agent_id (hooks/lib/lever-flags.sh lf_arm, salt_D4), the full
+#            lf_arm_json object; arms are per agent, never per account. pct 0 means every unit is
+#            ctrl or the forced arm, and nothing here reads the arm to decide anything.
+#   acct     the account running the hook; tp_acct the account root the transcript lives under. A
+#            cross-account copy is owned by the EARLIEST file (the cc-token-ledger rule), resolved
+#            by the scorer: the hook only records both, since a live call cannot see later copies.
+#   wider    the wider pattern (`select(undef`, `time.sleep(`), a SEPARATE match class: it never
+#            sets narrow or would_deny_class. wider_would_deny is the population it would add (a
+#            match no narrow class took, not bounded by an inner timeout under 300 s).
+#   kind=d4_follow  what the agent did next. A would-deny (narrow or wider) leaves a marker per
+#            agent_id; hooks/validate-bash.sh pipes that agent's next Bash call here whatever its
+#            timeout, and this writes one follow row linking it (follows_tool_use_id) and clears the
+#            marker. The follow call may also get its own subagent_bash row: consumers filter kind.
+# Every row is one write() of at most 2 KB (cmd_head and transcript_path shed first), in UTC Z.
+# Markers live in $CC_SUBAGENT_LONG_BASH_PENDING, else beside a redirected log (so a replay through
+# CC_SUBAGENT_LONG_BASH_LOG never touches live state), else ~/.claude/state/levers/d4-pending.
 #
 # HOSTED by hooks/validate-bash.sh, which is already registered on PreToolUse(Bash) for every account
 # and already parses agent_id and run_in_background: it pipes the payload here only for a subagent's
@@ -49,6 +66,64 @@ _cmd=""; [[ "$_p" == *$'\n'* ]] && _cmd="${_p#*$'\n'}"
 IFS=$'\t' read -r _aid _atype _sid _tuid _to _bg _tp <<<"$_meta"
 
 [ "${_aid:--}" != "-" ] || exit 0                 # main thread / pane teammate: not this rule
+
+_log="${CC_SUBAGENT_LONG_BASH_LOG:-$HOME/.claude/logs/subagent-long-bash.jsonl}"
+if [ -n "${CC_SUBAGENT_LONG_BASH_PENDING:-}" ]; then _pend="$CC_SUBAGENT_LONG_BASH_PENDING"
+elif [ -n "${CC_SUBAGENT_LONG_BASH_LOG:-}" ]; then _pend="$_log.pending"
+else _pend="${CC_LEVER_STATE_DIR:-$HOME/.claude/state/levers}/d4-pending"; fi
+# The direct binary, never `shasum` (a #! perl script: hooks/lib/shasum-direct.sh).
+_sha256=/sbin/sha256sum; [ -x "$_sha256" ] || _sha256=sha256sum
+_acct="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _acct="${_acct%/}"; _acct="${_acct##*/}"
+_tp_acct=""; [[ $_tp =~ /(\.claude[A-Za-z0-9_-]*)/ ]] && _tp_acct="${BASH_REMATCH[1]}"
+_aid_ok=""; case "$_aid" in *[!A-Za-z0-9._-]*|.*) ;; *) [ ${#_aid} -le 128 ] && _aid_ok=1 ;; esac
+_now="$(date -u '+%s %FT%TZ')"; _epoch="${_now%% *}"; _ts="${_now#* }"
+_cmdsha() { _sha="$(printf '%s' "$_cmd" | "$_sha256" 2>/dev/null)"; _sha="${_sha%% *}"; }
+
+# D4 arm per agent_id: one jq + one sha256sum (lever-flags.sh). A missing lib or an unsafe id logs null.
+_armj=null
+_lf="${BASH_SOURCE[0]%/*}/lib/lever-flags.sh"
+if [ -n "$_aid_ok" ] && [ -r "$_lf" ]; then
+  # shellcheck source=lib/lever-flags.sh
+  # shellcheck disable=SC1091  # resolved at RUNTIME from BASH_SOURCE
+  . "$_lf" && lf_arm D4 "$_aid" && _armj="$(lf_arm_json)"
+fi
+
+# One row, one write(), at most 2 KB: shed cmd_head and transcript_path first, else write nothing.
+# shellcheck disable=SC2016  # a jq program
+_emit() { # <jq object program> [jq args…] — the row is built by the program from its --arg values
+  local prog="$1" line; shift
+  line="$(jq -nr "$@" --argjson arm "$_armj" "($prog) as \$r
+    | if (\$r | tojson | utf8bytelength) < 2048 then \$r
+      else \$r + {cmd_head: ((\$r.cmd_head // \"\")[0:40]), transcript_path: null, trunc: true} end
+    | tojson | if utf8bytelength < 2048 then . else empty end" 2>/dev/null)" || return 0
+  [ -n "$line" ] || return 0
+  mkdir -p "${_log%/*}" 2>/dev/null || return 0
+  printf '%s\n' "$line" >> "$_log" 2>/dev/null
+}
+
+# ── d4_follow: this agent's previous Bash call was a would-deny; record what it did next ──────────
+if [ -n "$_aid_ok" ] && [ -e "$_pend/$_aid" ]; then
+  # claim the marker atomically: a parallel follow call that loses the rename logs nothing
+  if mv "$_pend/$_aid" "$_pend/.claim.$_aid.$$" 2>/dev/null; then
+    IFS=$'\t' read -r _f_tuid _f_cls _f_wider _f_sha _f_epoch < "$_pend/.claim.$_aid.$$" || true
+    rm -f "$_pend/.claim.$_aid.$$" 2>/dev/null
+    _cmdsha
+    case "$_f_epoch" in ''|*[!0-9]*) _gap=-1 ;; *) _gap=$(( _epoch - _f_epoch )) ;; esac
+    _rc=false; [[ $_cmd == *'rc=$?'* ]] && _rc=true
+    _toj=null; case "$_to" in ''|*[!0-9.]*) ;; *) _toj="${_to%%.*}" ;; esac
+    _emit '{kind:"d4_follow",v:3,ts:$ts,acct:$acct,sid:$sid[0:128],agent_id:$aid[0:128],
+            agent_type:$atype[0:128],tool_use_id:$tuid[0:128],
+            follows_tool_use_id:$ftuid[0:128],follows_class:(if $fcls == "-" then null else $fcls end),
+            follows_wider:(if $fw == "-" then null else $fw end),
+            gap_s:(if $gap < 0 then null else $gap end),same_cmd:($sha == $fsha),echo_rc:$rc,
+            timeout_ms:$to,run_in_background:($bg == "true"),cmd_head:$head,cmd_sha256:$sha,arm:$arm}' \
+      --arg ts "$_ts" --arg acct "$_acct" --arg sid "$_sid" --arg aid "$_aid" --arg atype "$_atype" \
+      --arg tuid "$_tuid" --arg ftuid "${_f_tuid:--}" --arg fcls "${_f_cls:--}" --arg fw "${_f_wider:--}" \
+      --argjson gap "$_gap" --arg sha "$_sha" --arg fsha "${_f_sha:-}" --argjson rc "$_rc" \
+      --argjson to "$_toj" --arg bg "$_bg" --arg head "${_cmd:0:160}"
+  fi
+fi
+
 [ "${_bg:-}" != "true" ] || exit 0                # backgrounded: the subagent does not block on it
 case "$_to" in ''|*[!0-9.]*) exit 0 ;; esac
 _to="${_to%%.*}"
@@ -89,19 +164,32 @@ case "$_why" in
 esac
 if [ -n "$_class" ] && [ "$_inner" -ge 0 ] && [ "$_inner" -lt 300 ]; then _class=""; _exempt="inner-timeout"; fi
 
-_log="${CC_SUBAGENT_LONG_BASH_LOG:-$HOME/.claude/logs/subagent-long-bash.jsonl}"
-mkdir -p "${_log%/*}" 2>/dev/null || exit 0
-# The direct binary, never `shasum` (a #! perl script: hooks/lib/shasum-direct.sh).
-_sha256=/sbin/sha256sum; [ -x "$_sha256" ] || _sha256=sha256sum
-_sha="$(printf '%s' "$_cmd" | "$_sha256" 2>/dev/null)"; _sha="${_sha%% *}"
-_acct="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _acct="${_acct%/}"; _acct="${_acct##*/}"
-jq -nc --arg ts "$(date -u +%FT%TZ)" --arg acct "$_acct" --arg sid "$_sid" --arg aid "$_aid" \
+# ── wider pattern (shadow only, its own class): perl's select(undef,…) and python's time.sleep( ───
+_wider=""; _wider_wd=false
+_rx_select='select[[:space:]]*[(][[:space:]]*undef'
+_rx_tsleep='time[.]sleep[[:space:]]*[(]'
+if [[ $_cmd =~ $_rx_select ]]; then _wider="select-undef"
+elif [[ $_cmd =~ $_rx_tsleep ]]; then _wider="time-sleep"; fi
+if [ -n "$_wider" ] && [ -z "$_class" ] && [ -z "$_exempt" ] && ! { [ "$_inner" -ge 0 ] && [ "$_inner" -lt 300 ]; }; then
+  _wider_wd=true
+fi
+
+_cmdsha
+_emit 'def nul: if . == "" then null else . end;
+   {kind:"subagent_bash",v:3,ts:$ts,acct:$acct,tp_acct:($tpa|nul),sid:$sid[0:128],agent_id:$aid[0:128],
+    agent_type:$atype[0:128],tool_use_id:$tuid[0:128],timeout_ms:$to,broad:true,narrow:($cls != ""),
+    why:($why|nul),would_deny_class:($cls|nul),exempt:($ex|nul),
+    inner_timeout_s:(if $inner < 0 then null else $inner end),wider:($wider|nul),wider_would_deny:$wwd,
+    would:"count",arm:$arm,cmd_head:$head,cmd_sha256:$sha,transcript_path:$tp[0:300]}' \
+  --arg ts "$_ts" --arg acct "$_acct" --arg tpa "$_tp_acct" --arg sid "$_sid" --arg aid "$_aid" \
   --arg atype "$_atype" --arg tuid "$_tuid" --argjson to "$_to" --arg why "$_why" \
   --arg head "${_cmd:0:160}" --arg sha "$_sha" --arg tp "$_tp" \
   --arg cls "$_class" --arg ex "$_exempt" --argjson inner "$_inner" \
-  'def nul: if . == "" then null else . end;
-   {kind:"subagent_bash",v:2,ts:$ts,acct:$acct,sid:$sid,agent_id:$aid,agent_type:$atype,
-    tool_use_id:$tuid,timeout_ms:$to,broad:true,narrow:($cls != ""),why:($why|nul),
-    would_deny_class:($cls|nul),exempt:($ex|nul),inner_timeout_s:(if $inner < 0 then null else $inner end),
-    would:"count",cmd_head:$head,cmd_sha256:$sha,transcript_path:$tp}' >> "$_log" 2>/dev/null
+  --arg wider "$_wider" --argjson wwd "$_wider_wd"
+
+# a would-deny (narrow or wider) arms the follow pipe for this agent's next Bash call
+if [ -n "$_aid_ok" ] && { [ -n "$_class" ] || [ "$_wider_wd" = true ]; } && mkdir -p "$_pend" 2>/dev/null; then
+  find "$_pend" -type f -mmin +1440 -delete 2>/dev/null   # an agent that never called again
+  printf '%s\t%s\t%s\t%s\t%s\n' "$_tuid" "${_class:--}" "${_wider:--}" "$_sha" "$_epoch" > "$_pend/$_aid" 2>/dev/null
+fi
 exit 0

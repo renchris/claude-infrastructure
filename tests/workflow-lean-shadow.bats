@@ -85,3 +85,57 @@ slot() { jq -r --arg l "$1" ".slots[] | select(.label == \$l) | $2" "$LOG"; }
   [ "$(jq -sr '[.[] | "\(.session_id):\(.repeat_in_session):\(.resume_from_run_id)"] | join(",")' "$LOG")" \
     = "S:0:wf_abc123,S:1:null,OTHER:0:null,S:0:null" ]
 }
+
+# ── W7+ S3: UTC Z, acct, the D2 arm per lineage root, follows_deny, 2 KB rows ───────────────────
+s3_flags() {
+  export CC_LEVER_STATE_DIR="$BATS_TEST_TMPDIR/levers"; mkdir -p "$CC_LEVER_STATE_DIR"
+  jq -nc '{v:1,rev:3,levers:{D2:{stage:"S0",mode:"shadow",pct:0,holdback:0,salt:"s3-d2-salt",split_salt:"s3-split"}}}' \
+    > "$CC_LEVER_STATE_DIR/flags.json"
+}
+fire_as() { # <sid> <tool_use_id> <script>
+  jq -nc --arg s "$1" --arg t "$2" --arg c "$3" '{session_id:$s,tool_use_id:$t,cwd:"/nonexistent",tool_name:"Workflow",tool_input:{script:$c}}' \
+    | /usr/bin/env python3 "$HOOK"
+}
+
+@test "5: S3 — UTC Z, acct, and the D2 arm is per lineage root (the S1 resolver), equal to the lib's" {
+  s3_flags
+  CC_LEVER_LINEAGE=root-A CLAUDE_CONFIG_DIR="$HOME/.claude-next4" fire_as S1 T1 'await agent(`x`)'
+  CC_LEVER_LINEAGE=root-A fire_as S2 T2 'await agent(`x`)'
+  fire_as S3 T3 'await agent(`x`)'
+  jq -e -s 'all(.[]; (.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$")) and .arm.lever == "D2"
+             and .arm.flag_src == "file" and .arm.arm == "ctrl" and .arm.pct_eff == 0 and .arm.unit == .lineage)' "$LOG" >/dev/null
+  [ "$(jq -sr '[.[] | "\(.acct):\(.lineage):\(.lineage_src)"] | join(",")' "$LOG")" \
+    = ".claude-next4:root-A:env,.claude:root-A:env,.claude:S3:self" ]
+  # two sessions of one lineage share the arm; it is the lib's arm, not a re-derivation
+  [ "$(jq -sr '[.[0].arm.u, .[1].arm.u] | unique | length' "$LOG")" -eq 1 ]
+  [ "$(jq -sr '.[0].arm.u' "$LOG")" = "$(/usr/bin/python3 -I "$REPO/hooks/lib/lever_flags.py" arm D2 root-A | jq -r .u)" ]
+  # the hook resolves read-only: no lever state written
+  [ ! -e "$CC_LEVER_STATE_DIR/arms" ]
+}
+
+@test "6: S3 — follows_deny reads this session's previous row, whatever its timestamp offset" {
+  mkdir -p "${LOG%/*}"
+  # a pre-S3 row with a local offset, 90 s before now, that was a would-deny
+  jq -nc --arg ts "$(date -r $(( $(date +%s) - 90 )) +%Y-%m-%dT%H:%M:%S%z)" \
+    '{ts:$ts,session_id:"S",tool_use_id:"T0",script_sha:"old",would_deny:true}' > "$LOG"
+  fire_as S T1 'await agent(`x`, {agentType: "workflow-lean"})'
+  fire_as S T2 'await agent(`y`)'
+  fire_as OTHER T3 'await agent(`z`)'
+  fire_as S T4 'await agent(`y`)'
+  [ "$(jq -sr '.[1:][] | "\(.tool_use_id):\(.follows_deny):\(.prev_tool_use_id):\(.prev_same_script)"' "$LOG" | paste -sd, -)" \
+    = "T1:true:T0:false,T2:false:T1:false,T3:null:null:null,T4:true:T2:true" ]
+  gap="$(jq -sr '.[1].prev_gap_s' "$LOG")"
+  awk -v g="$gap" 'BEGIN { exit !(g >= 85 && g <= 120) }' || { echo "prev_gap_s=$gap"; false; }
+}
+
+@test "7: S3 — a row stays under 2 KB in one write: slot detail is shed, never the verdict counts" {
+  s=""; for i in $(seq 1 60); do s="$s await agent(\`brief $i\`, {label: \"slot-label-number-$i\"});"; done
+  fire_as S T1 "$s"
+  [ "$(wc -l < "$LOG")" -eq 1 ]
+  [ "$(LC_ALL=C wc -c < "$LOG")" -le 2048 ]
+  [ "$(jq -r '"\(.slots_shed):\(.calls):\(.verdicts["would-deny"]):\(.would_deny)"' "$LOG")" = "all:60:60:true" ]
+  : > "$LOG"
+  s=""; for i in $(seq 1 12); do s="$s await agent(\`brief $i\`, {label: \"slot-label-number-$i\"});"; done
+  fire_as S T2 "$s"
+  [ "$(jq -r '"\(.slots_shed):\(.slots | length):\(.slots[0].verdict)"' "$LOG")" = "compact:12:would-deny" ]
+}

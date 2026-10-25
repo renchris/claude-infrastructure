@@ -84,7 +84,21 @@ IFS=$'\t' read -r _P_SID _P_BG _P_AID _P_TS <<<"$_META"
 # timeout goes to hooks/subagent-long-bash-shadow.sh, which logs the would-deny candidates and never
 # decides anything. Its output is discarded and its status ignored, so it cannot change a verdict
 # below; the main thread pays two string tests and no fork. Off: CC_SUBAGENT_LONG_BASH=off.
-if [ "$_P_AID" != "-" ] && [ "$_P_BG" != "true" ] && [[ $INPUT == *'"timeout"'* ]] \
+# FOLLOW pipe (plan § W7+ §4 S3): after a would-deny the shadow leaves a marker named for the agent_id,
+# and that agent's NEXT Bash call is piped too, whatever its timeout or backgrounding, so the shadow
+# records what the agent did next (kind=d4_follow). A subagent call pays one builtin `test -e`; the
+# marker dir is resolved exactly as the shadow resolves it. Still log-only: nothing here denies.
+_slb_follow=""
+if [ "$_P_AID" != "-" ]; then
+  case "$_P_AID" in
+    *[!A-Za-z0-9._-]*|.*) ;;
+    *) if [ -n "${CC_SUBAGENT_LONG_BASH_PENDING:-}" ]; then _slb_pend="$CC_SUBAGENT_LONG_BASH_PENDING"
+       elif [ -n "${CC_SUBAGENT_LONG_BASH_LOG:-}" ]; then _slb_pend="$CC_SUBAGENT_LONG_BASH_LOG.pending"
+       else _slb_pend="${CC_LEVER_STATE_DIR:-$HOME/.claude/state/levers}/d4-pending"; fi
+       [ -e "$_slb_pend/$_P_AID" ] && _slb_follow=1 ;;
+  esac
+fi
+if [ "$_P_AID" != "-" ] && { [ -n "$_slb_follow" ] || { [ "$_P_BG" != "true" ] && [[ $INPUT == *'"timeout"'* ]]; }; } \
    && [ "${CC_SUBAGENT_LONG_BASH:-shadow}" != off ] && [ -f "${BASH_SOURCE[0]%/*}/subagent-long-bash-shadow.sh" ]; then
   printf '%s' "$INPUT" | /bin/bash "${BASH_SOURCE[0]%/*}/subagent-long-bash-shadow.sh" >/dev/null 2>&1 || true
 fi

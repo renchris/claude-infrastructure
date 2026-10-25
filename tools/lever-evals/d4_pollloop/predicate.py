@@ -112,6 +112,8 @@ def replay(cases, hook=None):
                 t.join()
             rows = {}
             for fn in sorted(os.listdir(tmp)):
+                if not fn.endswith(".jsonl"):
+                    continue  # the hook's <log>.pending marker dirs (follow pipe, plan § W7+ S3)
                 with open(os.path.join(tmp, fn)) as fh:
                     for ln in fh:
                         try:
@@ -120,7 +122,9 @@ def replay(cases, hook=None):
                             raise PlumbingError(
                                 "hook wrote a non-JSON log line: %r" % ln[:120]
                             )
-                        rows[r.get("tool_use_id")] = r
+                        # a d4_follow row shares its call's tool_use_id: only the verdict row counts
+                        if r.get("kind", "subagent_bash") == "subagent_bash":
+                            rows[r.get("tool_use_id")] = r
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         c = rows.pop(CONTROL_ID, None)
