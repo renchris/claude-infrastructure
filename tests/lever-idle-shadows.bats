@@ -80,10 +80,13 @@ u6() { /usr/bin/python3 -I "$REPO/hooks/lib/lever_flags.py" hash "$1" "$2" | cut
   unit="$SID:$start"
   [ "$(rows arm | jq -r '[.lever,.unit,.arm,.flag_src,.stage,.pct_eff,.flag_rev,.hook,.due_n,.acct] | map(tostring) | join(" ")')" \
     = "D3 $unit ctrl file S0 0 3 idle-keepalive 1 .claude-tertiary" ]
-  [ "$(rows arm | jq -r .u)" = "$(u6 saltD3 "$unit")" ]
+  # u is compared as a NUMBER: the wake row passes through python, which writes 0.12 for 0.120000
+  want_u="$(u6 saltD3 "$unit")"
+  rows arm | jq -e --argjson w "$want_u" '.u == $w' >/dev/null
   rows arm | jq -e '.ts | test("^[0-9-]{10}T[0-9:]{8}Z$")' >/dev/null
-  [ "$(rows wake | jq -r '[.v,.lever,.arm,.unit_id,.fired,.eligible,.u] | map(tostring) | join(" ")')" \
-    = "3 D3 ctrl $unit false false $(u6 saltD3 "$unit")" ]
+  [ "$(rows wake | jq -r '[.v,.lever,.arm,.unit_id,.fired,.eligible] | map(tostring) | join(" ")')" \
+    = "3 D3 ctrl $unit false false" ]
+  rows wake | jq -e --argjson w "$want_u" '.u == $w' >/dev/null
   # the operator returns 65 min after the gap opened: the gap row carries the decision and the unit
   user_at $((start + 3900)); asst_at $((start + 3905)) 150600 0
   tracker
@@ -180,7 +183,7 @@ boundary() { # one Stop, on fresh telemetry (a loaded box can outlast the hook's
   [ "$(jq -r '[.schema,.v,.lever,.arm,.variant,.lineage,.lineage_src,.d1.flag_src,.d1.stage,.k2_thousand,.would_advise_k2,.prompt_head] | map(tostring) | join("|")' "$CC_IRS_LOG")" \
     = "2|ok|D1|ctrl|null|rootLINE|env|file|S0|200|true|next step, please" ]
   [ "$(jq -r .prompt_sha "$CC_IRS_LOG")" = "$(printf '%s' 'next step, please' | shasum -a 256 | cut -c1-64)" ]
-  [ "$(jq -r .d1.u "$CC_IRS_LOG")" = "$(u6 saltD1 rootLINE)" ]
+  jq -e --argjson w "$(u6 saltD1 rootLINE)" '.d1.u == $w' "$CC_IRS_LOG" >/dev/null
   jq -e '(.ts | type) == "number" and (.ts_z | test("Z$")) and (has("_p") | not)' "$CC_IRS_LOG" >/dev/null
   # a row with no readable gap (no request in reach) still carries the 200k field, and no prompt
   rm -f "$CC_IRS_LOG"
