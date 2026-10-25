@@ -1,4 +1,4 @@
-"""ptycanary.py -- time a fresh-pty `zsh -fc` start, the exact path every new terminal takes.
+"""ptycanary.py -- time a fresh-pty shell start (/bin/zsh -fc), the exact path every new terminal takes.
 
 Run as:  $PY -I ptycanary.py --out FILE        (a lockprobe probe; never via #!: DESIGN I1)
 
@@ -11,8 +11,8 @@ is the measurement. This process never kills zsh and never gives up on it.
 Why each step (DESIGN C1):
   * The pty comes from posix_openpt/grantpt/unlockpt/ptsname: ioctls, no /dev walk.
   * The slave is opened HERE with O_RDWR|O_NOCTTY|O_NONBLOCK and dup2'd onto zsh's fds 0/1/2.
-    zsh gets no setsid and no TIOCSCTTY, so it can never be a session leader whose exit revokes a
-    tty (the 68298 trigger). This process was setsid'd by the spawner but opens the slave with
+    The shell gets no setsid and no TIOCSCTTY, so it can never be a session leader whose exit
+    revokes its terminal (the 68298 trigger). This process was setsid'd by the spawner but opens the slave with
     O_NOCTTY, so it has no ctty either.
   * The master stays open for zsh's WHOLE life: zsh's init_io re-opens its tty by path, and a
     re-open after the master closed is exactly bash 96296's endless carrier wait.

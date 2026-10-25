@@ -16,7 +16,7 @@ Two groups, and the split is the point (DESIGN §2 I3):
     task_all / fd_list / threads                proc_pidinfo
 
 The kinfo_proc offsets are arm64, 648 bytes per record, VERIFIED 2026-10-25 on 24.6.0 against
-`ps -o ppid,pgid,tdev,lstart` and os.getsid(): p_starttime@0 (tv_sec q, tv_usec i), p_flag@32,
+`ps -x -o ppid,pgid,tdev,lstart` and os.getsid(): p_starttime@0 (tv_sec q, tv_usec i), p_flag@32,
 p_stat@36, p_pid@40, p_comm@243[17], cr_uid@420, e_ppid@560, e_pgid@564, e_tdev@572, e_tpgid@576,
 e_flag@612 (EPROC_SLEADER 0x2). OFFSETS is a dict so the self-test can be seam-injected
 (CC_LOCKWATCH_TEST_BAD_OFFSET=<field>) and must then read `blind`, never a quiet zero.

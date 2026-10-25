@@ -226,10 +226,10 @@ def poison_join(last_node, procs, ttymap, samples=None):
     ppid/sid/pgid (session_tree), never by tdev. `last_node` is the walk canary's
     `last="lstat ttysNNN"`; `samples` maps pid -> sample leaf frame. Returns None when no exiting
     or orphaned leader held that node."""
-    tty = (last_node or "").replace("lstat", "").strip()
-    if not tty.startswith("ttys"):
+    node = (last_node or "").replace("lstat", "").strip()
+    if not node.startswith("ttys"):
         return None
-    cands = [L for L in pty_leaders(procs, ttymap) if L["tty"] == tty and (L["exiting"] or L["orphan"])]
+    cands = [L for L in pty_leaders(procs, ttymap) if L["tty"] == node and (L["exiting"] or L["orphan"])]
     if not cands:
         return None
     L = sorted(cands, key=lambda c: (not c["exiting"], c["pid"]))[0]
@@ -246,7 +246,7 @@ def poison_join(last_node, procs, ttymap, samples=None):
     if holder is None and len(live) == 1:
         holder, basis = live[0]["pid"], "only-live-member"
     return {
-        "tty": tty,
+        "tty": node,
         "leader": L["pid"],
         "lstart": L["lstart"],
         "pgid": L["pgid"],
