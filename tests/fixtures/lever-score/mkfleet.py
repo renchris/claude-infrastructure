@@ -7,10 +7,13 @@ logs/subagent-long-bash.jsonl (N D4 would-deny rows, few enough to fail the popu
 logs/lever-rounds.jsonl (one kind=offline row, positive), state/flags.json (D3 at S2, pct 50, live,
 stage started D days before now) and a fresh guard heartbeat; it prints the truth as JSON.
 
-Each session holds 4 gaps of 1-2 h. A gap's return request rebuilds the cache at a cost
-proportional to the context at the gap (the CUPED covariate) times lognormal noise; in a TREATED
-gap (arm by lever_flags' own hash of the flags' salt) that cost is multiplied by (1 - F). Truth:
-planted_pp_wk = mean control return cost x F x gaps per week.
+Each session holds 4 idle episodes of 1-2 h, written as S2's gap v2 rows (unit "<sid>:<episode
+epoch>", episode_id, return_s). An episode's return request rebuilds the cache at a cost
+proportional to the context (the CUPED covariate) times lognormal noise; in a TREATED episode (arm
+by lever_flags' own hash of the flags' salt) a wake at 3300 s splits it into two gap rows (the
+first ended_by=wake, return_s null), the wake costs a cache read of the context plus a short turn,
+and the rebuild is multiplied by (1 - F). Truth: planted_pp_wk = (mean control rebuild x F - mean
+wake cost) x episodes per week.
 """
 
 import argparse
@@ -95,6 +98,7 @@ open(os.path.join(state, "guard.heartbeat"), "w").close()
 W_WRITE, W_READ, W_OUT = 0.245, 0.0067, 0.404
 gaps, d4, arm_rows = [], [], []
 cost = {"treat": [], "ctrl": []}
+wakes = []
 n_gaps = 0
 wpp = 0.0
 span = (a.now - 3600 * 3) - (start + 600)
@@ -178,7 +182,10 @@ for i in range(a.sessions):
         dur = rnd.uniform(3600, 7200)
         t0 = t
         req(t0, 1000, ctx, 200)  # the last request before the gap
-        unit = "%s:%s" % (sid, iso(t0))
+        unit = "%s:%d" % (
+            sid,
+            t0,
+        )  # gap v2's arm unit: "<sid>:<episode epoch>" (hooks/lib/idle_gap.py)
         ar = lf.arm("D3", unit, doc, "file")
         arm = ar["arm"]
         arm_rows.append(
@@ -195,21 +202,47 @@ for i in range(a.sessions):
         )
         base = ctx * math.exp(rnd.gauss(0, 0.25) - 0.03125)
         cw = int(base * ((1 - a.effect) if arm == "treat" else 1.0))
-        cost[arm].append(cw * W_WRITE / 1e6)
+        row = {
+            "kind": "gap",
+            "v": 2,
+            "sid": sid,
+            "acct": accts[k],
+            "wake_s": 3300,
+            "ctx": ctx,
+            "episode_id": iso(t0),
+            "unit": unit,
+        }
+        wake_pp = 0.0
+        seg = t0
+        if (
+            arm == "treat"
+        ):  # a fired wake splits the episode: its gap row has no return yet
+            req(t0 + 3300, 300, ctx, 150)
+            wake_pp = (300 * W_WRITE + ctx * W_READ + 150 * W_OUT) / 1e6
+            gaps.append(
+                dict(
+                    row,
+                    ts=iso(t0 + 3300),
+                    start=iso(t0),
+                    dur=3300.0,
+                    ended_by="wake",
+                    return_s=None,
+                )
+            )
+            seg = t0 + 3300
+        cost[arm].append(cw * W_WRITE / 1e6 + wake_pp)
+        if arm == "treat":
+            wakes.append(wake_pp)
         req(t0 + dur, cw, 0, 0)  # the return: the cache rebuild
         gaps.append(
-            {
-                "kind": "gap",
-                "v": 1,
-                "ts": iso(t0 + dur),
-                "sid": sid,
-                "acct": accts[k],
-                "start": iso(t0),
-                "dur": dur,
-                "wake_s": 3300,
-                "ctx": ctx,
-                "outcome": "no_wake",
-            }
+            dict(
+                row,
+                ts=iso(t0 + dur),
+                start=iso(seg),
+                dur=round(t0 + dur - seg, 1),
+                ended_by="record",
+                return_s=round(dur, 1),
+            )
         )
         n_gaps += 1
         t = t0 + dur + 600
@@ -297,7 +330,10 @@ print(
             "ctrl": len(cost["ctrl"]),
             "ctrl_mean_pp": mc,
             "per_week": per_week,
-            "planted_pp_wk": mc * a.effect * per_week,
+            "planted_pp_wk": (
+                mc * a.effect - (sum(wakes) / len(wakes) if wakes else 0.0)
+            )
+            * per_week,
             "wpp": wpp,
             "stage_started_at": iso(start),
         },

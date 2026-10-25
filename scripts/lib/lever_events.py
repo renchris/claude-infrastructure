@@ -22,11 +22,12 @@ ELIGIBLE EVENTS: the points where a lever DECIDES, logged in both arms by the sh
 `would` = the treatment would act there.
   D1  idle-recycle-shadow.jsonl  v=="ok" (an idle return evaluated)     would = would_advise_k2 (200k)
   D2  workflow-lean-shadow.jsonl every Workflow call parsed (no kind)   would = would_deny
-  D3  idle-keepalive.jsonl       kind=="gap" with dur >= wake_s         would = True (a due wake)
+  D3  idle-keepalive.jsonl       kind=="gap": v2 one per closed episode  would = True (a due wake)
+                                 (unit, episode_id, return_s >= wake_s); v1 one per gap (dur)
   D4  subagent-long-bash.jsonl   kind=="subagent_bash", class set       would = not exempt
 Every reader filters on kind: S3 splits an over-2KB workflow row into kind=slots continuation rows,
 and writes kind=d4_follow rows beside the calls they follow.
-Units are lever_flags' (D1/D2 the lineage root, D3 "sid:gap_start", D4 the agent_id). An event's
+Units are lever_flags' (D1/D2 the lineage root, D3 "sid:episode epoch" — v1 rows "sid:gap_start" —, D4 the agent_id). An event's
 arm is the LOGGED one where lever-arms.jsonl has it (kind=session for D1/D2, kind=event rows per
 (lever, unit) once S2/S3 write them), else recomputed by lever_flags.arm() against the current flag
 file, and every event says which (arm_src logged|recomputed).
@@ -327,7 +328,22 @@ def _extract(lever, r):
     if lever == "D3":
         if r.get("kind") != "gap":
             return None
-        dur, wake_s = r.get("dur"), r.get("wake_s") or 3300
+        wake_s = r.get("wake_s") or 3300
+        if r.get("unit") is not None:
+            # gap v2 (S2): the event is the EPISODE, unit "<sid>:<episode epoch>" (the arm unit),
+            # from its start to the real return (return_s); a gap a wake split (ended_by=wake,
+            # return_s null) is not the episode's end, so only the closing gap yields the event
+            ep, dur = parse_ts(r.get("episode_id")), r.get("return_s")
+            if ep is None or not isinstance(dur, (int, float)) or dur < wake_s:
+                return None
+            return (
+                r.get("sid"),
+                str(r["unit"]),
+                ep,
+                True,
+                {"dur": dur, "ctx": r.get("ctx"), "outcome": r.get("outcome")},
+            )
+        dur = r.get("dur")
         if not isinstance(dur, (int, float)) or dur < wake_s:
             return None
         start = r.get("start")
@@ -509,8 +525,14 @@ def scan_sessions(since, until):
                 s["last_real"] = max(s["last_real"], ts)
             t = parse_ts(ts + "Z") if ts else None
             if t is not None:
-                w = tok["uncached_input"] + tok["cache_write_5m"] + tok["cache_write_1h"]
-                reqs[sid].append((t, price(tok, "mid"), w, tok["cache_read"], tok["output"]))
+                w = (
+                    tok["uncached_input"]
+                    + tok["cache_write_5m"]
+                    + tok["cache_write_1h"]
+                )
+                reqs[sid].append(
+                    (t, price(tok, "mid"), w, tok["cache_read"], tok["output"])
+                )
     for s in sess.values():
         s["models"] = sorted(s["models"])
         # a context-wall death: the main session's last word was the refusal
@@ -529,7 +551,9 @@ def req_pp(q, end="mid", w_write=W_WRITE, w_out=W_OUT):
 
 def window_pp(reqs, sid, t0, t1, end="mid", w_write=W_WRITE, w_out=W_OUT):
     """pp of a session's requests with t0 <= t < t1 (S5 prices events through this)."""
-    return sum(req_pp(q, end, w_write, w_out) for q in reqs.get(sid, ()) if t0 <= q[0] < t1)
+    return sum(
+        req_pp(q, end, w_write, w_out) for q in reqs.get(sid, ()) if t0 <= q[0] < t1
+    )
 
 
 # ── the ledger row ────────────────────────────────────────────────────────────────────────────
@@ -541,7 +565,9 @@ def ledger_rows(sess, arms, flags, events, lands, since, until):
     window's end."""
     ev_by_sid = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     first = defaultdict(dict)
-    for e in events:  # sorted by (lever, t): the first seen per (sid, lever) is the earliest
+    for e in (
+        events
+    ):  # sorted by (lever, t): the first seen per (sid, lever) is the earliest
         ev_by_sid[e["sid"]][e["lever"]][e["arm"] or "?"] += 1
         first[e["sid"]].setdefault(e["lever"], e["arm"] or "?")
     rows = []

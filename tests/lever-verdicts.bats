@@ -8,7 +8,8 @@
 # mkfleet.py plants a known D3 effect and prints the truth) and at the library boundary for the ports:
 #   · the stats ports reproduce the plan's own numbers (MDE 2.85/1.48/14.36/2.55 pp/wk, T3 false-trip
 #     0.27/0.67/4.1%, Wilson n 16/25/6, HP ×1.37) and Newcombe's published example
-#   · a planted effect is recovered within 15% and reads stat ADVANCE; no effect never ADVANCEs; a
+#   · one D3 event per idle episode from S2's gap v2 rows (a wake splits an episode in two rows);
+#     a planted effect is recovered within 15% and reads stat ADVANCE; no effect never ADVANCEs; a
 #     planted harm REVERTs; plumbing (here only the check S11/S12 builds) holds the final verdict
 #   · Haybittle-Peto: KEEP before the first look, |z| 3.0 at an interim look, 1.96 at the final
 #   · the pseudo-salt A/A has an FPR inside [2%, 8%] on synthetic nulls; without a qualifying S0 A/A
@@ -20,6 +21,8 @@
 # cuts of this wave, run by hand 2026-10-25 on the test 2 fleet: an A/A over all events (treated
 # ones included) failed test 2's plumbing list (bootstrap vs A/A 33% apart); D3/D4 session arms by
 # "any treated event" with no control floor read guard BREACH on T4 (test 2's .guard == "OK").
+# (c) the D3 reader before it learned gap v2 (lever_events.py at b9c4fa0c4) read this fleet as 685
+# events at -0.61 pp/wk — per gap row, on an ISO unit no arm row carries — against 640 and +5.80.
 
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd -P)"
@@ -63,6 +66,8 @@ print("%.4f %.4f" % (lo, hi), s.hp_bound(1, 3), s.hp_bound(3, 3))' "$REPO/script
   truth="$(fleet --effect 0.5)"
   planted="$(printf '%s' "$truth" | jq -r .planted_pp_wk)"
   r="$(d3)"
+  # one event per idle EPISODE: a wake-split episode's two gap v2 rows (S2's shape) are one event
+  [ "$(printf '%s' "$r" | jq -r .events)" = "$(printf '%s' "$truth" | jq -r .gaps)" ] || { echo "$r"; false; }
   [ "$(printf '%s' "$r" | jq -r .stat_verdict)" = ADVANCE ] || { echo "$r"; false; }
   printf '%s' "$r" | jq -e --argjson p "$planted" \
     '(.estimate.pp_wk - $p | fabs) <= 0.15 * $p and .estimate.ci_lo[0] > 0 and .estimate.ci_hi[0] > 0
