@@ -44,7 +44,7 @@ in a README, below the hero.** (§6; how the three coexist, and each launch-film
 - Launch HN and Product Hunt: one-shot channels, substantive releases only, any finished asset (step 11; X1's advice).
 - HyperFrames' `/product-launch-video` route triggers on "launch video for X" but builds a site promo from captured brand
   assets and defaults X feeds to 1:1. Never route a founder demo there; X exports stay 16:9 (step 45 [33:35]-[33:39]).
-- **Resume:** if `~/Development/personal/launch-video/<product>/setup.md` exists, read it, `post-log.md` and the newest
+- **Resume:** if the product directory's `setup.md` exists (default `~/Development/personal/launch-video/<product>/`), read it, `post-log.md` and the newest
   `posts/*/checklist.md`, skip Stage 0, and resume at the first unmet exit check. An item marked `open` is asked when needed.
 
 ## Who does what
@@ -96,8 +96,8 @@ lands, say once "Tell me when it is in <path>" and end the turn; Resume picks it
 7. **Survivor habits are reference columns:** report where a take differs from step 29, never fail it on that. Label every
    number MEASURED (command named) or INFERRED (method named); an untested default says UNTESTED.
 8. **Length is an output of the beats,** never a target or a choice (INFERRED in step 43, after launch-film §5). Report it.
-9. **Product repos are read-only** (`git log`, `git show`, `gh pr list`). Tags or events go in only when the founder asks,
-   through that repo's own change process. Never touch a reso or reso-management-app repo.
+9. **Product repos are read-only** (`git log`, `git show`, `gh pr list`). Tags, events or a post package go in only when the
+   founder asks, through that repo's own change process (its worktree and land flow), never over a launch-film project.
 10. **The skill schedules nothing:** no launchd, cron, reminders or messages. The weekly question, the daily challenge prompt
     and the day-7 read run when the founder calls the skill; Resume finds the open row.
 
@@ -108,7 +108,8 @@ lands, say once "Tell me when it is in <path>" and end the turn; Resume picks it
    and which accounts post. Neither → route. Voice-only is UNTESTED (none of his six is). `mode` blocks Stage 1; an
    unknown mic blocks Stage 3 only, so Stages 1-2 may run with `mic: open` (INFERRED: they record nothing).
 2. **Create the product directory**, default `~/Development/personal/launch-video/<product>/` (private, local, `.md` and `.sh`
-   only): `setup.md`, `post-log.md`, `claims.md`, `swipe.md`, `posts/`; a dry run uses the caller's scratch `log-dir`.
+   only), or the directory the founder names: `setup.md`, `post-log.md`, `claims.md`, `swipe.md`, `posts/`; a dry run uses
+   the caller's scratch `log-dir`.
 3. **Mark the rest `open`** and fill each when its stage needs it: tiers (step 1), the conversion definition (step 33; q11 for
    an open-source tool), the tag scheme (step 4), product events (step 5, built only if the founder asks), music sources
    (q15), the one-liner and any launch-film project (§6.4-6.5), an optional mic reference (UNTESTED), the first four weeks (q12).
