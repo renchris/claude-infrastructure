@@ -106,3 +106,30 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
   [[ "$output" == *STUB-STDOUT-MARKER* ]] || false
   [[ "$output" == *STUB-STDERR-MARKER* ]]
 }
+
+# ── AFTER interact: THE STATUS IS CLAUDE'S, NOT EXPECT'S (FIX-DESIGN D13). A program that ends at
+#    `interact` exits 0 however the session ended, so a cc-pane-runner above lr-fire-resume read a
+#    crash as a clean exit and would close the pane. The lines after `interact` are extracted from
+#    the subject and run after a spawn whose child really dies, so the reap under test is the real one.
+post_interact() { # $1 = the child's sh program → $PI, an expect program: spawn it, read to eof, then the subject's tail
+  PI="$BATS_TEST_TMPDIR/post-interact.exp"
+  { printf 'spawn -noecho /bin/sh -c {%s}\nexpect eof\n' "$1"
+    sed -n "/^expect -c '\$/,/^' ||/p" "$FIRE" | sed -n '/^  interact$/,$p' | sed '1d;$d'
+  } > "$PI"
+  grep -q 'catch {wait}' "$PI"     # extraction sanity: the reap is in the extracted span
+}
+
+@test "after interact: a SIGTERM'd session makes the program exit non-zero (lr_rc ≠ 0)" {
+  post_interact 'kill -TERM $$'
+  run expect -f "$PI"
+  [ "$status" -ne 0 ]
+}
+
+@test "after interact: the session's own exit status is the program's (5 → 5, 0 → 0)" {
+  post_interact 'exit 5'
+  run expect -f "$PI"
+  [ "$status" -eq 5 ]
+  post_interact 'exit 0'
+  run expect -f "$PI"
+  [ "$status" -eq 0 ]
+}

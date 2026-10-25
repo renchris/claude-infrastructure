@@ -2233,6 +2233,12 @@ expect -c '
   set lr_keep [lr_drain_user]
   if {$lr_keep ne ""} { send -- [lr_b_utf8 $lr_keep] }
   interact
+  # THE EXIT STATUS OF CLAUDE, not of expect (the same reap as bin/reso-resume-one). A script that ends
+  # at `interact` exits 0 however the session ended, so a cc-pane-runner above this file would read a
+  # crash as a clean exit and close the pane. A signal death (CHILDKILLED <sig>) or a failed wait is 1.
+  if {[catch {wait} lr_w]} { exit 1 }
+  if {[llength $lr_w] > 4} { exit 1 }
+  exit [lindex $lr_w 3]
 ' || lr_rc=$?
 [ -z "$lr_tty_saved" ] || stty "$lr_tty_saved" 2>/dev/null || true
 # ── FALL THROUGH TO A SHELL, so the pane outlives the session (see the block above the expect) ────
@@ -2256,7 +2262,12 @@ fi
 # pane's tty, so it claims the stage (an atomic rename the watcher reads as the ack) and execs it. On
 # 2026-10-09 the typed form failed 16 times at load ~45 per core and stranded pane 44. Anything
 # unreadable — no lib, no stage, a refused take — falls through to the ordinary shell below unchanged.
-lr_succ_s="$0" lr_succ_lib=""
+lr_succ_s="$0" lr_succ_lib="" lr_succ_keep=1
+# Ownership: the runner exports its kitty window id as CC_PANE_RUNNER_OWNS_CLOSE; equal to this pane's
+# id ⇒ return the status to it. A typed launch, an operator pane or an older runner's `1` keeps a shell.
+if [ -n "${KITTY_WINDOW_ID:-}" ] && [ "${CC_PANE_RUNNER_OWNS_CLOSE:-}" = "$KITTY_WINDOW_ID" ]; then
+  lr_succ_keep=0
+fi
 while [ -L "$lr_succ_s" ]; do
   lr_succ_t="$(readlink "$lr_succ_s" 2>/dev/null)" || break
   case "$lr_succ_t" in /*) lr_succ_s="$lr_succ_t" ;; *) lr_succ_s="$(dirname "$lr_succ_s")/$lr_succ_t" ;; esac
@@ -2270,7 +2281,13 @@ if [ -n "$lr_succ_lib" ] && . "$lr_succ_lib" 2>/dev/null \
    && lr_succ_claimed="$(cc_pane_successor_take)" && [ -n "$lr_succ_claimed" ]; then
   printf '\n' >&2
   CC_SAY_DETAIL="staged successor $lr_succ_claimed" _lrf_say run "${SID:+${SID:0:8} }ended, starting successor" "claude exited rc $lr_rc"
-  cc_pane_successor_exec "$lr_succ_claimed" 1 || true
+  cc_pane_successor_exec "$lr_succ_claimed" "$lr_succ_keep" || true
+fi
+# A pane rooted in bin/cc-pane-runner (lr-lib.sh lr_launch_tail) is the runner's to end: it decides
+# close, hold or keep from this status, so no shell is exec'd here (FIX-DESIGN D13). The successor
+# above ran with keep=0 for the same reason and returned its own status through the runner.
+if [ "$lr_succ_keep" = 0 ]; then
+  exit "$lr_rc"
 fi
 # <<< lr-successor
 # WHAT FOLLOWS, SAID ONCE (lr-wake 2026-10-18, h defect 6). "This pane is now an ordinary shell" was

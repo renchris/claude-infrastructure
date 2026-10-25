@@ -220,9 +220,11 @@ if [ -t 0 ] && { [ ! -t 1 ] || [ ! -t 2 ]; } && [ -w /dev/tty ] && (: >/dev/tty)
   unset __ccs_r
 fi
 export CC_PANE_SUCCESSOR_LOOP_PID="$$" CC_PANE_SUCCESSOR_HANDBACK="$__ccs_h"
+__ccs_rc=0
 while [ -n "$__ccs_f" ] && [ -f "$__ccs_f" ]; do
   unset CLAUDE_CONFIG_DIR CC_ACCOUNT_PINNED CLAUDE_ISOLATION_SKIP
   source "$__ccs_f"
+  __ccs_rc=$?
   __ccs_f=""
   if [ -s "$__ccs_h" ]; then __ccs_f="$(cat "$__ccs_h")"; rm -f "$__ccs_h"; fi
 done
@@ -235,8 +237,15 @@ cc_pane_successor_exec() { # $1=claimed path, $2=1 keep a login shell after it (
   # The predecessor's per-launch prefixes (lib/claude-launcher.zsh claudeN, handoff relaunch lines)
   # reach this process's env; the .cmd sets its own, so nothing here may leak into the successor.
   unset CLAUDE_CONFIG_DIR CC_ACCOUNT_PINNED CLAUDE_ISOLATION_SKIP
-  # shellcheck disable=SC2016  # ${SHELL} expands in the successor shell, not here
+  # keep=0 ends with the LAST successor's status, not the loop's `unset` (0): under a cc-pane-runner
+  # that status decides close vs keep:crash, so a successor killed by SIGTERM (143) must reach it
+  # (FIX-DESIGN D14 — at 0 a crashed successor's runner pane closed, breaking invariant 4).
+  # shellcheck disable=SC2016  # ${SHELL} and __ccs_rc expand in the successor shell, not here
+  _tail='
+exit "${__ccs_rc:-0}"'
+  # shellcheck disable=SC2016  # the same: expanded by the successor shell
   [ "${2:-1}" = 0 ] || _tail='
+unset __ccs_rc
 exec "${SHELL:-/bin/zsh}" -l -i'
   # `-l -i` is load-bearing: the launch line calls zsh FUNCTIONS defined only in the interactive rc.
   exec "$_sh" -l -i -c "$_CC_PANE_SUCCESSOR_LOOP$_tail" cc-successor "$_c" "$(cc_pane_successor_dir)/$_k.handback"

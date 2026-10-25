@@ -361,7 +361,7 @@ mk_lr_tail() {
   mkdir -p "$t/scripts/limit-recover" "$t/lib" "$t/bin"
   ln -sf "$LIB" "$t/lib/pane-successor.sh"
   ln -sf "$REPO/lib/cc-say.sh" "$t/lib/cc-say.sh"
-  { printf '#!/bin/bash\nset -euo pipefail\nlr_rc=0\n'
+  { printf '#!/bin/bash\nset -euo pipefail\nlr_rc="${LR_TEST_RC:-0}"\n'
     sed -n '/^# >>> lr-say$/,/^# <<< lr-say$/p' "$REPO/scripts/limit-recover/lr-fire-resume.sh"
     sed -n '/^# >>> lr-successor$/,/^# <<< lr-successor$/p' "$REPO/scripts/limit-recover/lr-fire-resume.sh"
     printf 'echo FELL-THROUGH\n'
@@ -384,6 +384,55 @@ mk_lr_tail() {
     || { cat "$HOME/.claude/logs/pane-say.jsonl"; false; }
   [[ "$output" != *FELL-THROUGH* ]] || false
   grep -qxF 'argv: [-l] [-i]' "$FAKESH_LOG"   # the trailing shell keeps the pane
+}
+
+# ── THE LOOP'S STATUS (FIX-DESIGN D14). Under a cc-pane-runner the status decides close vs keep:crash;
+#    the loop used to end in `unset`, so a successor killed by SIGTERM reached the runner as 0 and its
+#    pane closed. keep=0 now ends with the last successor's status; keep=1 is unchanged. ────────────
+@test "exec (0 flag): the loop ends with the successor's own status (143), not its unset's 0" {
+  printf '/bin/sh -c "exit 143"\n' >> "$CMD"
+  stage
+  claim="$(cc_pane_successor_take)"
+  run env SHELL="$FAKESH" /bin/bash -c '. "$1"; cc_pane_successor_exec "$2" 0' _ "$LIB" "$claim"
+  [ "$(cat "$MARK")" = "ran CCD=<unset>" ]
+  [ "$status" -eq 143 ]
+}
+
+@test "exec (trailing shell): a 143 successor still ends in the login shell, whose status is the pane's" {
+  printf '/bin/sh -c "exit 143"\n' >> "$CMD"
+  stage
+  claim="$(cc_pane_successor_take)"
+  run env SHELL="$FAKESH" /bin/bash -c '. "$1"; cc_pane_successor_exec "$2" 1' _ "$LIB" "$claim"
+  [ "$status" -eq 0 ]
+  grep -qxF 'argv: [-l] [-i]' "$FAKESH_LOG"
+}
+
+@test "lr-fire-resume fall-through under its runner: claude's rc is returned, no shell (no stage)" {
+  mk_lr_tail
+  run env KITTY_WINDOW_ID=44 CC_PANE_RUNNER_OWNS_CLOSE=44 LR_TEST_RC=143 SHELL="$FAKESH" "$LR_TAIL"
+  [[ "$output" != *FELL-THROUGH* ]] || { echo "$output"; false; }
+  [ ! -e "$FAKESH_LOG" ]
+  [ "$status" -eq 143 ]
+}
+
+@test "lr-fire-resume fall-through under its runner: a staged successor runs keep=0 and its rc returns" {
+  mk_lr_tail
+  printf '/bin/sh -c "exit 143"\n' >> "$CMD"
+  stage
+  run env KITTY_WINDOW_ID=44 CC_PANE_RUNNER_OWNS_CLOSE=44 SHELL="$FAKESH" "$LR_TAIL"
+  [ "$(cat "$MARK")" = "ran CCD=<unset>" ]
+  [ "$(grep -c '^argv:' "$FAKESH_LOG")" -eq 1 ]      # the loop only: no trailing login shell
+  [ "$status" -eq 143 ]
+}
+
+@test "lr-fire-resume fall-through: ownership is the pane's OWN id — another pane's, or an old runner's 1, keeps the shell path" {
+  mk_lr_tail
+  run env KITTY_WINDOW_ID=44 CC_PANE_RUNNER_OWNS_CLOSE=1 SHELL="$FAKESH" "$LR_TAIL"
+  [[ "$output" == *FELL-THROUGH* ]] || false
+  run env KITTY_WINDOW_ID=44 CC_PANE_RUNNER_OWNS_CLOSE=45 SHELL="$FAKESH" "$LR_TAIL"
+  [[ "$output" == *FELL-THROUGH* ]] || false
+  run env CC_PANE_RUNNER_OWNS_CLOSE=44 SHELL="$FAKESH" "$LR_TAIL"
+  [[ "$output" == *FELL-THROUGH* ]]
 }
 
 @test "lr-fire-resume fall-through: no stage (or a refused take) reaches the ordinary shell path" {
