@@ -85,7 +85,9 @@
 # Exit codes: 1 kitty failed · 3 not inside kitty · 4 no control socket · 5 pinned binary unusable ·
 #             64 unsupported command/verb · 65 bad or missing window id · 66 identity pin
 #             unsatisfied or unverifiable (above) · 70 close refused by the fullscreen guard as
-#             refused-fs: the last pane of a native-fullscreen window, a fixed fact no retry changes
+#             refused-fs: the last pane of a native-fullscreen window, a condition that clears when
+#             the window gains a pane or leaves fullscreen (a runner pane holds and closes itself),
+#             so no immediate retry changes it
 #             (any OTHER guard refusal stays 1 and may be retried; see the `close` arm).
 #
 # Seams: CC_TERM_KITTY (kitty binary) · CC_TERM_KITTY_TO (socket) · IT2_KITTY_TIMEOUT_S
@@ -1662,7 +1664,9 @@ else:
       fi
       # The guard's stderr is captured (and re-emitted unchanged) because its rc alone cannot say WHY
       # it refused: kitten-failed, refused-unknown and refused-fs all exit 3. Only refused-fs is a
-      # fixed fact (this IS the last pane of a fullscreen window), so only it gets its own code, 70:
+      # condition no immediate retry changes (this IS the last pane of a fullscreen window until the
+      # window gains a pane or leaves fullscreen; a runner pane holds and closes itself), so only it
+      # gets its own code, 70:
       # retrying cannot change it, and handoff-fire's self-close stops on it and pages husk-fs instead
       # of re-running the same verdict 4 times (incident 2026-10-16, 3 husk episodes x 4 retries).
       # The other refusals keep exit 1 and are retried, because under load they can be transient.

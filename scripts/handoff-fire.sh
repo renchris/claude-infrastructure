@@ -1872,9 +1872,10 @@ sys.exit(0)' 2>/dev/null
 #
 # RETURN 3 = FS-GUARD (kitty crash 2026-10-15; incident follow-up 2026-10-16). bin/it2-kitty exits 70
 # when the fullscreen guard refused the close as refused-fs: the pane is the last one of a
-# native-fullscreen OS window, and closing it is the crash precondition. That is a fixed fact, not a
-# transient, so it is reported apart from 1: a retry re-runs the identical verdict (each 2026-10-16
-# husk episode ran 4 of them), and the caller should raise husk-fs instead.
+# native-fullscreen OS window, and closing it is the crash precondition. That is a condition that clears
+# when the window gains a pane or leaves fullscreen (a runner pane holds and closes itself), not a
+# transient a 2 s retry outlasts, so it is reported apart from 1: a retry re-runs the identical verdict
+# (each 2026-10-16 husk episode ran 4 of them), and the caller should raise husk-fs instead.
 hf_close_pane() { # $1=pane id  $2=site label  $3=spawn|self|peer  → 0 closed / 1 failed / 2 REFUSED / 3 FS-GUARD
   local _id="${1##*:}" _site="${2:-unknown}" _mode="${3:-peer}"
   local _term _owner _verdict _rc=0 _still _shim
@@ -6733,6 +6734,40 @@ if ts < int(sys.argv[2]): sys.exit(1)
 print("%d %s" % (rc, "true" if cs else "false"))' "$f" "$t0" 2>/dev/null)" || return 1
   [ -n "$row" ] || return 1
   printf '%s' "$row"
+}
+
+# THE RUNNER'S OWN DECISION (husk-history FIX-DESIGN D5). bin/cc-pane-runner writes the exit record
+# when its command returns and only THEN decides the pane's end (guard ≤5 s), adding `"tail"`:
+# closed | hold:fs | hold:unreadable | keep:<why>. A pane whose runner closes or holds it is not this
+# watcher's to close: an RPC close there races the runner, and a refused one paints a husk over a pane
+# that closes itself. So this waits for a record that is THIS launch's (ts ≥ T0, the watcher's start)
+# AND carries a tail — a ts test alone reads the record before the decision. It polls only when the
+# runner owns the pane: CC_PANE_RUNNER_OWNS_CLOSE is the runner's kitty window id, inherited by the
+# session and so by this watcher; anything else (unset, another pane, an older runner's `1`) is rc 1 now.
+# hf_pane_exit_tail PANE T0 MAXS → prints the tail · rc 0 found / 1 none (not owned, or MAXS s passed)
+hf_pane_exit_tail() {
+  local p="${1##*:}" t0="${2:-}" maxs="${3:-20}" f n=0 tl
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  case "$t0" in ''|*[!0-9]*) return 1 ;; esac
+  case "$maxs" in ''|*[!0-9]*) maxs=20 ;; esac
+  [ "${CC_PANE_RUNNER_OWNS_CLOSE:-}" = "$p" ] || return 1
+  f="${CC_PANE_EXIT_DIR:-${HOME:-}/.claude/run/pane-exit}/$p.json"
+  while :; do
+    if [ -f "$f" ] && tl="$(/usr/bin/python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    ts, tl = d["ts"], d["tail"]
+    assert isinstance(ts, int) and isinstance(tl, str) and tl
+except Exception:
+    sys.exit(1)
+if ts < int(sys.argv[2]): sys.exit(1)
+print(tl)' "$f" "$t0" 2>/dev/null)" && [ -n "$tl" ]; then
+      printf '%s' "$tl"; return 0
+    fi
+    [ "$n" -lt "$maxs" ] || return 1
+    sleep 1; n=$((n + 1))
+  done
 }
 
 pane_parked_reason() { # $1=it2-bin $2=session-id → echoes the reason, 0 parked / 1 not-parked/unknown
@@ -11672,6 +11707,7 @@ payload_lint_gate() {
 # websocket API — proven reliable detached). `sleep` here is plain sleep: no AppleEvents needed.
 if [ "${1:-}" = "__selfclose" ]; then
   SID="${2:?__selfclose needs a session id}"
+  _sc_t0="$(date +%s)"                             # a runner exit record older than this is not this launch's
   TTY_PATH="${3:-}"                                # acquired foreground at arm time — trustworthy
   SUCCESSOR="${4:-}"                               # verified-alive pane to focus after the close
   SUCCESSOR_TTY="${5:-}"                            # successor's tty, RESOLVED FOREGROUND at arm time
@@ -11840,7 +11876,9 @@ if [ "${1:-}" = "__selfclose" ]; then
   # NOT EVERY FAILED CLOSE IS A BLIP (2026-10-16). The connection failure above is the iTerm2 case the
   # retry was built for, and only that case. Under kitty, the fullscreen guard (kitty crash
   # 2026-10-15) refuses to close the last pane of a native-fullscreen window, and that refusal is a
-  # fixed fact: all 3 husk episodes of 2026-10-15/16 re-ran the identical verdict 4 times and then
+  # condition that clears only when the window gains a pane or leaves fullscreen (a runner pane holds
+  # and closes itself; the runner stand-down below skips this loop for it), never within a retry: all
+  # 3 husk episodes of 2026-10-15/16 re-ran the identical verdict 4 times and then
   # paged "failed 4/4" with nothing to say about why. hf_close_pane now returns 3 for exactly that
   # refusal (it2-kitty exit 70, refused-fs only), and the loop stops on it; the arm after the loop
   # raises husk-fs, which names the cause and the remedy (⌘W leaves fullscreen first). Any other
@@ -11854,7 +11892,17 @@ if [ "${1:-}" = "__selfclose" ]; then
     exit 1
   fi
   _close_ok=0 _close_rc=0
+  # A RUNNER-OWNED PANE ENDS ITSELF (FIX-DESIGN W1d). Its cc-pane-runner closed it, or holds it until
+  # removing it cannot empty a fullscreen window and then closes it; either way there is nothing to
+  # close from here and no husk to page. keep:* (crash, recycle, …) and no tail fall through unchanged.
+  if _sc_tail="$(hf_pane_exit_tail "$SID" "$_sc_t0" "${HF_PANE_EXIT_TAIL_MAXS:-20}")"; then
+    case "$_sc_tail" in
+      closed|hold:*) _close_ok=1
+        echo "→ pane $SID belongs to its cc-pane-runner ($_sc_tail) — it ends the pane itself; not closing it from here" ;;
+    esac
+  fi
   for _try in 1 2 3 4; do
+    [ "$_close_ok" = 0 ] || break
     # CLOSED FROM INSIDE IS CLOSED (husk panes 2026-09-30, fix F-a). bin/cc-pane-runner now exits
     # its pane when claude exits 0 with no recycle pending, so by the time this loop runs the window
     # this /exit belonged to may already be gone. Closing a pane that no longer exists fails every

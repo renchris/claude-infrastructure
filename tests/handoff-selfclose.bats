@@ -549,6 +549,62 @@ SH
   [ ! -e "$H/.claude/state/pane-close-queue/husk-PREDSID.json" ]
 }
 
+# ── A RUNNER-OWNED PANE ENDS ITSELF (husk-history FIX-DESIGN W1d, arms A2/A2d/A2s). Pane 289 shape:
+#    its cc-pane-runner wrote tail hold:fs (the last pane of a fullscreen window: it holds, then closes
+#    itself), and the watcher's RPC close refused rc 70 and painted husk-fs over it. RED before W1d.
+runner_rec() { # $1=dir $2=ts $3=tail ('' = no tail key); also lists pane 289 for the reachability proof
+  mkdir -p "$1"; printf '%s\n' 289 SUCC-B > "$BATS_TEST_TMPDIR/panes"; export PANE_LIST="$BATS_TEST_TMPDIR/panes"
+  if [ -n "$3" ]; then printf '{"rc":0,"claude_started":true,"ts":%s,"tail":"%s"}\n' "$2" "$3" > "$1/289.json"
+  else printf '{"rc":0,"claude_started":true,"ts":%s}\n' "$2" > "$1/289.json"; fi
+}
+
+@test "A2: the runner owns pane 289 and holds it (tail hold:fs) → no session close, no alarm, no husk row" {
+  H="$BATS_TEST_TMPDIR/home-a2"; mk_home "$H"
+  : > "$PS_DEAD_DIR/TTY-A"
+  runner_rec "$BATS_TEST_TMPDIR/px" "$(( $(date +%s) + 3600 ))" hold:fs
+  run env HOME="$H" CC_PANE_EXIT_DIR="$BATS_TEST_TMPDIR/px" CC_PANE_RUNNER_OWNS_CLOSE=289 \
+      IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_PANE_EXIT_TAIL_MAXS=2 bash "$HF" __selfclose 289 TTY-A
+  [[ "$output" == *"belongs to its cc-pane-runner (hold:fs)"* ]] || { echo "$output"; false; }
+  [ ! -e "$H/.claude/state/pane-close-queue/husk-289.json" ]
+  [ -z "$(ls "$H"/.claude/handoff-alarms/alarm-*.json 2>/dev/null)" ]
+  run grep -c 'session close' "$H/it2-calls.log"
+  [ "$output" = 0 ]
+}
+
+@test "A2d: the tail arrives 3 s after the watcher starts (the record precedes the decision) → still stands down" {
+  H="$BATS_TEST_TMPDIR/home-a2d"; mk_home "$H"
+  : > "$PS_DEAD_DIR/TTY-A"
+  local now; now="$(( $(date +%s) + 3600 ))"
+  runner_rec "$BATS_TEST_TMPDIR/px" "$now" ""                 # this launch's record, no decision yet
+  ( sleep 3; runner_rec "$BATS_TEST_TMPDIR/px" "$now" closed ) &
+  run env HOME="$H" CC_PANE_EXIT_DIR="$BATS_TEST_TMPDIR/px" CC_PANE_RUNNER_OWNS_CLOSE=289 \
+      IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_PANE_EXIT_TAIL_MAXS=15 bash "$HF" __selfclose 289 TTY-A
+  wait
+  [[ "$output" == *"belongs to its cc-pane-runner (closed)"* ]] || { echo "$output"; false; }
+  [ -z "$(ls "$H"/.claude/handoff-alarms/alarm-*.json 2>/dev/null)" ]
+  run grep -c 'session close' "$H/it2-calls.log"
+  [ "$output" = 0 ]
+}
+
+@test "A2s: a stale record, another pane's ownership, or a keep tail → today's close path runs" {
+  H="$BATS_TEST_TMPDIR/home-a2s"; mk_home "$H"
+  : > "$PS_DEAD_DIR/TTY-A"
+  runner_rec "$BATS_TEST_TMPDIR/px" 1000 hold:fs              # an earlier launch's record (kitty reuses ids)
+  run env HOME="$H" CC_PANE_EXIT_DIR="$BATS_TEST_TMPDIR/px" CC_PANE_RUNNER_OWNS_CLOSE=289 \
+      HF_PANE_EXIT_TAIL_MAXS=1 bash "$HF" __selfclose 289 TTY-A
+  grep -q 'session close' "$H/it2-calls.log" || { echo "$output"; false; }
+  H="$BATS_TEST_TMPDIR/home-a2s-own"; mk_home "$H"
+  runner_rec "$BATS_TEST_TMPDIR/px" "$(( $(date +%s) + 3600 ))" hold:fs
+  run env HOME="$H" CC_PANE_EXIT_DIR="$BATS_TEST_TMPDIR/px" CC_PANE_RUNNER_OWNS_CLOSE=1 \
+      HF_PANE_EXIT_TAIL_MAXS=1 bash "$HF" __selfclose 289 TTY-A
+  grep -q 'session close' "$H/it2-calls.log" || { echo "$output"; false; }
+  H="$BATS_TEST_TMPDIR/home-a2s-keep"; mk_home "$H"
+  runner_rec "$BATS_TEST_TMPDIR/px" "$(( $(date +%s) + 3600 ))" keep:crash
+  run env HOME="$H" CC_PANE_EXIT_DIR="$BATS_TEST_TMPDIR/px" CC_PANE_RUNNER_OWNS_CLOSE=289 \
+      HF_PANE_EXIT_TAIL_MAXS=1 bash "$HF" __selfclose 289 TTY-A
+  grep -q 'session close' "$H/it2-calls.log"
+}
+
 @test "close REFUSED by the fullscreen guard (rc 70) + CC STILL RUNNING → ONE attempt, close-failed-live naming the guard, NOT paged" {
   # The guard refuses on a live session too. husk-fs is only for `shell`; here the live arm keeps its
   # "look first" wording, reports the real attempt count (1, not a literal 4) and gains the guard
