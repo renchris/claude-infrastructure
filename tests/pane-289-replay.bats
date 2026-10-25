@@ -27,7 +27,7 @@ setup() {
 @test "A1 hold, then close: a refused-fs pane is held, re-asked, and closed after two safe reads" {
   fx_guard 3fs 3fs 0 0
   fx_runner claude
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "status=$status: $output"; false; }
   [ ! -e "$T/shell-ran" ]
   [ "$(wc -l < "$T/guard-log" | tr -d ' ')" -eq 4 ] || { cat "$T/guard-log"; false; }
   [ "$(sed -n 1p "$T/guard-log")" = "$FX_RUNNER_ARGV" ] || { cat "$T/guard-log"; false; }
@@ -80,7 +80,7 @@ setup() {
 # HEAD: `REFUSED — … holds 6 uncommitted change(s)`.
 @test "B1 closer: the finished session's pane would close; sibling dirt is not its work" {
   fx_close --pane 289 --dry-run
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "status=$status: $output"; false; }
   [[ "$output" == *"pane 289: WOULD CLOSE"*"Good to close: yes"* ]] || { echo "$output"; false; }
 }
 
@@ -181,7 +181,7 @@ setup() {
 # HEAD: closer `REFUSED — no transcript for session` (33× live) / `nothing says session`; sweep RESUME.
 b10() { # the pane-304 assertions (§2 row 1b), for either transcript variant
   fx_close --pane 304 --dry-run
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "status=$status: $output"; false; }
   [[ "$output" == *"pane 304: WOULD CLOSE"* ]] || { echo "$output"; false; }
   fx_paint --pane 304 --recompute --closer-out "$output" --dry-run
   [[ "$output" != *"state=RESUME"* ]] || { echo "$output"; false; }
@@ -205,7 +205,7 @@ b10() { # the pane-304 assertions (§2 row 1b), for either transcript variant
   grep -q 'exec "${SHELL:-/bin/zsh}" -l -i' "$T/lr-tail.sh" || { cat "$T/lr-tail.sh"; false; }
   run env KITTY_WINDOW_ID=289 CC_PANE_RUNNER_OWNS_CLOSE=289 SHELL="$S/fakeshell" \
     /usr/bin/script -q /dev/null /bin/bash "$T/lr-tail.sh" </dev/null
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "status=$status: $output"; false; }
   run test -e "$T/shell-ran"; [ "$status" -eq 1 ]
 }
 
@@ -213,7 +213,7 @@ b10() { # the pane-304 assertions (§2 row 1b), for either transcript variant
 @test "S1 successor loop: a successor that dies 143 reaches the runner as 143 — kept, guard never asked" {
   printf '%q\n' "$S/claude" > "$T/succ/ttys046.claimed.1"
   FX_INTERACTIVE=1 CLAUDE_RC=143 fx_runner ". $(printf %q "$REPO/lib/pane-successor.sh"); cc_pane_successor_exec $(printf %q "$T/succ/ttys046.claimed.1") 0"
-  [ "$status" -eq 7 ] || { echo "$output"; false; }
+  [ "$status" -eq 7 ] || { echo "status=$status: $output"; false; }
   [ "$(fx_tail)" = keep:crash ] || { cat "$T/pane-exit/289.json"; false; }
   run test -e "$T/guard-log"; [ "$status" -eq 1 ]
 }
@@ -237,7 +237,7 @@ b10() { # the pane-304 assertions (§2 row 1b), for either transcript variant
 @test "I1 guard: a crash over its own dirty NOTES.md keeps the shell, never asks the guard, stays RESUME" {
   echo dirty >> "$P/$NOTES"; fx_crash CRASH external-sigterm
   CLAUDE_RC=143 fx_runner claude
-  [ "$status" -eq 7 ] || { echo "$output"; false; }
+  [ "$status" -eq 7 ] || { echo "status=$status: $output"; false; }
   local tail; tail="$(fx_tail)"
   [ -z "$tail" ] || [ "$tail" = keep:crash ] || { echo "tail=$tail"; false; }
   [ ! -e "$T/guard-log" ]
@@ -298,7 +298,7 @@ i2_world() { # a stale yes, then a write only a Bash call made; the session cras
 @test "C1 guard: no close line and a 143 exit keep the shell; the guard is never asked and nothing holds" {
   { fx_tx_head; fx_selfclose; } > "$TX"
   CLAUDE_RC=143 fx_runner claude
-  [ "$status" -eq 7 ] || { echo "$output"; false; }
+  [ "$status" -eq 7 ] || { echo "status=$status: $output"; false; }
   [ -e "$T/shell-ran" ]
   local tail; tail="$(fx_tail)"
   [ "${tail#hold}" = "$tail" ] || { echo "tail=$tail"; false; }
