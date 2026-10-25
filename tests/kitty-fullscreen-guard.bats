@@ -97,6 +97,20 @@ def cache(pid, start, value):
 # main() in-process: the seams stay replaced, while _alert and --then still exec the PATH stubs
 def cli(*a):
     rc = g.main(list(a)); print(f"rc={rc} toggles={len(toggles)}")
+# The claim gate (guard docstring § CLAIMS): a fake wall clock, and one guard call per pane close.
+WALL = [1_000_000.0]
+g._wall = lambda: WALL[0]
+def snap(wid, panes, **extra):
+    """the kitten's reply for <wid> from a snapshot listing <panes>, one wid per pane"""
+    def k(addr, w, toggle=False):
+        base = dict(INFO, wid=wid, pid=4242, pane_wids=list(panes), pane_wid=wid,
+                    panes_in_os_window=len(panes), last_for=dict(INFO["last_for"], pane=len(panes) == 1))
+        return {**base, **extra}
+    g.kitten_query = k
+def close(wid, panes, **extra):
+    snap(wid, panes, **extra)
+    rc, verdict, info, _last, _r = g.decide("unix:/nowhere", wid, "refuse", "pane", "block-stock")
+    print(f"{wid}: rc={rc} verdict={verdict} claim={info.get('claim', 'n/a')} pending={info.get('pending')}")
 PY
 }
 
@@ -561,4 +575,97 @@ for v, st in (("refused-timeout", g.WindowState("UNKNOWN", [0], False, None)),
   vrow | grep -q '"error":"kitty @ kitten rc=1: boom"' || { vrow; false; }
   [[ "$stderr" == *"refused (kitten-failed) could not read kitty window 7: kitty @ kitten rc=1: boom"* ]] || { echo "$stderr"; false; }
   [[ "$stderr" != *"state="* ]] || { echo "$stderr"; false; }
+}
+
+# ── claims: concurrent "not last" answers (guard docstring § CLAIMS; FIX-DESIGN.md D7, breaks 1, 25) ─
+# Every window is fullscreen and on screen, so a close sent down the last-pane path is refused-fs.
+# Pane wids: A=1 B=2 C=3 D=4. RED-proof: mutants of claim_gate, once each — no claim check (G1),
+# count-based release (G2, G5), TTL ignored (G3).
+
+@test "G1 two panes from one snapshot: A is safe and claims, B takes the last-pane path and is refused" {
+  run drive 'states(lambda t: FS); close(1, [1, 2]); close(2, [1, 2])'
+  [[ "$output" == *"1: rc=0 verdict=safe-not-last claim=claimed pending=0"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"2: rc=3 verdict=refused-fs claim=last pending=1"* ]] || { echo "$output"; false; }
+  # the verdict row records the claim (here the CLI in-process: A's claim is live, so 2 is refused)
+  run drive 'states(lambda t: FS); close(1, [1, 2]); snap(2, [1, 2]); cli("--window", "2", "--to", "unix:/nowhere", "--mode", "refuse")'
+  [[ "$output" == *"rc=3 toggles=0"* ]] || { echo "$output"; false; }
+  vrow | grep -q '"verdict":"refused-fs".*"claim":"last","pending":1' || { vrow; false; }
+}
+
+@test "G2 two removals overlap: C left, A claims, B holding a stale snapshot of 3 is refused" {
+  run drive 'states(lambda t: FS); close(3, [1, 2, 3]); close(1, [1, 2]); close(2, [1, 2, 3])'
+  [[ "$output" == *"3: rc=0 verdict=safe-not-last claim=claimed"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"1: rc=0 verdict=safe-not-last claim=claimed pending=0"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"2: rc=3 verdict=refused-fs claim=last pending=2"* ]] || { echo "$output"; false; }
+}
+
+@test "G3 a claim excludes its pane for 30 s and is ignored after" {
+  run drive 'states(lambda t: FS); close(1, [1, 2]); WALL[0] += 29; close(2, [1, 2]); WALL[0] += 2; close(2, [1, 2])'
+  [[ "$output" == *"2: rc=3 verdict=refused-fs claim=last pending=1"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"2: rc=0 verdict=safe-not-last claim=claimed pending=0"* ]] || { echo "$output"; false; }
+}
+
+@test "G4 a pane's own claim never blocks itself" {
+  run drive 'states(lambda t: FS); close(1, [1, 2]); close(1, [1, 2])'
+  [ "$(grep -c '^1: rc=0 verdict=safe-not-last claim=claimed pending=0$' <<<"$output")" = "2" ] || { echo "$output"; false; }
+}
+
+@test "G5 the skeptic's join sequence: A claims, D joins, B claims, A is gone, D is refused" {
+  run drive 'states(lambda t: FS); close(1, [1, 2]); close(2, [1, 2, 4]); close(4, [2, 4])'
+  [[ "$output" == *"2: rc=0 verdict=safe-not-last claim=claimed pending=1"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"4: rc=3 verdict=refused-fs claim=last pending=1"* ]] || { echo "$output"; false; }
+}
+
+@test "G6 no pane_wids, or a length that disagrees with the pane count: HEAD semantics, claim unavailable" {
+  run drive 'states(lambda t: FS); kitten(last=False); run("refuse"); close(1, [1, 2], panes_in_os_window=3); close(2, [1, 2])'
+  [[ "$output" == "rc=0 verdict=safe-not-last toggles=0 reads=0 "* ]] || { echo "$output"; false; }
+  [[ "$output" == *"1: rc=0 verdict=safe-not-last claim=unavailable pending=None"* ]] || { echo "$output"; false; }
+  # an unavailable answer writes no claim, so the sibling is not blocked by it
+  [[ "$output" == *"2: rc=0 verdict=safe-not-last claim=claimed pending=0"* ]] || { echo "$output"; false; }
+  run drive 'states(lambda t: FS); kitten(last=False); cli("--window", "7", "--to", "unix:/nowhere", "--mode", "refuse")'
+  vrow | grep -q '"verdict":"safe-not-last".*"claim":"unavailable"' || { vrow; false; }
+}
+
+@test "G7 an unwritable claims file: HEAD semantics, claim error" {
+  export CC_KITTY_FS_GUARD_CLAIMS_DIR="$BATS_TEST_TMPDIR/not-a-dir"; : >"$CC_KITTY_FS_GUARD_CLAIMS_DIR"
+  run drive 'states(lambda t: FS); close(1, [1, 2]); close(2, [1, 2])'
+  [[ "$output" == *"1: rc=0 verdict=safe-not-last claim=error pending=None"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"2: rc=0 verdict=safe-not-last claim=error pending=None"* ]] || { echo "$output"; false; }
+  run drive 'states(lambda t: FS); snap(7, [7, 8]); cli("--window", "7", "--to", "unix:/nowhere", "--mode", "refuse")'
+  vrow | grep -q '"verdict":"safe-not-last".*"claim":"error"' || { vrow; false; }
+}
+
+@test "G8 kitten: pane_wids has one id per window group, overlay included, as many as panes_in_os_window" {
+  # The kitten under plain python, with kitty's result_handler decorator stubbed: describe() reads
+  # only the fake boss below. Window 11 is an overlay in window 10's group.
+  run /usr/bin/python3 -c '
+import importlib.util, json, os, sys, types
+h = types.ModuleType("kittens.tui.handler"); h.result_handler = lambda **k: (lambda f: f)
+for n in ("kittens", "kittens.tui"): sys.modules[n] = types.ModuleType(n)
+sys.modules["kittens.tui.handler"] = h
+spec = importlib.util.spec_from_file_location("k", os.environ["KITTEN"])
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+class W:
+    def __init__(s, wid): s.id = wid
+class Grp:
+    def __init__(s, *ws): s.windows = list(ws)
+class WL:
+    def __init__(s, *groups): s.groups = list(groups)
+    @property
+    def num_groups(s): return len(s.groups)
+class T:
+    def __init__(s, wl): s.windows, s.os_window_id = wl, 6
+w10, w11, w12, w13 = W(10), W(11), W(12), W(13)
+a, b = T(WL(Grp(w10, w11), Grp(w12))), T(WL(Grp(w13)))
+for w, t in ((w10, a), (w11, a), (w12, a), (w13, b)): w.tabref = (lambda t=t: t)
+boss = type("B", (), {})()
+boss.window_id_map = {10: w10, 11: w11, 12: w12, 13: w13}
+boss.os_window_map = {6: [a, b]}
+for wid in (11, 13):
+    r = k.describe(boss, wid)
+    print(wid, r["pane_wids"], r["pane_wid"], r["panes_in_os_window"], len(r["pane_wids"]) == r["panes_in_os_window"])
+'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"11 [10, 12, 13] 10 3 True"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"13 [10, 12, 13] 13 3 True"* ]] || { echo "$output"; false; }
 }

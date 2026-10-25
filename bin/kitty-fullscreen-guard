@@ -15,7 +15,8 @@ USAGE
     kitty-fullscreen-guard --any-fs --kitty-pid <pid>
 
 EXIT CODES
-    0  safe to empty the window NOW (or the removal would not empty the OS window at all)
+    0  safe to empty the window NOW (or the removal would not empty the OS window at all — for
+       --scope pane, counting sibling closes already told safe in the last 30 s; § CLAIMS)
     1  only with --then: the guard said safe but the follow-up action failed
        (with --then, 3 also covers focus moving off the window during the wait, and 4 the window
        vanishing — in both cases nothing was done)
@@ -26,7 +27,7 @@ EXIT CODES
 HOW IT DECIDES
     1. A no-UI kitten (lib/kitty-fs-kitten.py, `kitty @ kitten --match id:<wid>`) reports whether
        removing --scope empties the OS window, and its platform_window_id. Not last → exit 0 with
-       no state read.
+       no state read (for --scope pane, only once the claim gate below agrees).
     2. The state is read OUTSIDE kitty, from the CGS Space types of that platform window (the same
        SPI as docs/research/kitty-crash-2026-10-15/repro/probe.swift:18-50): FS = the types include
        4; WINDOWED = exactly [0] and onscreen; UNKNOWN = anything else. The Space type is not a
@@ -87,10 +88,26 @@ POLICY — ONE FILE, ONE LINE (operator decision D1, cc-decide e3920969aba9)
         mkdir -p ~/.claude/state/kitty-fs-guard && echo relax-stock-refuse >~/.claude/state/kitty-fs-guard/policy
     (or relax-stock / enforce), and `rm -f ~/.claude/state/kitty-fs-guard/policy` restores the default.
     --mode toggle stays a valid flag under every policy, so no caller's argv changes.
+
+CLAIMS — CONCURRENT "NOT LAST" ANSWERS (docs/research/husk-history-2026-10-24/FIX-DESIGN.md D7)
+    Two panes of one OS window closing together each see "2 panes, not last" and the window empties.
+    So for --scope pane the kitten also returns `pane_wids` (one window id per window group, as it
+    counts panes) and `pane_wid` (the group of --window). Under flock on <claims dir>/claims-<kitty
+    pid>.json (claims dir = $CC_KITTY_FS_GUARD_CLAIMS_DIR or the state dir), remaining = pane_wids
+    − self − other wids claimed within CLAIM_TTL_S (30 s). remaining ≥ 1 ⇒ safe-not-last, and only
+    then this pane's claim {wid: ts} is written; remaining = 0 ⇒ the last-pane path (step 2).
+    Counting against the snapshot's identities stays sound for stale snapshots and joins: a gone
+    pane is not listed, a leaving one is excluded until its claim ages out. There is no count-based
+    release. A reply without pane_wids, or one whose length differs from panes_in_os_window, is
+    claim "unavailable"; an OSError on the claims file is claim "error" — both keep the HEAD answer
+    (safe-not-last). The verdict row records `claim` (claimed|last|unavailable|error|n/a) and
+    `pending` (other live claims on this snapshot's panes). Cost, failing closed: a claim from a
+    call whose caller then did not close blocks a sibling's close for ≤30 s.
 """
 
 from __future__ import annotations
 
+import fcntl
 import glob
 import json
 import os
@@ -119,6 +136,7 @@ UNKNOWN_DEADLINE_S = 3.0  # toggle mode, before toggling: UNKNOWN is polled this
 AFTER_DEADLINE_S = 8.0  # after the one toggle: stable windowed must arrive by then
 KITTY_CALL_TIMEOUT_S = 5.0
 ALERT_TIMEOUT_S = 60.0
+CLAIM_TTL_S = 30.0  # a "not last" claim excludes its pane from siblings' counts this long
 
 FS, WINDOWED, UNKNOWN = "FS", "WINDOWED", "UNKNOWN"
 SCOPES = ("pane", "tab", "os-window")
@@ -228,6 +246,11 @@ def _now() -> float:
 
 def _sleep(seconds: float) -> None:
     time.sleep(seconds)
+
+
+def _wall() -> float:
+    # Claims are shared between guard PROCESSES, so their age is wall-clock time, not monotonic.
+    return time.time()
 
 
 def kitty_bin() -> str:
@@ -557,6 +580,71 @@ def cache_fsfix(info: dict) -> None:
         pass
 
 
+# ── concurrent "not last" answers: identity claims counted against the snapshot (docstring § CLAIMS) ─
+
+
+def claims_dir() -> str:
+    return os.environ.get("CC_KITTY_FS_GUARD_CLAIMS_DIR") or state_dir()
+
+
+def _int_list(v: Any) -> list[int] | None:
+    if not isinstance(v, list) or not all(isinstance(x, int) and not isinstance(x, bool) for x in v):
+        return None
+    return v
+
+
+def claim_gate(info: dict, wid: int) -> tuple[str, int | None]:
+    """→ (claim, pending) for a pane the kitten called not-last. claim is `claimed` (safe; our claim
+    is written), `last` (every other pane in this snapshot is gone-or-leaving: take the last-pane
+    path), `unavailable` or `error` (no reservation: HEAD semantics). pending = other live claims on
+    this snapshot's panes."""
+    pane_wids = _int_list(info.get("pane_wids"))
+    pid = info.get("pid")
+    me = info.get("pane_wid", wid)
+    if (
+        pane_wids is None
+        or len(pane_wids) != info.get("panes_in_os_window")
+        or not isinstance(pid, int)
+        or isinstance(pid, bool)
+        or not isinstance(me, int)
+        or me not in pane_wids
+    ):
+        return "unavailable", None
+    path = os.path.join(claims_dir(), f"claims-{pid}.json")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            raw = b""
+            while chunk := os.read(fd, 65536):
+                raw += chunk
+            try:
+                parsed = json.loads(raw.decode("utf-8")) if raw.strip() else {}
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                parsed = {}  # a torn write loses its claims; rewriting below heals the file
+            now = _wall()
+            live: dict[int, float] = {}
+            for k, ts in (parsed.items() if isinstance(parsed, dict) else ()):
+                # abs(): a claim from the future (a clock step back) also ages out instead of sticking
+                if isinstance(ts, (int, float)) and abs(now - ts) < CLAIM_TTL_S and str(k).isdigit():
+                    live[int(k)] = float(ts)
+            others = {w for w in live if w != me}
+            pending = len(others & set(pane_wids))
+            remaining = set(pane_wids) - {me} - others
+            claim = "claimed" if remaining else "last"
+            if remaining:
+                live[me] = now
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.ftruncate(fd, 0)
+            os.write(fd, json.dumps({str(k): v for k, v in live.items()}, sort_keys=True).encode())
+            return claim, pending
+        finally:
+            os.close(fd)  # releases the flock
+    except OSError:
+        return "error", None
+
+
 def cached_fsfix(pid: int) -> bool | None:
     """The cached fsfix for THIS process (pid + start time), or None: missing, unreadable, or written
     for an earlier process that had the same pid."""
@@ -759,8 +847,14 @@ def decide(
     cache_fsfix(info)
     last_for = info.get("last_for") or {}
     if last_for.get(scope) is False:
-        return 0, "safe-not-last", info, none, None
-    if last_for.get(scope) is not True:
+        if scope != "pane":
+            return 0, "safe-not-last", info, none, None
+        claim, pending = claim_gate(info, wid)
+        info = dict(info, claim=claim, pending=pending)
+        if claim != "last":
+            return 0, "safe-not-last", info, none, None
+        # every other pane of this snapshot is gone or claimed by a sibling's close: last-pane path
+    elif last_for.get(scope) is not True:
         return 3, "kitten-failed", dict(info, error=f"kitten reply has no last_for[{scope}]"), none, None
     pwid = info.get("platform_window_id")
 
@@ -989,6 +1083,9 @@ def main(argv: list[str] | None = None) -> int:
         relaxed=relaxed,
         enforced=False if relaxed else None,
         error=info.get("error"),
+        # docstring § CLAIMS: n/a when no claim gate ran (another scope, or the kitten said last)
+        claim=info.get("claim", "n/a"),
+        pending=info.get("pending"),
     )
     if rc != 0:
         if verdict == "kitten-failed":

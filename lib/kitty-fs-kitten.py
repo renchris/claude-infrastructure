@@ -69,6 +69,24 @@ def _panes(tab: Any) -> int:
     return int(n) if isinstance(n, int) else len(tab)
 
 
+def _pane_wids(tab: Any, wid: int) -> tuple[list[int], int]:
+    """→ (one window id per pane, the pane id holding <wid>), counted exactly as _panes() counts:
+    a group's id is its first (base) window, so an overlay over a pane maps to that pane. If the
+    groups cannot be listed the length falls short of _panes(), and the guard treats the reply as
+    unavailable."""
+    windows = getattr(tab, "windows", None)
+    if isinstance(getattr(windows, "num_groups", None), int):
+        ids, mine = [], wid
+        for g in getattr(windows, "groups", None) or ():
+            ws = list(getattr(g, "windows", None) or ())
+            if ws:
+                ids.append(int(ws[0].id))
+                if any(getattr(x, "id", None) == wid for x in ws):
+                    mine = int(ws[0].id)
+        return ids, mine
+    return [int(w.id) for w in tab], wid
+
+
 def describe(boss: Any, wid: int) -> dict[str, Any]:
     w = boss.window_id_map.get(wid)
     if w is None:
@@ -84,6 +102,18 @@ def describe(boss: Any, wid: int) -> dict[str, Any]:
         return {"error": f"window {wid} has no tab/os window"}
     tabs = list(tm)
     panes_in_os_window = sum(_panes(t) for t in tabs)
+    # The guard's claim gate (bin/kitty-fullscreen-guard § CLAIMS). Never raised into kitty: a
+    # failure omits the keys, which the guard reads as "unavailable".
+    pane_wids: "list[int] | None" = []
+    pane_wid = wid
+    try:
+        for t in tabs:
+            ids, mine = _pane_wids(t, wid)
+            pane_wids += ids
+            if t is tab:
+                pane_wid = mine
+    except Exception:  # noqa: BLE001
+        pane_wids = None
     pwid = None
     if platform_window_id is not None:
         try:
@@ -97,6 +127,11 @@ def describe(boss: Any, wid: int) -> dict[str, Any]:
         "panes_in_os_window": panes_in_os_window,
         "tabs_in_os_window": len(tabs),
         "panes_in_tab": _panes(tab),
+        **(
+            {"pane_wids": pane_wids, "pane_wid": pane_wid}
+            if pane_wids is not None
+            else {}
+        ),
         # Does removing <scope> empty the OS window? (`os-window` always does.)
         "last_for": {
             "pane": panes_in_os_window == 1,
