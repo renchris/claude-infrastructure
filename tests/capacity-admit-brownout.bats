@@ -28,6 +28,8 @@ setup() {
   # Only the brownout term may decide in this file.
   export CC_ADMIT_LOAD_TERM=off CC_ADMIT_HEADROOM_TERM=off CC_ADMIT_SEGMENT_TERM=off
   export CC_ADMIT_ACTIVE_TERM=off CC_ADMIT_RESERVE_TERM=off
+  # and pinned, so a term switched back on by a case still reads no live box
+  export CC_ADMIT_LOADAVG_OVERRIDE=1.0 CC_ADMIT_HEADROOM_OVERRIDE=64
   unset CC_ADMIT_BROWNOUT CC_ADMIT_GATE CC_ADMIT_TOKEN LR_ADMIT_TOKEN CC_ADMIT_BROWNOUT_NOW
   NOW=1792879070   # 2026-10-24T21:57:50Z, the replay's first fire
 }

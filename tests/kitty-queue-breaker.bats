@@ -20,7 +20,12 @@ setup() {
     chmod +x "$STUBS/$b"
   done
   export PATH="$STUBS:$PATH"
-  unset CC_KITTY_RC_BREAKER CC_KQ_NOW CC_HF_NETSTAT_FILE
+  unset CC_KITTY_RC_BREAKER CC_KQ_NOW CC_HF_NETSTAT_FILE CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE CC_PANE_CMD
+  # case 05 extracts handoff-fire's kt(); pin every machine seam that file names
+  export CC_FIRE_CAPACITY_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/claude-accounts-heal-"
 }
 
 rc_state() { # $1=kitty_rc value $2=hb age in seconds (absent = no hb)
