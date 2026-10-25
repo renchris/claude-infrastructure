@@ -250,10 +250,11 @@ T, runner = os.environ["T"], sys.argv[1]
 pid, fd = pty.fork()
 if pid == 0:
     os.execv("/bin/bash", ["/bin/bash", runner])
-def drain():
+def drain():  # an exited child leaves the master readable at EOF forever: b"" ends the drain
     while select.select([fd], [], [], 0)[0]:
         try:
-            os.read(fd, 4096)
+            if not os.read(fd, 4096):
+                return
         except OSError:
             return
 def tail():
