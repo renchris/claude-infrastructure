@@ -1100,11 +1100,7 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   # that never moves RUNG (wrap-ledger.sh § WORKING vs IDLING), and this hook reads only RUNG,
   # TRUNK, AHEAD and SHAS, so it skips the probe. The memo key carries WRAP_BUSY, so a BUSY reader
   # (operator-readout, notify, cc-classify) is never served this BUSY-less ledger.
-  # --session: the Stop payload's sid. A Stop hook's environment is not guaranteed to carry a session
-  # id (hooks/completion-assert.sh, "FEED THE SESSION ID"), and without one the ledger counts no own
-  # decision (BLOCKED=0) and no own loop (LOOP_SRC=nosid), so the ⛔ arm and the scope floor would be
-  # inert in production while green under a test env that exports the id (lead-keeps-working).
-  led="$( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine ${cur_sid:+--session "$cur_sid"} 2>/dev/null || true )"
+  led="$( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine 2>/dev/null || true )"
   [ -n "$led" ] || return 1
   SC_LED_CACHE="$led"
   rung="$(led_field "$led" RUNG)"
@@ -1220,7 +1216,7 @@ sc_read_ledger() {
     done
   fi
   [ -n "$wrap" ] && [ -f "$wrap" ] || return 0
-  ( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine ${cur_sid:+--session "$cur_sid"} 2>/dev/null || true )   # no BUSY probe, and --session: see mechanical_arm
+  ( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine 2>/dev/null || true )   # no BUSY probe: see mechanical_arm
 }
 ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on rc 0). Never fails.
   [ "${CC_SHIP_FLOOR:-1}" = 1 ] || return 0

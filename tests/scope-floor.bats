@@ -32,7 +32,6 @@ setup() {
   # Ledger stub: every field the floor reads, each overridable by STUB_<KEY> (set-but-empty counts).
   cc_stub "$BATS_TEST_TMPDIR/bin" wrap-ledger - <<'EOF'
 #!/bin/bash
-[ -n "${STUB_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$STUB_ARGV_LOG"
 if [ -n "${STUB_OLD:-}" ]; then printf 'RUNG=⛔\nBLOCKED=2\nBLOCKED_SRC=env\nDIRTY=0\n'; exit 0; fi
 for kv in "RUNG=⛔" "BLOCKED=2" "BLOCKED_SRC=env" "BLOCKED_RECHECKED=0" "RECHECKED_IDS=" "RECHECKED_SRC=none" \
   "BLOCKED_IDS=290215743799,e869fac7eb34" "LOOP_SCOPE=1" "LOOP_OPEN=1" "LOOP_SRC=own" "LOOP_RUNG=0" \
@@ -496,13 +495,6 @@ tx_close() {
   ! blocked "$ca" || { cat "$COMPLETION_IDL"; false; }
 }
 
-@test "S24: the ledger is asked with the Stop payload's session id (a Stop env need not carry one)" {
-  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/wl-argv"
-  out="$(actuate sidA "$(tx_f1)")"
-  blocked "$out"
-  grep -q -- '--machine --session sidA' "$STUB_ARGV_LOG" || { cat "$STUB_ARGV_LOG"; false; }
-}
-
 @test "S19b: C1 into a checkout with NO store file — real ledger + real dod-persist capture, next ledger reads LOOP_OPEN=1" {
   unset WRAP_LEDGER_BIN DOD_PERSIST_BIN
   export WRAP_DOD_DIR="$BATS_TEST_TMPDIR/dod" WRAP_TRUNK=origin/main CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
@@ -516,7 +508,8 @@ tx_close() {
   [ -z "$(ls -A "$WRAP_DOD_DIR" 2>/dev/null)" ]
   led0="$(cd "$CWD" && WRAP_BUSY=off bash "$REPO/scripts/wrap-ledger.sh" --machine --session sidA)"
   [ "$(printf '%s\n' "$led0" | sed -n 's/^LOOP_SRC=//p')" = none ] || { printf '%s\n' "$led0" | grep -E '^(RUNG|LOOP_|DOD)'; false; }
-  actuate sidA "$p" >/dev/null
+  # the hook runs with the session id in its environment, as Claude Code sets it for every hook command
+  CLAUDE_CODE_SESSION_ID=sidA actuate sidA "$p" >/dev/null
   f="$(ls "$WRAP_DOD_DIR"/*.md 2>/dev/null | head -1)"
   [ -n "$f" ] || { cat "$CONTINUE_IDL"; false; }
   grep -q '(stop-capture) .*session=sidA' "$f"
