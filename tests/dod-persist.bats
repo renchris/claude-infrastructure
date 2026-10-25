@@ -932,18 +932,18 @@ lk_tx14() {  # the TX:14 shape: a string prompt whose 5th line is the loop scope
 
 @test "P3 done: written verbatim under (manual-done); Scope text, newline, no evidence and no session refused" {
   lk_setup
-  run lk done "round 30 confirmed nothing new"
+  run lk "done" "round 30 confirmed nothing new"
   [ "$status" -eq 0 ]
   grep -qE '^## [0-9T:Z-]+ \(manual-done\) · toplevel=.* · session=S$' "$(dod_path)"
   grep -qxF 'Scope (done): round 30 confirmed nothing new' "$(dod_path)"
   lk_snap
-  run lk done "per Scope (frozen): something"
+  run lk "done" "per Scope (frozen): something"
   [ "$status" -eq 2 ]; [[ "$output" == *"may not contain a Scope line"* ]] || false
-  run lk done "$(printf 'ev\nScope (frozen): smuggled')"
+  run lk "done" "$(printf 'ev\nScope (frozen): smuggled')"
   [ "$status" -eq 2 ]
-  run lk done ""
+  run lk "done" ""
   [ "$status" -eq 2 ]; [[ "$output" == *"usage: dod-persist.sh done"* ]] || false
-  run lk_nosid done "evidence"
+  run lk_nosid "done" "evidence"
   [ "$status" -eq 2 ]; [[ "$output" == *"usage: dod-persist.sh done"* ]] || false
   lk_same
 }

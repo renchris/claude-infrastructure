@@ -374,7 +374,7 @@ tx_agent() { # $1 = extra record (or ""); the async agent a8e552e552430265c, its
 
 # ── S14-S16 — kinds, irrelevant rungs, an old ledger ──
 @test "S14: the loop 🔧 arm blocks with the loop text; any other 🔧 writes no scope-floor row" {
-  out="$(STUB_RUNG=🔧 STUB_LOOP_RUNG=1 STUB_BLOCKED=0 STUB_BLOCKED_IDS= actuate sidA "$(tx_f1)")"
+  out="$(STUB_RUNG=🔧 STUB_LOOP_RUNG=1 STUB_BLOCKED=0 STUB_BLOCKED_IDS='' actuate sidA "$(tx_f1)")"
   blocked "$out"
   r="$(reason_of "$out")"
   [[ "$r" == *'your frozen scope is a loop with no recorded stop'* ]] || false
@@ -481,7 +481,7 @@ tx_close() {
 
 @test "S23: a loop 🔧 under a 'yes' close — the floor blocks; anti-deference and completion-assert add no ledger block" {
   other_hooks_env
-  export STUB_RUNG=🔧 STUB_LOOP_RUNG=1 STUB_BLOCKED=0 STUB_BLOCKED_IDS= STUB_BLOCKED_GLOSS=
+  export STUB_RUNG=🔧 STUB_LOOP_RUNG=1 STUB_BLOCKED=0 STUB_BLOCKED_IDS='' STUB_BLOCKED_GLOSS=''
   p="$(tx_close '✅ Good to close: yes — nothing left to do')"
   out="$(run_hook_as session-continue.sh "$p")"
   blocked "$out"
@@ -510,7 +510,7 @@ tx_close() {
   [ "$(printf '%s\n' "$led0" | sed -n 's/^LOOP_SRC=//p')" = none ] || { printf '%s\n' "$led0" | grep -E '^(RUNG|LOOP_|DOD)'; false; }
   # the hook runs with the session id in its environment, as Claude Code sets it for every hook command
   CLAUDE_CODE_SESSION_ID=sidA actuate sidA "$p" >/dev/null
-  f="$(ls "$WRAP_DOD_DIR"/*.md 2>/dev/null | head -1)"
+  f="$(find "$WRAP_DOD_DIR" -name '*.md' -type f 2>/dev/null | head -1)"
   [ -n "$f" ] || { cat "$CONTINUE_IDL"; false; }
   grep -q '(stop-capture) .*session=sidA' "$f"
   grep -q '^Scope (frozen): Loop until dry' "$f"
