@@ -822,9 +822,10 @@ lk_same() { cmp "$BATS_TEST_TMPDIR/before" "$(dod_path)"; }
 lk_until() {  # $1=id → the until= epoch on its newest held line, "" when it has none
   sed -nE "s/^Scope \(held\): $1 until=([0-9]+) — .*/\1/p" "$(dod_path)" | tail -1
 }
-lk_near_window() {  # $1=until epoch  $2=epoch taken before the hold → within ±120 s of $2 + 6 h
-  local want=$(( $2 + 21600 ))
-  [ -n "$1" ] && [ $(( $1 - want )) -le 120 ] && [ $(( want - $1 )) -le 120 ]
+lk_near_window() {  # $1=until epoch  $2=epoch taken just before the hold → $2+6h ≤ until ≤ now+6h
+  # Bracketed by the hold's own before/after clock, never a fixed slack: under load a single hold
+  # (cc-decide + gate-classify) measured minutes, so a ±120 s window around ONE early stamp flaked.
+  [ -n "$1" ] && [ "$1" -ge $(( $2 + 21600 )) ] && [ "$1" -le $(( $(date +%s) + 21600 )) ]
 }
 # JSONL records: a human prompt (string content, origin human), a lane brief (a tool_result), an
 # injected isMeta record, and a task notification (origin.kind "task-notification", as the harness
@@ -898,18 +899,18 @@ lk_tx14() {  # the TX:14 shape: a string prompt whose 5th line is the loop scope
   lk_packet 333333333333 C open "$LK_SETTINGS"
   lk_packet 444444444444 C open "$LK_SETTINGS" money
   lk_packet 555555555555 C open "$LK_SETTINGS"
-  local t0 f; t0="$(date +%s)"
+  local t0 f
   run lk hold 111111111111 "durable"; [ "$status" -eq 0 ]
   f="$(dod_path)"
   grep -qxF 'Scope (held): 111111111111 — durable' "$f"
-  run lk hold 222222222222 "money, router says B"; [ "$status" -eq 0 ]
+  t0="$(date +%s)"; run lk hold 222222222222 "money, router says B"; [ "$status" -eq 0 ]
   [[ "$output" == *"one signal only"* ]] || false
   lk_near_window "$(lk_until 222222222222)" "$t0"
-  run lk hold 333333333333 "legacy, router says C"; [ "$status" -eq 0 ]
+  t0="$(date +%s)"; run lk hold 333333333333 "legacy, router says C"; [ "$status" -eq 0 ]
   lk_near_window "$(lk_until 333333333333)" "$t0"
   # no router at all reads as "no class-C route": a ceiling alone lapses, nothing at all is refused
   export CC_GATE_CLASSIFY_BIN="$BATS_TEST_TMPDIR/no-such-router.sh"
-  run lk hold 444444444444 "ceiling, no router"; [ "$status" -eq 0 ]
+  t0="$(date +%s)"; run lk hold 444444444444 "ceiling, no router"; [ "$status" -eq 0 ]
   lk_near_window "$(lk_until 444444444444)" "$t0"
   cp "$f" "$BATS_TEST_TMPDIR/before"
   run lk hold 555555555555 "no ceiling, no router"
