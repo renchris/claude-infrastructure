@@ -9,7 +9,7 @@
 # Run from repo root. Exit nonzero on any failure (a gate).
 set -u
 cd "$(dirname "$0")/.." || exit 2
-SUP="$PWD/scripts/lead-supervisor.sh"
+SUP="${SUPERVISOR_E2E_SUP:-$PWD/scripts/lead-supervisor.sh}"   # seam: grade a scratch copy (a red-without-the-change run, a mutant)
 P=0; F=0
 ok(){ P=$((P+1)); echo "  ✓ $1"; }
 no(){ F=$((F+1)); echo "  ✗ $1"; }
@@ -155,14 +155,15 @@ echo "T9 role-file page fallback — empty CC_PAGE_TO ⇒ target resolved from C
 # report a routing failure that never happened — fixture shape must track the real producer's argv.
 mkdir -p "$SBX/bin"; cat > "$SBX/bin/cc-notify" <<'STUB'
 #!/bin/bash
-target=""; role=""
+target=""; role=""; msg=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --role) role="$2"; shift 2 ;;
     --role=*) role="${1#--role=}"; shift ;;
     --from) shift 2 ;;
+    --subject) shift 2 ;;
     --*) shift ;;
-    *) [ -z "$target" ] && target="$1"; shift ;;
+    *) if [ -z "$target" ]; then target="$1"; else msg="$1"; fi; shift ;;
   esac
 done
 [ -n "$role" ] && target="$(head -n1 "${CC_ROLES_DIR:-$HOME/.claude/cc-roles}/$role" 2>/dev/null | tr -d '[:space:]')"
@@ -177,7 +178,12 @@ printf '%s\n' "$target" >> "${CC_NOTIFY_CAPTURE:-/dev/null}"
 # binary: a live target emits `verdict=delivered`.
 # CC_NOTIFY_STUB_VERDICT lets a test script the DELIVERY outcome independently of the exit code —
 # the same attempt/outcome split the rc knob already provides for T29.
-echo "cc-notify: verdict=${CC_NOTIFY_STUB_VERDICT:-delivered} target=$target" >&2
+# T43 (subject nudge) seams, all additive: the message body to its own capture; a relayed cc-wake line
+# BEFORE cc-notify's own token, indented exactly as cc-notify relays it (the real order, bin/cc-notify
+# _wake_pane); and the enqueued=/reason= fields the real token always carries.
+[ -n "${CC_NOTIFY_CAPTURE_MSG:-}" ] && printf '%s\t%s\n' "$target" "$msg" >> "$CC_NOTIFY_CAPTURE_MSG"
+[ -n "${CC_NOTIFY_STUB_WAKE:-}" ] && echo "  cc-wake: verdict=$CC_NOTIFY_STUB_WAKE target=$target" >&2
+echo "cc-notify: verdict=${CC_NOTIFY_STUB_VERDICT:-delivered} enqueued=${CC_NOTIFY_STUB_ENQ:-1} target=$target${CC_NOTIFY_STUB_REASON:+ reason=$CC_NOTIFY_STUB_REASON}" >&2
 # The ATTEMPT is captured above, then the scripted rc decides the OUTCOME — that split is what lets
 # T29 count re-attempts of a page the transport refused. Default 0 keeps every other test unchanged.
 exit "${CC_NOTIFY_STUB_RC:-0}"
@@ -1102,6 +1108,234 @@ once
 idl_has '"sid":"shift","state":"DEAD","detail":"owning pid 999998 gone' && ok "empty cwd/config_dir: DEAD paged with the right pid" \
                                                                        || no "an empty field shifted the pid: the dead session was not paged"
 rm -f "$CC_TELEMETRY_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR"/shift.* 2>/dev/null
+
+echo "T43 SUBJECT NUDGE — a STALL? session its own scope floor left with ungated work is told, on a damped ladder (ruling d610f8473106)"
+# Design docs/research/lead-keeps-working-2026-10-24.md §3.5 / §7.5 (the design calls this block T41;
+# T41 and T42 were taken). The oracle input is the scope floor's own session-continue IDL row; every
+# fixture below is that row's shape. CC_PAGE_TO_FILE=/dev/null leaves the desk unwired, so every
+# capture line is a SUBJECT send. Elapsed time is simulated by shifting the marker's epochs (nage),
+# never by sleeping. A fresh owner pid: this block runs ~50 sweeps on top of the suite's own.
+kill "$ALIVE" 2>/dev/null; sleep 900 & ALIVE=$!
+NB="$SBX/nudge"; mkdir -p "$NB/state" "$NB/home/.claude/state"
+FX='{"kind":"loop","ungated":1,"held":false,"held_id":null,"held_until":null,"ids":["e869fac7eb34","1bec72cbb3b8"],"head":"Scope (frozen): loop until dry over the round list","key":"aaaabbbbcccc","count":1,"day":1,"max":3,"rung":"⛔"}'
+iso_ago(){ local e=$(( $(date +%s) - ${1:-0} )); date -u -r "$e" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$e" +%Y-%m-%dT%H:%M:%SZ; }
+scrow(){ # $1=sid $2=disposition $3=reason [$4=override json] [$5=age_s] [$6=file] — a scope-floor row as sf_log writes it
+  local o="${4:-}"; [ -n "$o" ] || o='{}'
+  jq -nc --arg ts "$(iso_ago "${5:-0}")" --arg sid "$1" --arg d "$2" --arg r "$3" --argjson b "$FX" --argjson o "$o" \
+    '{ts:$ts,hook:"session-continue",sid:$sid,disposition:$d,reason:$r} + $b + $o' >> "${6:-$CC_IDL}"; }
+scraw(){ # $1=sid $2=disposition $3=reason — any other session-continue row (no floor fields)
+  jq -nc --arg ts "$(iso_ago 0)" --arg sid "$1" --arg d "$2" --arg r "$3" \
+    '{ts:$ts,hook:"session-continue",sid:$sid,disposition:$d,reason:$r}' >> "$CC_IDL"; }
+nsweep(){ env CC_NOTIFY_CAPTURE="$NB/sends" CC_NOTIFY_CAPTURE_MSG="$NB/msgs" CC_PAGE_TO_FILE=/dev/null \
+          CC_NOTIFY_BIN="$SBX/bin/cc-notify" CC_NOTIFY_STUB_REASON=woken-socket CC_SUP_NUDGE_STATE_DIR="$NB/state" \
+          CC_PAGE_DAMP_TTL_S=0 CC_OSA_CAPTURE="$NB/osa" LR_PAGE_OSASCRIPT_BIN="$OSBIN/osascript" PATH="$OSBIN:$PATH" \
+          "$@" bash "$SUP" --once >/dev/null 2>&1; }
+ns(){ local n; n="$(grep -cx "$1" "$NB/sends" 2>/dev/null)"; echo "${n:-0}"; }
+nall(){ local n=0; [ -f "$NB/sends" ] && n="$(wc -l < "$NB/sends" | tr -dc '0-9')"; echo "${n:-0}"; }
+nmsg(){ grep "^$1	" "$NB/msgs" 2>/dev/null | tail -1; }
+nmark(){ printf '%s' "$CC_SUPERVISOR_PAGEDIR/$1.nudged"; }
+nage(){ # $1=sid $2=seconds — every recorded event becomes that much older
+  local m; m="$(nmark "$1")"; [ -f "$m" ] || return 0
+  awk -v d="$2" '{ $2 = $2 - d; print }' "$m" > "$m.t" && mv "$m.t" "$m"; }
+ncnt(){ local n; n="$(grep -c "$1" "$CC_IDL" 2>/dev/null)"; echo "${n:-0}"; }
+ndig(){ local n; n="$(grep -c "digest .*causes=[^ ]*$1" "$CC_SUPERVISOR_LOG" 2>/dev/null)"; echo "${n:-0}"; }
+nreset(){ : > "$CC_IDL"; : > "$CC_SUPERVISOR_LOG"
+  rm -f "$CC_TELEMETRY_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR"/*.page "$CC_SUPERVISOR_PAGEDIR"/*.notified \
+        "$CC_SUPERVISOR_PAGEDIR"/*.nudged "$CC_SUPERVISOR_PAGEDIR"/*.nudged-shadow "$CC_SUPERVISOR_PAGEDIR/digest.pending" \
+        "$NB/sends" "$NB/msgs" "$NB/state"/subject-nudge.* "$NB/home/.claude/state"/subject-nudge.* "$CC_IDL".*.gz 2>/dev/null
+  rm -rf "$CC_SUPERVISOR_PAGEDIR/damp"; }
+S1=ee0bed82-5571-4599-9069-f45deb21046f; S2=1925a304-1669-45b0-ae28-6feddeac6dbe; S3=843c13d5-e2d3-4780-9fb8-1da68ac54072
+S4=10c2e0a1-3ea4-480e-9cef-bac285d9ca9d; S5=b73620f2-88fd-40df-b78a-39fd7166792e; S6=90c3ab15-b213-4cbc-8d7e-4a621fc05b9e
+S7=aea31f7f-b38c-420f-adf1-2d577066bd1a; S8=961bd084-67cb-4017-9215-bdacc84f00a4; S9=40123617-25c9-44e3-9d84-3c5370a85268
+S10=32a7443b-f1a4-4ec5-b07d-5b0d1f0e670a; S11=db2a41b9-c24a-4ef8-bb76-829cc360d272; S12=c44ad6a6-9d96-4b2c-91ff-b9c11d58b51a
+S13=041bfb31-8042-48bc-b474-c4b5978aa6a2; S14=b5ad9248-3acf-45ee-8dc6-29de02901e00
+
+# (1) the base case, and (14) the text never echoes the contract marker.
+nreset; mktel "$S1" 40 100 "$ALIVE" "$REPO"; scrow "$S1" abstained scope-floor-reclose; nsweep
+m1="$(nmsg "$S1")"
+{ [ "$(ns "$S1")" -eq 1 ] && printf '%s' "$m1" | grep -q 'IDLE WITH UNGATED SCOPE' && printf '%s' "$m1" | grep -q 'e869fac7eb34, 1bec72cbb3b8'; } \
+  && ok "(1) newest row scope-floor-reclose ungated:1 ⇒ one send to the sid, with the text and both decision ids" \
+  || no "(1) base case: sends=$(ns "$S1") text=${m1:0:120}"
+idl_has "\"kind\":\"subject_nudge\",\"sid\":\"$S1\",\"key\":\"aaaabbbbcccc\",\"attempt\":1" \
+  && ok "(1) the send is IDL-recorded with its key and attempt number" || no "(1) no subject_nudge record"
+{ [ -n "$m1" ] && ! printf '%s' "$m1" | grep -qF 'Scope (frozen):' && printf '%s' "$m1" | grep -qF 'loop scope "scope: loop until dry'; } \
+  && ok "(14) the text quotes the loop head but never the 'Scope (frozen):' marker dod-persist would re-capture" \
+  || no "(14) the contract marker leaked into the nudge text: ${m1:0:200}"
+
+# (3) the ladder on one key: back-off 30 min then 1 h, cap 3, then ONE capped record and ONE digest cause.
+nsweep; s_imm="$(ns "$S1")"
+# Margins are minutes, not seconds: at load a sweep's own wall time adds to the simulated age.
+nage "$S1" 1500; nsweep; s_29="$(ns "$S1")"; nage "$S1" 400; nsweep; s_30="$(ns "$S1")"
+{ [ "$s_imm" -eq 1 ] && [ "$s_29" -eq 1 ] && [ "$s_30" -eq 2 ]; } \
+  && ok "(3) same key inside its back-off ⇒ no send; the 2nd rung opens at 30 min" \
+  || no "(3) rung 1→2 wrong (immediate=$s_imm at-25m=$s_29 at-31.7m=$s_30)"
+nage "$S1" 3300; nsweep; s_59="$(ns "$S1")"; nage "$S1" 400; nsweep; s_60="$(ns "$S1")"
+{ [ "$s_59" -eq 2 ] && [ "$s_60" -eq 3 ]; } && ok "(3) the 3rd rung waits a full hour after the 2nd" \
+                                            || no "(3) rung 2→3 wrong (at-55m=$s_59 at-61.7m=$s_60)"
+nage "$S1" 99999; nsweep; nage "$S1" 99999; nsweep
+{ [ "$(ns "$S1")" -eq 3 ] && [ "$(ncnt "\"kind\":\"subject_nudge_capped\",\"sid\":\"$S1\".*\"why\":\"cap\"")" -eq 1 ] \
+  && [ "$(ncnt '"kind":"subject_nudge_capped"')" -eq 1 ] && [ "$(ndig subject-idle-capped)" -eq 1 ]; } \
+  && ok "(3) capped at 3 per key, then exactly one subject_nudge_capped{why:cap} and one digest cause" \
+  || no "(3) cap wrong (sends=$(ns "$S1") capped=$(ncnt '"kind":"subject_nudge_capped"') digests=$(ndig subject-idle-capped))"
+
+# (2) a newer non-accepting floor row, or an arming row after the floor row, means no send.
+for v in "scope-floor-clear" "scope-floor-kill-switch" "scope-floor-inflight" "continue" "cli-set"; do
+  nreset; mktel "$S2" 40 100 "$ALIVE" "$REPO"; scrow "$S2" abstained scope-floor-reclose '' 60
+  case "$v" in
+    scope-floor-inflight) scrow "$S2" abstained "$v" '{"what":"bg","n":1}' ;;
+    continue)             scraw "$S2" fired continue ;;
+    cli-set)              scraw "$S2" armed cli-set ;;
+    *)                    scrow "$S2" abstained "$v" ;;
+  esac
+  nsweep
+  [ "$(ns "$S2")" -eq 0 ] && ok "(2) a newer '$v' row ⇒ no send" || no "(2) a newer '$v' row still nudged (sends=$(ns "$S2"))"
+done
+
+# (15) the production shape: a key-cap floor row followed by the wake floor's mechanical-arm row.
+nreset; mktel "$S3" 40 100 "$ALIVE" "$REPO"; scrow "$S3" abstained scope-floor-key-cap; scraw "$S3" abstained wake-floor-mechanical-arm
+nsweep
+[ "$(ns "$S3")" -eq 1 ] && ok "(15) scope-floor-key-cap then wake-floor-mechanical-arm ⇒ one send (newest FLOOR row, not newest row)" \
+                        || no "(15) a trailing wake-floor row hid the floor row (sends=$(ns "$S3"))"
+
+# (4) reason=wake-path-armed ⇒ the next send waits NUDGE_ARMED_S (1 h), not the 30 min rung.
+nreset; mktel "$S4" 40 100 "$ALIVE" "$REPO"; scrow "$S4" abstained scope-floor-reclose
+nsweep CC_NOTIFY_STUB_REASON=wake-path-armed; nage "$S4" 1810; nsweep; s_a30="$(ns "$S4")"; nage "$S4" 1800; nsweep
+{ [ "$s_a30" -eq 1 ] && [ "$(ns "$S4")" -eq 2 ]; } && ok "(4) after reason=wake-path-armed the next send is allowed at 1 h, not at 30 min" \
+                                                  || no "(4) armed back-off wrong (at-30m=$s_a30 at-60m=$(ns "$S4"))"
+
+# (5) rc 124 AFTER the enqueue is a delivered line; enqueued=0 is not, and is retried.
+nreset; mktel "$S5" 40 100 "$ALIVE" "$REPO"; scrow "$S5" abstained scope-floor-reclose
+nsweep CC_NOTIFY_STUB_RC=124; nsweep
+{ [ "$(ns "$S5")" -eq 1 ] && grep -q '^N ' "$(nmark "$S5")" 2>/dev/null; } \
+  && ok "(5) rc 124 with enqueued=1 ⇒ marker written, no resend" || no "(5) a cut-but-enqueued send was re-sent or not recorded (sends=$(ns "$S5"))"
+nreset; mktel "$S5" 40 100 "$ALIVE" "$REPO"; scrow "$S5" abstained scope-floor-reclose
+nsweep CC_NOTIFY_STUB_ENQ=0; mk0=0; grep -q '^N ' "$(nmark "$S5")" 2>/dev/null && mk0=1; nsweep CC_NOTIFY_STUB_ENQ=0
+{ [ "$mk0" = 0 ] && [ "$(ns "$S5")" -eq 2 ]; } && ok "(5) enqueued=0 ⇒ no marker, retried on the next sweep" \
+                                              || no "(5) a non-enqueued send was damped (marker=$mk0 sends=$(ns "$S5"))"
+
+# (6) per-session caps across keys: 4 per rolling 24 h, and the gap between any two sends.
+nreset; mktel "$S6" 40 100 "$ALIVE" "$REPO"; scrow "$S6" abstained scope-floor-reclose '{"key":"k5k5k5k5k5k5"}'
+t6="$(date +%s)"
+printf 'N %s k1 0 1\nN %s k2 0 1\nN %s k3 0 1\nN %s k4 0 1\n' $(( t6 - 18000 )) $(( t6 - 14400 )) $(( t6 - 10800 )) $(( t6 - 7200 )) > "$(nmark "$S6")"
+nsweep; s_day="$(ns "$S6")"
+printf 'N %s k1 0 1\nN %s k2 0 1\nN %s k3 0 1\nN %s k4 0 1\n' $(( t6 - 90000 )) $(( t6 - 14400 )) $(( t6 - 10800 )) $(( t6 - 7200 )) > "$(nmark "$S6")"
+nsweep
+{ [ "$s_day" -eq 0 ] && [ "$(ns "$S6")" -eq 1 ]; } && ok "(6) 4 sends in 24 h (any keys) ⇒ a 5th key waits until the oldest leaves the window" \
+                                                  || no "(6) per-session day cap wrong (inside=$s_day after=$(ns "$S6"))"
+printf 'N %s k1 0 1\n' $(( $(date +%s) - 1500 )) > "$(nmark "$S6")"; : > "$NB/sends"; nsweep; s_gap="$(ns "$S6")"
+printf 'N %s k1 0 1\n' $(( $(date +%s) - 1900 )) > "$(nmark "$S6")"; nsweep
+{ [ "$s_gap" -eq 0 ] && [ "$(ns "$S6")" -eq 1 ]; } && ok "(6) the per-session gap holds across keys (a new key 25 min after another waits)" \
+                                                  || no "(6) gap across keys wrong (at-25m=$s_gap at-31.7m=$(ns "$S6"))"
+
+# (7) the fleet cap is per SWEEP and file-backed: assess() runs in $(…), so a variable could not count.
+nreset; for s in "$S7" "$S8" "$S9" "$S10" "$S11"; do mktel "$s" 40 100 "$ALIVE" "$REPO"; scrow "$s" abstained scope-floor-reclose; done
+nsweep; s_sw1="$(nall)"; nsweep
+{ [ "$s_sw1" -eq 3 ] && [ "$(nall)" -eq 5 ]; } && ok "(7) 5 candidates ⇒ 3 sends in one sweep, the other 2 on the next (the counter resets per sweep)" \
+                                              || no "(7) per-sweep fleet cap wrong (sweep1=$s_sw1 total-after-sweep2=$(nall))"
+
+# (8) the kill switches: off and shadow, by env and by file; shadow records what it would have sent.
+nreset; mktel "$S8" 40 100 "$ALIVE" "$REPO"; scrow "$S8" abstained scope-floor-reclose
+nsweep CC_SUP_SUBJECT_NUDGE=0; s_e0="$(ns "$S8")"
+: > "$NB/home/.claude/state/subject-nudge.off"; nsweep HOME="$NB/home" CC_SUP_NUDGE_STATE_DIR=; s_f0="$(ns "$S8")"
+rm -f "$NB/home/.claude/state/subject-nudge.off"
+{ [ "$s_e0" -eq 0 ] && [ "$s_f0" -eq 0 ]; } && ok "(8) CC_SUP_SUBJECT_NUDGE=0 and ~/.claude/state/subject-nudge.off each send nothing" \
+                                            || no "(8) an off switch leaked (env=$s_e0 file=$s_f0)"
+nsweep CC_SUP_SUBJECT_NUDGE=shadow; s_es="$(ns "$S8")"; sh_e="$(ncnt "\"kind\":\"subject_nudge\",\"sid\":\"$S8\".*\"mode\":\"shadow\"")"
+rm -f "$CC_SUPERVISOR_PAGEDIR/$S8.nudged-shadow"; : > "$NB/state/subject-nudge.shadow"; nsweep
+s_fs="$(ns "$S8")"; sh_f="$(ncnt "\"kind\":\"subject_nudge\",\"sid\":\"$S8\".*\"mode\":\"shadow\"")"; rm -f "$NB/state/subject-nudge.shadow"
+{ [ "$s_es" -eq 0 ] && [ "$s_fs" -eq 0 ] && [ "$sh_e" -eq 1 ] && [ "$sh_f" -eq 2 ]; } \
+  && ok "(8) shadow by env and by file sends nothing and records the would-be send" \
+  || no "(8) shadow wrong (sends env=$s_es file=$s_fs records=$sh_e/$sh_f)"
+nsweep
+[ "$(ns "$S8")" -eq 1 ] && ok "(8) control: the same fixture with the switches cleared sends" || no "(8) control did not send (sends=$(ns "$S8"))"
+nreset; mktel "$S8" 40 100 "$ALIVE" "$REPO"; scrow "$S8" abstained scope-floor-shadow; nsweep; s_son="$(ns "$S8")"
+nsweep CC_SUP_SUBJECT_NUDGE=shadow
+{ [ "$s_son" -eq 0 ] && [ "$(ncnt "\"kind\":\"subject_nudge\",\"sid\":\"$S8\".*\"mode\":\"shadow\"")" -eq 1 ]; } \
+  && ok "(8) a scope-floor-shadow row is acted on only in shadow mode" || no "(8) scope-floor-shadow handling wrong (on-mode sends=$s_son)"
+
+# (9) a non-uuid sid is never an address (cc-notify's friendly-name match could reach another session).
+nreset; mktel nudgeplain 40 100 "$ALIVE" "$REPO"; scrow nudgeplain abstained scope-floor-reclose; nsweep
+grep -qx nudgeplain "$NB/sends" 2>/dev/null && no "(9) a non-uuid sid was used as an address" || ok "(9) a non-uuid sid is never addressed"
+
+# (10) marker lifetime: clear_page and clear_page_recovered keep it; reap_clean drops it; 7 days prunes it.
+nreset; printf 'N %s aaaabbbbcccc 0 1\n' "$(date +%s)" > "$(nmark "$S10")"
+mktel "$S10" 40 7000 "$ALIVE" "$REPO"; nsweep CC_SUP_GC_S=6000; gc_kept=0; [ -f "$(nmark "$S10")" ] && gc_kept=1
+mktel "$S10" 40 1 "$ALIVE" "$REPO"; nsweep; ok_kept=0; [ -f "$(nmark "$S10")" ] && ok_kept=1
+{ [ "$gc_kept" = 1 ] && [ "$ok_kept" = 1 ] && idl_has "\"kind\":\"gc\",\"sid\":\"$S10\""; } \
+  && ok "(10) clear_page (via gc_stale) and clear_page_recovered (the OK branch) keep the .nudged marker" \
+  || no "(10) a page clear dropped the nudge ladder (gc=$gc_kept ok-branch=$ok_kept)"
+mktel "$S10" 40 2 999997 "$SBX/landed"; nsweep
+{ idl_has "\"kind\":\"reap\",\"sid\":\"$S10\"" && [ ! -f "$(nmark "$S10")" ]; } \
+  && ok "(10) reap_clean deletes the marker with the session" || no "(10) reap_clean left the marker (or did not reap)"
+printf 'N 1 k 0 1\n' > "$(nmark "$S11")"; touch -t 202001010000 "$(nmark "$S11")"; printf 'N 1 k 0 1\n' > "$(nmark "$S12")"; nsweep
+{ [ ! -f "$(nmark "$S11")" ] && [ -f "$(nmark "$S12")" ]; } && ok "(10) gc_stale prunes a marker untouched for 7 days, and only that one" \
+                                                          || no "(10) 7-day prune wrong"
+
+# (11) the verdict is cc-notify's own line, not the relayed cc-wake line before it (also for advise_subject).
+nreset; mktel "$S11" 40 100 "$ALIVE" "$REPO"; scrow "$S11" abstained scope-floor-reclose; mktel "$S12" 90 1 "$ALIVE" "$REPO"
+nsweep CC_NOTIFY_STUB_WAKE=refused-busy
+idl_has "\"kind\":\"subject_nudge\",\"sid\":\"$S11\".*\"verdict\":\"delivered\",\"enqueued\":1,\"reason\":\"woken-socket\"" \
+  && ok "(11) subject_nudge reads verdict/enqueued/reason from the ^cc-notify: verdict= line, past a cc-wake refused-busy line" \
+  || no "(11) the nudge recorded the relayed cc-wake verdict"
+idl_has "\"kind\":\"subject_advise\",\"sid\":\"$S12\".*\"verdict\":\"delivered\"" \
+  && ok "(11) advise_subject reads the same line (the 20:15:41Z refused-busy mis-record)" \
+  || no "(11) advise_subject still records the relayed cc-wake verdict"
+
+# (12) a durable hold: exactly one re-confirm per hold key, and one held-idle digest cause.
+HX='{"kind":"blocked","ungated":0,"held":true,"held_id":"e869fac7eb34","held_until":null,"key":"hhhh1111aaaa"}'
+nreset; mktel "$S12" 40 100 "$ALIVE" "$REPO"; scrow "$S12" abstained scope-floor-nothing-ungated "$HX"
+nsweep CC_SUP_NUDGE_GAP_S=0; h1="$(nmsg "$S12")"; nsweep CC_SUP_NUDGE_GAP_S=0
+{ [ "$(ns "$S12")" -eq 1 ] && printf '%s' "$h1" | grep -q 'IDLE ON A HOLD.*e869fac7eb34.*dod-persist.sh hold none'; } \
+  && ok "(12) a held row ⇒ exactly one re-confirm for its hold key, naming the hold and the release verb" \
+  || no "(12) held re-confirm wrong (sends=$(ns "$S12") text=${h1:0:120})"
+[ "$(ndig held-idle)" -eq 1 ] && ok "(12) …and exactly one held-idle digest cause" || no "(12) held-idle digest causes=$(ndig held-idle)"
+
+# (19) a lapsing hold renewed after its window is a NEW hold key; a hold past held_until runs the ladder.
+nreset; mktel "$S13" 40 100 "$ALIVE" "$REPO"
+scrow "$S13" abstained scope-floor-nothing-ungated "$(jq -nc --argjson u $(( $(date +%s) + 3600 )) '{ungated:0,held:true,held_id:"e869fac7eb34",held_until:$u,key:"hhhh2222aaaa"}')"
+nsweep CC_SUP_NUDGE_GAP_S=0
+scrow "$S13" abstained scope-floor-nothing-ungated "$(jq -nc --argjson u $(( $(date +%s) + 7200 )) '{ungated:0,held:true,held_id:"e869fac7eb34",held_until:$u,key:"hhhh3333aaaa"}')"
+nsweep CC_SUP_NUDGE_GAP_S=0
+{ [ "$(ns "$S13")" -eq 2 ] && [ "$(ncnt "\"kind\":\"subject_nudge_held\",\"sid\":\"$S13\".*\"enqueued\":1")" -eq 2 ]; } \
+  && ok "(19) a lapsing hold renewed with a new until= ⇒ a second re-confirm" || no "(19) renewal re-confirms=$(ns "$S13"), want 2"
+scrow "$S13" abstained scope-floor-nothing-ungated "$(jq -nc --argjson u $(( $(date +%s) - 60 )) '{ungated:0,held:true,held_id:"e869fac7eb34",held_until:$u,key:"hhhh4444aaaa"}')"
+nsweep CC_SUP_NUDGE_GAP_S=0
+{ [ "$(ns "$S13")" -eq 3 ] && nmsg "$S13" | grep -q 'IDLE WITH UNGATED SCOPE' && idl_has "\"kind\":\"subject_nudge\",\"sid\":\"$S13\""; } \
+  && ok "(19) a hold whose held_until has passed ⇒ a subject nudge (the ladder), not a re-confirm" \
+  || no "(19) a lapsed hold was not laddered (sends=$(ns "$S13") last=$(nmsg "$S13" | cut -c1-80))"
+
+# (13) rotation: the newest idl.jsonl.2*.gz is read when the live file has nothing; the archive chain never is.
+nreset; mktel "$S13" 40 100 "$ALIVE" "$REPO"; mktel "$S14" 40 100 "$ALIVE" "$REPO"
+scrow "$S13" abstained scope-floor-reclose '' 0 "$NB/rot"; gzip -c "$NB/rot" > "$CC_IDL.20261020T0000Z.gz"; rm -f "$NB/rot"
+scrow "$S14" abstained scope-floor-reclose '' 0 "$NB/chain"; gzip -c "$NB/chain" > "$CC_IDL.chain.0001.gz"; rm -f "$NB/chain"
+nsweep
+[ "$(ns "$S13")" -eq 1 ] && ok "(13) the newest dated rotation is read when the live IDL has no rows" || no "(13) the rotation fallback did not read idl.jsonl.2*.gz"
+[ "$(ns "$S14")" -eq 0 ] && ok "(13) the idl.jsonl.chain.* archive is never read" || no "(13) a row only in the archive chain was acted on"
+
+# (16) the horizon rule: an attempt that would land past GC_S − slack of telemetry age digests first.
+nreset; mktel "$S1" 40 5000 "$ALIVE" "$REPO"; scrow "$S1" abstained scope-floor-reclose; nsweep CC_SUP_GC_S=7200
+{ [ "$(ns "$S1")" -eq 1 ] && [ "$(ncnt "\"kind\":\"subject_nudge_capped\",\"sid\":\"$S1\".*\"why\":\"horizon\"")" -eq 1 ] && [ "$(ndig subject-idle-capped)" -eq 1 ]; } \
+  && ok "(16) next rung past GC_S − slack (CC_SUP_GC_S=7200) ⇒ digest why:horizon at this send, before GC" \
+  || no "(16) horizon digest missing (sends=$(ns "$S1") capped=$(ncnt '"kind":"subject_nudge_capped"'))"
+
+# (17) two sends that did not reach the session (cc-wake refused-busy, reason≠woken) ⇒ digest why:not-woken.
+nreset; mktel "$S2" 40 100 "$ALIVE" "$REPO"; scrow "$S2" abstained scope-floor-reclose
+nsweep CC_NOTIFY_STUB_WAKE=refused-busy CC_NOTIFY_STUB_REASON=no-watcher; c_1="$(ncnt '"kind":"subject_nudge_capped"')"
+nage "$S2" 1810; nsweep CC_NOTIFY_STUB_WAKE=refused-busy CC_NOTIFY_STUB_REASON=no-watcher
+{ [ "$c_1" -eq 0 ] && [ "$(ns "$S2")" -eq 2 ] && [ "$(ncnt "\"kind\":\"subject_nudge_capped\",\"sid\":\"$S2\".*\"why\":\"not-woken\"")" -eq 1 ]; } \
+  && ok "(17) two unwoken sends ⇒ digest why:not-woken after the second, not the first" \
+  || no "(17) not-woken digest wrong (after-1st=$c_1 sends=$(ns "$S2"))"
+
+# (18) the stale-inflight rule: time-bounded legs lapse, custody does not, and a young row is still in flight.
+nreset; for s in "$S3" "$S4" "$S5"; do mktel "$s" 40 100 "$ALIVE" "$REPO"; done
+scrow "$S3" abstained scope-floor-inflight '{"what":"bg","n":1}' 7200
+scrow "$S4" abstained scope-floor-inflight '{"what":"custody","n":1}' 7200
+scrow "$S5" abstained scope-floor-inflight '{"what":"bg","n":1}' 600
+nsweep
+[ "$(ns "$S3")" -eq 1 ] && ok "(18) a scope-floor-inflight {what:bg} row 2 h old ⇒ one send" || no "(18) a lapsed bg leg was not nudged"
+[ "$(ns "$S4")" -eq 0 ] && ok "(18) {what:custody} 2 h old ⇒ no send (custody-deathwatch owns it)" || no "(18) a custody leg was nudged"
+[ "$(ns "$S5")" -eq 0 ] && ok "(18) {what:bg} 10 min old ⇒ no send (still in flight)" || no "(18) a fresh bg leg was nudged"
+nreset
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"

@@ -39,8 +39,9 @@ setup() {
   # by exactly those 9 for that case only. Deriving the floor from the skip line (rather than pinning the
   # lower number everywhere) keeps the ratchet at full strength on every box that can actually run them.
   # 104 → 120 (T34-T38 permpend escalation ladder, item 6a5a218fd9a8): 17 new checks.
-  floor=120
-  if echo "$output" | grep -q 'SKIP T30'; then floor=111; fi
+  # 120 → 159 (T43 C6 subject nudge, ruling d610f8473106): 39 new checks.
+  floor=159
+  if echo "$output" | grep -q 'SKIP T30'; then floor=150; fi
   n_pass="$(echo "$output" | sed -nE 's/.*supervisor-e2e: ([0-9]+) passed.*/\1/p')"
   [ "${n_pass:-0}" -ge "$floor" ]
 }

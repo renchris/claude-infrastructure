@@ -30,6 +30,9 @@
 #            CC_SUP_GIT_TIMEOUT_S · CC_SUP_FIND_TIMEOUT_S · CC_SUP_CKPT_TIMEOUT_S · CC_SUP_NOTIFY_TIMEOUT_S ·
 #            CC_SUP_PANE_DELTA_TOL · CC_SUP_SELFCHECK_MIN_PERSIST · CC_SUP_OS_CHANNEL ·
 #            CC_SUP_SUBJECT_ADVISE · CC_SUP_ADVISE_STEP ·
+#            CC_SUP_SUBJECT_NUDGE · CC_SUP_NUDGE_MAX · CC_SUP_NUDGE_BACKOFF_S · CC_SUP_NUDGE_ARMED_S ·
+#            CC_SUP_NUDGE_SID_DAY · CC_SUP_NUDGE_GAP_S · CC_SUP_NUDGE_PER_SWEEP · CC_SUP_NUDGE_HORIZON_SLACK_S ·
+#            CC_SUP_NUDGE_INFLIGHT_WARM_S · CC_SUP_NUDGE_STATE_DIR ·
 #            CC_SUP_SHA_BIN
 set -uo pipefail
 
@@ -143,6 +146,19 @@ RECOVERY_S="${CC_SUP_RECOVERY_S:-3600}"                # sustained-OK dwell befo
 SUBJECT_ADVISE="${CC_SUP_SUBJECT_ADVISE:-1}"           # B-1 also tells the SUBJECT session itself (advise_subject); 0 = desk-only, the pre-2026-09-10 behaviour
 ADVISE_STEP="${CC_SUP_ADVISE_STEP:-5}"                 # re-advise the subject once per this many fill points climbed (its damping bucket)
 case "$ADVISE_STEP" in ''|*[!0-9]*|0) ADVISE_STEP=5 ;; esac
+# C6 SUBJECT NUDGE (nudge_subject; design docs/research/lead-keeps-working-2026-10-24.md §3.5, ruling d610f8473106).
+# Every bound is a seam; a non-numeric value falls back to its default rather than disarming the bound.
+_sup_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
+SUBJECT_NUDGE="${CC_SUP_SUBJECT_NUDGE:-1}"                                  # 1 | shadow | 0 ; or ~/.claude/state/subject-nudge.{off,shadow}
+NUDGE_STATE_DIR="${CC_SUP_NUDGE_STATE_DIR:-$HOME/.claude/state}"            # where the two kill-switch files live
+NUDGE_MAX="$(_sup_num "${CC_SUP_NUDGE_MAX:-}" 3)"                           # per key (the floor row's key = decision state)
+NUDGE_BACKOFF_S="$(_sup_num "${CC_SUP_NUDGE_BACKOFF_S:-}" 1800)"            # attempt k+1 waits BACKOFF·2^(k-1) after attempt k (30 min, 1 h)
+NUDGE_ARMED_S="$(_sup_num "${CC_SUP_NUDGE_ARMED_S:-}" 3600)"                # after verdict reason=wake-path-armed: re-check in 1 h (detached-watcher hole)
+NUDGE_SID_DAY="$(_sup_num "${CC_SUP_NUDGE_SID_DAY:-}" 4)"                   # per session, rolling 24 h, whatever the key
+NUDGE_GAP_S="$(_sup_num "${CC_SUP_NUDGE_GAP_S:-}" 1800)"                    # minimum gap between any two nudges to one session
+NUDGE_PER_SWEEP="$(_sup_num "${CC_SUP_NUDGE_PER_SWEEP:-}" 3)"               # fleet cap, FILE-backed ($PAGEDIR/.nudge-sweep): assess() runs in $(…)
+NUDGE_HORIZON_SLACK_S="$(_sup_num "${CC_SUP_NUDGE_HORIZON_SLACK_S:-}" 1200)" # digest before GC_S - this (2 × SUPERVISOR_SWEEP_MAX_S)
+NUDGE_INFLIGHT_WARM_S="$(_sup_num "${CC_SUP_NUDGE_INFLIGHT_WARM_S:-${CC_BH_WAVE_WARM_S:-}}" 1800)" # freshness of the time-bounded in-flight legs (bg/agent/wave)
 GC_S="${CC_SUP_GC_S:-21600}"                           # telemetry age past which a LIVE-OWNER row is GC'd — a hung/pid-recycled owner would STALL?-escalate every sweep forever (item fdc101e8b0c7). reaper-horizon-lint bounds this ≥ SUPERVISOR_SWEEP_MAX_S×10; default 6h = 12× STALL_S.
 OWNER_PAT="${CC_SUP_OWNER_PAT:-claude}"               # a live pid OWNS its telemetry row only if its process command matches this — kill -0 alone reads a RECYCLED pid as the original session (the STALL? zombie)
 TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
@@ -543,6 +559,13 @@ clear_page(){ rm -f "$PAGEDIR/$1.page" "$PAGEDIR/$1.notified" "$PAGEDIR/$1.ok" "
 # drain reads the box — so a refused send retries on the next sweep. The desk page is unchanged and still
 # sent: this is an additional recipient, not a reroute. Re-armed in assess()'s OK branch only once fill
 # falls a full step BELOW T (a compaction), so a session hovering at T is not re-told on every wobble.
+# cc-notify's OWN verdict token is the `^cc-notify: verdict=` line. Anything else that says `verdict=` is
+# a child's: cc-notify relays cc-wake's stderr (indented) BEFORE printing its own, so the first
+# `verdict=` in the output is cc-wake's. Measured 2026-10-24 20:15:41Z: a subject_advise row recorded
+# cc-wake's `refused-busy` while cc-notify's verdict was `delivered` (lead-keeps-working maps/wake-path.md §5.2).
+notify_field(){ # $1=cc-notify combined output $2=field → that field's value from cc-notify's own line, or nothing
+  printf '%s\n' "$1" | grep -E '^cc-notify: verdict=' | head -1 | grep -oE "(^| )$2=[A-Za-z0-9_-]+" | head -1 | sed 's/.*=//'
+}
 advise_subject(){ # $1=sid $2=used_pct
   local sid="$1" used="$2" af bucket last out rc verdict
   [ "$SUBJECT_ADVISE" = 1 ] || return 0
@@ -554,11 +577,237 @@ advise_subject(){ # $1=sid $2=used_pct
   if [ -n "$last" ] && [ "$bucket" -le "$last" ]; then return 0; fi
   out="$(sup_bounded "$SUP_NOTIFY_TIMEOUT_S" "$NOTIFY_BIN" "$sid" \
     "⚠️ CONTEXT ${used}% FULL (lead-supervisor, addressed to THIS session) — past the ${T}% handoff threshold and still mid-turn, where the Stop-time boundary hook cannot reach you. At your next safe seam: commit or persist what you hold, then recycle this pane (handoff-fire.sh --recycle, or /handoff). The context ceiling is a hard refusal, not a compaction." 2>&1)"; rc=$?
-  verdict="$(printf '%s' "$out" | grep -oE 'verdict=[a-z-]+' | head -1 | cut -d= -f2)"
+  verdict="$(notify_field "$out" verdict)"
   : "${verdict:=unreadable}"
   if [ "$rc" = 0 ]; then printf '%s\n' "$bucket" > "$af" 2>/dev/null || true; fi
   idl subject_advise "\"sid\":\"$sid\",\"used\":$used,\"step\":$ADVISE_STEP,\"notify_rc\":$rc,\"verdict\":$(json_str "$verdict"),\"why\":\"B-1 told the SUBJECT, not only the desk — its PostToolUse mailbox drain reads this mid-turn; marker kept only on rc 0, so a refused send retries next sweep\""
   printf '%s  subject ADVISED sid=%s used=%s rc=%s verdict=%s\n' "$(utc)" "$sid" "$used" "$rc" "$verdict" >> "$SUPLOG" 2>/dev/null || true
+  return 0
+}
+
+# ── C6 SUBJECT NUDGE — wake an IDLE session whose own scope floor saw ungated work (ruling d610f8473106). ──
+# After a session's last idle Stop no Stop hook can act again: the scope floor (hooks/session-continue.sh)
+# runs only AT a Stop, so a session that closed over ungated scope and went quiet stays quiet. The STALL?
+# branch is the one place left that can, and `cc-notify <sid>` to a watcher-less live pane socket-wakes it
+# through cc-wake. This is NOT a page: page()/send_page address the desk role, never the subject.
+# The oracle is the floor's own IDL row (its newest `scope-floor*` row), never this daemon's guess at
+# scope. Damping is read BEFORE any send and is per key (the row's decision-state key), per session per
+# 24 h, per session gap, and per sweep fleet-wide — the last FILE-backed, because assess() runs inside
+# $(…) and a variable dies with that subshell (the digest's lesson, above). The operator hears about a
+# ladder that is not working once per key (digest cause `subject-idle-capped`), before gc_stale's
+# horizon drops the row and this daemon can no longer see the session at all.
+# Marker $PAGEDIR/<sid>.nudged, one line per event (`.nudged-shadow` in shadow mode):
+#   N <epoch> <key> <armed01> <reached01>   a recorded send (armed = reason wake-path-armed; reached = woken* or armed)
+#   H <epoch> <holdkey>                    a recorded hold re-confirm
+#   C <epoch> <key> <why>                  the once-per-key operator digest (cap | not-woken | horizon)
+# Lifetime: clear_page/clear_page_recovered leave it (a void is not a reset of the ladder); reap_clean
+# deletes it; gc_stale prunes any untouched for 7 days.
+NUDGE_SWEEP_FILE="$PAGEDIR/.nudge-sweep"
+nudge_mode(){ # → on | shadow | off. An env 0 and the .off file each win outright; anything unrecognised is off.
+  case "$SUBJECT_NUDGE" in 0|off) echo off; return 0 ;; esac
+  [ -e "$NUDGE_STATE_DIR/subject-nudge.off" ] && { echo off; return 0; }
+  case "$SUBJECT_NUDGE" in shadow) echo shadow; return 0 ;; 1|on) ;; *) echo off; return 0 ;; esac
+  [ -e "$NUDGE_STATE_DIR/subject-nudge.shadow" ] && { echo shadow; return 0; }
+  echo on
+}
+iso_epoch(){ # $1=ISO-8601 UTC (…Z) → epoch, or nothing. BSD date first (launchd's /bin/date), GNU fallback.
+  date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || date -u -d "$1" +%s 2>/dev/null || true
+}
+nudge_rows(){ # $1=sid → this session's session-continue IDL rows, oldest first; the newest ROTATED file if the live one has none
+  local sid="$1" rows g gz=""
+  rows="$(sup_bounded 5 grep -F "\"sid\":\"$sid\"" "$IDL" 2>/dev/null | grep -F '"hook":"session-continue"' | tail -200)"
+  if [ -z "$rows" ]; then
+    # `idl.jsonl.2*.gz` only — the dated rotations. Never `idl.jsonl.chain.*.gz`: that is the archive chain,
+    # whose rows are older than any rotation and would resurrect a decision the session has long moved past.
+    for g in "$IDL".2*.gz; do [ -e "$g" ] && gz="$g"; done           # glob order is lexical: the last is the newest
+    [ -n "$gz" ] && rows="$(sup_bounded 5 gzip -dc "$gz" 2>/dev/null | grep -F "\"sid\":\"$sid\"" | grep -F '"hook":"session-continue"' | tail -200)"
+  fi
+  printf '%s' "$rows"
+}
+# The NEWEST `scope-floor*` row decides, and only an ARMING row after it voids it (`continue`, `cli-set`,
+# or any `fired` disposition: the session was re-armed or forced on). Never "the newest session-continue
+# row": wake_floor runs right after scope_floor and logs `wake-floor-mechanical-arm` on every such Stop
+# with no watcher (19 production rows, design §9.3 M21), so that oracle would read that row and never
+# nudge again. Prints `none`, `void`, or `row` + the row's fields, \x1f-separated (not a tab: IFS
+# whitespace collapses an EMPTY field and shifts the rest left — e2e T42).
+nudge_pick(){ # stdin = rows
+  jq -cR 'fromjson? // empty' 2>/dev/null | jq -rs '
+    def s: if . == null then "" elif type == "array" then map(tostring) | join(",") else tostring end;
+    to_entries as $e
+    | ([ $e[] | select((.value.reason // "" | tostring) | startswith("scope-floor")) ] | last) as $r
+    | if $r == null then "none"
+      elif any($e[]; .key > $r.key and ((.value.reason // "") == "continue" or (.value.reason // "") == "cli-set"
+                                        or (.value.disposition // "") == "fired")) then "void"
+      else $r.value | ["row", (.reason|s), (.ungated|s), (.held|s), (.held_id|s), (.held_until|s), (.key|s),
+                       (.kind|s), (.ids|s), (.head|s), (.what|s), (.ts|s)] | map(gsub("[\u001f\n\r]"; " ")) | join("\u001f")
+      end' 2>/dev/null
+}
+# A `scope-floor-inflight` row is suppressed while its legs could still be running. Only the
+# TIME-BOUNDED legs (bg, agent, wave: freshness CC_BH_WAVE_WARM_S) provably lapse on their own, and the
+# floor re-evaluates only at a Stop the idle session never reaches — so past WARM + STALL_S the row is
+# accepted. custody, landing, resident (or any leg not named here) stay suppressed: a dead lane's
+# custody is custody-deathwatch's to report, and it wakes the originator itself.
+nudge_inflight_lapsed(){ # $1=what $2=row ts (ISO) $3=now → 0 = accept the row
+  local tok n=0 ep
+  for tok in $(printf '%s' "$1" | tr ',;+' '   '); do
+    case "$tok" in bg|agent|wave) n=$((n+1)) ;; *) return 1 ;; esac
+  done
+  [ "$n" -gt 0 ] || return 1
+  ep="$(iso_epoch "$2")"; case "$ep" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$(( $3 - ep ))" -ge "$(( NUDGE_INFLIGHT_WARM_S + STALL_S ))" ]
+}
+# Damping, read BEFORE any send. → 0 = REFUSED, 1 = may send. Either way
+# NUDGE_NEXT is the earliest epoch the next send to this key could go, which the horizon digest reads.
+nudge_damped(){ # $1=marker $2=key $3=now
+  local mf="$1" k="$2" t="$3" kn=0 klast=0 karmed=0 slast=0 sday=0 sold=0 bo i
+  if [ -s "$mf" ]; then
+    read -r kn klast karmed slast sday sold <<EOF
+$(awk -v k="$k" -v t="$t" '
+  ($1 == "N" || $1 == "H") { if ($2 > sl) sl = $2; if (t - $2 < 86400) { d++; if (so == 0 || $2 < so) so = $2 } }
+  ($1 == "N" && $3 == k)   { n++; if ($2 >= kl) { kl = $2; ka = $4 } }
+  END { printf "%d %d %d %d %d %d\n", n, kl, ka, sl, d, so }' "$mf" 2>/dev/null)
+EOF
+  fi
+  kn="$(_sup_num "$kn" 0)"; klast="$(_sup_num "$klast" 0)"; slast="$(_sup_num "$slast" 0)"
+  sday="$(_sup_num "$sday" 0)"; sold="$(_sup_num "$sold" 0)"
+  bo="$NUDGE_BACKOFF_S"; i=1
+  while [ "$i" -lt "$kn" ]; do bo=$(( bo * 2 )); i=$(( i + 1 )); done        # BACKOFF·2^(k-1) after attempt k
+  [ "$karmed" = 1 ] && bo="$NUDGE_ARMED_S"
+  NUDGE_NEXT="$t"
+  [ "$kn" -gt 0 ] && [ "$(( klast + bo ))" -gt "$NUDGE_NEXT" ] && NUDGE_NEXT=$(( klast + bo ))
+  [ "$slast" -gt 0 ] && [ "$(( slast + NUDGE_GAP_S ))" -gt "$NUDGE_NEXT" ] && NUDGE_NEXT=$(( slast + NUDGE_GAP_S ))
+  [ "$sday" -ge "$NUDGE_SID_DAY" ] && [ "$(( sold + 86400 ))" -gt "$NUDGE_NEXT" ] && NUDGE_NEXT=$(( sold + 86400 ))
+  NUDGE_KN="$kn"
+  [ "$kn" -ge "$NUDGE_MAX" ] && return 0                                         # key cap
+  [ "$sday" -ge "$NUDGE_SID_DAY" ] && return 0                                    # per-session 24 h cap
+  [ "$slast" -gt 0 ] && [ "$(( t - slast ))" -lt "$NUDGE_GAP_S" ] && return 0     # per-session gap, any key
+  [ "$kn" -gt 0 ] && [ "$(( t - klast ))" -lt "$bo" ] && return 0                 # this key's back-off
+  return 1
+}
+# The once-per-key operator digest, at the FIRST of: (a) the key's NUDGE_MAX-th send; (b) a second
+# recorded send that did not reach the session (reason neither woken* nor wake-path-armed — e.g. cc-wake
+# refused-busy); (c) the next attempt would land past GC_S - NUDGE_HORIZON_SLACK_S of telemetry age,
+# where gc_stale drops the row and the ladder can never finish.
+nudge_capcheck(){ # $1=sid $2=marker $3=key $4=telemetry_age_s $5=now $6=mode
+  local sid="$1" mf="$2" k="$3" tel="$4" t="$5" kn nr why=""
+  awk -v k="$k" '$1 == "C" && $3 == k { f = 1 } END { exit !f }' "$mf" 2>/dev/null && return 0
+  read -r kn nr <<EOF
+$(awk -v k="$k" '$1 == "N" && $3 == k { n++; if ($5 != 1) r++ } END { printf "%d %d\n", n, r }' "$mf" 2>/dev/null)
+EOF
+  kn="$(_sup_num "$kn" 0)"; nr="$(_sup_num "$nr" 0)"
+  [ "$kn" -gt 0 ] || return 0
+  if [ "$kn" -ge "$NUDGE_MAX" ]; then why=cap
+  elif [ "$nr" -ge 2 ]; then why=not-woken
+  else
+    nudge_damped "$mf" "$k" "$t" || true
+    [ "$(( tel + NUDGE_NEXT - t ))" -ge "$(( GC_S - NUDGE_HORIZON_SLACK_S ))" ] && why=horizon
+  fi
+  [ -n "$why" ] || return 0
+  printf 'C %s %s %s\n' "$t" "$k" "$why" >> "$mf" 2>/dev/null || return 0
+  [ "$6" = shadow ] || digest_add "subject-idle-capped"
+  idl subject_nudge_capped "\"sid\":\"$sid\",\"key\":$(json_str "$k"),\"why\":\"$why\",\"sends\":$kn,\"not_reached\":$nr,\"mode\":\"$6\""
+  return 0
+}
+nudge_send(){ # $1=sid $2=subject $3=text → NUDGE_RC / NUDGE_VERDICT / NUDGE_ENQ / NUDGE_REASON
+  local out
+  # No --no-wake, no CC_NOTIFY_WAKE=0, no CC_WAKE=off: the socket wake IS the point of this send.
+  out="$(sup_bounded "$SUP_NOTIFY_TIMEOUT_S" "$NOTIFY_BIN" "$1" --from lead-supervisor --subject "$2" "$3" 2>&1)"; NUDGE_RC=$?
+  NUDGE_VERDICT="$(notify_field "$out" verdict)"; : "${NUDGE_VERDICT:=unreadable}"
+  NUDGE_ENQ="$(notify_field "$out" enqueued)"; case "$NUDGE_ENQ" in 1) ;; *) NUDGE_ENQ=0 ;; esac
+  NUDGE_REASON="$(notify_field "$out" reason)"; : "${NUDGE_REASON:=none}"
+}
+nudge_slot(){ # $1=marker → 0 = a send may go (slot reserved). FAIL CLOSED: an unwritable marker or counter sends nothing.
+  local n
+  : >> "$1" 2>/dev/null || return 1
+  n="$(wc -l < "$NUDGE_SWEEP_FILE" 2>/dev/null | tr -dc '0-9')"; : "${n:=0}"
+  [ "$n" -lt "$NUDGE_PER_SWEEP" ] || return 1
+  printf 'x\n' >> "$NUDGE_SWEEP_FILE" 2>/dev/null || return 1
+}
+nudge_text(){ # $1=kind $2=ungated $3=ids(,) $4=head $5=transcript_age_s → one line (cc-notify collapses newlines)
+  local what dec head
+  # Never echo the contract marker back: a `Scope (frozen):` line in the session's own transcript is
+  # what dod-persist captures as a NEW contract, so a quoted head would re-freeze machine text as scope.
+  head="$(printf '%s' "$4" | tr '\n\r' '  ' | sed 's/Scope (frozen):/scope:/g')"
+  if [ "$1" = loop ]; then what="loop scope \"${head}…\""
+  elif [ "${2:-0}" -gt 0 ] 2>/dev/null; then what="$2 DoD item(s)"
+  else what="the work a now-lapsed hold had paused"; fi
+  dec="${3:-}"; [ -n "$dec" ] || dec=none; dec="${dec//,/, }"
+  # shellcheck disable=SC2016  # the backticked commands are LITERAL text for the reader, never expanded
+  printf '⏯ IDLE WITH UNGATED SCOPE (lead-supervisor, machine text addressed to THIS session; not an operator answer) — idle ~%sm. Your last close went idle while your frozen scope still has in-scope work no open decision gates (%s; open decisions: %s). Run the next ungated step now (a loop scope: the next round as scoped). If every remaining item truly waits on an open money, self-modification, permission, credential or G2 decision, `~/.claude/hooks/dod-persist.sh hold <id> "<what it gates>"`; if the loop'"'"'s stop condition holds or the operator ruled it stopped, `~/.claude/hooks/dod-persist.sh done "<evidence>"`. Then close.' \
+    "$(( ${5:-0} / 60 ))" "$what" "$dec"
+}
+# HELD BRANCH: a self-declared hold is never silent to the operator. One re-confirm line per hold key
+# (key + held id + its until=, so a renewed lapsing hold is a NEW key and is re-confirmed each window)
+# and one `held-idle` digest cause. A hold whose held_until has PASSED never reaches here — the idle
+# session cannot Stop to notice its own lapse, so nudge_subject runs the ladder for it instead.
+nudge_held(){ # $1=sid $2=mode $3=key $4=held_id $5=held_until $6=telemetry_age_s
+  local sid="$1" mode="$2" hk mf t until_txt text
+  hk="$(printf '%s/%s/%s' "${3:-nokey}" "${4:-none}" "${5:-durable}" | tr -c 'A-Za-z0-9._/-' '_')"
+  mf="$PAGEDIR/$sid.nudged"; [ "$mode" = shadow ] && mf="$PAGEDIR/$sid.nudged-shadow"
+  awk -v k="$hk" '$1 == "H" && $3 == k { f = 1 } END { exit !f }' "$mf" 2>/dev/null && return 0
+  t="$(now)"
+  nudge_damped "$mf" "H:$hk" "$t" && return 0
+  nudge_slot "$mf" || return 0
+  if [ -n "$5" ]; then until_txt="until $(fmt_since "$5")"; else until_txt="durable"; fi
+  text="⏯ IDLE ON A HOLD (lead-supervisor, machine text addressed to THIS session; not an operator answer) — you are idle on a hold over ${4:-an open decision} (${until_txt}). A decision gates only the act it asks about; if the remaining work does not truly wait on it, release the hold with \`~/.claude/hooks/dod-persist.sh hold none \"<why>\"\` and drive it; otherwise leave it."
+  if [ "$mode" = shadow ]; then NUDGE_RC=0; NUDGE_VERDICT=shadow; NUDGE_ENQ=1; NUDGE_REASON=shadow
+  else nudge_send "$sid" "re-confirm the hold" "$text"; fi
+  if [ "$NUDGE_ENQ" = 1 ]; then
+    printf 'H %s %s\n' "$t" "$hk" >> "$mf" 2>/dev/null || true
+    [ "$mode" = shadow ] || digest_add "held-idle"
+  fi
+  idl subject_nudge_held "\"sid\":\"$sid\",\"hold_key\":$(json_str "$hk"),\"held_id\":$(json_str "$4"),\"notify_rc\":$NUDGE_RC,\"verdict\":$(json_str "$NUDGE_VERDICT"),\"enqueued\":$NUDGE_ENQ,\"reason\":$(json_str "$NUDGE_REASON"),\"mode\":\"$mode\""
+  return 0
+}
+nudge_subject(){ # $1=sid $2=transcript_age_s $3=telemetry_age_s — called in assess()'s STALL? branch. Never fails; prints NOTHING (assess's stdout is its finding count).
+  local sid="$1" tage="${2:-0}" tel="${3:-0}" mode rows pick v reason ung held hid huntil key kind ids head what ts t mf n reached armed
+  mode="$(nudge_mode)"; [ "$mode" = off ] && return 0
+  [ -n "$NOTIFY_BIN" ] || return 0
+  # Addressed by the telemetry session_id, exactly as advise_subject: a full dashed uuid or nothing — a bare
+  # word would fall into cc-notify's friendly-name match and could reach a DIFFERENT session.
+  [[ "$sid" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] || return 0
+  rows="$(nudge_rows "$sid")"; [ -n "$rows" ] || return 0
+  pick="$(printf '%s\n' "$rows" | nudge_pick)"
+  IFS=$'\x1f' read -r v reason ung held hid huntil key kind ids head what ts <<EOF
+$pick
+EOF
+  [ "$v" = row ] || return 0
+  t="$(now)"
+  case "$ung" in true) ung=1 ;; ''|*[!0-9]*) ung=0 ;; esac
+  case "$huntil" in ''|*[!0-9]*) huntil="" ;; esac
+  [ -n "$key" ] || key=nokey
+  case "$reason" in
+    scope-floor|scope-floor-reclose|scope-floor-gap|scope-floor-key-cap|scope-floor-day-cap)
+      [ "$ung" -gt 0 ] || return 0 ;;
+    scope-floor-shadow)
+      if [ "$mode" != shadow ] || [ "$ung" -le 0 ]; then return 0; fi ;;
+    scope-floor-nothing-ungated)
+      [ "$held" = true ] || return 0
+      if [ -z "$huntil" ] || [ "$huntil" -gt "$t" ]; then nudge_held "$sid" "$mode" "$key" "$hid" "$huntil" "$tel"; return 0; fi ;;
+    scope-floor-inflight)
+      nudge_inflight_lapsed "$what" "$ts" "$t" || return 0 ;;
+    *) return 0 ;;                       # kill-switch, operator-hold, conversation, clear, assignee, headless …
+  esac
+  mf="$PAGEDIR/$sid.nudged"; [ "$mode" = shadow ] && mf="$PAGEDIR/$sid.nudged-shadow"
+  if nudge_damped "$mf" "$key" "$t"; then
+    nudge_capcheck "$sid" "$mf" "$key" "$tel" "$t" "$mode"
+    return 0
+  fi
+  nudge_slot "$mf" || return 0
+  n=$(( NUDGE_KN + 1 ))
+  if [ "$mode" = shadow ]; then NUDGE_RC=0; NUDGE_VERDICT=shadow; NUDGE_ENQ=1; NUDGE_REASON=shadow
+  else nudge_send "$sid" "keep driving the ungated scope" "$(nudge_text "$kind" "$ung" "$ids" "$head" "$tage")"; fi
+  # Recorded when ENQUEUED, whatever rc: a 124 after the enqueue is a delivered line (bin/cc-notify:96-111),
+  # and re-sending it would double the mail. enqueued=0 ⇒ no marker, retried next sweep within the caps.
+  if [ "$NUDGE_ENQ" = 1 ]; then
+    armed=0; [ "$NUDGE_REASON" = wake-path-armed ] && armed=1
+    case "$NUDGE_REASON" in woken*|wake-path-armed|shadow) reached=1 ;; *) reached=0 ;; esac
+    printf 'N %s %s %s %s\n' "$t" "$key" "$armed" "$reached" >> "$mf" 2>/dev/null || true
+  fi
+  idl subject_nudge "\"sid\":\"$sid\",\"key\":$(json_str "$key"),\"attempt\":$n,\"notify_rc\":$NUDGE_RC,\"verdict\":$(json_str "$NUDGE_VERDICT"),\"enqueued\":$NUDGE_ENQ,\"reason\":$(json_str "$NUDGE_REASON"),\"kind\":$(json_str "$kind"),\"ids\":$(jq -cn --arg s "$ids" '$s | split(",") | map(select(length > 0))' 2>/dev/null || printf '[]'),\"row\":$(json_str "$reason"),\"mode\":\"$mode\""
+  printf '%s  subject NUDGED sid=%s key=%s attempt=%s rc=%s verdict=%s enqueued=%s reason=%s mode=%s\n' \
+    "$(utc)" "$sid" "$key" "$n" "$NUDGE_RC" "$NUDGE_VERDICT" "$NUDGE_ENQ" "$NUDGE_REASON" "$mode" >> "$SUPLOG" 2>/dev/null || true
+  [ "$NUDGE_ENQ" = 1 ] && nudge_capcheck "$sid" "$mf" "$key" "$tel" "$t" "$mode"
   return 0
 }
 # ── OK-branch recovery with HYSTERESIS — the 2026-09-07 page-storm fix (desk wake-noise). ──
@@ -824,6 +1073,7 @@ reap_clean(){ # $1=sid $2=cwd
   idl reap "\"sid\":\"$1\",\"cwd\":\"$2\",\"why\":\"clean-completion-shipped-clean-worktree\""
   rm -f "$TEL_DIR/$1.json" 2>/dev/null || true
   clear_page "$1"
+  rm -f "$PAGEDIR/$1.nudged" "$PAGEDIR/$1.nudged-shadow" 2>/dev/null || true   # the session is over: its nudge ladder with it
   printf '%s  reap sid=%s (clean+landed — dispatched-worker lifecycle end)\n' "$(utc)" "$1" >> "$SUPLOG" 2>/dev/null || true
 }
 
@@ -915,6 +1165,17 @@ gc_stale(){ # → prints the count of horizon-stale live-owner rows dropped
     [ -n "$sid" ] && clear_page "$sid"
     idl gc "\"sid\":\"${sid:-unknown}\",\"age\":$age,\"horizon\":$GC_S,\"pid\":\"${pid:-}\",\"why\":\"live-owner pid on telemetry ${age}s stale >= ${GC_S}s horizon — hung or pid-recycled owner; dropped the row so it stops re-paging every sweep\""
     g=$((g+1))
+  done
+  # Nudge markers outlive clear_page by design (a void or a GC is not the end of a ladder), so they age
+  # out here instead: one untouched for 7 days belongs to a session nothing has seen for a week. A glob
+  # and stat, never find(1): this runs EVERY sweep, and a find bound would cost up to SUP_FIND_TIMEOUT_S
+  # per sweep on a slow volume (e2e T30a, whose hung `find` caught exactly that).
+  local m mt t; t="$(now)"
+  for m in "$PAGEDIR"/*.nudged "$PAGEDIR"/*.nudged-shadow; do
+    [ -f "$m" ] || continue
+    mt="$(stat -f %m "$m" 2>/dev/null || stat -c %Y "$m" 2>/dev/null || echo "$t")"   # BSD stat, then GNU fallback
+    case "$mt" in ''|*[!0-9]*) continue ;; esac
+    if [ "$(( t - mt ))" -ge 604800 ]; then rm -f "$m" 2>/dev/null || true; fi
   done
   echo "$g"
 }
@@ -1087,6 +1348,10 @@ EOF
       # re-page finds the file pre-existing and resolves normally.
       local had_page=0; [ -f "$PAGEDIR/$sid.page" ] && had_page=1
       page "$sid" "STALL?" "pid alive but telemetry ${age}s + transcript ${tage}s stale — CANDIDATE; re-observing effects at deadline"
+      # C6: the page tells the desk; the nudge tells the SUBJECT, if its own scope floor left ungated work.
+      # Here, past the registered-desk, permission-beacon and operator-adopted exemptions and inside the
+      # [STALL_S, GC_S] window; ESCALATED is reachable only through this branch, so one site suffices.
+      nudge_subject "$sid" "$tage" "$age"
       [ "$had_page" = 1 ] && resolve_page "$sid" "$cwd"
       echo 1; return
     fi
@@ -1356,6 +1621,7 @@ self_restart_if_stale(){
 sweep(){
   local n=0 found=0 gc r pp wc fd
   gc="$(gc_stale)"                 # GC horizon-stale live-owner zombies FIRST — they are resolved, not a per-sweep finding
+  _ensure; : > "$NUDGE_SWEEP_FILE" 2>/dev/null || true   # the subject-nudge fleet cap is per SWEEP (a stale file only sends less)
   if [ -d "$TEL_DIR" ]; then
     for f in "$TEL_DIR"/*.json; do
       [ -e "$f" ] || continue
