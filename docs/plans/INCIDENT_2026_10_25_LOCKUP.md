@@ -18,7 +18,8 @@ Working folder (untracked evidence): `~/incident-2026-10-25/` — CHANGELOG.md (
 | W2 fix design | Workflow `wf_ce44f989-ca5` → solution/DESIGN.md | read-only fan-out |
 | W3 pane→session map | Workflow `wf_1ec8d534-06b` → restore-plan-v2 | read-only, two independent methods |
 | W4 resume-layout determinism + restore of the remaining 15 + design lane E | **S** pane 23, sid c7887188, branch `resume-layout-determinism` | default |
-| W5 design lanes A–D | **S** 4 sessions, branches `lockwatch-lane-{a,b,c,d}` | default |
+| W5 design lanes A–D | **S** 4 sessions, branches `lockwatch-lane-{a,b,c,d}` — panes 72 (A, sid 4b4a3a7b), 73 (B, d41b1e89), 74 (C, 7d370dfb), 75 (D) | default |
+| W6 lane F: root-cause code fix (cc-pane-runner SIG_IGN, cc-pane-verdict blocking open, pty test teardown) + kitty upstream issue + Apple Feedback draft | **S** pane 76, sid 914995eb, branch `lockwatch-lane-f` | default; added after the final RCA named our own code |
 | lead | **L** this pane (kitty pane 1) | synthesis, custody, operator relay |
 
 Lead context budget: recycle at the first idle seam ≥35%; everything needed is on disk (this file + the folder above). Succession: `handoff-fire.sh --recycle` in pane 1 (fired lanes notify pane 1, so the pane must stay).
@@ -30,9 +31,16 @@ Lead context budget: recycle at the first idle seam ≥35%; everything needed is
 - (a) RCA draft (rca/RCA-draft.md): Likely trigger = `kill -KILL 94459 68298` by pid at 03:48:58 in a bats pty test → session leader stuck in proc_exit→vn_revoke→drain, descendant stuck in pty open → /dev node vnode iocount never drops → every ttyname/devname lstat sleeps forever (zsh, login, ps). kitty deafness (RC last OK 03:47; main thread last log 03:52; 297 zombies) is a separate earlier chain. PTY exhaustion refuted (≤65/511). Final RCA.md pending (refuters running).
 - (b)+(e): DESIGN.md lanes A–D fired; lane E → pane 23.
 
+## Status update (2026-10-25 ~16:40 CDT)
+
+- (a) FINAL RCA: `docs/research/incident-2026-10-25/RCA.md` (copy of ~/incident-2026-10-25/RCA.md, 16:13). Rank 1 (Likely): kernel pty deadlock from our own code — `bin/cc-pane-runner:292` SIG_IGN inherited by children + `bin/cc-pane-verdict:135` blocking `stty size < "$TTYP"` + an `A1t pty` test driver that exited without killing its child; trigger `kill -KILL 94459 68298` by pid at 03:48:58 → VNOP_REVOKE → vnode_drain with no timeout → every devfs lookup of ttys063 sleeps. Rank 2: 65–100/core overload for ~13 h held in place by self-releasing admission gates. Rank 3: detection blind (producers hung on the same devname path; pages unread). Rank 4: kitty main thread `ttyname_r` in spawn. Rank 5/6: amplifiers; failed recovery.
+- Design: `docs/research/incident-2026-10-25/DESIGN.md` (with the 0082/0083 renumbering and the lane-A unpoison-target-set amendment).
+- Plan commit landed `e6dfb51f7`.
+- Decision filed: `888ad4830b80` (refuse autonomous launches above 50/core sustained? default observe-only; revisit 2026-11-01).
+
 ## Open items
 
-1. Collect W1 final RCA → copy RCA.md + DESIGN.md into `docs/research/incident-2026-10-25/`, commit, ship.
+1. ~~Collect W1 final RCA → copy RCA.md + DESIGN.md into `docs/research/incident-2026-10-25/`, commit, ship.~~ DONE (this commit).
 2. Custody: pane 23 + lanes A–D (`cc-custody`); verify each landing by content (`git ls-tree origin/main -- <paths>`).
 3. Pane 23 restores the 15 → verify with `bin/cc-panes` (SHELL=0, every plan row accounted).
 4. Operator Phase-0 items from DESIGN.md §8 (H5 Pushover credential, H7 two `--confirm` migration lines, H6 one TCC click) → file with `cc-backlog needs` once lanes land the migrations.
