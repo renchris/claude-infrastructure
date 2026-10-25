@@ -71,8 +71,8 @@ def run(label, argv, seconds=30):
             if not c:
                 break
             buf += c
-    try:
-        os.kill(pid, signal.SIGKILL)
+    try:  # the whole group (its MCP children too) while the master is still open
+        os.killpg(pid, signal.SIGKILL)
         os.waitpid(pid, 0)
     except OSError:
         pass

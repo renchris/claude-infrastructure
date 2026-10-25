@@ -88,8 +88,8 @@ def run(label, extra):
             if not chunk:
                 break
             buf += chunk
-    try:
-        os.kill(pid, signal.SIGKILL)
+    try:  # the whole group (its MCP children too) while the master is still open
+        os.killpg(pid, signal.SIGKILL)
         os.waitpid(pid, 0)
     except OSError:
         pass

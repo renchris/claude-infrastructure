@@ -373,12 +373,49 @@ need_band() {
 }
 under_pty() { # BOUND_S UNTIL_SH CMD…: run CMD on a pty until UNTIL_SH holds, then SIGHUP it
   py -c '
-import os, pty, select, signal, subprocess, sys, time
+import atexit, os, pty, select, signal, subprocess, sys, time
 bound, until, cmd = float(sys.argv[1]), sys.argv[2], sys.argv[3:]
 log = open(os.environ.get("PTY_LOG", os.devnull), "ab")
 pid, fd = pty.fork()
 if pid == 0:
     os.execv(cmd[0], cmd)
+# Every exit path (atexit, and a TERM/ALRM/INT/HUP to this driver) reaps: a hangup to the child, a
+# grace that keeps draining, then SIGKILL to its whole group WHILE THE MASTER IS OPEN, master last
+# (incident 2026-10-25: a pty child left alive under a closed master wedged /dev).
+def reap(grace=5.0, sink=None, done=[]):
+    if done:
+        return
+    done.append(1)
+    try:
+        os.kill(pid, signal.SIGHUP)
+    except OSError:
+        pass
+    t = time.time() + grace
+    while time.time() < t:
+        try:
+            if os.waitpid(pid, os.WNOHANG)[0]:
+                break
+        except OSError:
+            break
+        if select.select([fd], [], [], 0.05)[0]:
+            try:
+                d = os.read(fd, 65536)
+                if sink is not None:
+                    sink(d)
+            except OSError:
+                time.sleep(0.05)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        os.waitpid(pid, 0)
+    except OSError:
+        pass
+    os.close(fd)
+atexit.register(reap)
+for s in (signal.SIGTERM, signal.SIGALRM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(s, lambda n, f: sys.exit(128 + n))
 t0, ok = time.time(), False
 while time.time() - t0 < bound:
     if select.select([fd], [], [], 0.25)[0]:
@@ -389,19 +426,8 @@ while time.time() - t0 < bound:
     if subprocess.call(["/bin/sh", "-c", until]) == 0:
         ok = True
         break
-os.kill(pid, signal.SIGHUP)
 # keep draining: an exiting child blocks in tty drain while its output sits unread (a deadlock)
-for _ in range(400):
-    if select.select([fd], [], [], 0.05)[0]:
-        try:
-            log.write(os.read(fd, 65536))
-        except OSError:
-            pass
-    if os.waitpid(pid, os.WNOHANG)[0]:
-        break
-else:
-    os.kill(pid, signal.SIGKILL)
-    os.waitpid(pid, 0)
+reap(20.0, log.write)
 sys.exit(0 if ok else 1)' "$@"
 }
 

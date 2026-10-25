@@ -988,7 +988,8 @@ expect -c '
   trap {
     set rows [stty rows]
     set cols [stty columns]
-    catch {stty rows $rows columns $cols < $spawn_out(slave,name)}
+    # stty -f opens the slave O_NONBLOCK; `< slave` was a blocking open by path (incident 2026-10-25).
+    catch {exec /bin/stty -f $spawn_out(slave,name) rows $rows columns $cols}
   } WINCH
   expect {
     # ── THE RESUME DIALOG. Two defects lived in the one line this replaces. ──

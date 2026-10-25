@@ -1870,7 +1870,8 @@ expect -c '
   trap {
     set rows [stty rows]
     set cols [stty columns]
-    stty rows $rows columns $cols < $spawn_out(slave,name)
+    # stty -f opens the slave O_NONBLOCK; `< slave` was a blocking open by path (incident 2026-10-25).
+    catch {exec /bin/stty -f $spawn_out(slave,name) rows $rows columns $cols}
   } WINCH
   # THE MAIN LOOP RUNS ON THE QUIET BUDGET, not on 300 s. This one line is what makes the arm below
   # a WAIT rather than a give-up: at 300 s the timeout arm was unreachable in practice — lr-handoff

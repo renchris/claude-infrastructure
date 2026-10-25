@@ -294,7 +294,7 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
       set timeout 1; set done 0
       expect { -re {.+} { exp_continue } timeout {} eof { set done 1 } }
       if {$done} break
-      if {[catch {exec /bin/stty -a < $spawn_out(slave,name)} m]} break
+      if {[catch {exec /bin/stty -a -f $spawn_out(slave,name)} m]} break
       lappend modes [regexp -inline {[-]*echo } $m]
     }
     puts "\nMODES:$modes:END"

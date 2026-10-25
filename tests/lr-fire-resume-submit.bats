@@ -650,7 +650,7 @@ SH
   run timeout 90 expect -c '
     spawn -noecho expect -f $env(EXP)
     set timeout 1; expect { -re {.+} { exp_continue } timeout {} }
-    set m [exec /bin/stty -a < $spawn_out(slave,name)]
+    set m [exec /bin/stty -a -f $spawn_out(slave,name)]
     puts "\nMODE:[regexp -inline {[-]*echo } $m]"
     set timeout 20; expect { -re {.+} { exp_continue } timeout {} eof {} }
     catch close; catch wait; exit 0'

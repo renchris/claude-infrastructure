@@ -28,12 +28,49 @@ need_band() { # read with ps, not python: at PRI 4 a python start is the cost be
 # LINGER_S more (so a second, wrong write would land), then SIGHUP it. rc 0 = UNTIL_SH held in time.
 under_pty() {
   /usr/bin/python3 -I -c '
-import os, pty, select, signal, subprocess, sys, time
+import atexit, os, pty, select, signal, subprocess, sys, time
 bound, linger, until, cmd = float(sys.argv[1]), float(sys.argv[2]), sys.argv[3], sys.argv[4:]
 log = open(os.environ.get("PTY_LOG", os.devnull), "ab")
 pid, fd = pty.fork()
 if pid == 0:
     os.execv(cmd[0], cmd)
+# Every exit path (atexit, and a TERM/ALRM/INT/HUP to this driver) reaps: a hangup to the child, a
+# grace that keeps draining, then SIGKILL to its whole group WHILE THE MASTER IS OPEN, master last
+# (incident 2026-10-25: a pty child left alive under a closed master wedged /dev).
+def reap(grace=5.0, sink=None, done=[]):
+    if done:
+        return
+    done.append(1)
+    try:
+        os.kill(pid, signal.SIGHUP)
+    except OSError:
+        pass
+    t = time.time() + grace
+    while time.time() < t:
+        try:
+            if os.waitpid(pid, os.WNOHANG)[0]:
+                break
+        except OSError:
+            break
+        if select.select([fd], [], [], 0.05)[0]:
+            try:
+                d = os.read(fd, 65536)
+                if sink is not None:
+                    sink(d)
+            except OSError:
+                time.sleep(0.05)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        os.waitpid(pid, 0)
+    except OSError:
+        pass
+    os.close(fd)
+atexit.register(reap)
+for s in (signal.SIGTERM, signal.SIGALRM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(s, lambda n, f: sys.exit(128 + n))
 t0, ok, end = time.time(), False, None
 while time.time() - t0 < bound and (end is None or time.time() < end):
     if select.select([fd], [], [], 0.25)[0]:
@@ -43,8 +80,7 @@ while time.time() - t0 < bound and (end is None or time.time() < end):
             break
     if end is None and subprocess.call(["/bin/sh", "-c", until]) == 0:
         ok, end = True, time.time() + linger
-os.kill(pid, signal.SIGHUP)
-os.waitpid(pid, 0)
+reap(5.0, log.write)
 sys.exit(0 if ok else 1)' "$@"
 }
 stub_rig() { # a rig root, a spec for $1 with knobs $2, a work dir

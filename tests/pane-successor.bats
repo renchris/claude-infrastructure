@@ -590,11 +590,19 @@ fs_env() {
 #   hangup: after 1.5 s, mark the window closed (the fake `ls` stops listing it), close the master
 #           and SIGHUP the child — what kitty does when it closes a window; print "rc=<n>" (or
 #           "alive") and whether the `sleep 31.5` it started survived.
-import os, pty, signal, subprocess, sys, time
+import atexit, os, pty, signal, subprocess, sys, time
 mode, argv = sys.argv[1], sys.argv[2:]
 pid, fd = pty.fork()
 if pid == 0:
     os.execvp(argv[0], argv)
+def kill_group():  # every exit path: no member of the child's group outlives this driver (incident 2026-10-25)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+atexit.register(kill_group)
+for s in (signal.SIGTERM, signal.SIGALRM, signal.SIGINT):
+    signal.signal(s, lambda n, f: sys.exit(128 + n))
 def reap(limit):
     end = time.time() + limit
     while time.time() < end:
@@ -612,6 +620,7 @@ if mode == "exit":
         buf += chunk
     sys.stdout.write(buf.decode(errors="replace"))
     print("rc=%s" % reap(10))
+    kill_group()
 else:
     time.sleep(1.5)
     open(os.environ["KFS_CLOSED"], "w").close()   # kitty drops the window, then hangs up its pty
