@@ -51,9 +51,6 @@ setup() {
   printf '1 0 /sbin/launchd\n' > "$CC_WF_PSTABLE_FILE"
   : > "$CC_BACKLOG_FILE"
   W="$BATS_TEST_TMPDIR/w"
-  # The mechanical-dirty row gained a `rung` field (lead-keeps-working, design §3.4 (ii)); the
-  # SHF_BASE hook never wrote it, so the parity compares every OTHER field (shf_idl's own seam).
-  export SHF_IDL_DEL='.ts, .rung'
 }
 
 have_old() {
@@ -96,6 +93,13 @@ stop() {
       "$SHF_OUT_DIR/$2.out" > "$SHF_OUT_DIR/$2.out.n" && mv "$SHF_OUT_DIR/$2.out.n" "$SHF_OUT_DIR/$2.out"
   fi
   shf_keep "$2" "$CONTINUE_IDL" "$CLAUDE_CONFIG_DIR/state"
+  # …and ONE deliberate IDL change (design §3.4 (ii)): the mechanical-dirty row now carries the rung
+  # it armed on. The SHF_BASE hook armed only on 🔧, so its rows gain exactly `rung:"🔧"` — appended,
+  # as the new hook appends it — and the NEW arm's value is still compared, never dropped.
+  if [ "$1" = old ]; then
+    jq -c 'if .reason == "mechanical-dirty" and (has("rung") | not) then . + {rung: "🔧"} else . end' \
+      "$SHF_OUT_DIR/$2.idl" > "$SHF_OUT_DIR/$2.idl.n" && mv "$SHF_OUT_DIR/$2.idl.n" "$SHF_OUT_DIR/$2.idl"
+  fi
 }
 # armed <old|new> — arm the 🔧 loop for $W through that arm's own `set`.
 armed() {
