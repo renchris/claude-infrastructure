@@ -105,9 +105,10 @@ pid_lstart() {
   run_bounded 3 "$LOCKD/.ls.$$" "$LOCKD/.ls.err" "$PERL" -e '
     my $mib = pack("i4", 1, 14, 1, $ARGV[0]); my $buf = "\0" x 648; my $len = pack("Q", 648);
     my $r = syscall(202, $mib, 4, $buf, $len, 0, 0);
-    print(($r == 0 && unpack("Q", $len) >= 648) ? unpack("q", substr($buf, 0, 8)) : 0);' "$1"
-  local v=0
-  read -r v 2>"$LOCKD/.lockerr" < "$LOCKD/.ls.$$" || v=0
+    print((($r == 0 && unpack("Q", $len) >= 648) ? unpack("q", substr($buf, 0, 8)) : 0), "\n");' "$1"
+  local v=""
+  # a line without its newline makes `read` return 1 AFTER assigning it: test the value, not rc
+  read -r v 2>"$LOCKD/.lockerr" < "$LOCKD/.ls.$$" || [ -n "$v" ] || v=0
   rm -f "$LOCKD/.ls.$$"
   printf '%s' "${v:-0}"
 }
