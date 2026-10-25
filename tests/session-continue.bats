@@ -862,6 +862,7 @@ ma_unarm() { # the chain ended (cap or clear of the sentinel only): drop the sen
 
 @test "C5 M2: the ⛔ and 🔧 budgets are separate — a spent ⛔ budget leaves a later 🔧 lapse armed" {
   ma_blk_fixture; ma_ai_stub 1; unset AI_ID
+  export CC_MECH_MAX=1      # so ONE shared-file spend would already exhaust the 🔧 budget
   run ma_actuate sid-blk-2 ""; fired "$output"
   ma_unarm
   run ma_actuate sid-blk-2 ""; [ -z "$output" ]
