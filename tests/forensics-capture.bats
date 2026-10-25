@@ -5,6 +5,8 @@
 # the interpreter the sentinel and lockprobe use.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME"
   REPO="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
   CAP="$REPO/scripts/forensics/capture.sh"
   LW="$REPO/scripts/lockwatch"

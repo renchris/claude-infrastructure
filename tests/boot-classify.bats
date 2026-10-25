@@ -4,6 +4,8 @@
 # (CC_BC_NO_LOG=1); the fixtures are excerpts of the real converted stall reports.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME"
   REPO="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
   BC="$REPO/scripts/lockwatch/boot_classify.py"
   FX="$REPO/tests/fixtures/lockwatch"

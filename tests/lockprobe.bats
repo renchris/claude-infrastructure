@@ -4,6 +4,8 @@
 # signals anything outside $BATS_TEST_TMPDIR. Every lockprobe run is bounded by perl alarm.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME"
   REPO="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
   LW="$REPO/scripts/lockwatch"
   FX="$REPO/tests/fixtures/lockwatch"
