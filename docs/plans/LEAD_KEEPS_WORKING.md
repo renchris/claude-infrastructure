@@ -47,6 +47,32 @@ active-session ceiling (8 mid-turn at ~40 load/core) for over 30 min; one sessio
 needs one slot. The B+C fire used the gate's one-fire raise (`CC_FIRE_ACTIVE_CEILING=9`) because the firing lead is
 counted only while mid-turn and goes idle once the track runs, so the fire swaps the lead's slot for the track's.
 
+## Lead state (2026-10-25 04:20 CDT, at the lead's first recycle)
+
+- **Tracks A and B+C are running, nothing of theirs has landed.** A: 22 commits, final wrap-ledger and forks runs.
+  B+C: 5 commits (`b3540f237` supervisor nudge, `c1cd2c92f` cc-decide ceiling/help/hints, `1a92a3bd8` supervisor-e2e
+  stall threshold), waiting on its own suite runs. Both report by peer mail to the lead's pane (inbox 272), so a
+  recycle of the lead's pane keeps the address. Read a track's state from its worktree
+  (`git -C ~/Development/.worktrees/<wt> log origin/main..HEAD`) and transcript, never from a ping alone.
+- **Track D's brief is `/tmp/fire-lkw-rule-text.txt`** (durable copy: `.claude/tmp/lkw/` in the `lead-idle-fix` worktree, gitignored) (track-specific head + the shared block `/tmp/lkw/common.txt`).
+  Fire it only after A's and B+C's code is on trunk, with `--worktree lkw-rule-text --notify-back <lead pane>`,
+  a goal in the same shape as A's, and an account with headroom (check `claude-accounts`). If /tmp was cleared,
+  rebuild it from design §3.7, §3.8, §7.6 (operator-readout rows) and §7.7 plus the correction below.
+- **Correction track D must carry (measured by B+C, 2026-10-24, step 0):** `codex exec -s read-only` does NOT confine
+  reads (a canary under the real HOME was read) and `-s` overrides a permission profile; an outer `sandbox-exec`
+  breaks codex. Only a temp `CODEX_HOME` whose `config.toml` sets `default_permissions` to a profile reading the
+  export alone, with no `-s`, confines it. So the grant text names `~/.claude/scripts/xvendor-review.sh` and "a
+  read-only permission profile confined to the export", never `codex exec -s read-only`; §7.7's token list changes to
+  match.
+- **Fire capacity:** the box sits at its 8-session active ceiling at 35-90 load/core; a refusal is a throttle (fire when
+  `cc_sp_active` from `scripts/lib/spawn-presence.sh` reads ≤ 6 while the lead is idle). See the learning above.
+- **Back-channel:** the originator name `agent-context-sync-134` no longer resolves; the live B13 lead is
+  `agent-context-sync-271` (pinged at doc-written). Ping it again with the landed shas at the end; the originator's
+  final `DONE` ping goes to whichever agentsync lead resolves then (`cc-notify --list | grep agent-context-sync`).
+- **Wave 3 (lead):** after D lands: converge; design §7.8 items 1-5 by content; §8.4 records (two class-A packets,
+  `cc-backlog needs` for the xvendor-review allow rule); print `git ls-tree origin/main` for every changed file and
+  the tracks' red/green/mutant receipts (from their commit bodies: `git log --format=%B origin/main`); then Track E.
+
 ## Definition of done (per track)
 
 Each track's done: every file its design §8.1 row names is changed as §3 specifies; every new check has a bats test
