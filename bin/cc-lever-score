@@ -1,0 +1,593 @@
+#!/usr/bin/env python3
+"""cc-lever-score — the usage levers' scorer (docs/plans/USAGE_LEVERS.md § W7+ §3 row "Scorer").
+
+Wave S4 builds the core; the verbs S5 owns exit 3 with a pointer.
+
+  cc-lever-score ledger   [--since W] [--until T] [--write]
+      One row per session over the window: sid, lineage, acct, D1/D2 arms and per-lever event
+      counts by arm, tokens by class (deduped, output imputed where unrecorded), pp lo/mid/hi, tool
+      errors without hook denies (and the hook denies apart), lands by ship-land exit class,
+      prompt-too-long deaths, eval flag. JSONL on stdout; --write merges it by sid into
+      ~/.claude/logs/lever-ledger.jsonl (flock, tmp+rename) and prints one summary line.
+  cc-lever-score plumbing [--since W] [--until T] [--json]
+      Every §2 "Plumbing gate" check. A check with no data today (or one a later wave builds) is
+      NO-DATA, and any FAIL or NO-DATA makes the verdict PLUMBING: there is no pass by absence.
+  cc-lever-score selftest [--keep DIR]
+      Builds a synthetic fleet with a planted effect, scores it twice in fresh processes, and
+      requires: byte-identical output, the effect recovered, dedupe across roots, hook denies split
+      out, a context-wall death found, plumbing clean where it has data, and plumbing failing closed
+      on a missing root and on >0.1% unparseable rows.
+  cc-lever-score score|aa|report|failures|guards → exit 3 (wave S5 builds them)
+
+  W = <N>d | <N>h | YYYY-MM-DD (UTC); default 7d. T = YYYY-MM-DD[THH:MM:SSZ]; default now.
+Exit: 0 ok / plumbing CLEAN / selftest PASS · 1 plumbing PLUMBING / selftest FAIL · 2 usage ·
+3 not built yet. Env: CC_NOW (epoch "now", tests), plus scripts/lib/lever_events.py's seams.
+Reads only; it never changes a flag, a stage or a session.
+"""
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "scripts", "lib"))
+import lever_events as le  # noqa: E402
+
+lf = le.lf
+PARSE_MAX = 0.001       # §2: parse failures above 0.1%
+FLAG_SRC_MAX = 0.01     # §2: flag_src != file on more than 1% of rows
+RECOMPUTE_MAX = 0.005   # §2: logged arm != recomputed arm on more than 0.5% of rows
+DIFF_MAX = {"join_coverage": 3.0, "imputed_output_share": 5.0, "outcome_missing": 3.0}  # points
+S5_VERBS = ("score", "aa", "report", "failures", "guards")
+MAX_ROW = 2048
+
+
+def now():
+    v = os.environ.get("CC_NOW", "")
+    return float(v) if re.match(r"^\d+(\.\d+)?$", v) else time.time()
+
+
+def parse_since(w, t_now):
+    m = re.match(r"^(\d+)([dh])$", w or "")
+    if m:
+        return t_now - int(m.group(1)) * (86400 if m.group(2) == "d" else 3600)
+    t = le.parse_ts(w + "T00:00:00Z") if re.match(r"^\d{4}-\d\d-\d\d$", w or "") else le.parse_ts(w)
+    if t is None:
+        raise ValueError("bad window %r" % w)
+    return t
+
+
+def parse_until(v, t_now):
+    if not v:
+        return t_now
+    return parse_since(v, t_now)
+
+
+# ── collect ───────────────────────────────────────────────────────────────────────────────────
+def collect(since, until, scan=True):
+    flags = le.read_flags()
+    arm_rows, arm_st = le.read_jsonl(le.log_path(le.ARMS_LOG), since, until)
+    arms = le.Arms(arm_rows)
+    events, ev_st = le.load_events(since, until, arms, flags)
+    lands, unknown, land_st = le.load_lands(since, until)
+    sess, meta, reqs = le.scan_sessions(since, until) if scan else ({}, {}, {})
+    return {"since": since, "until": until, "flags": flags, "arms": arms, "arm_st": arm_st,
+            "events": events, "ev_st": ev_st, "lands": lands, "land_unknown": unknown,
+            "land_st": land_st, "sess": sess, "meta": meta, "reqs": reqs}
+
+
+# ── ledger ────────────────────────────────────────────────────────────────────────────────────
+def fit_row(row):
+    line = json.dumps(row, sort_keys=True, separators=(",", ":"))
+    if len(line) + 1 > MAX_ROW:
+        row = dict(row, models=[], events={})
+        line = json.dumps(row, sort_keys=True, separators=(",", ":"))
+    return line if len(line) + 1 <= MAX_ROW else None
+
+
+def write_ledger(lines):
+    path = le.log_path(le.LEDGER_LOG)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        merged = {}
+        try:
+            with open(path) as f:
+                for raw in f:
+                    try:
+                        r = json.loads(raw)
+                        merged[r["sid"]] = raw.rstrip("\n")
+                    except (ValueError, KeyError, TypeError):
+                        continue  # a damaged old row is replaced or dropped, never kept as-is
+        except FileNotFoundError:
+            pass
+        for line in lines:
+            merged[json.loads(line)["sid"]] = line
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".lever-ledger.")
+        with os.fdopen(fd, "w") as f:
+            for sid in sorted(merged):
+                f.write(merged[sid] + "\n")
+        os.replace(tmp, path)
+    return path, len(merged)
+
+
+def cmd_ledger(a):
+    t_now = now()
+    since, until = parse_since(a.since, t_now), parse_until(a.until, t_now)
+    c = collect(since, until)
+    rows = le.ledger_rows(c["sess"], c["arms"], c["flags"], c["events"], c["lands"], since, until)
+    lines, dropped = [], 0
+    for r in rows:
+        line = fit_row(r)
+        if line is None:
+            dropped += 1
+        else:
+            lines.append(line)
+    if a.write:
+        path, total = write_ledger(lines)
+        print("ledger: %d session row(s) written, %d dropped over %d bytes; %s now holds %d" % (
+            len(lines), dropped, MAX_ROW, path.replace(le.home(), "~"), total))
+    else:
+        for line in lines:
+            sys.stdout.write(line + "\n")
+    m = c["meta"]
+    sys.stderr.write("ledger: %d session(s), %d response(s), %d copied response(s) dropped, "
+                     "%d/%d line(s) unparseable, window %s..%s\n" % (
+                         len(rows), m.get("responses", 0), m.get("responses_xdup_dropped", 0),
+                         m.get("lines_unparseable", 0), m.get("lines_parsed", 0), le.iso(since),
+                         le.iso(until)))
+    return 0
+
+
+# ── plumbing ──────────────────────────────────────────────────────────────────────────────────
+def chk(name, status, detail, owner=None):
+    d = {"check": name, "status": status, "detail": detail}
+    if owner:
+        d["owner"] = owner
+    return d
+
+
+def arm_rows_flat(arms):
+    """Every logged arm decision: (lever, unit, sid, acct, arm, u, flag_src, pct_eff, excluded, t)."""
+    out = []
+    for r in arms.rows:
+        if r.get("kind") == "session":
+            for L, a in sorted((r.get("arms") or {}).items()):
+                if isinstance(a, dict):
+                    out.append((L, r.get("lineage"), r.get("sid"), r.get("acct"), a.get("arm"),
+                                a.get("u"), a.get("flag_src"), a.get("pct_eff"),
+                                bool(r.get("excluded")), r["_t"]))
+        elif r.get("kind") == "event":
+            out.append((r.get("lever"), r.get("unit"), r.get("sid"), r.get("acct"), r.get("arm"),
+                        r.get("u"), r.get("flag_src"), r.get("pct_eff"), bool(r.get("excluded")),
+                        r["_t"]))
+    return out
+
+
+def recompute_ok(salt, unit, arm, u, pct):
+    if not salt or unit is None:
+        return False
+    h = lf.h52(salt, unit)
+    if u is None or round(float(u), 6) != lf.u6(h):
+        return False
+    if not isinstance(pct, int) or isinstance(pct, bool):
+        return False
+    if arm == "treat":
+        return lf.below(h, pct)
+    if arm in ("ctrl", "holdback"):
+        return not lf.below(h, pct)
+    return False
+
+
+def plumbing(c):
+    checks = []
+    # 1. roots
+    rs = le.root_status()
+    bad = [r for r in rs if not r["ok"]]
+    extra = le.extra_roots()
+    checks.append(chk("four projects roots read", "fail" if bad else "pass",
+                      ("unread: " + ", ".join("%s (%s)" % (r["root"], r["why"]) for r in bad)) if bad else
+                      "%d/4 listable%s" % (len(rs), ("; also read, no account's: " + ", ".join(extra)) if extra else "")))
+    # 2. parse failures, per store (a broken small store would hide in the transcripts' denominator)
+    stores = [("transcripts", c["meta"].get("lines_parsed", 0), c["meta"].get("lines_unparseable", 0))]
+    stores.append((le.ARMS_LOG, c["arm_st"]["lines"], c["arm_st"]["bad"]))
+    for L, st in sorted(c["ev_st"].items()):
+        stores.append((le.SHADOW_LOGS[L], st["lines"], st["bad"]))
+    stores.append(("land.log", c["land_st"]["lines"], c["land_st"]["bad"]))
+    over = [(n, b, t) for n, t, b in stores if t and b / t > PARSE_MAX]
+    total = sum(t for _, t, _ in stores)
+    if over:
+        checks.append(chk("parse failures <= 0.1%", "fail", "; ".join(
+            "%s %d/%d (%.2f%%)" % (n, b, t, 100.0 * b / t) for n, b, t in over)))
+    elif not total:
+        checks.append(chk("parse failures <= 0.1%", "no-data", "no rows read"))
+    else:
+        checks.append(chk("parse failures <= 0.1%", "pass", ", ".join(
+            "%s %d/%d" % (n, b, t) for n, t, b in stores)))
+    flat = arm_rows_flat(c["arms"])
+    # 3. flag_src
+    pop = [r for r in flat if r[6] != "excluded"]
+    if not pop:
+        checks.append(chk("flag_src != file <= 1%", "no-data", "no arm rows in window"))
+    else:
+        nf = sum(1 for r in pop if r[6] != "file")
+        checks.append(chk("flag_src != file <= 1%", "fail" if nf / len(pop) > FLAG_SRC_MAX else "pass",
+                          "%d/%d not from the flag file" % (nf, len(pop))))
+    # 4. logged arm vs recomputed
+    doc, src = c["flags"]
+    salts = {}
+    if src == "file":
+        for L in lf.LEVERS:
+            n = lf._norm_lever((doc.get("levers") or {}).get(L))
+            salts[L] = n["salt"] if n else None
+    chk_rows = [r for r in flat if r[4] not in ("off", "excluded") and r[6] not in ("default", "unreadable")]
+    if not chk_rows:
+        checks.append(chk("logged arm == recomputed (<= 0.5% off)", "no-data", "no hashed arm rows"))
+    elif src != "file":
+        checks.append(chk("logged arm == recomputed (<= 0.5% off)", "no-data",
+                          "flag file %s: no salt to recompute with" % src))
+    else:
+        mis = sum(1 for r in chk_rows if not recompute_ok(salts.get(r[0]), r[1], r[4], r[5], r[7]))
+        checks.append(chk("logged arm == recomputed (<= 0.5% off)",
+                          "fail" if mis / len(chk_rows) > RECOMPUTE_MAX else "pass",
+                          "%d/%d differ" % (mis, len(chk_rows))))
+    # 5. eval rows in production arms
+    if not flat:
+        checks.append(chk("no eval rows in production arms", "no-data", "no arm rows in window"))
+    else:
+        ev_sids = {sid for sid, s in c["sess"].items() if s["eval"]}
+        leak = sorted({r[2] for r in flat if not r[8] and r[2] in ev_sids})
+        checks.append(chk("no eval rows in production arms", "fail" if leak else "pass",
+                          ("eval session(s) armed unexcluded: " + ", ".join(leak[:5])) if leak else
+                          "%d eval session(s) in window, none armed" % len(ev_sids)))
+    # 6. an account with eligible events but zero lever rows
+    t0 = max(c["since"], c["arms"].first_t) if c["arms"].first_t is not None else c["since"]
+    ev_acct, no_acct = {}, 0
+    for e in c["events"]:
+        if e["t"] < t0:
+            continue
+        if e["acct"]:
+            ev_acct[e["acct"]] = ev_acct.get(e["acct"], 0) + 1
+        else:
+            no_acct += 1
+    row_acct = {}
+    for r in c["arms"].rows:
+        if r["_t"] >= t0 and r.get("acct"):
+            row_acct[r["acct"]] = row_acct.get(r["acct"], 0) + 1
+    if not ev_acct:
+        checks.append(chk("every account with events has lever rows", "no-data",
+                          "no eligible events with an account since the first arm row"))
+    else:
+        dark = sorted(a for a in ev_acct if not row_acct.get(a))
+        checks.append(chk("every account with events has lever rows", "fail" if dark else "pass",
+                          ("dark: " + ", ".join("%s (%d events)" % (a, ev_acct[a]) for a in dark)) if dark else
+                          ", ".join("%s %d ev/%d rows" % (a, ev_acct[a], row_acct.get(a, 0)) for a in sorted(ev_acct))
+                          + ("; %d event(s) carry no account" % no_acct if no_acct else "")))
+    # 7. ship-land exit codes (T2: an unknown exit code is PLUMBING)
+    n_land = sum(sum(v.values()) for v in c["lands"].values())
+    if not c["land_st"]["lines"]:
+        checks.append(chk("ship-land exit codes all known", "no-data", "no land.log rows"))
+    else:
+        u = sorted({str(x) for x in c["land_unknown"]})
+        checks.append(chk("ship-land exit codes all known", "fail" if u else "pass",
+                          ("unknown exit(s) %s in %d row(s)" % (",".join(u), len(c["land_unknown"]))) if u else
+                          "%d attributed land(s), codes in {0,5,6,11,42,143}" % n_land))
+    # 8. arms differing on join coverage, imputed-output share, outcome-missing
+    for name, fn in (("join_coverage", _join_cov), ("imputed_output_share", _imputed),
+                     ("outcome_missing", _outcome_missing)):
+        per = {}
+        for arm in ("ctrl", "treat"):
+            evs = [e for e in c["events"] if e["arm"] == arm]
+            per[arm] = fn(evs, c) if evs else None
+        label = "arms within %g points on %s" % (DIFF_MAX[name], name.replace("_", " "))
+        if per["ctrl"] is None or per["treat"] is None:
+            checks.append(chk(label, "no-data", "one arm only (ctrl %s, treat %s)" % (
+                _pct(per["ctrl"]), _pct(per["treat"]))))
+        else:
+            d = abs(per["ctrl"] - per["treat"]) * 100
+            checks.append(chk(label, "fail" if d > DIFF_MAX[name] else "pass",
+                              "ctrl %s, treat %s" % (_pct(per["ctrl"]), _pct(per["treat"]))))
+    # 9. the fingerprint: observed today, pinned by S5's config/levers.json
+    vers = sorted({s["cc_version"] for s in c["sess"].values() if s["cc_version"]})
+    models = sorted({m for s in c["sess"].values() for m in s["models"]})
+    checks.append(chk("fingerprint and thresholds sha unchanged mid-stage", "no-data",
+                      "observed CC %s; main models %s; no pin to compare (config/levers.json)" % (
+                          ",".join(vers[-3:]) or "-", ",".join(models[:4]) or "-"), "S5"))
+    for name, owner in (("SRM p >= 0.001 overall and per account; arm x account chi2", "S5"),
+                        ("treatment exposure >= 80%", "S11/S12"),
+                        ("covariate balance", "S5"),
+                        ("placebo-salt A/A significant in <= 3 of last 20", "S5"),
+                        ("bootstrap SD within 20% of A/A SD", "S5"),
+                        ("weekly fleet meter/wpp in [1.1, 1.5]", "S5"),
+                        ("successor/predecessor arms agree >= 95%", "S8")):
+        checks.append(chk(name, "no-data", "built by wave " + owner, owner))
+    n_fail = sum(1 for k in checks if k["status"] == "fail")
+    n_nd = sum(1 for k in checks if k["status"] == "no-data")
+    verdict = "CLEAN" if not (n_fail or n_nd) else "PLUMBING"
+    return {"verdict": verdict, "fail": n_fail, "no_data": n_nd, "checks": checks,
+            "window": {"since": le.iso(c["since"]), "until": le.iso(c["until"])}}
+
+
+def _pct(x):
+    return "-" if x is None else "%.1f%%" % (100 * x)
+
+
+def _join_cov(evs, c):
+    return sum(1 for e in evs if e["sid"] in c["sess"]) / len(evs)
+
+
+def _imputed(evs, c):
+    sids = {e["sid"] for e in evs if e["sid"] in c["sess"]}
+    n = sum(c["sess"][s]["responses"] for s in sids)
+    return sum(c["sess"][s]["responses_imputed"] for s in sids) / n if n else None
+
+
+def _outcome_missing(evs, c):
+    """An event whose session made no request at or after it: its outcome never arrived."""
+    miss = 0
+    for e in evs:
+        rq = c["reqs"].get(e["sid"]) or ()
+        if not any(t >= e["t"] for t, _ in rq):
+            miss += 1
+    return miss / len(evs)
+
+
+def cmd_plumbing(a):
+    t_now = now()
+    since, until = parse_since(a.since, t_now), parse_until(a.until, t_now)
+    res = plumbing(collect(since, until))
+    if a.json:
+        print(json.dumps(res, sort_keys=True))
+    else:
+        for k in res["checks"]:
+            print("%-8s %s — %s" % (k["status"].upper(), k["check"], k["detail"]))
+        print("verdict: %s (%d fail, %d no-data) window %s..%s" % (
+            res["verdict"], res["fail"], res["no_data"], res["window"]["since"], res["window"]["until"]))
+    return 0 if res["verdict"] == "CLEAN" else 1
+
+
+# ── selftest ──────────────────────────────────────────────────────────────────────────────────
+ST_BASE = 1790812800  # 2026-10-01T00:00:00Z: fixture time, fixed so two runs see one world
+ST_EFFECT = 0.20      # treated D1 lineages cost 20% less
+
+
+def _w(path, rows):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:
+        for r in rows:
+            # compact, as Claude Code writes: scan()'s byte prefilter matches '"type":"assistant"'
+            f.write((r if isinstance(r, str) else json.dumps(r, sort_keys=True, separators=(",", ":"))) + "\n")
+
+
+def make_fixture(base, n=240, seed=7):
+    """A synthetic fleet under <base>/home. → dict of planted truths."""
+    rnd = random.Random(seed)
+    home = os.path.join(base, "home")
+    state, logs = os.path.join(base, "state"), os.path.join(base, "logs")
+    for d in le.ACCOUNT_DIRS:
+        os.makedirs(os.path.join(home, d, "projects"), exist_ok=True)
+    os.makedirs(os.path.join(home, ".claude-next"), exist_ok=True)
+    os.symlink(os.path.join(home, ".claude", "projects"), os.path.join(home, ".claude-next", "projects"))
+    os.makedirs(state, exist_ok=True)
+    doc = {"v": 1, "rev": 3, "levers": {L: {"stage": "S2", "pct": 50, "holdback": 0, "mode": "live",
+                                            "salt": "st-" + L, "split_salt": "sp-" + L,
+                                            "params_id": "p0", "candidate": None, "trip": None,
+                                            "thresholds_sha": "t0"} for L in lf.LEVERS}}
+    with open(os.path.join(state, "flags.json"), "w") as f:
+        json.dump(doc, f)
+    os.environ.update(CC_LEVER_STATE_DIR=state, CC_LEVER_LOG_DIR=logs)
+    for k in ("CC_LEVER_ALL", "CC_LEVER_D1", "CC_LEVER_D2", "CC_LEVER_EXCLUDE", "CC_IRS",
+              "CC_WORKFLOW_SHADOW", "CC_IDLE_KEEPALIVE", "CC_SUBAGENT_LONG_BASH"):
+        os.environ.pop(k, None)
+    open(os.path.join(state, "guard.heartbeat"), "w").close()
+    truth = {"responses": 0, "sessions": n, "tool_err": 0, "tool_err_hook": 0, "ptl_sid": None,
+             "copies": 0, "pp": {"treat": [], "ctrl": []}}
+    accts = [".claude-next", ".claude-secondary", ".claude-tertiary", ".claude-quaternary"]
+    roots = [".claude", ".claude-secondary", ".claude-tertiary", ".claude-quaternary"]
+    arm_rows, irs, gaps, d4, d2, lands = [], [], [], [], [], []
+    for i in range(n):
+        sid = "%08x-0000-4000-8000-%012x" % (i, i)
+        k = i % 4
+        t = ST_BASE + 3600 * i // 8
+        a = {L: lf.arm(L, sid, doc, "file") for L in ("D1", "D2")}
+        arm_rows.append({"v": 1, "kind": "session", "ts": le.iso(t), "sid": sid, "lineage": sid,
+                         "lineage_src": "self", "acct": accts[k], "excluded": False, "flag_src": "file",
+                         "flag_rev": 3, "arms": {L: {x: a[L][x] for x in ("arm", "u", "flag_src", "split",
+                                                                           "pct_eff", "stage")}
+                                                  for L in a}})
+        scale = rnd.uniform(0.7, 1.3) * ((1 - ST_EFFECT) if a["D1"]["arm"] == "treat" else 1.0)
+        lines = [{"type": "user", "timestamp": le.iso(t), "version": "2.1.293", "sessionId": sid,
+                  "message": {"role": "user", "content": "go"}}]
+        nreq = 6 + rnd.randrange(6)
+        tok_sum = {"w": 0, "r": 0, "o": 0}
+        for j in range(nreq):
+            u = {"input_tokens": int(40 * scale), "cache_creation_input_tokens": int(3000 * scale),
+                 "cache_read_input_tokens": int(90000 * scale), "output_tokens": int(800 * scale),
+                 "cache_creation": {"ephemeral_5m_input_tokens": int(3000 * scale),
+                                    "ephemeral_1h_input_tokens": 0}}
+            tok_sum["w"] += u["input_tokens"] + u["cache_creation_input_tokens"]
+            tok_sum["r"] += u["cache_read_input_tokens"]
+            tok_sum["o"] += u["output_tokens"]
+            # 60 s apart: the last request (>= t+310) follows every planted event, so no outcome is missing
+            lines.append({"type": "assistant", "timestamp": le.iso(t + 10 + 60 * j), "sessionId": sid,
+                          "message": {"id": "msg_%d_%d" % (i, j), "model": "claude-opus-5-5",
+                                      "stop_reason": "end_turn", "usage": u,
+                                      "content": [{"type": "text", "text": "ok"}]}})
+            truth["responses"] += 1
+        pp = (tok_sum["w"] * le.W_WRITE + tok_sum["r"] * le.W_READ["mid"] + tok_sum["o"] * le.W_OUT) / 1e6
+        truth["pp"][a["D1"]["arm"]].append(pp)
+        if i % 5 == 0:
+            hook = i % 10 == 0
+            lines.append({"type": "user", "timestamp": le.iso(t + 400), "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "toolu_%d" % i, "is_error": True,
+                 "content": "PreToolUse:Bash hook error: denied" if hook else "exit 1: no such file"}]}})
+            truth["tool_err_hook" if hook else "tool_err"] += 1
+        if i == 3:
+            lines.append({"type": "assistant", "timestamp": le.iso(t + 2000), "isApiErrorMessage": True,
+                          "message": {"id": "err_%d" % i, "model": "<synthetic>", "content": [
+                              {"type": "text", "text": "Prompt is too long"}],
+                              "usage": {"input_tokens": 0, "output_tokens": 0}}})
+            truth["ptl_sid"] = sid
+            truth["responses"] += 1  # the refusal is a response too (zero tokens)
+        slug = "-Users-x-proj%d" % (i % 3)
+        _w(os.path.join(home, roots[k], "projects", slug, sid + ".jsonl"), lines)
+        if i % 20 == 7:  # a transplanted copy under another account: same ids, must count once
+            _w(os.path.join(home, roots[(k + 1) % 4], "projects", slug, sid + ".jsonl"), lines)
+            truth["copies"] += 1
+        irs.append({"ts": t + 300, "sid": sid, "config_dir": "/x/" + accts[k], "v": "ok",
+                    "turn_start": t + 300, "would_advise": True, "would_advise_k2": i % 2 == 0,
+                    "ctx_at_idle": 210000, "gap_s": 1000})
+        gaps.append({"kind": "gap", "v": 1, "ts": le.iso(t + 200), "sid": sid, "acct": accts[k],
+                     "start": le.iso(t + 100), "dur": 3400.0, "wake_s": 3300, "outcome": "no_wake"})
+        if i % 3 == 0:
+            d4.append({"kind": "subagent_bash", "v": 2, "ts": le.iso(t + 150), "acct": accts[k], "sid": sid,
+                       "agent_id": "ag%d" % i, "would_deny_class": "poll-loop", "exempt": None})
+        if i % 4 == 1:
+            off = time.strftime("%Y-%m-%dT%H:%M:%S-0500", time.gmtime(t + 160 - 5 * 3600))
+            d2.append({"ts": off, "hook": "workflow-lean-shadow", "session_id": sid, "parse": "ok",
+                       "would_deny": True, "resume_from_run_id": None, "calls": 2})
+        if i % 6 == 0:
+            lands.append({"ts": le.iso(t + 450), "tool": "ship-land", "sid": sid,
+                          "exit": (0, 6, 42)[(i // 6) % 3]})
+    _w(os.path.join(logs, le.ARMS_LOG), arm_rows)
+    _w(os.path.join(logs, le.SHADOW_LOGS["D1"]), irs)
+    _w(os.path.join(logs, le.SHADOW_LOGS["D2"]), d2)
+    _w(os.path.join(logs, le.SHADOW_LOGS["D3"]), gaps)
+    _w(os.path.join(logs, le.SHADOW_LOGS["D4"]), d4)
+    _w(os.path.join(base, "land.log"), lands)
+    truth["lands_ok"] = sum(1 for r in lands if r["exit"] == 0)
+    return truth
+
+
+def _run(base, *argv):
+    env = dict(os.environ, HOME=os.path.join(base, "home"), CC_LEVER_STATE_DIR=os.path.join(base, "state"),
+               CC_LEVER_LOG_DIR=os.path.join(base, "logs"), CC_LAND_LOG=os.path.join(base, "land.log"),
+               CC_NOW=str(ST_BASE + 3 * 86400), CC_TOKEN_LEDGER_WORKERS="2", PYTHONHASHSEED="random")
+    for k in ("CC_LEVER_ALL", "CC_LEVER_D1", "CC_LEVER_D2", "CC_LEVER_EXCLUDE", "CC_MODEL_CONFIG"):
+        env.pop(k, None)
+    p = subprocess.run([sys.executable, "-I", os.path.realpath(__file__)] + list(argv), env=env,
+                       capture_output=True, text=True, timeout=600)
+    return p.returncode, p.stdout, p.stderr
+
+
+def cmd_selftest(a):
+    base = a.keep or tempfile.mkdtemp(prefix="lever-score-selftest.")
+    os.makedirs(base, exist_ok=True)
+    results = []
+
+    def ok(name, cond, detail=""):
+        results.append((bool(cond), name, detail))
+
+    try:
+        truth = make_fixture(base)
+        rc1, out1, err1 = _run(base, "ledger", "--since", "7d")
+        rc2, out2, _ = _run(base, "ledger", "--since", "7d")
+        h1, h2 = hashlib.sha256(out1.encode()).hexdigest(), hashlib.sha256(out2.encode()).hexdigest()
+        ok("ledger runs", rc1 == 0 and rc2 == 0 and out1, err1.strip()[-300:])
+        ok("same code, same data, byte-identical output twice", h1 == h2 and out1, h1[:16])
+        rows = [json.loads(x) for x in out1.splitlines() if x.strip()]
+        ok("one row per session", len(rows) == truth["sessions"], "%d rows" % len(rows))
+        resp = sum(r["responses"] for r in rows)
+        ok("copies across roots counted once", resp == truth["responses"],
+           "%d responses, %d planted, %d copied file(s)" % (resp, truth["responses"], truth["copies"]))
+        by = {"treat": [], "ctrl": []}
+        for r in rows:
+            by.setdefault(r["arms"]["D1"]["arm"], []).append(r["pp"]["mid"])
+        mt = sum(by["treat"]) / max(len(by["treat"]), 1)
+        mc = sum(by["ctrl"]) / max(len(by["ctrl"]), 1)
+        eff = 1 - mt / mc if mc else 0.0
+        ok("planted effect recovered (-%.0f%% +/- 5 points)" % (100 * ST_EFFECT),
+           by["treat"] and by["ctrl"] and abs(eff - ST_EFFECT) <= 0.05,
+           "recovered -%.1f%% (treat n=%d, ctrl n=%d)" % (100 * eff, len(by["treat"]), len(by["ctrl"])))
+        tp = sum(sum(v) for v in truth["pp"].values())
+        lp = sum(r["pp"]["mid"] for r in rows)
+        ok("priced pp matches the planted tokens", abs(lp - tp) < 1e-3 * max(tp, 1), "%.4f vs %.4f" % (lp, tp))
+        te = sum(r["tool_errors"] for r in rows)
+        th = sum(r["tool_errors_hook"] for r in rows)
+        ok("hook denies split out of tool errors", te == truth["tool_err"] and th == truth["tool_err_hook"],
+           "%d errors + %d hook denies" % (te, th))
+        deaths = [r["sid"] for r in rows if r["ptl"]["death"]]
+        ok("context-wall death found", deaths == [truth["ptl_sid"]], ",".join(deaths))
+        lok = sum(r["lands"]["ok"] for r in rows)
+        ok("lands attributed by exit class", lok == truth["lands_ok"], "%d ok" % lok)
+        ok("every session's D1 arm logged, none recomputed",
+           rows and all(r["arms"]["D1"]["src"] == "logged" for r in rows))
+        rc, out, err = _run(base, "plumbing", "--since", "7d", "--json")
+        pl = json.loads(out) if out.strip() else {"checks": [], "verdict": "?"}
+        fails = [k["check"] for k in pl["checks"] if k["status"] == "fail"]
+        ok("plumbing has no FAIL on a clean fleet", rc == 1 and not fails and pl["checks"],
+           "; ".join(fails) or err.strip()[-200:])
+        withdata = [k["check"] for k in pl["checks"] if k["status"] == "pass"]
+        ok("plumbing checks with data pass", len(withdata) >= 9, "%d pass" % len(withdata))
+        ok("plumbing never CLEAN while checks lack data", pl["verdict"] == "PLUMBING")
+        # fail closed: a missing root, then unparseable rows
+        sec = os.path.join(base, "home", ".claude-secondary", "projects")
+        os.rename(sec, sec + ".gone")
+        rc, out, _ = _run(base, "plumbing", "--since", "7d", "--json")
+        os.rename(sec + ".gone", sec)
+        st = {k["check"]: k["status"] for k in json.loads(out)["checks"]} if out.strip() else {}
+        ok("plumbing fails on a missing root", rc == 1 and st.get("four projects roots read") == "fail")
+        _w(os.path.join(base, "logs", le.SHADOW_LOGS["D3"]), ["{not json"])
+        rc, out, _ = _run(base, "plumbing", "--since", "7d", "--json")
+        st = {k["check"]: k["status"] for k in json.loads(out)["checks"]} if out.strip() else {}
+        ok("plumbing fails on >0.1% unparseable rows", rc == 1 and st.get("parse failures <= 0.1%") == "fail")
+    finally:
+        if not a.keep:
+            shutil.rmtree(base, ignore_errors=True)
+    for passed, name, detail in results:
+        print("%s %s%s" % ("ok  " if passed else "FAIL", name, (" — " + detail) if detail else ""))
+    good = all(p for p, _, _ in results) and results
+    print("selftest: %s (%d/%d)" % ("PASS" if good else "FAIL", sum(1 for p, _, _ in results if p),
+                                     len(results)))
+    return 0 if good else 1
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="cc-lever-score", add_help=True)
+    sub = ap.add_subparsers(dest="verb")
+    p = sub.add_parser("ledger")
+    p.add_argument("--since", default="7d")
+    p.add_argument("--until")
+    p.add_argument("--write", action="store_true")
+    p = sub.add_parser("plumbing")
+    p.add_argument("--since", default="7d")
+    p.add_argument("--until")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("selftest")
+    p.add_argument("--keep")
+    for v in S5_VERBS:
+        p = sub.add_parser(v)
+        p.add_argument("rest", nargs=argparse.REMAINDER)
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit as e:
+        return 2 if e.code else 0
+    if a.verb in S5_VERBS:
+        sys.stderr.write("cc-lever-score %s: not built yet — wave S5 owns it "
+                         "(docs/plans/USAGE_LEVERS.md § W7+ §4)\n" % a.verb)
+        return 3
+    try:
+        if a.verb == "ledger":
+            return cmd_ledger(a)
+        if a.verb == "plumbing":
+            return cmd_plumbing(a)
+        if a.verb == "selftest":
+            return cmd_selftest(a)
+    except ValueError as e:
+        sys.stderr.write("cc-lever-score: %s\n" % e)
+        return 2
+    ap.print_usage(sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

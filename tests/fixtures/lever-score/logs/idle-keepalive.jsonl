@@ -1,0 +1,2 @@
+{"kind":"gap","v":1,"ts":"2026-10-01T10:00:15Z","sid":"aaaaaaaa-0000-4000-8000-00000000000a","acct":".claude-next","start":"2026-10-01T10:00:12Z","end":"2026-10-01T11:00:12Z","dur":3600.0,"end_src":"record","ctx":3100,"model":"claude-opus-5-5","wake_s":3300,"outcome":"no_wake"}
+{"kind":"gap","v":1,"ts":"2026-10-01T11:00:09Z","sid":"bbbbbbbb-0000-4000-8000-00000000000b","acct":".claude-tertiary","start":"2026-10-01T11:00:06Z","end":"2026-10-01T11:00:08Z","dur":2.0,"end_src":"record","ctx":4000,"model":"claude-opus-5-5","wake_s":3300,"outcome":"no_wake"}

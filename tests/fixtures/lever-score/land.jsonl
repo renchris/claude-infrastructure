@@ -1,0 +1,4 @@
+{"ts":"2026-10-01T10:00:35Z","tool":"ship-land","sid":"aaaaaaaa-0000-4000-8000-00000000000a","exit":42,"stage":"lock"}
+{"ts":"2026-10-01T10:00:38Z","tool":"ship-land","sid":"aaaaaaaa-0000-4000-8000-00000000000a","exit":0,"stage":"land"}
+{"ts":"2026-10-01T10:00:39Z","repo":"/x","event":"release","exit":0}
+{"ts":"2026-10-01T11:00:09Z","tool":"ship-land","sid":"bbbbbbbb-0000-4000-8000-00000000000b","exit":6,"stage":"gate"}
