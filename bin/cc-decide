@@ -12,18 +12,27 @@
 #
 # THE THREE CLASSES (gate-classify.sh routes every boundary to exactly one):
 #   A  AUTO-DECIDE + audit trail — the agent already ruled + ACTED; the packet is the trail.
-#   B  QUEUE-FOR-REVIEW — a value-fork/external-info the values don't settle, AFTER route-around
-#      failed: carries a default_if_no_veto + veto_deadline; the default FIRES at the deadline
-#      (async early-veto, never a sync approval).
-#   C  HARD-BLOCK (human-only) — C10 self-mod / C6 money-path / permission denial: WAITS, has NO
-#      default (the ceiling holds); carries a staged one-action artifact + rollback one-liner.
+#   B  QUEUE-FOR-REVIEW — a judgment call with a status-quo course (usually the frozen scope), or external
+#      info the values don't settle: carries default_if_no_veto + veto_deadline; the default FIRES at the
+#      deadline, and the filer keeps that course meanwhile (async early-veto, never a sync approval).
+#   C  HARD-BLOCK (human-only) — C10 self-mod / C6 money-path / permission denial / credential / a G2
+#      escalation surface (auth, destructive migration, nav pattern, DB timeout), declared with
+#      --ceiling self-mod|money|permission|credential|g2 (research-kit programs: program): WAITS, has
+#      NO default. It is the filer's ⛔ and holds only the act it names; the filer keeps driving every
+#      in-scope item it does not gate. A pick among new options is class B with your pick as --default.
 #
 # Verbs:
-#   open  --class A|B|C --what <plain-english, NO codenames>
+#   open  --class A|B|C --what <plain-english, NO codenames>        (open -h|--help prints this)
 #         [--option "label::outcome" ...] [--recommendation r] [--default d] [--deadline ISO]
 #         [--project subject-project] [--default-effect change|no-change]
 #         [--session-sid s] [--session-pane u] [--staged-artifact p] [--route-around r] [--id id]
-#         [--conviction N] [--receipt R]
+#         [--conviction N] [--receipt R] [--ceiling self-mod|money|permission|credential|g2|program]
+#           → --ceiling: class C only (program needs --project); REQUIRED on a class-C open from a
+#             session (CLAUDE_CODE_SESSION_ID or CLAUDE_SESSION_ID set) — refused rc 2 without it, and
+#             the refusal prints the class-B command. Stored as `ceiling`, not part of the id. Off:
+#             CC_DECIDE_CEILING=0 or ~/.claude/state/decide-ceiling.off. A session's B/C open also
+#             prints, on stderr and last, the closest ANSWERED packet (cc-memory-search --decisions):
+#             act on a ruling, never re-ask it. Off: CC_DECIDE_HINTS=0 or ~/.claude/state/decide-hints.off.
 #           → fail-closed: B needs default+deadline; C must NOT carry a default (nor a
 #             --default-effect, having no default to describe); what_plain required.
 #             B REQUIRES --conviction + --receipt; C ALSO REQUIRES both and ≥2 --option (THE CONVICTION PROTOCOL,
@@ -100,8 +109,8 @@ mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | "${CC_SHA256:-/sbin/sha256sum
 ensure_dir() { mkdir -p "$DECISIONS_DIR" 2>/dev/null || true; }
 
 # ── THE CONVICTION PROTOCOL (2026-09-08, docs/research/conviction-close-2026-09-08.md) ──────────
-# A class-C packet is the ⛔ rung: it ends a session's turn holding work and hands the operator a
-# question. Measured over the live store on 2026-09-08: 20 open B/C packets in 30 days, 5 with zero
+# A class-C packet is the ⛔ rung: it hands the operator a question and holds only the act it names;
+# the session keeps driving every in-scope item it does not gate (ruling d610f8473106). Measured over the live store on 2026-09-08: 20 open B/C packets in 30 days, 5 with zero
 # options, 0 citing a research path, 0 stating how sure the filer was. The operator's rule, verbatim:
 # "if conviction of a decision is not >90% then research exhaustively, and then implement if now
 # >90% or then ask the user if below." So a class-C open carries the NUMBER, the RECEIPT of the
@@ -160,14 +169,85 @@ log_idl() { # <verb> <id> <class> <status>
     "$(now_iso)" "$1" "$2" "$3" "$4" >> "$IDL" 2>/dev/null || true
 }
 
+# ── CEILING + RULING HINTS (ruling d610f8473106; docs/research/lead-keeps-working-2026-10-24.md §3.6) ─
+# Both key on a SESSION filing: a daemon carries no session id and keeps today's behaviour exactly, so
+# the 60-odd legacy producers and every suite that unsets the ids are untouched. The id is the env, not
+# the resolved sid: an explicit --session-sid is a caller filing on another session's behalf.
+in_session() { [ -n "${CLAUDE_CODE_SESSION_ID:-}${CLAUDE_SESSION_ID:-}" ]; }
+
+ceiling_required() {
+  in_session || return 1
+  [ "${CC_DECIDE_CEILING:-1}" = "0" ] && return 1
+  [ -e "$HOME/.claude/state/decide-ceiling.off" ] && return 1
+  return 0
+}
+
+# Hints never fire under bats unless forced (the bin/cc-notify:510 precedent): nine suites open B/C
+# without unsetting the session ids, and each open would fork the search and write stderr.
+hints_enabled() {
+  in_session || return 1
+  [ "${CC_DECIDE_HINTS:-}" = "0" ] && return 1
+  [ -e "$HOME/.claude/state/decide-hints.off" ] && return 1
+  if [ "${CC_DECIDE_HINTS:-}" != "1" ] \
+     && [ -n "${BATS_TEST_FILENAME:-}${BATS_TEST_TMPDIR:-}${BATS_RUN_TMPDIR:-}" ]; then
+    return 1
+  fi
+  return 0
+}
+
+# Single-quote a value for a pasteable command line.
+sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# The class-B re-file of this decision: what a judgment call with a status-quo course should be.
+class_b_cmd() { # <what> <project> <conviction> <receipt>
+  printf 'cc-decide open --class B --what %s --default "<the frozen-scope course>" --deadline <ISO> --default-effect no-change --project %s --conviction %s --receipt %s' \
+    "$(sq "$1")" "${2:-<repo>}" "${3:-N}" "$([ -n "$4" ] && sq "$4" || printf R)"
+}
+
+# The closest ANSWERED packet, as one stderr line, or nothing. Fail open on every path: no bounder,
+# a missing engine, an error, a timeout or no hit prints nothing and never changes the exit code.
+# Run as `python3 -I <path>` so the exec-form lint sees an interpreter under the bounder.
+ruling_hint() { # <id> <class> <what>
+  local bounder t engine out line
+  bounder="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null)" || return 0
+  [ -n "$bounder" ] || return 0
+  t="${CC_DECIDE_HINT_TIMEOUT_S:-3}"
+  case "$t" in ''|*[!0-9]*) t=3 ;; esac
+  engine="${CC_MEMORY_SEARCH_BIN:-$(dirname "$(self_path)")/cc-memory-search}"
+  [ -f "$engine" ] || return 0
+  out="$("$bounder" "$t" python3 -I "$engine" --decisions --exclude "$1" --top 3 --json -- "$3" 2>/dev/null)" || return 0
+  line="$(printf '%s' "$out" | jq -r '
+    def cut(n): (. // "" | tostring | gsub("[\\t\\r\\n]"; " ")) as $s
+      | if ($s | length) > n then $s[0:n] + "…" else $s end;
+    if (type == "array") and length > 0 and (.[0].id // "") != "" then .[0] as $h
+      | (((.[0].ratio // 0) | tonumber? // 0) >= 1.5) as $strong
+      | ($h.status == "expired-actioned") as $fired
+      | "cc-decide: "
+        + (if $strong then "PRIOR ANSWER" + (if $fired then " (default fired)" else "" end)
+           else "similar answered packet" end)
+        + ": " + $h.id + " · " + ($h.status // "?") + " " + (($h.resolved // "") | tostring | .[0:10])
+        + " · \"" + ($h.what_plain | cut(120)) + "\" · "
+        + (if $fired then "default fired: " + ($h.default_if_no_veto | cut(120))
+           else (($h.evidence // "") | if . == "" then "no evidence recorded" else cut(120) end) end)
+        + " — act on it and file class A citing it; re-ask only as class B with it as --default."
+        + "\u001f" + $h.id + "\u001f" + ((.[0].ratio // "") | tostring)
+    else empty end' 2>/dev/null)" || return 0
+  [ -n "$line" ] || return 0
+  printf '%s\n' "${line%%$'\037'*}" >&2
+  line="${line#*$'\037'}"
+  log_idl ruling-hint "${line%%$'\037'*}" "$2" "ratio:${line#*$'\037'}"
+}
+
 cmd_open() {
   local class="" what="" rec="" def="" deadline="" sid="" pane="" staged="" route="" id=""
-  local project="" deffect="" conviction="" receipt=""
+  local project="" deffect="" conviction="" receipt="" ceiling=""
   local options=()
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
+      -h|--help)         usage; return 0 ;;
       --class)           class="${1:-}";    [ $# -gt 0 ] && shift ;;
+      --ceiling)         ceiling="${1:-}";  [ $# -gt 0 ] && shift ;;
       --conviction)      conviction="${1:-}"; [ $# -gt 0 ] && shift ;;
       --receipt)         receipt="${1:-}";    [ $# -gt 0 ] && shift ;;
       --what)            what="${1:-}";      [ $# -gt 0 ] && shift ;;
@@ -211,6 +291,22 @@ cmd_open() {
       change|no-change) : ;;
       *) echo "cc-decide open: --default-effect must be change|no-change (got '${deffect}')" >&2; return 2 ;;
     esac
+  fi
+  # --ceiling NAMES the operator-only surface a class-C packet holds (ruling d610f8473106, goal (b):
+  # class C is the reserve, never a judgment call). Closed set, same polarity as --default-effect: a
+  # typo is refused rather than stored as a ceiling nothing recognises. Only class C holds one, and
+  # `program` (a research-kit gate packet) is meaningless without the program's --project.
+  if [ -n "$ceiling" ]; then
+    case "$ceiling" in
+      self-mod|money|permission|credential|g2|program) : ;;
+      *) echo "cc-decide open: --ceiling must be self-mod|money|permission|credential|g2|program (got '${ceiling}')" >&2; return 2 ;;
+    esac
+    if [ "$class" != "C" ]; then
+      echo "cc-decide open: --ceiling is for class C only (class ${class} does not hold an operator-only ceiling)" >&2; return 2
+    fi
+    if [ "$ceiling" = "program" ] && [ -z "$project" ]; then
+      echo "cc-decide open: --ceiling program needs --project (the research program the gate packet belongs to)" >&2; return 2
+    fi
   fi
   # ── THE CONVICTION PROTOCOL — the number, the receipt, the options (see the helpers above) ────
   # Same asymmetry as the class-B gate: a malformed packet is REFUSED, never half-written. The two
@@ -327,6 +423,46 @@ cmd_open() {
     echo "$id"; return 0
   fi
 
+  # ── a session's class-C open declares its ceiling (after the early return: a re-open never refuses) ─
+  # Measured 2026-10-24 (§9.3 M16): 33 of the 48 open class-C packets route B under gate-classify —
+  # judgment calls filed as hard blocks, each one a ⛔ that idled its session. The refusal teaches the
+  # re-file instead of only naming the flag: the class-B command is printed LAST, because filers pipe
+  # `2>&1 | tail -3`.
+  if [ "$class" = "C" ] && [ -z "$ceiling" ] && ceiling_required; then
+    { echo "cc-decide open: a session's class-C packet must name the operator-only ceiling it holds — nothing was filed."
+      echo "  Class C waits with no default and is reserved for self-modification, a money path, a permission denial,"
+      echo "  a credential or a G2 surface (auth, destructive migration, nav pattern, DB timeout); a judgment call with a"
+      echo "  status-quo course is class B, filed with that course as its default, and you keep that course meanwhile."
+      echo "  If a ceiling truly holds: --ceiling self-mod|money|permission|credential|g2  (research-kit programs: program)"
+      echo "  Otherwise: $(class_b_cmd "$what" "$project" "$conviction" "$receipt")"
+    } >&2
+    return 2
+  fi
+
+  # ── stderr only, most useful LAST; stdout stays exactly the id and the exit code never changes ──
+  # gate-classify's disagreement is not a refusal: the router misses genuine gates (a247b7288149, a
+  # money path, routes B), so it is printed for the filer to weigh and the packet is written anyway.
+  local disagree=""
+  if [ -n "$ceiling" ] && [ "$ceiling" != "program" ]; then
+    local gc gcout
+    gc="$(dirname "$(self_path)")/../scripts/gate-classify.sh"
+    if [ -f "$gc" ]; then
+      gcout="$(bash "$gc" "$what" 2>/dev/null | head -1)" || gcout=""
+      case "$gcout" in
+        "B "*) disagree="cc-decide: gate-classify routes this B, not C (${gcout#B }) — you declared --ceiling ${ceiling}; if no operator-only ceiling actually holds, re-file it: $(class_b_cmd "$what" "$project" "$conviction" "$receipt")" ;;
+      esac
+    fi
+  fi
+  if [ "$class" != "A" ] && hints_enabled; then
+    if [ "$class" = "C" ]; then
+      echo "cc-decide: class C waits with no default and is reserved for self-modification, a money path, a permission denial, a credential or a G2 surface; a judgment call with a status-quo course is class B (--default \"<that course>\" --deadline <ISO> --default-effect no-change --project <repo>)." >&2
+    fi
+    [ -n "$disagree" ] && printf '%s\n' "$disagree" >&2
+    ruling_hint "$id" "$class" "$what"
+  elif [ -n "$disagree" ]; then
+    printf '%s\n' "$disagree" >&2
+  fi
+
   # Build the options array (bash 3.2-safe: guard the empty-array expansion under set -u).
   local opts_json="[]" o label outcome
   if [ "${#options[@]}" -gt 0 ]; then
@@ -338,7 +474,7 @@ cmd_open() {
     done
   fi
 
-  # NOTE mk_id is class+sid+what ONLY — deliberately NOT the new fields. Annotating an existing
+  # NOTE mk_id is class+sid+what ONLY — deliberately NOT the new fields (ceiling included). Annotating an existing
   # decision with its project or default-effect must not mint a SECOND packet for the same fork.
   local tmp="$file.tmp.$$"
   if jq -n --arg id "$id" --arg created "$(now_iso)" --arg class "$class" \
@@ -346,12 +482,13 @@ cmd_open() {
         --argjson options "$opts_json" --arg rec "$rec" --arg def "$def" \
         --arg deadline "$deadline" --arg staged "$staged" --arg route "$route" \
         --arg project "$project" --arg deffect "$deffect" \
-        --argjson conviction "${conviction:-null}" --arg receipt "$receipt" \
+        --argjson conviction "${conviction:-null}" --arg receipt "$receipt" --arg ceiling "$ceiling" \
     '{id:$id, created:$created, class:$class, session_sid:$sid, session_pane_uuid:$pane,
       what_plain:$what, subject_project:$project, options:$options, recommendation:$rec,
       default_if_no_veto:$def, default_effect:$deffect, veto_deadline:$deadline,
       staged_artifact_path:$staged, route_around_taken:$route, status:"open",
-      conviction:$conviction, receipt:$receipt}' \
+      conviction:$conviction, receipt:$receipt}
+     + (if $ceiling != "" then {ceiling:$ceiling} else {} end)' \
     > "$tmp" 2>/dev/null && mv "$tmp" "$file"; then :; else
     rm -f "$tmp" 2>/dev/null || true; echo "cc-decide open: write failed" >&2; return 2
   fi

@@ -9,6 +9,7 @@ consumer can threshold it (min-max normalisation, TM's defect, makes that imposs
 
     cc-memory-search [--all] [--top N] [--json] [--since YYYY-MM-DD] [--store DIR]...
                      [--lessons DIR] [--rules FILE]... [--canary] [--stats [--days N]] <terms...>
+    cc-memory-search --decisions [--exclude ID]... [--top N] [--json] <terms...>
 
 Default scope: the current project's store (resolved as hooks/lib/memory-index-locate.sh does), the
 `- [` link lines of its archive/*COLD*.md (never PRE-COMPACT snapshots), the repo's docs/lessons, one
@@ -16,6 +17,12 @@ row per hook bullet of both .claude/rules/agent-operating-lessons*.md files, and
 `type: feedback` topic in EVERY store (gap-2 replay: the rules that answered 3 of 14 queries lived in
 another project's store). `--all` adds every store's topics. --store/--lessons/--rules REPLACE the
 default scope.
+
+--decisions also replaces it: the corpus is the ANSWERED packets (actioned, vetoed, expired-actioned)
+of ${CC_DECISIONS_DIR:-~/.claude/autonomy/decisions}, so a session finds an operator ruling, a fired
+class-B default included, before it asks again (ruling d610f8473106). No memory store is globbed in
+this mode. --exclude ID drops a packet (cc-decide passes the one it is opening); --json adds each
+packet's id/status/resolved/default and `ratio`, the top-1 score over the top-2 score.
 
 Liveness (gap 4): one IDL row per search in a `finally` (hook "cc-memory-search"), one state row in
 $HOME/.claude/state/memory-search.jsonl; --canary checks each active store's newest topic comes back;
@@ -69,6 +76,7 @@ class Doc:
     store: str
     day: date | None = None
     extra_name: str = ""
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -79,6 +87,8 @@ class Scope:
     rules: list[str] = field(default_factory=list)
     feedback_sweep: bool = False
     all_stores: bool = False
+    decisions: str = ""
+    exclude: list[str] = field(default_factory=list)
 
 
 # ── frontmatter ─────────────────────────────────────────────────────────────────────────────────
@@ -353,7 +363,73 @@ def rules_docs(rules: str) -> list[Doc]:
     return docs
 
 
+ANSWERED = frozenset({"actioned", "vetoed", "expired-actioned"})
+
+
+def decisions_dir() -> str:
+    return os.environ.get("CC_DECISIONS_DIR") or os.path.join(
+        os.path.expanduser("~"), ".claude", "autonomy", "decisions"
+    )
+
+
+def _text(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def decision_docs(ddir: str, exclude: list[str]) -> list[Doc]:
+    """One row per ANSWERED packet: what_plain is the name column, the default and recommendation the
+    description, object options' outcomes and the evidence the body. String options (ship-land's
+    escalation packets) carry no outcome and are skipped; an unreadable packet is skipped, never fatal."""
+    docs: list[Doc] = []
+    skip = set(exclude)
+    for p in sorted(glob.glob(os.path.join(ddir, "*.json"))):
+        try:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                pkt = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(pkt, dict) or pkt.get("status") not in ANSWERED:
+            continue
+        pid = _text(pkt.get("id")) or os.path.splitext(os.path.basename(p))[0]
+        if pid in skip or os.path.splitext(os.path.basename(p))[0] in skip:
+            continue
+        opts = pkt.get("options")
+        outcomes = [
+            f"{_text(o.get('label'))} {_text(o.get('outcome_in_operator_terms'))}"
+            for o in (opts if isinstance(opts, list) else [])
+            if isinstance(o, dict)
+        ]
+        default = _text(pkt.get("default_if_no_veto"))
+        docs.append(
+            Doc(
+                p,
+                _text(pkt.get("what_plain")),
+                f"{default} {_text(pkt.get('recommendation'))}".strip(),
+                "\n".join([*outcomes, _text(pkt.get("evidence"))])[:BODY_CAP],
+                "decisions",
+                parse_day(_text(pkt.get("resolved")) or _text(pkt.get("created"))),
+                meta={
+                    "id": pid,
+                    "class": _text(pkt.get("class")),
+                    "status": pkt.get("status"),
+                    "resolved": _text(pkt.get("resolved")),
+                    "what_plain": _text(pkt.get("what_plain")),
+                    "default_if_no_veto": default,
+                    "evidence": _text(pkt.get("evidence")),
+                },
+            )
+        )
+    return docs
+
+
 def resolve_scope(args: argparse.Namespace, cwd: str) -> Scope:
+    # Checked FIRST: this mode must never reach repo_root / current_store / all_store_dirs, whose
+    # projects/ glob is the 7.4 s a cc-decide hint cannot afford.
+    if args.decisions:
+        ddir = decisions_dir()
+        if not os.path.isdir(ddir):
+            raise FileNotFoundError(f"--decisions {ddir}: not a directory")
+        return Scope("decisions", decisions=ddir, exclude=list(args.exclude))
     if args.store or args.lessons or args.rules:
         for s in args.store:
             if not os.path.isdir(s):
@@ -381,6 +457,8 @@ def resolve_scope(args: argparse.Namespace, cwd: str) -> Scope:
 
 
 def build_corpus(scope: Scope) -> list[Doc]:
+    if scope.decisions:
+        return decision_docs(scope.decisions, scope.exclude)
     docs: list[Doc] = []
     for s in scope.stores:
         docs += topic_docs(s)
@@ -531,8 +609,17 @@ def idl_log() -> str:
 # ── modes ───────────────────────────────────────────────────────────────────────────────────────
 
 
+def top_ratio(hits: list[tuple[Doc, float]]) -> float | None:
+    """Top-1 score over top-2 (bm25 is negative, so the quotient is positive): how far the best match
+    stands out. None with fewer than two hits — a lone hit has nothing to stand out from."""
+    if len(hits) < 2 or hits[1][1] == 0:
+        return None
+    return round(hits[0][1] / hits[1][1], 4)
+
+
 def emit(hits: list[tuple[Doc, float]], as_json: bool) -> None:
     if as_json:
+        ratio = top_ratio(hits)
         rows = [
             {
                 "path": d.path,
@@ -541,6 +628,8 @@ def emit(hits: list[tuple[Doc, float]], as_json: bool) -> None:
                 "store": d.store,
                 "score": round(s, 4),
                 "score_space": "bm25",
+                # the default-scope key set is a contract; only --decisions rows carry the extras
+                **({"ratio": ratio, **d.meta} if d.store == "decisions" else {}),
             }
             for d, s in hits
         ]
@@ -642,6 +731,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="a memory store dir (replaces the default scope)",
     )
     p.add_argument("--lessons", help="a lessons dir (replaces the default scope)")
+    p.add_argument(
+        "--decisions",
+        action="store_true",
+        help="answered decision packets (replaces the default scope)",
+    )
+    p.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="with --decisions: drop this packet id",
+    )
     p.add_argument(
         "--rules",
         action="append",

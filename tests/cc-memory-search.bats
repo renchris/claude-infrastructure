@@ -246,3 +246,48 @@ state_last() { tail -1 "$STATE" | jq -r "$1"; }
   grep -q 'Run .cc-memory-search <terms>. first' "$REPO/CLAUDE.global.slim.md"
   grep -q 'cc-memory-search --json --top 3' "$REPO/commands/compact-memory.md"
 }
+
+# ── --decisions: the answered-packet corpus (ruling d610f8473106; design §3.6 item 4, §7.6) ─────
+# cc-decide's ruling hint runs this mode, so it must answer from the decisions dir alone: no projects/
+# under HOME at all, an open packet never returned (it is a question, not a ruling), a string-options
+# packet (ship-land's shape) read without error.
+pkt() { # <dir> <id> <class> <status> <what> <default> <options-json>
+  jq -n --arg id "$2" --arg c "$3" --arg s "$4" --arg w "$5" --arg d "$6" --argjson o "$7" \
+    '{id:$id, class:$c, status:$s, what_plain:$w, default_if_no_veto:$d, options:$o, resolved:"2026-10-15T00:00:00Z"}' \
+    > "$1/$2.json"
+}
+
+decisions_fixture() {
+  D="$T/decisions"; mkdir -p "$D"
+  export CC_DECISIONS_DIR="$D"
+  pkt "$D" b00000000001 B expired-actioned "Keep looping until a round confirms nothing new before you paste, or paste once a round has no turn?" \
+    "keep looping until dry" '[{"label":"keep looping","outcome_in_operator_terms":"no paste until a round finds nothing"}]'
+  pkt "$D" c00000000002 C open "Should the loop stop now? The loop stop question, asked again." "" '[]'
+  pkt "$D" d00000000003 C superseded "Should the loop stop now, superseded copy" "" '[]'
+  pkt "$D" e00000000004 C actioned "Land the documentation fix for the nightly job" "" '["park it","land it"]'
+  jq '.evidence = "closed the loop on the doc drift"' "$D/e00000000004.json" > "$D/x" && mv "$D/x" "$D/e00000000004.json"
+  rm -rf "$HOME/.claude/projects"
+}
+
+@test "--decisions ranks the answered class-B packet first with ratio >= 1.5; open and superseded never return" {
+  decisions_fixture
+  run "$S" --decisions --json --top 3 -- "Should the loop stop now"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.[0].id')" = "b00000000001" ]
+  [ "$(printf '%s' "$output" | jq -r '.[0].default_if_no_veto')" = "keep looping until dry" ]
+  printf '%s' "$output" | jq -e '.[0].ratio >= 1.5' >/dev/null
+  [ "$(printf '%s' "$output" | jq '[.[] | select(.id == "c00000000002" or .id == "d00000000003")] | length')" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.[1].id')" = "e00000000004" ]
+  [ ! -d "$HOME/.claude/projects" ]
+}
+
+@test "--decisions --exclude drops the named packet; the text mode prints the packet path" {
+  decisions_fixture
+  run "$S" --decisions --json --exclude b00000000001 -- "Should the loop stop now"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq '[.[] | select(.id == "b00000000001")] | length')" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.[0].id')" = "e00000000004" ]
+  run "$S" --decisions loop
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[bm25 decisions] $D/b00000000001.json"* ]] || false
+}

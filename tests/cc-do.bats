@@ -23,6 +23,8 @@ setup() {
   BACKLOG="$REPO/bin/cc-backlog"
 
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermeticity rule 1
+  # the class-C opens below file as a daemon would: from a session cc-decide requires --ceiling
+  unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
   export CC_ACTIVATION_DIR="$BATS_TEST_TMPDIR/activation"
   export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"

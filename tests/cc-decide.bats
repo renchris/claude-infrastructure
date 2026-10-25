@@ -420,9 +420,11 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 # "✅ SAFE TO CLOSE — nothing of mine is open". These pin the ladder, INCLUDING its third rung:
 # $CLAUDE_SESSION_ID is not exported to a tool-call shell (hooks/log-bash.sh:9 D-9), which is the
 # only shell `cc-decide open` ever runs in, so a ladder without CLAUDE_CODE_SESSION_ID is a no-op.
+# A session's class-C open now needs --ceiling (ruling d610f8473106); these cases pin attribution,
+# not the ceiling, so they file with CC_DECIDE_CEILING=0 (the ceiling has its own cases below).
 
 @test "open with NO --session-sid attributes the packet to the calling session" {
-  export CLAUDE_CODE_SESSION_ID="SID-ENV-CCS"
+  export CLAUDE_CODE_SESSION_ID="SID-ENV-CCS" CC_DECIDE_CEILING=0
   run bash "$CD" open --class C "${C_OK[@]}" --what "a hard block nobody can see"
   [ "$status" -eq 0 ]
   run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
@@ -432,7 +434,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 @test "CLAUDE_CODE_SESSION_ID alone suffices — the rung a tool-call shell actually has" {
   # Guards the exact no-op the obvious fix would have shipped: defaulting only to
   # CLAUDE_SESSION_ID leaves sid "" at every real call site, because CC does not export it there.
-  export CLAUDE_CODE_SESSION_ID="SID-ONLY-CCS"
+  export CLAUDE_CODE_SESSION_ID="SID-ONLY-CCS" CC_DECIDE_CEILING=0
   run bash "$CD" open --class C "${C_OK[@]}" --what "reachable from the shell that files it"
   [ "$status" -eq 0 ]
   run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
@@ -452,7 +454,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 
 @test "CLAUDE_SESSION_ID is the FIRST env rung — it outranks CLAUDE_CODE_SESSION_ID" {
   export CLAUDE_SESSION_ID="SID-FIRST"
-  export CLAUDE_CODE_SESSION_ID="SID-SECOND"
+  export CLAUDE_CODE_SESSION_ID="SID-SECOND" CC_DECIDE_CEILING=0
   run bash "$CD" open --class C "${C_OK[@]}" --what "ladder order"
   [ "$status" -eq 0 ]
   run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
@@ -479,7 +481,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 }
 
 @test "re-open within ONE session is still idempotent — same sid, same id, one packet" {
-  export CLAUDE_CODE_SESSION_ID="SID-SAME"
+  export CLAUDE_CODE_SESSION_ID="SID-SAME" CC_DECIDE_CEILING=0
   a=$(bash "$CD" open --class C "${C_OK[@]}" --what "same decision twice")
   b=$(bash "$CD" open --class C "${C_OK[@]}" --what "same decision twice")
   [ "$a" = "$b" ]
@@ -948,4 +950,220 @@ _rck_refused() {  # $1=expected rc — the tool's OWN refusal, never the unknown
     > "$CC_RESEARCH_REGISTRY"
   run bash "$CD" recheck "$id" --conviction 60 --receipt "$r" --session-sid s
   [ "$status" -eq 0 ]
+}
+
+# ── class-C ceiling, open --help and ruling hints (ruling d610f8473106; design §3.6, §7.6) ─────────
+# setup() unsets the session ids, so every case above is a daemon-shaped filer: no ceiling needed and
+# no hint. The cases below opt in with _sess, which also points HOME at a scratch dir so the operator's
+# own ~/.claude/state/*.off files cannot decide a verdict. The engine is a stub behind
+# CC_MEMORY_SEARCH_BIN that counts its calls, so "no hint" is asserted as zero searches, not as quiet.
+C_ARGS=(--conviction 60 --receipt "probe => result" --option "a::x" --option "b::y")
+B_ARGS=(--conviction 60 --receipt "probe => result" --default "keep the course" --deadline 2099-01-01T00:00:00Z)
+GATED_TEXT="edit settings.json in place to widen the allow rule"
+E869_TEXT="Should the B13 loop stop now, with you pasting setup prompt v33 on the real Mac and the stop rule changed from 'until a round confirms nothing new' to 'stop when a round finds no turn and no wrong output on states a real Mac reaches without deliberate damage'? Answer yes or no."
+
+_sess() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/state"
+  export CLAUDE_CODE_SESSION_ID="sess-hint-1"
+}
+
+_hint_stub() { # [sleep-seconds] → exports CC_MEMORY_SEARCH_BIN; each call appends one line to $STUB_CALLS
+  export STUB_CALLS="$BATS_TEST_TMPDIR/stub.calls"; : > "$STUB_CALLS"
+  export CC_MEMORY_SEARCH_BIN="$BATS_TEST_TMPDIR/stub-search.py"
+  # the 3 s default bounds a real filer; under a loaded gate python's own startup can pass it, so a
+  # positive case would read as "no hint". The fail-open case sets its own 1 s bound.
+  export CC_DECIDE_HINT_TIMEOUT_S=60
+  printf '%s\n' \
+    'import json, os, sys, time' \
+    'open(os.environ["STUB_CALLS"], "a").write(" ".join(sys.argv[1:]) + "\n")' \
+    "time.sleep(${1:-0})" \
+    'print(json.dumps([{"id": "eb3dbe1e5e94", "status": "expired-actioned", "resolved": "2026-10-15T09:00:00Z",' \
+    '  "what_plain": "Keep looping until a round confirms nothing at all?", "default_if_no_veto": "keep looping until dry",' \
+    '  "evidence": "", "ratio": 2.9}, {"id": "a247b7288149", "status": "actioned", "resolved": "2026-10-20T00:00:00Z",' \
+    '  "what_plain": "Buy the plan", "default_if_no_veto": "", "evidence": "bought", "ratio": 2.9}]))' \
+    > "$CC_MEMORY_SEARCH_BIN"
+}
+_calls() { wc -l < "$STUB_CALLS" | tr -d ' '; }
+
+@test "open --help and open -h print the usage (rc 0) with the class-C reserve and the class-B status-quo course" {
+  run bash "$CD" open --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HARD-BLOCK"* ]] || false
+  [[ "$output" == *"status-quo course"* ]] || false
+  [[ "$output" == *"--ceiling self-mod|money|permission|credential|g2"* ]] || false
+  [[ "$output" != *"unknown arg"* ]] || false
+  run bash "$CD" open -h
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HARD-BLOCK"* ]]
+}
+
+@test "hint ordering: stdout is exactly the id; stderr ends reserve reminder, then the PRIOR ANSWER line" {
+  _sess; _hint_stub; export CC_DECIDE_HINTS=1
+  rc=0
+  bash "$CD" open --class C --ceiling self-mod --what "$GATED_TEXT" "${C_ARGS[@]}" \
+    > "$BATS_TEST_TMPDIR/out" 2> "$BATS_TEST_TMPDIR/err" || rc=$?
+  [ "$rc" -eq 0 ]
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/out" | tr -d ' ')" -eq 1 ]
+  id="$(cat "$BATS_TEST_TMPDIR/out")"
+  [[ "$id" =~ ^[0-9a-f]{12}$ ]] || false
+  last="$(tail -n 1 "$BATS_TEST_TMPDIR/err")"
+  [[ "$last" == *"PRIOR ANSWER (default fired): eb3dbe1e5e94"*"default fired: keep looping until dry"* ]] || false
+  [[ "$(tail -n 2 "$BATS_TEST_TMPDIR/err" | head -n 1)" == *"reserved for self-modification"* ]] || false
+  # the engine is asked with the new packet excluded and the packet's own text as the query
+  grep -q -- "--decisions --exclude $id --top 3 --json -- $GATED_TEXT" "$STUB_CALLS"
+  # what a filer piping `2>&1 | tail -3` reads: reminder, ruling, id
+  run bash -c 'bash "$1" open --class C --ceiling self-mod --what "$2 (second)" --conviction 60 --receipt "p => r" --option a::x --option b::y 2>&1 | tail -n 3' _ "$CD" "$GATED_TEXT"
+  [ "${#lines[@]}" -eq 3 ]
+  [[ "${lines[0]}" == *"reserved for self-modification"* ]] || false
+  [[ "${lines[1]}" == *"eb3dbe1e5e94"* ]] || false
+  [[ "${lines[2]}" =~ ^[0-9a-f]{12}$ ]]
+}
+
+@test "hint gate: no session id means no search (daemons and every legacy producer pay nothing)" {
+  _sess; _hint_stub; export CC_DECIDE_HINTS=1
+  unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
+  run bash "$CD" open --class B --what "no session" "${B_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [ "$(_calls)" -eq 0 ]
+  # CONTROL: the same open from a session searches once
+  export CLAUDE_CODE_SESSION_ID="sess-hint-1"
+  run bash "$CD" open --class B --what "with session" "${B_ARGS[@]}"
+  [ "$(_calls)" -eq 1 ]
+}
+
+@test "hint gate: under bats with no CC_DECIDE_HINTS=1 a session open does not search" {
+  _sess; _hint_stub; unset CC_DECIDE_HINTS
+  [ -n "${BATS_TEST_FILENAME:-}" ]
+  run bash "$CD" open --class B --what "bats run" "${B_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [ "$(_calls)" -eq 0 ]
+  [[ "$output" != *"cc-decide:"* ]] || false
+  # CONTROL: forced on, the same shell searches
+  CC_DECIDE_HINTS=1 run bash "$CD" open --class B --what "bats run forced" "${B_ARGS[@]}"
+  [ "$(_calls)" -eq 1 ]
+}
+
+@test "hint kill switches: CC_DECIDE_HINTS=0 and ~/.claude/state/decide-hints.off each stop the search" {
+  _sess; _hint_stub
+  # the bats predicate would also silence this case, so it runs with the bats vars removed: only the
+  # switch itself can stop the search
+  run env -u BATS_TEST_FILENAME -u BATS_TEST_TMPDIR -u BATS_RUN_TMPDIR CC_DECIDE_HINTS=0 \
+    bash "$CD" open --class B --what "env off" "${B_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [ "$(_calls)" -eq 0 ]
+  : > "$HOME/.claude/state/decide-hints.off"
+  CC_DECIDE_HINTS=1 run bash "$CD" open --class B --what "file off" "${B_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [ "$(_calls)" -eq 0 ]
+  rm -f "$HOME/.claude/state/decide-hints.off"
+  CC_DECIDE_HINTS=1 run bash "$CD" open --class B --what "control on" "${B_ARGS[@]}"
+  [ "$(_calls)" -eq 1 ]
+}
+
+@test "hint gate: class A never searches, and a re-open of an existing packet never searches" {
+  _sess; _hint_stub; export CC_DECIDE_HINTS=1
+  run bash "$CD" open --class A --what "auto-decided trail"
+  [ "$status" -eq 0 ]
+  [ "$(_calls)" -eq 0 ]
+  CC_DECIDE_HINTS=0 run bash "$CD" open --class B --what "filed once" "${B_ARGS[@]}"
+  id="$output"
+  run bash "$CD" open --class B --what "filed once" "${B_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$id" ]
+  [ "$(_calls)" -eq 0 ]
+}
+
+@test "ceiling required: a session's class-C open with no --ceiling is refused rc 2, files nothing, prints the class-B route last" {
+  _sess
+  rc=0
+  bash "$CD" open --class C --what "$E869_TEXT" "${C_ARGS[@]}" \
+    > "$BATS_TEST_TMPDIR/out" 2> "$BATS_TEST_TMPDIR/err" || rc=$?
+  [ "$rc" -eq 2 ]
+  [ ! -s "$BATS_TEST_TMPDIR/out" ]
+  tail2="$(tail -n 2 "$BATS_TEST_TMPDIR/err")"
+  [[ "$tail2" == *"--ceiling self-mod|money|permission|credential|g2"* ]] || false
+  [[ "$(tail -n 1 "$BATS_TEST_TMPDIR/err")" == *"--class B"*"--default"*"--deadline"*"--default-effect no-change"* ]] || false
+  [ -z "$(find "$CC_DECISIONS_DIR" -name '*.json' 2>/dev/null)" ]
+}
+
+@test "ceiling values: closed set, class C only, program needs --project; stored as .ceiling" {
+  _sess
+  run bash "$CD" open --class C --ceiling bogus --what "x" "${C_ARGS[@]}"
+  [ "$status" -eq 2 ]
+  run bash "$CD" open --class B --ceiling money --what "x" "${B_ARGS[@]}"
+  [ "$status" -eq 2 ]
+  run bash "$CD" open --class C --ceiling program --what "x" "${C_ARGS[@]}"
+  [ "$status" -eq 2 ]
+  [ -z "$(find "$CC_DECISIONS_DIR" -name '*.json' 2>/dev/null)" ]
+  run bash "$CD" open --class C --ceiling program --project /tmp/repo --what "x" "${C_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.ceiling' "$CC_DECISIONS_DIR/$output.json")" = "program" ]
+}
+
+@test "ceiling self-mod on text gate-classify routes B: accepted, stored, and the disagreement is on stderr" {
+  _sess
+  rc=0
+  bash "$CD" open --class C --ceiling self-mod --what "$E869_TEXT" "${C_ARGS[@]}" \
+    > "$BATS_TEST_TMPDIR/out" 2> "$BATS_TEST_TMPDIR/err" || rc=$?
+  [ "$rc" -eq 0 ]
+  id="$(cat "$BATS_TEST_TMPDIR/out")"
+  [ "$(bash "$CD" list --json | jq -r --arg id "$id" '.[] | select(.id == $id) | .ceiling')" = "self-mod" ]
+  grep -q 'gate-classify routes this B' "$BATS_TEST_TMPDIR/err"
+  grep -q -- '--class B' "$BATS_TEST_TMPDIR/err"
+  # a genuinely gated text draws no disagreement
+  run bash "$CD" open --class C --ceiling self-mod --what "$GATED_TEXT" "${C_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"gate-classify"* ]] || false
+}
+
+@test "ceiling not required: no session id (legacy callers), CC_DECIDE_CEILING=0, the decide-ceiling.off file" {
+  _sess
+  run env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID bash "$CD" open --class C --what "legacy daemon" "${C_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'has("ceiling")' "$CC_DECISIONS_DIR/$output.json")" = "false" ]
+  CC_DECIDE_CEILING=0 run bash "$CD" open --class C --what "env off" "${C_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  : > "$HOME/.claude/state/decide-ceiling.off"
+  run bash "$CD" open --class C --what "file off" "${C_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  rm -f "$HOME/.claude/state/decide-ceiling.off"
+  # CONTROL: neither switch, same session — refused
+  run bash "$CD" open --class C --what "control" "${C_ARGS[@]}"
+  [ "$status" -eq 2 ]
+}
+
+@test "id stability: --ceiling is not part of the id; the re-open without it is the existing early return" {
+  _sess
+  run bash "$CD" open --class C --ceiling self-mod --what "$GATED_TEXT" "${C_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  id="$output"
+  run bash "$CD" open --class C --what "$GATED_TEXT" "${C_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$id" ]
+  [ "$(find "$CC_DECISIONS_DIR" -name '*.json' | wc -l | tr -d ' ')" -eq 1 ]
+}
+
+@test "hint fails open: absent engine, an engine past CC_DECIDE_HINT_TIMEOUT_S, and no bounder on PATH" {
+  _sess; export CC_DECIDE_HINTS=1
+  CC_MEMORY_SEARCH_BIN="$BATS_TEST_TMPDIR/absent.py" run bash "$CD" open --class B --what "absent engine" "${B_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ ^[0-9a-f]{12}$ ]] || false
+  # an engine that would sleep 40 s is cut at 1 s: the open returns well before the engine could
+  # (the bound is the stub's sleep, not a wall-clock budget a loaded machine can miss)
+  _hint_stub 40
+  t0=$SECONDS
+  CC_DECIDE_HINT_TIMEOUT_S=1 run bash "$CD" open --class B --what "slow engine" "${B_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ ^[0-9a-f]{12}$ ]] || false
+  [ $((SECONDS - t0)) -lt 30 ]
+  # no timeout/gtimeout on PATH: the search is never run unbounded
+  _hint_stub
+  nb="$BATS_TEST_TMPDIR/nobounder"; mkdir -p "$nb"
+  for t in jq sed cut date mkdir dirname mv rm readlink head cat tr wc python3; do
+    ln -sf "$(command -v "$t")" "$nb/$t"
+  done
+  PATH="$nb" run /bin/bash "$CD" open --class B --what "no bounder" "${B_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ ^[0-9a-f]{12}$ ]] || false
+  [ "$(_calls)" -eq 0 ]
 }

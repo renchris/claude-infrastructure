@@ -128,7 +128,8 @@ open_packet_B() {
   case "$conv" in ''|*[!0-9]*) conv=0 ;; esac
   [ "$conv" -le 100 ] 2>/dev/null || conv=0
   rcpt="session ${SID:-?} close => $(printf '%s' "$what" | cut -c1-160)"
-  "$decide" open --class B --what "$what" \
+  # CC_DECIDE_HINTS=0: a 5 s Stop hook must never pay cc-decide's ruling search (its stderr is dropped).
+  CC_DECIDE_HINTS=0 "$decide" open --class B --what "$what" \
     --conviction "$conv" --receipt "$rcpt" \
     --default "park this decision to the backlog and continue other work" \
     --default-effect no-change --project "$proj" \

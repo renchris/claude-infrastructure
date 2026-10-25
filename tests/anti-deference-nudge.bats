@@ -715,3 +715,28 @@ Reply approve or veto for each; on approval this pane recycles into implementati
   [ "$status" -eq 0 ]; [ -z "$output" ]
   grep -q '"reason":"no-tell"' "$ANTIDEF_IDL"
 }
+
+# ── The ⛔ readout's `Not gated by it` clause (ruling d610f8473106, design §3.6 item 5, §7.6) ──
+# A PIN: the ledger's ⛔ readout gains "Not gated by it: … — keep driving it", and this hook adds no
+# phrase to TELLS for it. Lines 1-2 are the B13 F1 close (maps/incident-replay.md §7) with that clause.
+@test "⛔ readout with the 'Not gated by it' clause (F1 lines 1-2) ⇒ no-tell" {
+  run runhook "$(mkfix '❌ Good to close: no — the loop is waiting on your answers to two decisions.
+⛔ Blocked — 2 decision(s) need your call: whether to stop the loop and paste v33, and whether to send the code to OpenAI for review. Not gated by it: round 27 of the loop — keep driving it; the frozen scope is the course until it is answered.')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"no-tell"' "$ANTIDEF_IDL"
+}
+
+# A 5 s Stop hook must never pay cc-decide's ruling search: open_packet_B's one call carries
+# CC_DECIDE_HINTS=0. The stub records the env it was run with and echoes an id like the real one.
+@test "open_packet_B runs cc-decide with CC_DECIDE_HINTS=0" {
+  # shellcheck source=helpers/cc-stub.bash
+  . "$BATS_TEST_DIRNAME/helpers/cc-stub.bash"
+  mkdir -p "$BATS_TEST_TMPDIR/sbin"
+  cc_stub "$BATS_TEST_TMPDIR/sbin" cc-decide "#!/bin/bash
+printf 'HINTS=%s\n' \"\${CC_DECIDE_HINTS-unset}\" >> \"$BATS_TEST_TMPDIR/decide.env\"
+echo 0123456789ab"
+  export ANTIDEF_DECIDE_BIN="$BATS_TEST_TMPDIR/sbin/cc-decide"
+  run runhook "$(mkfix "Which account should I use for this run — default to next2? Want me to proceed?")" "pkt-hints"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/decide.env")" = "HINTS=0" ]
+}

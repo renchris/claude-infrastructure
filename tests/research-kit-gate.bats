@@ -24,7 +24,8 @@ setup_file() {
 setup() {
   export HOME="$BATS_FILE_TMPDIR/home"
   mkdir -p "$HOME"
-  unset CC_BATS_ACTIVE CC_RESEARCH_RECORDS
+  # the class-C open at row 12 files as a daemon would: from a session cc-decide requires --ceiling
+  unset CC_BATS_ACTIVE CC_RESEARCH_RECORDS CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   G="$REPO/scripts/research-kit/gate.sh"
   export W="$BATS_FILE_TMPDIR/w"
@@ -875,6 +876,19 @@ print(r.status); print('\n'.join(r.evidence))"
   id="$(/bin/bash "$REPO/bin/cc-decide" open --class C --what "pick a store" --option "a::x" --option "b::y" --conviction 70 --receipt "$REC/frame.json")"
   printf '{"id":"DR-1","packet":{"id":"%s","class":"C","due":"%s"}}\n' "$id" "$(date -u -v+1500H +%Y-%m-%dT%H:%M:%SZ)" >> "$REC/decisions.jsonl"
   [[ "$(rowtext 12)" == *"MALFORMED PACKET"* ]]
+}
+
+# A program session carries a session id, and cc-decide refuses a session's class-C open with no
+# operator-only ceiling (ruling d610f8473106): gate_sweep's file-packet must pass --ceiling program.
+@test "program packets: file-packet --class C from a session carries --ceiling program and succeeds" {
+  printf '{"id":"DR-1","status":"carried","blocks_waves":["B1"]}\n' >> "$REC/decisions.jsonl"
+  export CLAUDE_CODE_SESSION_ID="sess-program-1"
+  run "$G" file-packet --program demo --decision DR-1 --class C --what "storage backend" --option "a::x" --option "b::y" \
+    --conviction 70 --receipt "$REC/frame.json" --due "2099-01-01T00:00:00Z"
+  [ "$status" -eq 0 ]
+  id="$(printf '%s\n' "$output" | awk '{print $2}' | tail -n 1)"
+  [ "$(jq -r '.ceiling' "$CC_DECISIONS_DIR/$id.json")" = "program" ]
+  [ "$(jq -r '.session_sid' "$CC_DECISIONS_DIR/$id.json")" = "sess-program-1" ]
 }
 
 @test "row 13: a vendor preflight run after the contract page fails" {

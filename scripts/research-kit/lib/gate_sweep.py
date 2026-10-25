@@ -147,6 +147,10 @@ def open_packet(
         args += ["--conviction", str(conviction)]
     for o in options:
         args += ["--option", o]
+    if cls == "C":
+        # A program session carries a session id, and cc-decide refuses a session's class-C open that
+        # names no operator-only ceiling (ruling d610f8473106); a program gate packet's is `program`.
+        args += ["--ceiling", "program"]
     if cls == "B":
         args += [
             "--default",
