@@ -1071,6 +1071,11 @@ _calls() { wc -l < "$STUB_CALLS" | tr -d ' '; }
   [ "$status" -eq 0 ]
   [ "$output" = "$id" ]
   [ "$(_calls)" -eq 0 ]
+  # positive control: a NEW class-B open in the same session does search, so the two zeros above are
+  # the gates holding, not a search that never runs
+  run bash "$CD" open --class B --what "a new judgment call" "${B_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [ "$(_calls)" -eq 1 ]
 }
 
 @test "ceiling required: a session's class-C open with no --ceiling is refused rc 2, files nothing, prints the class-B route last" {
@@ -1145,6 +1150,12 @@ _calls() { wc -l < "$STUB_CALLS" | tr -d ' '; }
 
 @test "hint fails open: absent engine, an engine past CC_DECIDE_HINT_TIMEOUT_S, and no bounder on PATH" {
   _sess; export CC_DECIDE_HINTS=1
+  # positive control: a working engine is consulted, so each fail-open case below is a real failure
+  # path that stays silent, not a search that never runs
+  _hint_stub
+  run bash "$CD" open --class B --what "working engine" "${B_ARGS[@]}"
+  [ "$status" -eq 0 ]
+  [ "$(_calls)" -eq 1 ]
   CC_MEMORY_SEARCH_BIN="$BATS_TEST_TMPDIR/absent.py" run bash "$CD" open --class B --what "absent engine" "${B_ARGS[@]}"
   [ "$status" -eq 0 ]
   [[ "$output" =~ ^[0-9a-f]{12}$ ]] || false

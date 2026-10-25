@@ -1181,9 +1181,12 @@ nage "$S1" 99999; nsweep; nage "$S1" 99999; nsweep
   && ok "(3) capped at 3 per key, then exactly one subject_nudge_capped{why:cap} and one digest cause" \
   || no "(3) cap wrong (sends=$(ns "$S1") capped=$(ncnt '"kind":"subject_nudge_capped"') digests=$(ndig subject-idle-capped))"
 
-# (2) a newer non-accepting floor row, or an arming row after the floor row, means no send.
+# (2) a newer non-accepting floor row, or an arming row after the floor row, means no send. Each case
+# carries a same-sweep positive control ($S3: the accepting row alone, which must send), so a "no send"
+# is the void holding, never a supervisor that cannot nudge at all.
 for v in "scope-floor-clear" "scope-floor-kill-switch" "scope-floor-inflight" "continue" "cli-set"; do
   nreset; mktel "$S2" 40 100 "$ALIVE" "$REPO"; scrow "$S2" abstained scope-floor-reclose '' 60
+  mktel "$S3" 40 100 "$ALIVE" "$REPO"; scrow "$S3" abstained scope-floor-reclose '' 60
   case "$v" in
     scope-floor-inflight) scrow "$S2" abstained "$v" '{"what":"bg","n":1}' ;;
     continue)             scraw "$S2" fired continue ;;
@@ -1191,7 +1194,8 @@ for v in "scope-floor-clear" "scope-floor-kill-switch" "scope-floor-inflight" "c
     *)                    scrow "$S2" abstained "$v" ;;
   esac
   nsweep
-  [ "$(ns "$S2")" -eq 0 ] && ok "(2) a newer '$v' row ⇒ no send" || no "(2) a newer '$v' row still nudged (sends=$(ns "$S2"))"
+  { [ "$(ns "$S2")" -eq 0 ] && [ "$(ns "$S3")" -eq 1 ]; } && ok "(2) a newer '$v' row ⇒ no send (control without it: one send)" \
+    || no "(2) a newer '$v' row still nudged, or the control did not send (sends=$(ns "$S2") control=$(ns "$S3"))"
 done
 
 # (15) the production shape: a key-cap floor row followed by the wake floor's mechanical-arm row.
@@ -1241,32 +1245,42 @@ nreset; mktel "$S8" 40 100 "$ALIVE" "$REPO"; scrow "$S8" abstained scope-floor-r
 nsweep CC_SUP_SUBJECT_NUDGE=0; s_e0="$(ns "$S8")"
 : > "$NB/home/.claude/state/subject-nudge.off"; nsweep HOME="$NB/home" CC_SUP_NUDGE_STATE_DIR=; s_f0="$(ns "$S8")"
 rm -f "$NB/home/.claude/state/subject-nudge.off"
-{ [ "$s_e0" -eq 0 ] && [ "$s_f0" -eq 0 ]; } && ok "(8) CC_SUP_SUBJECT_NUDGE=0 and ~/.claude/state/subject-nudge.off each send nothing" \
-                                            || no "(8) an off switch leaked (env=$s_e0 file=$s_f0)"
 nsweep CC_SUP_SUBJECT_NUDGE=shadow; s_es="$(ns "$S8")"; sh_e="$(ncnt "\"kind\":\"subject_nudge\",\"sid\":\"$S8\".*\"mode\":\"shadow\"")"
 rm -f "$CC_SUPERVISOR_PAGEDIR/$S8.nudged-shadow"; : > "$NB/state/subject-nudge.shadow"; nsweep
 s_fs="$(ns "$S8")"; sh_f="$(ncnt "\"kind\":\"subject_nudge\",\"sid\":\"$S8\".*\"mode\":\"shadow\"")"; rm -f "$NB/state/subject-nudge.shadow"
+nsweep; s_ctl="$(ns "$S8")"
+# The off and shadow verdicts are read only now, against the control: the same fixture with the
+# switches cleared must send, or "sent nothing" would also describe a supervisor that cannot nudge.
+{ [ "$s_e0" -eq 0 ] && [ "$s_f0" -eq 0 ] && [ "$s_ctl" -eq 1 ]; } \
+  && ok "(8) CC_SUP_SUBJECT_NUDGE=0 and ~/.claude/state/subject-nudge.off each send nothing (control: one send)" \
+  || no "(8) an off switch leaked, or the control did not send (env=$s_e0 file=$s_f0 control=$s_ctl)"
 { [ "$s_es" -eq 0 ] && [ "$s_fs" -eq 0 ] && [ "$sh_e" -eq 1 ] && [ "$sh_f" -eq 2 ]; } \
   && ok "(8) shadow by env and by file sends nothing and records the would-be send" \
   || no "(8) shadow wrong (sends env=$s_es file=$s_fs records=$sh_e/$sh_f)"
-nsweep
-[ "$(ns "$S8")" -eq 1 ] && ok "(8) control: the same fixture with the switches cleared sends" || no "(8) control did not send (sends=$(ns "$S8"))"
+[ "$s_ctl" -eq 1 ] && ok "(8) control: the same fixture with the switches cleared sends" || no "(8) control did not send (sends=$s_ctl)"
 nreset; mktel "$S8" 40 100 "$ALIVE" "$REPO"; scrow "$S8" abstained scope-floor-shadow; nsweep; s_son="$(ns "$S8")"
 nsweep CC_SUP_SUBJECT_NUDGE=shadow
 { [ "$s_son" -eq 0 ] && [ "$(ncnt "\"kind\":\"subject_nudge\",\"sid\":\"$S8\".*\"mode\":\"shadow\"")" -eq 1 ]; } \
   && ok "(8) a scope-floor-shadow row is acted on only in shadow mode" || no "(8) scope-floor-shadow handling wrong (on-mode sends=$s_son)"
 
 # (9) a non-uuid sid is never an address (cc-notify's friendly-name match could reach another session).
-nreset; mktel nudgeplain 40 100 "$ALIVE" "$REPO"; scrow nudgeplain abstained scope-floor-reclose; nsweep
-grep -qx nudgeplain "$NB/sends" 2>/dev/null && no "(9) a non-uuid sid was used as an address" || ok "(9) a non-uuid sid is never addressed"
+# Control in the same sweep: a uuid sid with the same row IS addressed.
+nreset; mktel nudgeplain 40 100 "$ALIVE" "$REPO"; scrow nudgeplain abstained scope-floor-reclose
+mktel "$S9" 40 100 "$ALIVE" "$REPO"; scrow "$S9" abstained scope-floor-reclose; nsweep
+if grep -qx nudgeplain "$NB/sends" 2>/dev/null; then no "(9) a non-uuid sid was used as an address"
+elif [ "$(ns "$S9")" -ne 1 ]; then no "(9) the uuid control was not addressed (sends=$(ns "$S9"))"
+else ok "(9) a non-uuid sid is never addressed (a uuid sid with the same row is)"; fi
 
 # (10) marker lifetime: clear_page and clear_page_recovered keep it; reap_clean drops it; 7 days prunes it.
 nreset; printf 'N %s aaaabbbbcccc 0 1\n' "$(date +%s)" > "$(nmark "$S10")"
 mktel "$S10" 40 7000 "$ALIVE" "$REPO"; nsweep CC_SUP_GC_S=6000; gc_kept=0; [ -f "$(nmark "$S10")" ] && gc_kept=1
 mktel "$S10" 40 1 "$ALIVE" "$REPO"; nsweep; ok_kept=0; [ -f "$(nmark "$S10")" ] && ok_kept=1
-{ [ "$gc_kept" = 1 ] && [ "$ok_kept" = 1 ] && idl_has "\"kind\":\"gc\",\"sid\":\"$S10\""; } \
-  && ok "(10) clear_page (via gc_stale) and clear_page_recovered (the OK branch) keep the .nudged marker" \
-  || no "(10) a page clear dropped the nudge ladder (gc=$gc_kept ok-branch=$ok_kept)"
+# …and the kept marker still DRIVES the ladder: past its back-off, the next send is attempt 2, not 1.
+nage "$S10" 2000; mktel "$S10" 40 100 "$ALIVE" "$REPO"; scrow "$S10" abstained scope-floor-reclose; nsweep
+read_kept=0; idl_has "\"kind\":\"subject_nudge\",\"sid\":\"$S10\",\"key\":\"aaaabbbbcccc\",\"attempt\":2" && read_kept=1
+{ [ "$gc_kept" = 1 ] && [ "$ok_kept" = 1 ] && [ "$read_kept" = 1 ] && idl_has "\"kind\":\"gc\",\"sid\":\"$S10\""; } \
+  && ok "(10) clear_page (via gc_stale) and clear_page_recovered (the OK branch) keep the .nudged marker, and the ladder reads it" \
+  || no "(10) a page clear dropped the nudge ladder (gc=$gc_kept ok-branch=$ok_kept next-is-attempt-2=$read_kept)"
 mktel "$S10" 40 2 999997 "$SBX/landed"; nsweep
 { idl_has "\"kind\":\"reap\",\"sid\":\"$S10\"" && [ ! -f "$(nmark "$S10")" ]; } \
   && ok "(10) reap_clean deletes the marker with the session" || no "(10) reap_clean left the marker (or did not reap)"
@@ -1313,7 +1327,8 @@ scrow "$S13" abstained scope-floor-reclose '' 0 "$NB/rot"; gzip -c "$NB/rot" > "
 scrow "$S14" abstained scope-floor-reclose '' 0 "$NB/chain"; gzip -c "$NB/chain" > "$CC_IDL.chain.0001.gz"; rm -f "$NB/chain"
 nsweep
 [ "$(ns "$S13")" -eq 1 ] && ok "(13) the newest dated rotation is read when the live IDL has no rows" || no "(13) the rotation fallback did not read idl.jsonl.2*.gz"
-[ "$(ns "$S14")" -eq 0 ] && ok "(13) the idl.jsonl.chain.* archive is never read" || no "(13) a row only in the archive chain was acted on"
+{ [ "$(ns "$S14")" -eq 0 ] && [ "$(ns "$S13")" -eq 1 ]; } && ok "(13) the idl.jsonl.chain.* archive is never read (the dated rotation in the same sweep is)" \
+  || no "(13) a row only in the archive chain was acted on, or the rotation control was not (chain=$(ns "$S14") rotation=$(ns "$S13"))"
 
 # (16) the horizon rule: an attempt that would land past GC_S − slack of telemetry age digests first.
 nreset; mktel "$S1" 40 5000 "$ALIVE" "$REPO"; scrow "$S1" abstained scope-floor-reclose; nsweep CC_SUP_GC_S=7200
@@ -1336,8 +1351,11 @@ scrow "$S4" abstained scope-floor-inflight '{"what":"custody","n":1}' 7200
 scrow "$S5" abstained scope-floor-inflight '{"what":"bg","n":1}' 600
 nsweep
 [ "$(ns "$S3")" -eq 1 ] && ok "(18) a scope-floor-inflight {what:bg} row 2 h old ⇒ one send" || no "(18) a lapsed bg leg was not nudged"
-[ "$(ns "$S4")" -eq 0 ] && ok "(18) {what:custody} 2 h old ⇒ no send (custody-deathwatch owns it)" || no "(18) a custody leg was nudged"
-[ "$(ns "$S5")" -eq 0 ] && ok "(18) {what:bg} 10 min old ⇒ no send (still in flight)" || no "(18) a fresh bg leg was nudged"
+# The two "no send" verdicts hold only beside the same sweep's 2 h bg send ($S3), their positive control.
+{ [ "$(ns "$S4")" -eq 0 ] && [ "$(ns "$S3")" -eq 1 ]; } && ok "(18) {what:custody} 2 h old ⇒ no send (custody-deathwatch owns it)" \
+  || no "(18) a custody leg was nudged, or the bg control was not (custody=$(ns "$S4") control=$(ns "$S3"))"
+{ [ "$(ns "$S5")" -eq 0 ] && [ "$(ns "$S3")" -eq 1 ]; } && ok "(18) {what:bg} 10 min old ⇒ no send (still in flight)" \
+  || no "(18) a fresh bg leg was nudged, or the bg control was not (fresh=$(ns "$S5") control=$(ns "$S3"))"
 nreset
 
 echo ""
