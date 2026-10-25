@@ -41,7 +41,10 @@ Wave S4 built the core (ledger, plumbing, selftest); wave S5 the statistics, gua
       launchd-parented bash older than 600 s, so the plist execs python and this stays under it.
       Prints one `job:` line; exit 124 when the bound fired (nothing half-written: each store's
       write is one append or one rename), else score's exit, else 0 (a guard BREACH or blind
-      verdict is the guard tick's input, not a job failure).
+      verdict is the guard tick's input, not a job failure). Then, with what is left of the bound
+      (at least 30 s), `cc-lever-judge reask --since 1d --write` for T5 (wave S9), in its own
+      process group and printed as a second `job: reask rc …` line; its exit never changes the
+      job's.
   score, D1 and D4 (wave S8)
       D1 is scored by chain accounting (scripts/lib/lever_chain.py): net pp per treated recycle,
       fleet-scaled by the would-recycle points a week, with the control-arm model check and the
@@ -1289,7 +1292,47 @@ def cmd_job(a):
     # job failed only if a verb could not run (score refused: 3, usage: 2)
     rc = rcs[0] or (0 if rcs[1] in (0, 1, 4) else rcs[1])
     print("job: score rc %d · guards rc %d · %.1f s (bound %d s)" % (rcs[0], rcs[1], time.time() - t0, budget))
+    sys.stdout.flush()
+    jrc, jline = judge_reask(budget - (time.time() - t0) - JUDGE_MARGIN_S)
+    print("job: reask rc %s · %s" % (jrc, jline))
     return rc
+
+
+JUDGE = os.path.join(os.path.dirname(HERE), "bin", "cc-lever-judge")
+JUDGE_MARGIN_S = 15   # left for the kill and the job's last line inside the bound
+JUDGE_MIN_S = 30      # below this much budget the re-ask pass waits for the next hour
+
+
+def judge_reask(left):
+    """T5's re-ask rows (S8 found nothing scheduled them): `cc-lever-judge reask --since 1d --write`,
+    AFTER score and guards have written, in its own process group, bounded by what is left of the
+    job's budget. The judge keeps its own 40-dossiers-a-day cap and writes a session's rows only from
+    a batch that held. Its exit never changes the job's: a judge failure cannot touch the score or
+    guard rows already written, and the guards read the rows it writes at the next hour.
+    → (rc or "skipped"/"error", one line of detail)."""
+    if left < JUDGE_MIN_S:
+        return "skipped", "%.0f s of budget left (needs %d)" % (max(0.0, left), JUDGE_MIN_S)
+    try:
+        p = subprocess.Popen([sys.executable, "-I", JUDGE, "reask", "--since", "1d", "--write"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    except OSError as e:
+        return "error", "could not start the judge: %s" % e
+    try:
+        _out, err = p.communicate(timeout=left)
+    except subprocess.TimeoutExpired:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(p.pid, sig)
+            except OSError:
+                break
+            try:
+                p.wait(timeout=5)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        return 124, "killed at the job's bound after %.0f s" % left
+    last = [ln for ln in (err or "").splitlines() if ln.strip()]
+    return p.returncode, (last[-1][:300] if last else "no output")
 
 
 # ── selftest ──────────────────────────────────────────────────────────────────────────────────

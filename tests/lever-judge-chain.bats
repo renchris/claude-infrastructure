@@ -24,7 +24,9 @@
 # scores -0.01925 pp, not 0.02841 (test 1 red); model_check_tol 0.25 -> 2.0 passes the 2x fleet's
 # ratio 1.390 (test 2 red); the kappa_min comparison made False -> the flip batch holds OK (test 5
 # red); fails() made False -> a gold batch is VOID on its known negatives (tests 4, 6, 8 red);
-# reserve() removed -> the second run is accepted, rc 0 (test 7 red). File absence: before S8
+# reserve() removed -> the second run is accepted, rc 0 (test 7 red). The two "score job" tests (S9):
+# before S9 the job ran no judge, so neither prints a `job: reask rc` line (both red by absence).
+# File absence: before S8
 # there is no bin/cc-lever-judge and D1 scored "metric … is built by wave S8".
 
 setup() {
@@ -184,4 +186,31 @@ rs=[json.loads(l) for l in open(sys.argv[1])]
 open(sys.argv[1],"w").writelines(json.dumps(dict(r, echo_rc=False) if r["kind"]=="d4_follow" else r)+"\n" for r in rs)' "$FX/logs/subagent-long-bash.jsonl"
 	run score score --lever D4 --since 7d --json
 	[[ "$(jf 'r["stat_verdict"], r["reasons"][0]' <<<"$output")" == "('REVERT', 're-issued as told: Wilson upper "* ]] || { echo "$output"; false; }
+}
+
+@test "score job: runs the T5 re-ask pass once, after score and guards, and its rows reach the next guard read" {
+	run score job
+	[ "$status" -eq 0 ] || { echo "$output"; false; }
+	[ "$(grep -c '^job: reask rc ' <<<"$output")" = 1 ] || { echo "$output"; false; }
+	[[ "$output" == *"job: reask rc 0 · reask: OK; 3 row(s) appended"* ]] || { echo "$output"; false; }
+	# the re-ask line comes after both score and guards wrote
+	[[ "$output" == *"job: score rc 0 · guards rc "*$'\n'"job: reask rc 0"* ]] || { echo "$output"; false; }
+	[ "$(/usr/bin/python3 -c 'import json,sys
+print(sorted((r["src"], r["reask"]) for r in map(json.loads, open(sys.argv[1])) if r["kind"] == "reask"))' "$FX/logs/lever-judge.jsonl")" = "[('judge', True), ('prefilter', False)]" ]
+	run /usr/bin/python3 -I "$REPO/bin/cc-lever-score" guards --json
+	[ "$(/usr/bin/python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["guards"]["T5"]["status"])' <<<"$output")" = ok ]
+}
+
+@test "score job: a failing judge (forbidden served model, exit 4) leaves the job's exit and the score rows intact" {
+	run score job
+	[ "$status" -eq 0 ] || { echo "$output"; false; }
+	good="$(grep -c '"kind": *"score"' "$FX/logs/lever-score.jsonl")"
+	: >"$FX/logs/lever-score.jsonl"
+	rm -f "$FX/logs/lever-judge.jsonl" "$FX/state/judge-day.json"
+	STUB_MODEL=claude-opus-5-5 run score job
+	[ "$status" -eq 0 ] || { echo "$output"; false; }
+	[[ "$output" == *"job: reask rc 4 · "* ]] || { echo "$output"; false; }
+	[ "$(grep -c '"kind": *"score"' "$FX/logs/lever-score.jsonl")" = "$good" ]
+	[ "$good" -gt 0 ]
+	[ ! -e "$FX/logs/lever-judge.jsonl" ] || [ "$(grep -c '"kind":"reask"' "$FX/logs/lever-judge.jsonl")" = 0 ]
 }
