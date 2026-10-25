@@ -15,7 +15,9 @@
 #   pe_facts   <tp>                              → team␟close␟cwd␟records
 #   pe_end     <sid> <pane> <since> [class]      → crash | clean | unknown
 #   pe_work    <tp> <dir> <own|strict|team>      → - | clean | dirty:N | unlanded:N | unknown
-#   pe_verdict <sid> <tp> <pane> [since] [class] → STATE␟why␟work␟close␟end␟owner␟cwd
+#   pe_verdict <sid> <tp> <pane> [since] [class] [cwd] → STATE␟why␟work␟close␟end␟owner␟cwd
+#     (cwd is a FALLBACK, used only when the transcript records none — a caller's registry or shell
+#     cwd; without it such a session's work read "-", and a crash over its own dirt read DONE)
 #
 # Seams: CC_PANE_EXIT_DIR (runner exit records <pane>.json {rc, ts, …}), CC_CRASH_LOG (jsonl rows
 # {sid, class, cause, …}), CC_FIRED_DIR (fired records <pane>.json {closedAt, transcript, …}),
@@ -252,8 +254,8 @@ _pe_work_why() { # $1=work $2=mode $3=short-sid → the reason a non-clean work 
   esac
 }
 
-pe_verdict() { # $1=sid $2=tp $3=pane [$4=since] [$5=class] → STATE␟why␟work␟close␟end␟owner␟cwd
-  local sid="${1:-}" tp="${2:-}" pane="${3:-}" since="${4:-}" class="${5:-}"
+pe_verdict() { # $1=sid $2=tp $3=pane [$4=since] [$5=class] [$6=fallback cwd] → STATE␟why␟work␟close␟end␟owner␟cwd
+  local sid="${1:-}" tp="${2:-}" pane="${3:-}" since="${4:-}" class="${5:-}" fcwd="${6:-}"
   local s8 facts team close cwd records end mode cust="" cstate="" owner="-" state why work="-"
   local _PE_WORK="" _PE_TRUNK=""
   s8="${sid:0:8}"; [ -n "$s8" ] || s8="?"
@@ -261,6 +263,7 @@ pe_verdict() { # $1=sid $2=tp $3=pane [$4=since] [$5=class] → STATE␟why␟wo
   case "$since" in ''|*[!0-9]*) since=0 ;; esac
   facts="$(pe_facts "$tp")"
   IFS="$_PE_US" read -r team close cwd records <<<"$facts"
+  case "$cwd" in ''|-) [ -z "$fcwd" ] || cwd="$fcwd" ;; esac
   end="$(pe_end "$sid" "$pane" "$since" "$class")"
   [ "$end" = clean ] && mode=own || mode=strict
   if cust="$(cc_pane_custody "$pane" "$since")"; then

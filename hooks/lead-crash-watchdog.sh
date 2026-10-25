@@ -1661,53 +1661,24 @@ pane_verdict_settle() { # $1=tty → closed | relaunched | shell | unknown  (wai
   [[ -n "$procs" ]] || { printf 'unknown'; return 0; }
   if printf '%s\n' "$procs" | pane_procs_are_shells; then printf 'shell'; else printf 'unknown'; fi
 }
-pane_work_state() { # $1=cwd → clean | dirty:N | unlanded:N | -   (git facts, never the session's word)
-  local cwd="$1" dirty ahead
-  { [[ -n "$cwd" && -d "$cwd" ]] && git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; } || { printf -- '-'; return 0; }
-  dirty=$(git -C "$cwd" status --porcelain 2>/dev/null | wc -l | tr -d ' ' || true)
-  [[ "$dirty" == 0 ]] || { printf 'dirty:%s' "$dirty"; return 0; }
-  ahead=$(git -C "$cwd" rev-list --count origin/main..HEAD 2>/dev/null || echo "")
-  case "$ahead" in ''|*[!0-9]*|0) printf 'clean' ;; *) printf 'unlanded:%s' "$ahead" ;; esac
-}
-# ASSISTANT TEXT ONLY (2026-09-30, husk-panes root cause 7). This used to grep the whole JSONL, and
-# in a session that never wrote a close the last match came from the CLAUDE.md instructions
-# attachment ("An honest `Good to close: no …`"), so every such pane read `no`. A streaming pass in
-# the style of last_assistant_text: records whose type or message.role is assistant, content[].text
-# joined, the last `Good to close: yes|no`. No assistant close ⇒ "-", not a fault.
-pane_last_close() { # $1=transcript → yes | no | -   (the last "Good to close:" the session wrote)
-  local c=""
-  [[ -n "${1:-}" && -f "$1" ]] || { printf -- '-'; return 0; }
-  c=$(lcw_bounded "${LCW_REPORT_READ_TIMEOUT_S:-30}" "${LCW_PYTHON_BIN:-python3}" - "$1" <<'PY' 2>/dev/null || true
-import json, re, sys
-last = ""
-pat = re.compile(r"Good to close: (yes|no)\b")
-try:
-    with open(sys.argv[1], "r", errors="replace") as fh:
-        for line in fh:
-            if "Good to close: " not in line or '"assistant"' not in line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            msg = rec.get("message") or {}
-            if rec.get("type") != "assistant" and msg.get("role") != "assistant":
-                continue
-            content = msg.get("content")
-            if isinstance(content, list):
-                content = "\n".join(b.get("text", "") for b in content
-                                    if isinstance(b, dict) and b.get("type") == "text")
-            if not isinstance(content, str):
-                continue
-            hits = pat.findall(content)
-            if hits:
-                last = hits[-1]
-except Exception:
-    pass
-sys.stdout.write(last)
-PY
-)
-  printf '%s' "${c:--}"
+# THE ONE VERDICT (husk-history FIX-DESIGN §2, D8): lib/pane-end.sh's pe_verdict, the function the
+# closer and the sweep ask too. It replaced this file's own work reader (whole-cwd porcelain, two-dot
+# unlanded) and close reader, which painted pane 289 CANTTELL from a shared cwd's sibling dirt over a
+# session that had said Good to close: yes. Found like pane-custody.sh below: checkout sibling, else
+# the live layer. No lib ⇒ CANTTELL with nothing known, never DONE and never RESUME.
+# pane_end_verdict SID TPATH CLASS → STATE␟why␟work␟close␟end␟owner␟cwd (\x1f-separated)
+pane_end_verdict() {
+  local self lib="" c
+  self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  for c in "$(dirname "$self")/../lib/pane-end.sh" "$HOME/.claude/lib/pane-end.sh"; do
+    [[ -r "$c" ]] && { lib="$c"; break; }
+  done
+  # shellcheck source=/dev/null  # resolved at run time (checkout, else the live layer)
+  if [[ -n "$lib" ]] && { declare -F pe_verdict >/dev/null 2>&1 || . "$lib" 2>/dev/null; } \
+     && declare -F pe_verdict >/dev/null 2>&1; then
+    pe_verdict "$1" "$2" "${LEAD_PANE:-}" "" "$3" "${LEAD_CWD:-}" 2>/dev/null && return 0
+  fi
+  printf 'CANTTELL\x1flib/pane-end.sh could not be loaded\x1f-\x1f-\x1funknown\x1f-\x1f-\n'
 }
 pane_end_reason() { # $1=sid → the SessionEnd reason session-end.sh logged, or -
   local f="${CC_SESSIONS_LOG:-$HOME/.claude/logs/sessions.log}" r
@@ -1929,7 +1900,9 @@ pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → lin
   if [[ "$full_cfg" != "$LEAD_CFG" ]]; then
     for f in "$full_cfg"/projects/*/"$sid".jsonl; do [[ -f "$f" ]] && { tpath="$f"; break; }; done
   fi
-  work=$(pane_work_state "$LEAD_CWD"); close=$(pane_last_close "$tpath"); reason=$(pane_end_reason "$sid")
+  local pe_st pe_owner
+  IFS=$'\x1f' read -r pe_st _ work close _ pe_owner _ <<< "$(pane_end_verdict "$sid" "$tpath" "$class")" || true
+  reason=$(pane_end_reason "$sid")
   when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   s8="${sid:0:8}"; pane="${LEAD_PANE:-<pane>}"
   pane_is_desk "$LEAD_PANE" && role=" (desk)"
@@ -1993,13 +1966,13 @@ pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → lin
       _pv_add ok "$s8 retired by desk" "$closing"
       detail="session $s8${role} was retired by the desk after its work was collected; the pane close that should have followed did not happen. Do NOT resume it — its work was landed before the retirement." ;;
     RECYCLE:*)
-      title="✅ closed $s8"; pvs=DONE
-      case "$work" in dirty:*|unlanded:*) pvs=CANTTELL ;; esac
+      # pvs is pe_verdict's: a clean end is DONE when nothing of the session's OWN is open (its
+      # written files, its unlanded commits) — sibling dirt in a shared cwd is not its work.
+      title="✅ closed $s8"
+      case "$pe_st" in DONE|COLLECTED) pvs=DONE ;; OWNED) pvs=OWNED; pvo="$pe_owner" ;; *) pvs=CANTTELL ;; esac
       detail="exited on its own (reason: $reason); nothing relaunched here · work in ${LEAD_CWD:-?}: $work · last close verdict: $close"
-      case "$work" in
-        dirty:*|unlanded:*) _pv_add ok "$s8${role} ended cleanly" ;;
-        *) _pv_add ok "$s8${role} ended cleanly" "$closing" ;;
-      esac
+      if [[ "$pvs" == DONE ]]; then _pv_add ok "$s8${role} ended cleanly" "$closing"
+      else _pv_add ok "$s8${role} ended cleanly"; fi
       _pv_work_row
       if [[ "$tm_is" == 1 ]]; then _pv_tm_row; else detail="$detail · reopen: $resume"; fi ;;
     *)
@@ -2015,7 +1988,10 @@ pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → lin
         _pv_add ok "$s8 work collected by pane $c_op" "do not resume" "cc-husk-sweep --pane $pane"
         detail="$detail · killed here; its originator (pane $c_op) collected its work: custody $c_slug: $c_kind at $c_ts. A resume would re-arm its /goal over finished work."
       else
-        title="⛔ KILLED $s8"; pvs=RESUME
+        title="⛔ KILLED $s8"
+        # pe_verdict's state: a crash is RESUME unless the session had said yes and nothing of its
+        # own is open (DONE), or a team member's cwd cannot be told apart (CANTTELL).
+        case "$pe_st" in DONE|COLLECTED) pvs=DONE ;; CANTTELL) pvs=CANTTELL ;; *) pvs=RESUME ;; esac
         case "$work" in dirty:*) pvu="${work#dirty:}" ;; esac
         # The pinned resume line (~85 cells) never fits a 56-cell row, so the row's ▶ is the triage
         # command and the resume line goes to the log.

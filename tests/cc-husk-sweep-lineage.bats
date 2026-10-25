@@ -32,6 +32,8 @@ setup() {
   register "$SID" 332 "$R0"
   tx "$SID" '{"type":"user","cwd":"'"$CWD"'","message":{"role":"user","content":"find a flat"}}' \
              '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Good to close: no — searching"}]}}'
+  # It was killed mid-task: RESUME needs a crash (husk-history FIX-DESIGN §2), so the crash log says so.
+  printf '{"sid":"%s","class":"CRASH","cause":"external-sigterm"}\n' "$SID" > "$CC_HUSK_CRASH_LOG"
 }
 register() { printf '[%s] registered session=%s pid=1 tty=ttys0%s pane=%s\n' "$(date -r "$3" '+%Y-%m-%d %H:%M:%S')" "$1" "$2" "$2" >> "$T/watchdog.log"; }
 tx() { local s="$1"; shift; mkdir -p "$T/.claude-tertiary/projects/p"; printf '%s\n' "$@" > "$T/.claude-tertiary/projects/p/$s.jsonl"; }

@@ -47,7 +47,11 @@ setup() {
   chmod +x "$CC_DEATH_PAGER" "$CC_DEATH_OSA_BIN"
   SID="88e2c2b1-ad2b-407a-a889-e7fd15c8076e"
   TX="$T/acct/projects/proj/$SID.jsonl"
-  printf '{"type":"assistant","message":{"content":[{"type":"text","text":"Good to close: no — waiting"}]},"version":"2.1.260"}\n' > "$TX"
+  # A FINISHED session by default: it Wrote cwd/scratch.txt (so that dirt is its OWN — husk-history
+  # FIX-DESIGN §2 counts only a clean-ending session's own writes) and said Good to close: yes. A case
+  # that needs another close writes its own transcript.
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w1","name":"Write","input":{"file_path":"%s/cwd/scratch.txt","content":""}}]}}\n' "$T" > "$TX"
+  printf '{"type":"assistant","message":{"content":[{"type":"text","text":"Good to close: yes — done"}]},"version":"2.1.260"}\n' >> "$TX"
 }
 verdict_with() { # $1=hook $2=class $3=cause $4=exit $5=sig
   bash "$1" --pane-verdict "$SID" 63977 "$2" "$3" "$4" "$5" "$TX" </dev/null
@@ -90,7 +94,7 @@ assert_rows() {
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
   painted | grep -q '⚠ uncommitted work in cwd'
   said | grep -q 'work in [^"]*: dirty:1'
-  said | grep -q 'last close verdict: no'
+  said | grep -q 'last close verdict: yes'
 }
 
 @test "the title escape rides along, so the tab is labelled until the next prompt" {

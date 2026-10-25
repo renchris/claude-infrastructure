@@ -307,6 +307,23 @@ fired_close() { printf '{"closedAt":"%s","transcript":"/x/%s.jsonl"}\n' "${1:-20
   [ "$(fld 2)" = "1 uncommitted change(s), and session d0d00017 did not end cleanly, so every change counts" ]
 }
 
+@test "fallback cwd: a transcript with no cwd uses the caller's, so a crash over dirt is RESUME, not DONE" {
+  mkrepo
+  # records with no cwd field at all (tx_start/tx_say both carry one)
+  printf '{"type":"user","timestamp":"2026-10-25T10:00:00.000Z","sessionId":"%s","message":{"role":"user","content":"go"}}\n' "$SID" > "$TP"
+  printf '{"type":"assistant","timestamp":"2026-10-25T10:02:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Good to close: yes"}]}}\n' >> "$TP"
+  crash_row CRASH sigkill
+  printf 'x\n' > "$R/dirty.txt"
+  run pe pe_verdict "$SID" "$TP" "$PANE"
+  [ "$(fld 1)" = DONE ]                      # no cwd anywhere: nothing to read, so nothing open
+  run pe pe_verdict "$SID" "$TP" "$PANE" "" "" "$R"
+  [ "$(fld 1)" = RESUME ]
+  [ "$(fld 7)" = "$R" ]
+  tx_start "$T"                              # a transcript cwd outranks the fallback
+  run pe pe_verdict "$SID" "$TP" "$PANE" "" "" "$R"
+  [ "$(fld 7)" = "$T" ]
+}
+
 @test "row 3: yes, crash, dirt, custody open ⇒ OWNED by the originator pane" {
   mkrepo; tx_start; tx_say "Good to close: yes"; crash_row CRASH
   printf 'x\n' > "$R/via-sed.txt"; custody_open 41

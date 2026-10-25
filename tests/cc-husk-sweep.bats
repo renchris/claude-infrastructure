@@ -43,6 +43,11 @@ transcript() { # <store> <cwd> <sid> <last-close: yes|no|none>
 }
 # A transcript in the pane's cwd no longer NAMES the session (husk-panes-2026-09-30 root cause 8),
 # so the verdict and resume cases below name it through a surviving registry row instead.
+# RESUME needs a CRASH (husk-history FIX-DESIGN §2 rows 3-4): a session that ended cleanly is never
+# resumed, so a case about a RESUMABLE husk records the crash the crash log would hold for it.
+crashed() { # <sid> → a CRASH row in the crash log
+  printf '{"sid":"%s","class":"CRASH","cause":"external-sigterm"}\n' "$1" >> "$CC_HUSK_CRASH_LOG"
+}
 reg() { # <pane> <sid> <account label> <cwd>
   printf '{"paneUUID":"%s","session_id":"%s","account":"%s","cwd":"%s"}\n' "$1" "$2" "$3" "$4" > "$CC_REGISTRY_DIR/$1.json"
 }
@@ -77,32 +82,34 @@ reg() { # <pane> <sid> <account label> <cwd>
   [[ "$output" != *dddddddd* ]] || { echo "$output"; false; }
 }
 
-@test "verdict: 'Good to close: no' ⇒ RESUME; 'yes' on a non-git cwd ⇒ UNKNOWN (not shown done); the crash cause is carried" {
+@test "verdict: a crash after 'Good to close: no' ⇒ RESUME; 'yes' on a non-git cwd ⇒ DONE (nothing of its own can be open); the crash cause is carried" {
   reg 10 "eeeeeeee-0000-0000-0000-000000000005" claude-secondary "$CWD_A"
   transcript "$T/.claude-secondary" "$CWD_A" "eeeeeeee-0000-0000-0000-000000000005" no
-  printf '{"sid":"eeeeeeee-0000-0000-0000-000000000005","cause":"external-sigterm"}\n' > "$CC_HUSK_CRASH_LOG"
+  printf '{"sid":"eeeeeeee-0000-0000-0000-000000000005","class":"CRASH","cause":"external-sigterm"}\n' > "$CC_HUSK_CRASH_LOG"
   run "$SWEEP" --json --pane 10
   [[ "$output" == *'"verdict":"RESUME"'* ]] || false
   [[ "$output" == *'"death":"external-sigterm"'* ]] || false
   reg 30 "ffffffff-0000-0000-0000-000000000006" claude-secondary "$CWD_B"
   transcript "$T/.claude-secondary" "$CWD_B" "ffffffff-0000-0000-0000-000000000006" yes
   run "$SWEEP" --json --pane 30
-  [[ "$output" == *'"verdict":"UNKNOWN"'* ]] || false
+  [[ "$output" == *'"verdict":"DONE"'* ]] || { echo "$output"; false; }
 }
 
-@test "verdict: uncommitted or unlanded work in the cwd forces RESUME whatever the session said" {
+@test "verdict: after a crash, uncommitted work in the cwd forces RESUME whatever the session said" {
   git -C "$CWD_A" init -q && git -C "$CWD_A" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   echo x > "$CWD_A/dirty"
   reg 10 "aaaaaaaa-0000-0000-0000-000000000007" claude-secondary "$CWD_A"
   transcript "$T/.claude-secondary" "$CWD_A" "aaaaaaaa-0000-0000-0000-000000000007" yes
+  crashed "aaaaaaaa-0000-0000-0000-000000000007"
   run "$SWEEP" --json --pane 10
-  [[ "$output" == *'"work":"dirty"'* ]] || false
+  [[ "$output" == *'"work":"dirty:1"'* ]] || { echo "$output"; false; }
   [[ "$output" == *'"verdict":"RESUME"'* ]] || false
 }
 
 @test "--resume --yes types the PINNED launcher line, echo-verified, and records the attempt" {
   reg 10 "abababab-0000-0000-0000-000000000008" claude-tertiary "$CWD_A"
   transcript "$T/.claude-tertiary" "$CWD_A" "abababab-0000-0000-0000-000000000008" no
+  crashed "abababab-0000-0000-0000-000000000008"
   run "$SWEEP" --resume --yes --pane 10
   [ "$status" -ne 2 ]
   grep -q 'SEND 10 : hs-.*nocorrect CC_ACCOUNT_PINNED=1 claude3 --resume abababab-0000-0000-0000-000000000008' "$CC_HUSK_IT2_LOG"
@@ -239,7 +246,7 @@ IT2
   SID=55555555-0000-0000-0000-000000000005
   printf '{"paneUUID":"10","session_id":"%s","account":"claude-next","cwd":"%s"}\n' "$SID" "$CWD_A" \
     > "$CC_REGISTRY_DIR/10.json"
-  transcript "$T/.claude" "$CWD_A" "$SID" no
+  transcript "$T/.claude" "$CWD_A" "$SID" no; crashed "$SID"
   tombstone  "$T/.claude" "$CWD_A" "$SID" "$T/.claude-next"   # one store, the other spelling
   run "$SWEEP" --json --pane 10
   [ "$status" -eq 0 ]
@@ -252,7 +259,7 @@ IT2
   SID=66666666-0000-0000-0000-000000000006
   printf '{"paneUUID":"10","session_id":"%s","account":"claude-tertiary","cwd":"%s"}\n' "$SID" "$CWD_A" \
     > "$CC_REGISTRY_DIR/10.json"
-  transcript "$T/.claude-tertiary"   "$CWD_A" "$SID" no
+  transcript "$T/.claude-tertiary"   "$CWD_A" "$SID" no; crashed "$SID"
   tombstone  "$T/.claude-secondary"  "$CWD_A" "$SID" "$T/.claude-quaternary"   # a foreign store's row
   transcript "$T/.claude-quaternary" "$CWD_B" "$SID" none
   run "$SWEEP" --json --pane 10
@@ -311,7 +318,7 @@ stub_lr_lib() { # <body of lr_transplant_target>
   SID=aaaa0000-0000-0000-0000-00000000000a
   printf '{"paneUUID":"10","session_id":"%s","account":"claude-tertiary","cwd":"%s"}\n' "$SID" "$CWD_A" \
     > "$CC_REGISTRY_DIR/10.json"
-  transcript "$T/.claude-tertiary" "$CWD_A" "$SID" no
+  transcript "$T/.claude-tertiary" "$CWD_A" "$SID" no; crashed "$SID"
   stub_lr_lib 'return 0;'          # rc 0, nothing on stdout
   run "$SWEEP" --json --pane 10
   [ "$status" -eq 0 ]
@@ -368,6 +375,7 @@ custody_row() { # <kind> <ts> <targetPane>
   export CC_CUSTODY_DIR="$T/custody"
   reg 10 "abababab-0000-0000-0000-000000000056" claude-tertiary "$CWD_A"
   transcript "$T/.claude-tertiary" "$CWD_A" "abababab-0000-0000-0000-000000000056" no
+  crashed "abababab-0000-0000-0000-000000000056"
   custody_row open 2026-10-01T00:35:50Z 41
   custody_row abandon 2026-10-01T03:59:28Z 41
   run "$SWEEP" --json --pane 10
