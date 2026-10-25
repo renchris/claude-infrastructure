@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+load helpers/cc-stub
 # lib/pane-end.sh — the ONE "is this session finished?" decision (FIX-DESIGN §2, D8-D10, D16), and
 # the three-dot unlanded diff in hooks/lib/session-writes.sh it depends on. Every store is a fixture
 # under $BATS_TEST_TMPDIR: temp git repos, synthetic transcripts, a stub crash log, runner exit
@@ -80,7 +81,7 @@ fired_close() { printf '{"closedAt":"%s","transcript":"/x/%s.jsonl"}\n' "${1:-20
 
 @test "pe_facts: a read that dies reports records '-', never 0 (which would mean 'never received a turn')" {
   mkrepo; tx_start
-  mkdir -p "$T/bin"; printf '#!/bin/sh\nexit 137\n' > "$T/bin/python3"; chmod +x "$T/bin/python3"
+  mkdir -p "$T/bin"; cc_stub "$T/bin" python3 $'#!/bin/sh\nexit 137\n'
   PATH="$T/bin:$PATH" run pe pe_facts "$TP"
   [ "$output" = "$(printf '0\037-\037-\037-')" ]
 }

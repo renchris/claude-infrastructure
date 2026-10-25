@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+load helpers/cc-stub
 # reso-resume-one — the first test suite this file has ever had.
 #
 # It had none because until now it was not in the repo: it lived only at ~/.reso/bin/reso-resume-one
@@ -1387,21 +1388,20 @@ w2_reap() { # <path> <branch> → tombstone, remove, delete the branch
 #    to the file's last line and run with a fake shell, so the subject's own bytes are what runs.
 rr_tail() { # → $RR_TAIL, a runnable copy of the post-session tail; $1 = claude's rc
   RR_TAIL="$BATS_TEST_TMPDIR/rr-tail.sh"
-  { printf '#!/bin/bash\nrr_rc=%s\nrr_pane_tty() { :; }\ncc_run() { "$@"; }\n' "$1"
+  { printf 'rr_rc=%s\nrr_pane_tty() { :; }\ncc_run() { "$@"; }\n' "$1"   # run as /bin/bash "$RR_TAIL"
     sed -n '/^rr_runner_owns() {/,$p' "$RRO"
   } > "$RR_TAIL"
   grep -q 'rr_close_on_clean_exit "\$rr_rc"' "$RR_TAIL"   # extraction sanity
-  chmod +x "$RR_TAIL"
-  FAKESH="$BATS_TEST_TMPDIR/fakesh"
-  printf '#!/bin/bash\ntouch "%s/shell-ran"\nexit 7\n' "$BATS_TEST_TMPDIR" > "$FAKESH"; chmod +x "$FAKESH"
-  GUARD="$BATS_TEST_TMPDIR/guard"
-  printf '#!/bin/bash\necho "$*" >> "%s/guard.log"\nexit 0\n' "$BATS_TEST_TMPDIR" > "$GUARD"; chmod +x "$GUARD"
+  mkdir -p "$BATS_TEST_TMPDIR/rrbin"; FAKESH="$BATS_TEST_TMPDIR/rrbin/fakesh"; GUARD="$BATS_TEST_TMPDIR/rrbin/guard"
+  cc_stub "$BATS_TEST_TMPDIR/rrbin" fakesh "$(printf '#!/bin/bash\ntouch "%s/shell-ran"\nexit 7\n' "$BATS_TEST_TMPDIR")"
+  # shellcheck disable=SC2016  # $* expands when the STUB runs
+  cc_stub "$BATS_TEST_TMPDIR/rrbin" guard "$(printf '#!/bin/bash\necho "$*" >> "%s/guard.log"\nexit 0\n' "$BATS_TEST_TMPDIR")"
 }
 
 @test "TAIL: under its runner a crashed session's rc (143) is returned, and no shell is exec'd" {
   rr_tail 143
   run env KITTY_WINDOW_ID=289 CC_PANE_RUNNER_OWNS_CLOSE=289 CC_KITTY_FS_GUARD="$GUARD" \
-    CC_PANE_SUCCESSOR_LIB=/nonexistent SHELL="$FAKESH" "$RR_TAIL"
+    CC_PANE_SUCCESSOR_LIB=/nonexistent SHELL="$FAKESH" /bin/bash "$RR_TAIL"
   [ ! -e "$BATS_TEST_TMPDIR/shell-ran" ]
   [[ "$output" == *"its cc-pane-runner decides"* ]] || { echo "$output"; false; }
   [ "$status" -eq 143 ]
@@ -1410,7 +1410,7 @@ rr_tail() { # → $RR_TAIL, a runnable copy of the post-session tail; $1 = claud
 @test "TAIL: under its runner a clean exit returns 0 without asking the guard (the runner owns that close)" {
   rr_tail 0
   run env KITTY_WINDOW_ID=289 CC_PANE_RUNNER_OWNS_CLOSE=289 CC_KITTY_FS_GUARD="$GUARD" \
-    CC_PANE_SUCCESSOR_LIB=/nonexistent SHELL="$FAKESH" "$RR_TAIL"
+    CC_PANE_SUCCESSOR_LIB=/nonexistent SHELL="$FAKESH" /bin/bash "$RR_TAIL"
   [ "$status" -eq 0 ]
   [ ! -e "$BATS_TEST_TMPDIR/shell-ran" ]
   [ ! -e "$BATS_TEST_TMPDIR/guard.log" ]
@@ -1419,7 +1419,7 @@ rr_tail() { # → $RR_TAIL, a runnable copy of the post-session tail; $1 = claud
 @test "TAIL: a typed launch (no ownership, or an older runner's 1) keeps today's path: a shell after a crash" {
   rr_tail 143
   run env KITTY_WINDOW_ID=289 CC_PANE_RUNNER_OWNS_CLOSE=1 CC_KITTY_FS_GUARD="$GUARD" \
-    CC_PANE_SUCCESSOR_LIB=/nonexistent SHELL="$FAKESH" "$RR_TAIL"
+    CC_PANE_SUCCESSOR_LIB=/nonexistent SHELL="$FAKESH" /bin/bash "$RR_TAIL"
   [ "$status" -eq 7 ]
   [ -e "$BATS_TEST_TMPDIR/shell-ran" ]
   [[ "$output" == *"ordinary shell"* ]]
