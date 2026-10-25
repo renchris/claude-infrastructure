@@ -70,7 +70,7 @@ actuate() { printf '{"cwd":"%s","session_id":"%s","transcript_path":"%s"}' "$CWD
 blocked() { printf '%s' "$1" | grep -q '"decision":"block"'; }
 reason_of() { printf '%s' "$1" | jq -r '.reason // ""'; }
 row() { grep -F "\"reason\":\"$1\"" "$CONTINUE_IDL" 2>/dev/null | tail -1; }
-rows_like() { grep -c "\"reason\":\"scope-floor" "$CONTINUE_IDL" 2>/dev/null || true; }
+rows_like() { [ -f "$CONTINUE_IDL" ] || { echo 0; return 0; }; grep -c "\"reason\":\"scope-floor" "$CONTINUE_IDL" || true; }
 key_of() { row scope-floor | jq -r '.key'; }
 
 # transcript records
@@ -321,18 +321,22 @@ tx_agent() { # $1 = extra record (or ""); the async agent a8e552e552430265c, its
 }
 
 # ── S13 — the other abstains ──
-@test "S13a: assignee (rc 0 and rc 2), teardown marker, research program, live /goal" {
+# An assignee or a torn-down session never forks the ledger (the floor returns before its read, design
+# §3.4 D-8), and the mechanical arm releases both before ITS read, so for them the floor is SILENT: no
+# block and no row. Research program and live /goal are decided on ledger facts and are logged.
+@test "S13a: assignee (rc 0 and rc 2) and teardown are silent; research program and live /goal abstain logged" {
   p="$(tx_f1)"
   for rc in 0 2; do
     printf '%s\n' "agent_assignee_argv() { printf 'lkw-x'; return 0; }" "agent_team_member_confirms() { return $rc; }" \
       > "$BATS_TEST_TMPDIR/ai.sh"
     : > "$CONTINUE_IDL"
     ! blocked "$(AGENT_IDENTITY_LIB="$BATS_TEST_TMPDIR/ai.sh" actuate sidA "$p")" || false
-    [ -n "$(row scope-floor-assignee)" ] || { echo "rc $rc"; false; }
+    [ "$(rows_like)" = 0 ] || { echo "rc $rc"; cat "$CONTINUE_IDL"; false; }
   done
   mkdir -p "$CC_TEARDOWN_DIR"; printf '{"sid":"sidA"}' > "$CC_TEARDOWN_DIR/sidA.json"
+  : > "$CONTINUE_IDL"
   ! blocked "$(actuate sidA "$p")" || false
-  [ -n "$(row scope-floor-teardown)" ]
+  [ "$(rows_like)" = 0 ]
   rm -f "$CC_TEARDOWN_DIR/sidA.json"
   ! blocked "$(STUB_RESEARCH_PROGRAM=tm2 actuate sidA "$p")" || false
   [ -n "$(row scope-floor-research)" ]
