@@ -3,7 +3,7 @@
 #
 #   cc-pane-verdict --pane N --state DONE|RESUME|OWNED|NOTHING|CANTTELL [--sid S]
 #                   [--guard safe|fullscreen|unreadable|stuck|held] [--owner M] [--unsaved K] [--moved-to M]
-#                   [--stranded] [--tty PATH] [--kitty-pid P] [--dry-run]
+#                   [--stranded] [--tty PATH | --tty-fd N] [--kitty-pid P] [--dry-run]
 #   cc-pane-verdict --pane N --recompute [--reason R] [--closer-out TEXT] [--sid S] [--tty PATH] …
 #
 # WHY (docs/research/husk-panes-2026-10-22/, RC5 and § CONTRACT in synthesis.md). Up to four writers
@@ -44,7 +44,7 @@
 #        CC_PANE_EXIT_DIR · CC_SAY_LOG.
 set -u
 
-PANE="" STATE="" SID="" GUARD="safe" OWNER="" UNSAVED="" MOVED="" STRANDED=0 TTYP="" DRY=0
+PANE="" STATE="" SID="" GUARD="safe" OWNER="" UNSAVED="" MOVED="" STRANDED=0 TTYP="" TTYFD="" DRY=0
 RECOMPUTE=0 REASON="" CLOSER_OUT="" KPID="${KITTY_PID:-}"
 usage() { sed -n '3,7p' "$0" >&2; exit 2; }
 while [ $# -gt 0 ]; do
@@ -58,6 +58,7 @@ while [ $# -gt 0 ]; do
     --moved-to) MOVED="${2:-}"; shift 2 ;;
     --stranded) STRANDED=1; shift ;;
     --tty) TTYP="${2:-}"; shift 2 ;;
+    --tty-fd) TTYFD="${2:-}"; shift 2 ;;
     --kitty-pid) KPID="${2:-}"; shift 2 ;;
     --recompute) RECOMPUTE=1; shift ;;
     --reason) REASON="${2:-}"; shift 2 ;;
@@ -69,6 +70,53 @@ while [ $# -gt 0 ]; do
 done
 case "$PANE" in ''|*[!0-9]*) echo "cc-pane-verdict: --pane needs a kitty window id" >&2; exit 2 ;; esac
 case "$UNSAVED" in *[!0-9]*) UNSAVED="" ;; esac
+case "$TTYFD" in *[!0-9]*) TTYFD="" ;; esac
+
+# ── the pane's tty: never a blocking open by path (incident 2026-10-25, ~/incident-2026-10-25/RCA.md)
+# `stty size < "$TTYP"` opened the pty slave by path, and an open of a slave whose master is gone
+# sleeps in the kernel waiting for a carrier while holding the device lock and a vnode reference.
+# When the pane's leader then exited, its revoke waited on that reference with no timeout and every
+# /dev lookup of the node hung for 9 h. So the tty is an fd the caller already holds (--tty-fd, the
+# runner's own pane), or else a path that is looked up and opened O_NONBLOCK|O_NOCTTY (no carrier
+# wait). Either way it is touched only in a CHILD this script abandons after 5 s (RCA R1): even a
+# non-blocking open, a lookup or an ioctl can sleep uninterruptibly behind someone else's stuck open,
+# and a painter must never inherit that. No perl: no path is opened at all (cols fall back to 56, the
+# title still goes through kitty).
+_has_tty() { [ -n "$TTYFD" ] || [ -n "$TTYP" ]; }
+_TTY_OUT=""
+_on_tty() { # $1=r|w CMD… → CMD with the tty on fd 0 (r: its stdout in _TTY_OUT) or fd 1 (w, appending); 124 = abandoned
+  local _m="$1" _o=/dev/null _p _end=$((SECONDS + 5)) _rc=0; shift
+  _TTY_OUT=""
+  if [ "$_m" = r ]; then _o="$(mktemp "${TMPDIR:-/tmp}/cc-pane-verdict.XXXXXX" 2>/dev/null)" || return 1; fi
+  if [ -n "$TTYFD" ]; then
+    if [ "$_m" = r ]; then "$@" 0<&"$TTYFD" >"$_o" 2>/dev/null & else "$@" 1>&"$TTYFD" 2>/dev/null & fi
+  elif [ -x /usr/bin/perl ]; then
+    /usr/bin/perl -MPOSIX -e '
+      my ($m, $p) = splice @ARGV, 0, 2;
+      alarm 5;
+      ($m eq "r" ? -c $p : -w $p) or exit 1;
+      my $fl = ($m eq "r" ? O_RDONLY : O_WRONLY | O_APPEND) | O_NONBLOCK | O_NOCTTY;
+      my $f = POSIX::open($p, $fl);
+      defined $f or exit 1;
+      my $to = $m eq "r" ? 0 : 1;
+      if ($f != $to) { defined POSIX::dup2($f, $to) or exit 1; POSIX::close($f); }
+      exec { $ARGV[0] } @ARGV or exit 127;' "$_m" "$TTYP" "$@" >"$_o" 2>/dev/null &
+  else
+    [ "$_m" = r ] && rm -f "$_o"; return 1
+  fi
+  _p=$!
+  while kill -0 "$_p" 2>/dev/null; do
+    # a wall-clock deadline, never a poll count: under load each poll's sleep stretches (a 5 s count
+    # measured 15 s at 18/core)
+    if [ "$SECONDS" -ge "$_end" ]; then # abandoned: never waited on, so this script cannot inherit its sleep
+      kill -KILL "$_p" 2>/dev/null; [ "$_m" = r ] && rm -f "$_o"; return 124
+    fi
+    /bin/sleep 0.1
+  done
+  wait "$_p" || _rc=$?
+  if [ "$_m" = r ]; then _TTY_OUT="$(cat "$_o" 2>/dev/null)"; rm -f "$_o"; fi
+  return "$_rc"
+}
 
 # ── recompute: the state from the facts ─────────────────────────────────────────────────────────
 if [ "$RECOMPUTE" = 1 ]; then
@@ -132,7 +180,7 @@ esac
 
 # ── fit to the pane's real width ─────────────────────────────────────────────────────────────────
 cols="${CC_PANE_VERDICT_COLS:-}"
-if [ -z "$cols" ] && [ -n "$TTYP" ] && [ -c "$TTYP" ]; then cols="$(stty size < "$TTYP" 2>/dev/null | awk '{print $2}')"; fi
+if [ -z "$cols" ] && _has_tty && _on_tty r stty size; then cols="$(printf '%s\n' "$_TTY_OUT" | awk '{print $2}')"; fi
 case "$cols" in ''|*[!0-9]*|0) cols=56 ;; esac
 _sd="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")" 2>/dev/null && pwd)"
 for _c in "${_sd:+$_sd/../lib/cc-say.sh}" "${HOME:-}/.claude/lib/cc-say.sh"; do
@@ -158,8 +206,8 @@ fi
 
 # ── paint ────────────────────────────────────────────────────────────────────────────────────────
 painted=0
-if [ -n "$TTYP" ] && [ -w "$TTYP" ]; then
-  printf '\033[H\033[2J%s\n%s\n' "$R1" "$R2" >> "$TTYP" 2>/dev/null && painted=1
+if _has_tty; then
+  _on_tty w printf '\033[H\033[2J%s\n%s\n' "$R1" "$R2" 2>/dev/null && painted=1
 fi
 kbin="${CC_PANE_VERDICT_KITTY_BIN:-}"
 if [ -z "$kbin" ] && [ -n "$_sd" ] && [ -x "$_sd/cc-kitty-bin" ]; then kbin="$(bash "$_sd/cc-kitty-bin" 2>/dev/null || true)"; fi
@@ -170,7 +218,7 @@ if [ -n "$kbin" ] && [ -x "$kbin" ] && [ -n "$sock" ]; then
   tmo="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
   if ${tmo:+"$tmo" 5} "$kbin" @ --to "$sock" set-window-title --temporary --match "id:$PANE" "$TITLE" >/dev/null 2>&1; then tdone=1; fi
 fi
-if [ "$tdone" = 0 ] && [ -n "$TTYP" ] && [ -w "$TTYP" ]; then printf '\033]2;%s\007' "$TITLE" >> "$TTYP" 2>/dev/null || true; fi
+if [ "$tdone" = 0 ] && _has_tty; then _on_tty w printf '\033]2;%s\007' "$TITLE" 2>/dev/null || true; fi
 [ -n "$now" ] && printf '%s\n' "$now" > "$rec" 2>/dev/null
 
 log="${CC_SAY_LOG:-${HOME:-}/.claude/logs/pane-say.jsonl}"

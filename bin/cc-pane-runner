@@ -63,8 +63,9 @@
 #     with the split this replaced: later `it2 session run/send` find a prompt), a missing or unusable
 #     guard or recycle lib (fail closed), or `keep:fallback` — any unplanned exit of this runner after
 #     the command returned, caught by the EXIT trap.
-# From the command's return on, a signal cannot end this process unguarded (_guarded), and there is
-# exactly one `exec` of a shell in this file (_fallback).
+# From the command's return on, a signal cannot end this process unguarded (_guarded; its children
+# keep default dispositions, incident 2026-10-25), and there is exactly one `exec` of a shell in this
+# file (_fallback); the entry signal reset re-execs this file, never a shell.
 #
 # Env contract (all set by bin/it2-kitty split):
 #   CC_PANE_CMD_DIR   directory holding <pane-id>.armed / <pane-id>.cmd
@@ -77,6 +78,20 @@
 #   own pane, so the opt-in close in bin/cc-close-attrib must stand down, and the self-close watcher
 #   reads the record's `tail` only when the id is ITS pane's. (Not CC_PANE_RUNNER: that already
 #   carries this file's PATH into every runner pane, including the ordinary shell it degrades to.)
+
+# EVERY CHILD STARTS WITH DEFAULT SIGNAL DISPOSITIONS (incident 2026-10-25, ~/incident-2026-10-25/
+# RCA.md §1). A signal ignored when bash starts can never be trapped or reset by it (measured, bash
+# 3.2), and every child inherits the ignore: a painter subshell that inherited "ignore HUP" slept in a
+# pty open the leader's exit HUP could not end, and /dev stayed wedged for 9 h. So whatever launched
+# us (a `&` ignores INT and QUIT, nohup ignores HUP), restore the five once here, before anything
+# runs, through perl, which can. The runner's own guard later is a no-op HANDLER (_guarded), which
+# exec resets to default in every child. No perl: carry on as launched (kitty's launch is already
+# default, measured 2026-10-25).
+if [ -z "${_CC_PANE_RUNNER_SIGRESET:-}" ] && [ -x /usr/bin/perl ]; then
+  export _CC_PANE_RUNNER_SIGRESET=1
+  exec /usr/bin/perl -e '$SIG{$_} = "DEFAULT" for qw(HUP INT QUIT TERM TSTP); exec { $ARGV[0] } @ARGV or exit 127' /bin/bash "$0" "$@"
+fi
+unset _CC_PANE_RUNNER_SIGRESET
 
 set -u
 # shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
@@ -184,19 +199,31 @@ _husk_row() { # $1=reason [key=value …]
 # states and repaints only on a change; this runner hands it facts. Returns 0 only when the tool ran
 # against a real tty: with none (a test, a pipe) the caller keeps its one-line _say instead.
 # CC_PANE_RUNNER_TTY is the test seam for the pane's tty.
+# The painter gets the pane's tty as the fd this runner already holds (`--tty-fd 0`), never a path to
+# open (incident 2026-10-25): opening a pty slave by path sleeps in the kernel for a carrier when the
+# master is gone, and that sleeping open is what wedged /dev. `tty` is not asked either: it walks /dev.
 _PV_PAINTED=0
 _verdict() { # cc-pane-verdict arguments after --pane/--sid/--tty
-  local _sd _v _t _reg _sid=""
+  local _sd _v _reg _sid="" _ta
   [ -n "${KITTY_WINDOW_ID:-}" ] || return 1
-  _t="${CC_PANE_RUNNER_TTY:-$(tty 2>/dev/null)}" || _t=""
-  [ -n "$_t" ] && [ -w "$_t" ] || return 1
+  if [ -n "${CC_PANE_RUNNER_TTY:-}" ]; then
+    [ -w "$CC_PANE_RUNNER_TTY" ] || return 1
+    _ta="--tty"
+  else
+    [ -t 0 ] || return 1
+    _ta="--tty-fd"
+  fi
   _sd="$(_self_dir)"
   _v="${_sd:+$_sd/cc-pane-verdict}"
   [ -n "$_v" ] && [ -x "$_v" ] || _v="${HOME:-}/.claude/bin/cc-pane-verdict"
   [ -x "$_v" ] || return 1
   _reg="${CC_REGISTRY_DIR:-${HOME:-}/.claude/cc-registry}/$KITTY_WINDOW_ID.json"
   if [ -n "$_PANE_EXIT_DIR" ] && _since_launch "$_reg"; then _sid="$(jq -r '.session_id // empty' "$_reg" 2>/dev/null)"; fi
-  cc_run "$_v" --pane "$KITTY_WINDOW_ID" ${_sid:+--sid "$_sid"} --tty "$_t" "$@" >/dev/null 2>&1 || return 1
+  if [ "$_ta" = --tty ]; then
+    cc_run "$_v" --pane "$KITTY_WINDOW_ID" ${_sid:+--sid "$_sid"} --tty "$CC_PANE_RUNNER_TTY" "$@" >/dev/null 2>&1 || return 1
+  else
+    cc_run "$_v" --pane "$KITTY_WINDOW_ID" ${_sid:+--sid "$_sid"} --tty-fd 0 "$@" >/dev/null 2>&1 || return 1
+  fi
   _PV_PAINTED=1
 }
 
@@ -285,11 +312,16 @@ _exit_policy() { # $1=command $2=rc $3=1 iff fleet launch line $4=claude_started
   _TAIL=keep:crash
 }
 
-# From the command's return, INT/QUIT/TSTP/TERM/HUP are ignored (and so are they in every child the
-# runner starts: the guard, the hold's sleep), and any exit that is not a planned one runs _escape,
-# which keeps a shell. HEAD's close asked the guard with default dispositions, so a ^C in that 5 s
-# window ended the pane unguarded (FIX-DESIGN D2, break 4). _fallback resets both before its exec.
-_guarded() { trap '' INT QUIT TSTP TERM HUP; trap '_escape' EXIT; }
+# From the command's return, INT/QUIT/TSTP/TERM/HUP cannot end the runner, and any exit that is not a
+# planned one runs _escape, which keeps a shell. HEAD's close asked the guard with default
+# dispositions, so a ^C in that 5 s window ended the pane unguarded (FIX-DESIGN D2, break 4).
+# _fallback resets both before its exec.
+# A no-op HANDLER, never `trap ''` (incident 2026-10-25): an ignore is inherited by every child, so
+# the painter's subshell could not be ended by the HUP the pane's leader sends on exit and held the
+# tty open forever. A caught signal is reset to default across fork+exec, so children (the guard, the
+# painter, the hold's sleep) die to a signal as they should, and the runner re-asks a guard that did
+# (_gate, _hold).
+_guarded() { trap ':' INT QUIT TSTP TERM HUP; trap '_escape' EXIT; }
 # shellcheck disable=SC2329  # invoked indirectly — the EXIT trap only.
 _escape() { # the EXIT trap: a planned exit set _DONE; anything else keeps a shell, said and retried
   [ "${_DONE:-0}" = 1 ] && return 0
@@ -347,7 +379,14 @@ _gate() { # $1=what exited → _TAIL=closed|hold:fs|hold:unreadable|keep:<why>
     _TAIL=keep:no-guard _KEEP_HINT="fullscreen guard missing"
     _KEEP_DETAIL="fullscreen guard not executable at $_GUARD — keeping the shell ($1 $_WHY)"; return 0
   fi
-  _o="$(cc_run "$_GUARD" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner 2>&1)" || _rc=$?
+  # A guard ended by a signal (rc > 128: a ^C, or a TERM to this pane's group) gave no answer; ask
+  # again, up to 3 more times, rather than read its death as "cannot answer" and keep a shell (D2).
+  local _try=0
+  while :; do
+    _rc=0; _o="$(cc_run "$_GUARD" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner 2>&1)" || _rc=$?
+    [ "$_rc" -gt 128 ] && [ "$_try" -lt 3 ] || break
+    _try=$((_try + 1))
+  done
   case "$_rc" in
     0|4) _TAIL=closed ;;
     3)   _detail "$1 $_WHY — guard: ${_o:-no output}" "held: closes itself when safe"
@@ -404,6 +443,8 @@ _hold() { # $1=fs|unreadable — exits 0 only once removing this pane cannot emp
         _rc=0; cc_run "$_GUARD" --any-fs --kitty-pid "$KITTY_PID" --tool cc-pane-hold >/dev/null 2>&1 || _rc=3 ;;
       esac
     fi
+    # A guard ended by a signal gave no answer: not a safe read, and not a reason to escape (_gate).
+    if [ "$_rc" -gt 128 ]; then _ok=0; continue; fi
     case "$_rc" in
       0|4) _ok=$((_ok + 1)); [ "$_ok" -ge 2 ] && _hold_done; _w=$((2 * _s)) ;;
       3)   _ok=0

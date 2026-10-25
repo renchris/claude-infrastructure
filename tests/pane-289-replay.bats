@@ -50,7 +50,10 @@ setup() {
   kill -TERM -- "-$pid" 2>/dev/null || true; sleep 0.3; kill -INT -- "-$pid" 2>/dev/null || true
   wait "$pid" || st=$?
   [ "$st" -eq 0 ] || { echo "runner ended $st"; cat "$T/a1g.out"; false; }
-  [ "$(grep -c -- '--tool cc-pane-hold' "$T/guard-log")" -ge 2 ] || { cat "$T/guard-log"; false; }
+  # Since 2026-10-25 the guard being asked dies with the group signal (the runner's children keep
+  # default dispositions) and the runner asks again, so the "3fs" answer may never be read and there
+  # may be no hold (FIX-DESIGN §8, incident 2026-10-25). Two asks, then a decided close.
+  [ "$(grep -c -- '--mode refuse' "$T/guard-log")" -ge 2 ] || { cat "$T/guard-log"; false; }
   [ "$(fx_tail)" = closed ]
   run test -e "$T/shell-ran"; [ "$status" -eq 1 ]
 }

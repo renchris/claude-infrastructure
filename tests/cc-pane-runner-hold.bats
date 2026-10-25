@@ -39,7 +39,7 @@ printf "%s\n" "$*" >> "$T/guard-log"
 case " $* " in *" --any-fs "*) exit "$(cat "$T/anyfs-rc" 2>/dev/null || echo 0)" ;; esac
 n=$(( $(cat "$T/guard-n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$T/guard-n"
 if [ -n "${GUARD_ARMED:-}" ]; then if [ -e "$GUARD_ARMED" ]; then echo present; else echo absent; fi >> "$T/guard-armed"; fi
-[ "$n" = 1 ] && [ -n "${GUARD_SLEEP1:-}" ] && /bin/sleep "$GUARD_SLEEP1"
+[ "$n" = 1 ] && [ -n "${GUARD_SLEEP1:-}" ] && { /bin/sleep "$GUARD_SLEEP1"; : > "$T/guard1-finished"; }
 [ -e "$T/release" ] && exit 0
 line="$(sed -n "${n}p" "$T/guard-seq")"; [ -n "$line" ] || line="$(tail -n 1 "$T/guard-seq")"
 rc="${line%%	*}"; err="${line#*	}"; [ "$err" = "$line" ] && err=""
@@ -57,10 +57,15 @@ printf "%s\n" "$*" >> "$T/kitty-log"'
   export SHELL="$S/fakeshell"
 }
 
-# A held runner ignores every catchable signal, so a failed background arm would leave it holding
-# forever: KILL whatever an arm started (its process group too, for A1g).
+# A held runner survives every catchable signal, so a failed background arm would leave it holding
+# forever: KILL whatever an arm started, by process group (A1g, A1t start it as a group leader with
+# set -m), and the pty driver's child's group too, in case the driver itself was SIGKILLed before its
+# own reap (incident 2026-10-25).
 teardown() {
+  local p
   if [ -n "${pid:-}" ]; then kill -KILL -- "-$pid" 2>/dev/null || true; kill -KILL "$pid" 2>/dev/null || true; fi
+  p="$(cat "$T/pty-child-pid" 2>/dev/null)"
+  case "$p" in ''|*[!0-9]*) ;; *) kill -KILL -- "-$p" 2>/dev/null || true ;; esac
   return 0
 }
 
@@ -204,7 +209,10 @@ not_stopped() { case "$(ps -o stat= -p "$1" 2>/dev/null)" in T*) return 1 ;; esa
   [ "$(jq -r .rc "$CC_PANE_EXIT_DIR/289.json")" = 124 ]
 }
 
-@test "A1g: TERM then INT to the runner's process group while the guard decides — it survives and holds" {
+# The group signal ends the guard the runner is ASKING (its children keep default dispositions,
+# incident 2026-10-25) but never the runner: it reads the guard's signal death as no answer and asks
+# again. Before the fix the guard inherited the runner's ignore and finished its sleep.
+@test "A1g: TERM then INT to the runner's process group while the guard decides — the ask dies, the runner re-asks and closes" {
   seq_guard 3fs 0 0
   export GUARD_SLEEP1=3 CC_PANE_CMD=claude
   set -m
@@ -213,20 +221,23 @@ not_stopped() { case "$(ps -o stat= -p "$1" 2>/dev/null)" in T*) return 1 ;; esa
   set +m
   wait_until 10 test -s "$T/guard-log" || { echo "the gate never asked the guard"; false; }
   kill -TERM -- "-$pid"; /bin/sleep 0.3
-  kill -INT -- "-$pid"; /bin/sleep 0.3
-  alive "$pid" || { echo "the runner died in the gate"; cat "$T/out"; false; }
+  kill -INT -- "-$pid" 2>/dev/null || true
   st=0; wait "$pid" || st=$?
-  [ "$st" -eq 0 ] || { echo "status $st"; cat "$T/out"; false; }
+  [ "$st" -eq 0 ] || { echo "status $st (the runner died in the gate?)"; cat "$T/out"; false; }
   [ ! -e "$T/shell-ran" ]
-  [ "$(refuse_calls)" = 3 ]
+  [ ! -e "$T/guard1-finished" ] || { echo "the asked guard outlived a TERM to its group: it inherited an ignore"; false; }
+  n="$(refuse_calls)"
+  [ "$n" -ge 2 ] && [ "$n" -le 4 ] || { echo "refuse calls $n"; cat "$T/guard-log"; false; }
   tail_is closed
 }
 
 @test "A1t: a held runner survives TERM, INT, HUP, QUIT and TSTP, and closes once safe" {
   seq_guard 3fs
   export CC_PANE_HOLD_STEP_S=1 CC_PANE_CMD=claude
+  set -m
   "$RUNNER" </dev/null >"$T/out" 2>&1 &
   pid=$!
+  set +m
   wait_until 10 held hold:fs || { echo "never held"; cat "$T/out"; false; }
   for sig in TERM INT HUP QUIT TSTP; do
     kill -s "$sig" "$pid"; /bin/sleep 0.3
@@ -241,67 +252,15 @@ not_stopped() { case "$(ps -o stat= -p "$1" 2>/dev/null)" in T*) return 1 ;; esa
   tail_is closed
 }
 
-# The keys typed at a held pane, through a real pty whose foreground group is the runner. Driven by
-# python's pty module, not script(1): macOS script refuses a non-tty stdin ("tcgetattr/ioctl:
-# Operation not supported on socket") and exits at once, so it cannot be typed into from a test.
-PTY_DRIVER='
-import json, os, pty, select, sys, time
-T, runner = os.environ["T"], sys.argv[1]
-pid, fd = pty.fork()
-if pid == 0:
-    os.execv("/bin/bash", ["/bin/bash", runner])
-def drain():  # an exited child leaves the master readable at EOF forever: b"" ends the drain
-    while select.select([fd], [], [], 0)[0]:
-        try:
-            if not os.read(fd, 4096):
-                return
-        except OSError:
-            return
-def tail():
-    try:
-        return json.load(open(T + "/pane-exit/289.json")).get("tail")
-    except Exception:
-        return None
-def ended():
-    p, st = os.waitpid(pid, os.WNOHANG | os.WUNTRACED)
-    return None if p == 0 else st
-def fail(msg):  # a held runner ignores every catchable signal: never leave one behind
-    try:
-        os.kill(pid, 9)
-    except OSError:
-        pass
-    sys.exit(msg)
-end = time.time() + 30  # start-up, not the hold: bash + stubs under load
-while tail() != "hold:fs":
-    drain(); time.sleep(0.1)
-    st = ended()
-    if st is not None:
-        sys.exit("ended before holding: wait status %d, tail %r" % (st, tail()))
-    if time.time() > end:
-        fail("never held: tail %r, guard calls %r" % (tail(), os.path.exists(T + "/guard-log") and open(T + "/guard-log").read()))
-for ch in (b"\x03", b"\x1c", b"\x1a"):
-    os.write(fd, ch); time.sleep(0.3); drain()
-    st = ended()
-    if st is not None:
-        fail("ended or stopped by %r: wait status %d" % (ch, st))
-open(T + "/release", "w").close()
-t0 = time.time(); end = t0 + 30
-while True:
-    drain(); st = ended()
-    if st is not None:
-        break
-    if time.time() > end:
-        fail("still held 30 s after release: tail %r" % tail())
-    time.sleep(0.1)
-print("exit=%d after %ds" % (os.waitstatus_to_exitcode(st), time.time() - t0))
-'
+# The keys typed at a held pane, through a real pty: tests/helpers/cc-pane-pty-driver.py, which kills
+# its child's process group on every exit path before the master closes (incident 2026-10-25).
 
 @test "A1t pty: ^C ^\\ ^Z typed at the held pane's terminal do not end or stop it" {
   /usr/bin/python3 -I -c 'import pty' 2>/dev/null || skip "no python3 pty module to type through (an environment precondition)"
   seq_guard 3fs
   # the paint goes to a file: the painter on a pty nobody reads is a different test (A1 painted)
   export CC_PANE_HOLD_STEP_S=1 CC_PANE_CMD=claude CC_PANE_RUNNER_TTY="$T/tty"; : > "$T/tty"
-  run /usr/bin/python3 -I -c "$PTY_DRIVER" "$RUNNER"
+  run /usr/bin/python3 -I "$REPO/tests/helpers/cc-pane-pty-driver.py" "$RUNNER"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == "exit=0 after "* ]] || { echo "$output"; false; }
   echo "# $output" >&3
