@@ -509,6 +509,10 @@ EOF
 
 @test "cc-close-attrib: three successor generations keep a constant ancestry depth (one loop shell, no nesting)" {
   mk_cca
+  # Every generation stages from ONE template, so all share setup's created_epoch: at the default 120 s
+  # TTL a loaded box (load ~800, 2026-10-25: 4 min for this case) expired gen 3 or 4 and the chain
+  # stopped short. The TTL is not this case's subject (it has its own); depth is.
+  mk_meta "@TTY@" "$W_PID" "$W_LSTART" "$(date +%s)" 3600
   # A stub claude that, like a recycling session, stages its own successor (the wrapper again, on this
   # stub) while it runs, and records how many hops separate it from the driver. Generation 1 is the
   # driver's launch; 2, 3 and 4 are successors. Its tty comes from ps: the wrapper backgrounds it.
