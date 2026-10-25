@@ -1058,7 +1058,7 @@ for o in data:
         *) fs_unk=$((fs_unk + 1)); note "  [CC-DESK-$n] fullscreen toggled, state UNKNOWN (window $hd: no frame read twice, and no fullscreen Space names it)" ;;
       esac
       # A window opened by position is counted placed only once a read-back finds it on its display.
-      want="${WDISP[$n]%% *}"
+      want="${WDISP[$n]:-}"; want="${want%% *}"
       if [ -n "${WPOS[$n]:-}" ] && [ -n "$uuid" ] && [ -n "$want" ]; then
         if [ "$uuid" = "$want" ]; then placed=$((placed + 1))
         else place_bad=$((place_bad + 1)); note "  [CC-DESK-$n] ⚠ opened on display $uuid, recorded $want"; fi
