@@ -113,6 +113,24 @@ reply, ONE transcript file, the two prompts attached to different parents and on
 children — a branch, with no lock, refusal or warning. This is the hazard the incumbent waits on; the
 zero-restart mechanisms (P3–P6) never create a second writer.
 
+## P10 — DECISIVE for rollout: retrofit a RUNNING session onto a lane by hot-reloading a mod (no restart)
+
+`p10.py`, private tmux socket, interactive throwaway session launched with `--plugin-dir /tmp/mtam/probe/mod-lane`
+(a no-op module) and `CLAUDE_SECURESTORAGE_CONFIG_DIR=ss-p10a` (next2 copy). After inference call 2 the module file
+was rewritten so that `session.start` (fires on every load AND reload, U-api) runs
+`await $.env.set('CLAUDE_SECURESTORAGE_CONFIG_DIR', '<ss-p10b>')` (next3 copy). The TUI printed
+`mtam-lane: reloaded (1 hook: session.start)` when the running turn ended (edit at t+3.0 s, turn end + reload at
+≈t+29 s; a mod reload waits for the turn boundary, it does not apply mid-turn). No consent dialog appeared. Calls
+1–7 (before the reload) billed next2; the follow-up turn's calls 8–9 sent bearer `cf40551134` and billed `1a71eca0`
+(next3). First attempt (`log-p10.try1.jsonl`) sent no follow-up after the reload, so it observed nothing — inconclusive,
+superseded by this run. ⇒ `CLAUDE_SECURESTORAGE_CONFIG_DIR` is re-read live (G2: `uw()` reads it on every call), and
+`$.env.set` (a documented mods op, I2) can re-point a running process at a new lane at its next turn end.
+
+Live census, one `/bin/ps -axww -o args=` read at 03:07 CDT: 42 interactive Claude Code 2.1.293 processes; **40 of
+42 carry `--plugin-dir /Users/chrisren/.claude/mods/accounts-readout`** (the launcher passes one `--plugin-dir` per
+`~/.claude/mods/<name>/`, I2). So a lane-binding module shipped inside an already-loaded mod reaches ≈95% of the live
+fleet with no restart; the rest adopt at their next natural launch.
+
 ## P9 — ACCRUING: does an account's own refresh revoke its previous access token?
 
 `revoke-watch.py` (started 02:31:38 CDT, bounded 9,000 s; the held token expires ≈04:02 CDT) holds next3's current
