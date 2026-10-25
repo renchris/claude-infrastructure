@@ -44,9 +44,32 @@ REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
 MODEL = "claude-opus-5-5"
 W_READ = {"lo": 0.0057, "mid": 0.0067, "hi": 0.0076}
 W_WRITE, W_OUT = 0.245, 0.404
+# f2/collect.py's literal write targets, with two fixes the first smoke forced (2026-10-25: a default
+# slot's own `cat > out/answer.md <<'EOF'` was flagged for "-> /agentsync.lock" in its prose): a
+# heredoc's body is data, not command text, and `->` / `=>` are arrows, not redirects
 WRITE_BASH = re.compile(
-    r"(>>?|\btee(?:\s+-a)?|\bmkdir(?:\s+-p)?|\btouch)\s*(/[\w./~-]+)"
+    r"((?<![-=])>>?|\btee(?:\s+-a)?|\bmkdir(?:\s+-p)?|\btouch)\s*([~/][\w./@+~-]+)"
 )
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][\w-]*)\1")
+
+
+def strip_heredocs(cmd):
+    """The command text with every heredoc body removed (the opener line is kept)."""
+    out, lines, i = [], cmd.split("\n"), 0
+    while i < len(lines):
+        out.append(lines[i])
+        ends = [m.group(2) for m in HEREDOC.finditer(lines[i])]
+        i += 1
+        for tag in ends:
+            while i < len(lines) and lines[i].strip() != tag:
+                i += 1
+            i += 1
+    return "\n".join(out)
+
+
+def bash_write_targets(cmd):
+    """Absolute (or ~) paths a Bash command literally writes: redirect, tee, mkdir, touch."""
+    return [m.group(2) for m in WRITE_BASH.finditer(strip_heredocs(cmd or ""))]
 NUM = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")
 ANSWER_CAP = 200_000
 DOSSIER_ANSWER_CAP = 12_000
@@ -117,9 +140,7 @@ def slot(path):
         if name in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
             writes.append(inp.get("file_path") or inp.get("notebook_path") or "")
         elif name == "Bash":
-            writes += [
-                mm.group(2) for mm in WRITE_BASH.finditer(inp.get("command") or "")
-            ]
+            writes += bash_write_targets(inp.get("command"))
     return dict(
         requests=len(req),
         pp=pp,

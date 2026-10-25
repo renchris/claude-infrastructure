@@ -45,11 +45,13 @@ const brief = (c) =>
   `- asks: each separate thing the task asks the agent to deliver, one plain sentence each (3-8 usually). ` +
   `A grader will check an answer against each ask.\n` +
   `- facts: up to 6 specific values a CORRECT answer must state that a shell command can compute from the ` +
-  `frozen copy: counts, line numbers, file names, highest/lowest values, exact strings. For each: claim ` +
+  `frozen copy: counts, file names, highest/lowest values, exact strings. For each: claim ` +
   `(what the value is), check_cmd (a read-only bash command run with cwd = ${c.root}, using relative paths, ` +
   `that prints ONLY the expected value on stdout — no labels, one line), and match ("number" if the value is ` +
   `a number, else "substring"). Only include a fact when the task clearly requires that exact value in the ` +
-  `answer; an empty list is correct for judgement or prose tasks. Verify each check_cmd by running it.`
+  `answer; an empty list is correct for judgement or prose tasks. Never use a line number as a fact: a correct ` +
+  `answer may cite a neighbouring line or a range (smoke 2026-10-25: both variants cited launchd.py:56-58 for a ` +
+  `definition the key pinned at line 55). Verify each check_cmd by running it.`
 
 phase('Keys')
 const keys = await parallel(

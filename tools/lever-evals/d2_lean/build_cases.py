@@ -84,9 +84,6 @@ USER_FRAME = "[Workflow harness — user request]"
 PATH_RX = re.compile(
     r"(?<![\w.$}])(~/|/(?:Users|tmp|private/tmp)/)[^\s`'\"<>()\[\]{},;|*]*"
 )
-WRITE_BASH = re.compile(
-    r"(?:>>?|\btee(?:\s+-a)?|\bmkdir(?:\s+-p)?|\btouch)\s+([~/][\w./@+~-]+)"
-)
 
 
 def roots():
@@ -102,6 +99,20 @@ def ep(s):
         return datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
+
+
+def _grade():
+    """grade.py's write-target reader, shared so a case's outputs and an answer's forbidden writes
+    are read by one rule."""
+    global _GRADE
+    if _GRADE is None:
+        spec = importlib.util.spec_from_file_location("d2_grade", os.path.join(HERE, "grade.py"))
+        _GRADE = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_GRADE)
+    return _GRADE
+
+
+_GRADE = None
 
 
 def _hook():
@@ -255,10 +266,8 @@ def read_slot(path):
                         if p:
                             written.add(os.path.normpath(os.path.expanduser(p)))
                     elif b.get("name") == "Bash":
-                        for mm in WRITE_BASH.finditer(inp.get("command") or ""):
-                            written.add(
-                                os.path.normpath(os.path.expanduser(mm.group(1)))
-                            )
+                        for t in _grade().bash_write_targets(inp.get("command")):
+                            written.add(os.path.normpath(os.path.expanduser(t)))
     return brief, cwd, ts, branch, written, models
 
 

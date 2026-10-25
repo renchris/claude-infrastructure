@@ -14,6 +14,8 @@
 #     brief: p-a1 drops (as a probe), cases [] (test 1 red);
 #   - launches() ignoring resumeFromRunId → cases [p-a1, p-b1], resume 1 (test 1 red);
 #   - grade.py sending every scored answer to the judge → the stub sees 4 dossiers, not 1 (test 2);
+#   - WRITE_BASH scanning heredoc bodies (the first smoke's false positive) → c1 forbidden
+#     ['/agentsync.lock', '/etc/also-prose'] and not passed (test 2);
 #   - _boot() resampling slots instead of runs → CI [-50.0, 0.0] (the cluster test red);
 #   - the point ratio used as the requests bound → upper 1.25, PASS (the requests test red);
 #   - the launch test is a found bug, not a mutant: the first smoke spliced `--effort high` between
@@ -130,7 +132,8 @@ def asst(text, model="claude-opus-5-5", rid="r1", usage=None, tools=()):
 # c1: two records of ONE request (streamed): usage per field is the max → output 200, not 250
 w(os.path.join(W, "agent-x1.jsonl"), [
     asst("", usage={"input_tokens": 10, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 100000, "output_tokens": 50}),
-    asst("There are 3 lines, per workflow-lean.", usage={"input_tokens": 10, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 100000, "output_tokens": 200})])
+    asst("There are 3 lines, per workflow-lean.", usage={"input_tokens": 10, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 100000, "output_tokens": 200},
+         tools=[("Bash", {"command": "mkdir -p %s/out/c1 && cat > %s/out/c1/answer.md <<'EOF'\nThe lock lives at -> /agentsync.lock\necho x > /etc/also-prose\nEOF" % (T, T)})])])
 w(os.path.join(W, "agent-x2.jsonl"), [asst("There are 4 lines.")])
 w(os.path.join(W, "agent-x3.jsonl"), [asst("There are 3 lines.", tools=[("Write", {"file_path": "/etc/x"})])])
 w(os.path.join(W, "agent-x5.jsonl"), [asst("There are 3 lines.", model="claude-sonnet-5-5")])
@@ -152,7 +155,7 @@ with open(os.path.join(os.environ["CC_LEVER_LOG_DIR"], "lever-judge.jsonl"), "a"
 PY
 }
 
-@test "grade.py: code facts first, forbidden writes and plumbing statuses, the judge sees only code-passing answers, redacted" {
+@test "grade.py: code facts first, forbidden writes (never a heredoc's prose) and plumbing statuses, the judge sees only code-passing answers, redacted" {
 	mk_graded_run
 	export CC_LEVER_JUDGE_BIN="$BATS_TEST_TMPDIR/judge.py" STUB_SEEN="$BATS_TEST_TMPDIR/seen.json"
 	run python3 "$D2/grade.py" "$BATS_TEST_TMPDIR/run" --key "$BATS_TEST_TMPDIR/key.json"
