@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2016  # the fixtures are JS source: their backticks are template literals, not expansions
 # hooks/workflow-lean-shadow.py — the LOG-ONLY PreToolUse hook on Workflow (docs/plans/USAGE_LEVERS.md
-# W1.3). Two contracts: (1) it never denies — no stdout, exit 0, on every input including its own
-# failures; (2) each agent() call is logged with the verdict a deny-mode hook would reach, the brief's
+# W1.3). Two contracts: (1) with no flag file (pct 0) it never denies — no stdout, exit 0, on every
+# input including its own failures (the S11 treated arm: tests/lever-treatment.bats); (2) each agent() call is logged with the verdict a deny-mode hook would reach, the brief's
 # commit/ship/Skill/MCP markers and the hook's latency.
 # RED-proof (2026-10-24, scratch copies): a copy that prints a deny decision fails test 2; a copy whose
 # agentType reader always returns None fails test 1 (the `lean` slot reads would-deny).

@@ -1,8 +1,9 @@
 #!/bin/bash
-# subagent-long-bash-shadow.sh — COUNT-ONLY rule: a subagent's foreground Bash with timeout > 270 s.
+# subagent-long-bash-shadow.sh — lever D4: a subagent's foreground Bash with timeout > 270 s.
 #
-# Plan: docs/plans/USAGE_LEVERS.md § W3. Research: docs/research/usage-levers-2026-10-23/round2/
-# REPORT.md decision 3. It LOGS, it never denies, and it prints nothing.
+# Plan: docs/plans/USAGE_LEVERS.md § W3 and § W7+ §2 D4. Research: docs/research/usage-levers-2026-10-23/
+# round2/REPORT.md decision 3. It LOGS. It prints nothing, except the one D4-DENY line of a treated
+# poll loop (S11, below), which only an agent in the treat arm at a pct above 0 can reach.
 #
 # WHY. A subagent's prompt cache lives 5 minutes. A foreground Bash that runs past ~300 s lets it
 # expire, and the subagent's next request re-writes its whole context: 250 rebuilds (46.3M tokens)
@@ -37,15 +38,24 @@
 #            agent_id; hooks/validate-bash.sh pipes that agent's next Bash call here whatever its
 #            timeout, and this writes one follow row linking it (follows_tool_use_id) and clears the
 #            marker. The follow call may also get its own subagent_bash row: consumers filter kind.
+# W7+ S11 (plan § W7+ §2 D4; decisions-2026-10-24 REPORT.md row 3b) adds the TREATMENT verdict. Only
+#   the poll-loop class is deny-eligible (long-runner, waiter and the wider pattern stay count-only),
+#   and every row carries treat_verdict: null (not eligible), "would_deny" (eligible, but this
+#   agent's arm is not treat at a pct above 0 — every eligible row at pct 0), or "deny". Only on
+#   "deny", and only after its row is written, does this print one line on stdout,
+#   `D4-DENY<TAB><the fixed message>`, which validate-bash.sh turns into its deny(). The message is
+#   the lever's tunable (§3 hillclimb "D4: the message"): a non-wait branch, `echo rc=$?`, and repeat
+#   the slice on 124; never run_in_background (it trips the /goal gate in validate-bash.sh).
 # Every row is one write() of at most 2 KB (cmd_head and transcript_path shed first), in UTC Z.
 # Markers live in $CC_SUBAGENT_LONG_BASH_PENDING, else beside a redirected log (so a replay through
 # CC_SUBAGENT_LONG_BASH_LOG never touches live state), else ~/.claude/state/levers/d4-pending.
 #
 # HOSTED by hooks/validate-bash.sh, which is already registered on PreToolUse(Bash) for every account
 # and already parses agent_id and run_in_background: it pipes the payload here only for a subagent's
-# foreground call that carries a timeout, so the main thread pays nothing. Kill switch:
-# CC_SUBAGENT_LONG_BASH=off. Log: ~/.claude/logs/subagent-long-bash.jsonl (command head + sha256,
-# never the whole command). Fail-open on every path. bash 3.2-safe.
+# foreground call that carries a timeout, so the main thread pays nothing. Kill switches:
+# CC_SUBAGENT_LONG_BASH=off (nothing runs), CC_LEVER_D4 / CC_LEVER_ALL = off|control (arm ctrl, so
+# never "deny"). Log: ~/.claude/logs/subagent-long-bash.jsonl (command head ≤ 200 chars + sha256,
+# never the whole command). Fail-open on every path: any failure prints nothing. bash 3.2-safe.
 set -uo pipefail
 trap 'exit 0' EXIT
 
@@ -102,8 +112,8 @@ _emit() { # <jq object program> [jq args…] — the row is built by the program
     | if (\$r | tojson | utf8bytelength) < 2048 then \$r
       else \$r + {cmd_head: ((\$r.cmd_head // \"\")[0:40]), transcript_path: null, trunc: true} end
     | tojson | if utf8bytelength < 2048 then . else empty end" 2>/dev/null)" || return 0
-  [ -n "$line" ] || return 0
-  mkdir -p "${_log%/*}" 2>/dev/null || return 0
+  [ -n "$line" ] || return 1
+  mkdir -p "${_log%/*}" 2>/dev/null || return 1
   printf '%s\n' "$line" >> "$_log" 2>/dev/null
 }
 
@@ -111,7 +121,7 @@ _emit() { # <jq object program> [jq args…] — the row is built by the program
 if [ -n "$_aid_ok" ] && [ -e "$_pend/$_aid" ]; then
   # claim the marker atomically: a parallel follow call that loses the rename logs nothing
   if mv "$_pend/$_aid" "$_pend/.claim.$_aid.$$" 2>/dev/null; then
-    IFS=$'\t' read -r _f_tuid _f_cls _f_wider _f_sha _f_epoch < "$_pend/.claim.$_aid.$$" || true
+    IFS=$'\t' read -r _f_tuid _f_cls _f_wider _f_sha _f_epoch _f_tv < "$_pend/.claim.$_aid.$$" || true
     rm -f "$_pend/.claim.$_aid.$$" 2>/dev/null
     _prep; _cmdsha
     case "$_f_epoch" in ''|*[!0-9]*) _gap=-1 ;; *) _gap=$(( _epoch - _f_epoch )) ;; esac
@@ -122,12 +132,13 @@ if [ -n "$_aid_ok" ] && [ -e "$_pend/$_aid" ]; then
             agent_type:$atype[0:128],tool_use_id:$tuid[0:128],
             follows_tool_use_id:$ftuid[0:128],follows_class:(if $fcls == "-" then null else $fcls end),
             follows_wider:(if $fw == "-" then null else $fw end),
+            follows_verdict:(if $ftv == "-" then null else $ftv end),
             gap_s:(if $gap < 0 then null else $gap end),same_cmd:($sha == $fsha),echo_rc:$rc,
             timeout_ms:$to,run_in_background:($bg == "true"),cmd_head:$head,cmd_sha256:$sha,arm:$arm}' \
       --arg ts "$_ts" --arg acct "$_acct" --arg sid "$_sid" --arg aid "$_aid" --arg atype "$_atype" \
       --arg tuid "$_tuid" --arg ftuid "${_f_tuid:--}" --arg fcls "${_f_cls:--}" --arg fw "${_f_wider:--}" \
-      --argjson gap "$_gap" --arg sha "$_sha" --arg fsha "${_f_sha:-}" --argjson rc "$_rc" \
-      --argjson to "$_toj" --arg bg "$_bg" --arg head "${_cmd:0:160}"
+      --arg ftv "${_f_tv:--}" --argjson gap "$_gap" --arg sha "$_sha" --arg fsha "${_f_sha:-}" \
+      --argjson rc "$_rc" --argjson to "$_toj" --arg bg "$_bg" --arg head "${_cmd:0:200}"
   fi
 fi
 
@@ -182,22 +193,37 @@ if [ -n "$_wider" ] && [ -z "$_class" ] && [ -z "$_exempt" ] && ! { [ "$_inner" 
 fi
 
 _prep; _cmdsha
+
+# ── treatment verdict (S11): poll-loop only; "deny" needs this agent's arm = treat at pct_eff > 0 ───
+# The arm already folds every lower-only control (hook kill, CC_LEVER_EXCLUDE, CC_LEVER_ALL/D4,
+# mode, trip, dead-man): treat is reachable only at pct_eff > 0. Both are re-checked here anyway, so
+# a partial lib load (LF_ARM unset) can only read would_deny.
+_tv=""
+if [ "$_class" = poll-loop ]; then
+  _tv=would_deny
+  if [ "${LF_ARM:-}" = treat ] && [ "${LF_PCT_EFF:-0}" -gt 0 ] 2>/dev/null; then _tv=deny; fi
+fi
+
 # shellcheck disable=SC2016  # a jq program: its $vars are jq's
 _emit 'def nul: if . == "" then null else . end;
    {kind:"subagent_bash",v:3,ts:$ts,acct:$acct,tp_acct:($tpa|nul),sid:$sid[0:128],agent_id:$aid[0:128],
     agent_type:$atype[0:128],tool_use_id:$tuid[0:128],timeout_ms:$to,broad:true,narrow:($cls != ""),
     why:($why|nul),would_deny_class:($cls|nul),exempt:($ex|nul),
     inner_timeout_s:(if $inner < 0 then null else $inner end),wider:($wider|nul),wider_would_deny:$wwd,
-    would:"count",arm:$arm,cmd_head:$head,cmd_sha256:$sha,transcript_path:$tp[0:300]}' \
+    would:"count",treat_verdict:($tv|nul),arm:$arm,cmd_head:$head,cmd_sha256:$sha,transcript_path:$tp[0:300]}' \
   --arg ts "$_ts" --arg acct "$_acct" --arg tpa "$_tp_acct" --arg sid "$_sid" --arg aid "$_aid" \
   --arg atype "$_atype" --arg tuid "$_tuid" --argjson to "$_to" --arg why "$_why" \
-  --arg head "${_cmd:0:160}" --arg sha "$_sha" --arg tp "$_tp" \
+  --arg head "${_cmd:0:200}" --arg sha "$_sha" --arg tp "$_tp" \
   --arg cls "$_class" --arg ex "$_exempt" --argjson inner "$_inner" \
-  --arg wider "$_wider" --argjson wwd "$_wider_wd"
+  --arg wider "$_wider" --argjson wwd "$_wider_wd" --arg tv "$_tv" || { [ "$_tv" != deny ] || _tv=would_deny; }   # no row, no deny
 
 # a would-deny (narrow or wider) arms the follow pipe for this agent's next Bash call
 if [ -n "$_aid_ok" ] && { [ -n "$_class" ] || [ "$_wider_wd" = true ]; } && mkdir -p "$_pend" 2>/dev/null; then
   find "$_pend" -type f -mmin +1440 -delete 2>/dev/null   # an agent that never called again
-  printf '%s\t%s\t%s\t%s\t%s\n' "$_tuid" "${_class:--}" "${_wider:--}" "$_sha" "$_epoch" > "$_pend/$_aid" 2>/dev/null
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$_tuid" "${_class:--}" "${_wider:--}" "$_sha" "$_epoch" "${_tv:--}" > "$_pend/$_aid" 2>/dev/null
+fi
+
+if [ "$_tv" = deny ]; then
+  printf 'D4-DENY\t%s\n' "Denied by usage lever D4 (3df527edd333): this foreground poll loop can outlive the subagent's 5-minute prompt cache, and the next request then re-writes your whole context. If you are not waiting on something outside this agent, do not poll: do the next piece of work now and check once later. If you must wait, wait in slices: re-issue it as \`timeout 260 bash -c '<the loop>'; echo rc=\$?\` with a Bash tool timeout of 270000 or less, and repeat that same slice while it prints rc=124. Do not use run_in_background for it."
 fi
 exit 0

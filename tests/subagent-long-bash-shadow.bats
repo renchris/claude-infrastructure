@@ -10,6 +10,8 @@
 # would_deny_class field, and `bash -c '<loop>'` was not a poll loop.
 # S3 RED-proof (2026-10-25): against the base hooks (git show c43f39d2b:…) (6)-(10) fail: rows are
 # v:2 with no arm and no wider class, and validate-bash never pipes a no-timeout call, so no d4_follow.
+# S11 (2026-10-25): (9) used to pin "a live 100 arm never denies"; S11 adds that deny on purpose, so
+# (9) keeps only pct 0 and the treated arm moved to tests/lever-treatment.bats.
 #
 # Hermetic: $HOME and the log are fixtures; validate-bash runs with the same isolation its own
 # suites use (CC_SHARED_CHECKOUT, CC_VB_DECISION_LOG, no kitty).
@@ -189,8 +191,10 @@ ROWS
     = '[["time-sleep",true]]' ]
 }
 
-@test "(9) S3 pct 0 never denies, and nor does a raised arm: the shadow has no deny path" {
-  for mode_pct in "shadow 0" "live 100"; do
+# S11 changed this on purpose: a raised (treat) arm now denies a poll loop. That arm's contract is
+# owned by tests/lever-treatment.bats; this keeps only the pct 0 half.
+@test "(9) S3 pct 0 never denies: the would-deny is logged and nothing is decided" {
+  for mode_pct in "shadow 0" "live 0"; do
     # shellcheck disable=SC2086  # two words on purpose
     s3_flags $mode_pct
     : > "$CC_SUBAGENT_LONG_BASH_LOG"
@@ -200,8 +204,7 @@ ROWS
     [ "$status" -eq 0 ]; [ -z "$output" ]
     [ "$(jq -sr '[.[] | .kind] | join(",")' "$CC_SUBAGENT_LONG_BASH_LOG")" = "subagent_bash,d4_follow" ]
   done
-  # under live 100 with a fresh heartbeat the arm reads treat: logged, and still nothing decided
-  [ "$(jq -sr '[.[] | .arm.arm] | unique | join(",")' "$CC_SUBAGENT_LONG_BASH_LOG")" = treat ]
+  [ "$(jq -sr '[.[] | .arm.arm] | unique | join(",")' "$CC_SUBAGENT_LONG_BASH_LOG")" = ctrl ]
 }
 
 @test "(10) S3 rows stay under 2 KB in one write: oversize fields shed, concurrent appends stay whole" {

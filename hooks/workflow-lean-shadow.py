@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""PreToolUse hook on Workflow — LOG ONLY. It never denies, never asks, prints nothing on stdout and
-exits 0 on every path, its own failures included.
+"""PreToolUse hook on Workflow — lever D2. It logs every call, never asks, and exits 0 on every path,
+its own failures included. It prints nothing, except the one deny of D2's treatment (W7+ S11, below),
+which only a lineage in the treat arm at a pct above 0 can reach.
 
 WHY (docs/plans/USAGE_LEVERS.md W1.3; docs/research/usage-levers-2026-10-23/round2/REPORT.md). A
 read-only Workflow slot run as the default agent loads CLAUDE.md, rules, memory and skills; the same
@@ -29,6 +30,19 @@ W7+ S3 (plan § W7+ §2 D2 "Arm", §3 "Telemetry rows", §6 on UTC and 2 KB rows
   - `follows_deny`: whether this session's previous Workflow row was a would-deny (null when there is
     none in the log's tail), with `prev_tool_use_id`, `prev_gap_s` and `prev_same_script` — the
     edited-resubmit signal D2's compliance metric is scored from.
+W7+ S11 (plan § W7+ §2 D2) adds the TREATMENT: block a Workflow script ONCE per (session, script_sha)
+when any agent() slot reads would-deny (no agentType, no needs-default/keep-default exemption),
+with the fixed message D2_MSG (the lever's tunable, §3 hillclimb "D2: the message"). Never tunable:
+a resume (resumeFromRunId) always passes. Every row carries:
+  - `would_treat`: the treatment branch's own verdict, whatever the arm (true iff would_deny, not a
+    resume, and no earlier treated row or block-once state for this session and script);
+  - `treat_skip`: why an eligible call is not treated — "resume" | "repeat" | null;
+  - `denied`: true only when would_treat AND the D2 arm is treat AND pct_eff > 0 AND the block-once
+    state was created now (O_EXCL, so two racing calls deny at most once). At pct 0 (S0) no arm is
+    treat, so `denied` is always false and the hook prints nothing;
+  - `block_state`: "created" | "exists" | "error" | null.
+Block-once state: one empty file per (session, script_sha) in <lever state dir>/d2-blocked/ (S6
+rotates the state dir). The deny is printed only after its row is written.
 Each row is ONE write() of at most 2 KB, so concurrent appends stay whole. A call whose row would be
 larger is split losslessly: the row without `slots` (slots_shed "split", slot_rows k), then k rows
 of kind "slots" carrying the slots in order; readers join them back by tool_use_id.
@@ -69,6 +83,15 @@ LOG_TAIL_BYTES = (
     4_000_000  # repeat_in_session and follows_deny scan this much of the log's end
 )
 MAX_ROW = 2048  # one write() at most this many bytes (lever_flags.MAX_ROW)
+D2_MSG = (
+    "Blocked once by usage lever D2 (a4c54d1744d1): {n} agent() slot(s) in this Workflow script have "
+    "no agentType ({slots}). A read-only slot with a self-contained brief (research, measurement, "
+    "extraction, review, drafting into files) should run as `agentType: 'workflow-lean'`, which loads "
+    "no CLAUDE.md, rules, memory or skills and starts about 84% cheaper at equal correctness: add it to "
+    "those slots and resubmit. A slot that writes code, commits, lands, or needs a Skill or MCP keeps "
+    "the default agent: put a `/* needs-default */` comment inside its agent() call. Resubmitting this "
+    "same script unchanged is never blocked again."
+)
 
 
 class Bounded(Exception):
@@ -376,11 +399,11 @@ def script_source(ti: Dict[str, Any], cwd: str) -> Tuple[str, Optional[str]]:
 
 def history(
     log: str, sid: Any, sha: Optional[str]
-) -> Tuple[int, Optional[Dict[str, Any]]]:
-    """(earlier rows of this session with the same script sha, this session's latest row) from the
-    log's tail."""
+) -> Tuple[int, int, Optional[Dict[str, Any]]]:
+    """(earlier rows of this session with the same script sha, how many of those were would_treat,
+    this session's latest row) from the log's tail. kind=slots rows are never call rows."""
     if not isinstance(sid, str) or not sid:
-        return 0, None
+        return 0, 0, None
     try:
         with open(log, "rb") as fh:
             fh.seek(0, os.SEEK_END)
@@ -388,8 +411,8 @@ def history(
             fh.seek(max(0, size - LOG_TAIL_BYTES))
             raw = fh.read()
     except OSError:
-        return 0, None
-    n, prev, needle = 0, None, json.dumps(sid).encode()
+        return 0, 0, None
+    n, n_treat, prev, needle = 0, 0, None, json.dumps(sid).encode()
     for ln in raw.split(b"\n"):
         if needle not in ln:
             continue
@@ -406,7 +429,8 @@ def history(
         prev = r
         if sha and r.get("script_sha") == sha:
             n += 1
-    return n, prev
+            n_treat += r.get("would_treat") is True
+    return n, n_treat, prev
 
 
 def ts_epoch(ts: Any) -> Optional[float]:
@@ -440,6 +464,74 @@ def lever_arm(sid: Any) -> Dict[str, Any]:
             "arm": None,
             "arm_error": f"{e.__class__.__name__}: {e}"[:120],
         }
+
+
+def block_path(sid: Any, sha: str) -> str:
+    """The block-once state file of (session, script_sha): a hash name, so any sid is a safe name."""
+    try:
+        sys.path.insert(
+            0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")
+        )
+        import lever_flags as lf  # noqa: E402
+
+        base = lf.state_dir()
+    except Bounded:
+        raise
+    except Exception:
+        base = os.path.join(os.path.expanduser("~"), ".claude", "state", "levers")
+    key = hashlib.sha256(f"{sid}:{sha}".encode("utf-8", "replace")).hexdigest()[:40]
+    return os.path.join(base, "d2-blocked", key)
+
+
+def treatment(row: Dict[str, Any], n_treat: int) -> Dict[str, Any]:
+    """D2's treatment verdict for one call (S11). Never denies unless the arm is treat at pct > 0."""
+    out: Dict[str, Any] = {
+        "would_treat": False,
+        "treat_skip": None,
+        "denied": False,
+        "block_state": None,
+    }
+    sha = row.get("script_sha")
+    if row.get("parse") != "ok" or row.get("would_deny") is not True or not sha:
+        return out
+    if row.get("resume_from_run_id"):
+        out["treat_skip"] = "resume"  # never tunable: a resume always passes
+        return out
+    path = block_path(row.get("session_id"), sha)
+    if n_treat > 0 or os.path.exists(path):
+        out["treat_skip"] = "repeat"
+        out["block_state"] = "exists" if os.path.exists(path) else None
+        return out
+    out["would_treat"] = True
+    arm = row.get("arm") if isinstance(row.get("arm"), dict) else {}
+    pct = arm.get("pct_eff")
+    if arm.get("arm") != "treat" or not isinstance(pct, int) or pct <= 0:
+        return out
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except OSError:
+        out["block_state"] = "error"  # no state, no deny: block-once must hold
+        return out
+    try:
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644))
+        out["block_state"], out["denied"] = "created", True
+    except FileExistsError:  # a racing call of the same script created it first
+        out["block_state"], out["treat_skip"] = "exists", "repeat"
+        out["would_treat"] = False
+    except OSError:
+        out["block_state"] = "error"
+    return out
+
+
+def deny_reason(row: Dict[str, Any]) -> str:
+    wd = [s for s in row.get("slots") or [] if s.get("verdict") == "would-deny"]
+    names = [
+        f"line {s.get('line')}" + (f" '{s['label']}'" if s.get("label") else "")
+        for s in wd[:8]
+    ]
+    if len(wd) > 8:
+        names.append(f"+{len(wd) - 8} more")
+    return D2_MSG.format(n=len(wd), slots=", ".join(names))
 
 
 def encode(row: Dict[str, Any]) -> List[bytes]:
@@ -494,6 +586,7 @@ def main() -> None:
     log = os.path.join(
         os.path.expanduser("~"), ".claude", "logs", "workflow-lean-shadow.jsonl"
     )
+    n_treat = 0
     try:
         data = json.load(sys.stdin)
         ti = data.get("tool_input") or {}
@@ -514,7 +607,7 @@ def main() -> None:
             if src is not None
             else None
         )
-        n_rep, prev = history(log, row["session_id"], sha)
+        n_rep, n_treat, prev = history(log, row["session_id"], sha)
         row["follows_deny"] = None if prev is None else prev.get("would_deny") is True
         if prev is not None:
             pe = ts_epoch(prev.get("ts"))
@@ -555,12 +648,23 @@ def main() -> None:
             )
     elif "session_id" in row:
         row.update(lineage=None, lineage_src=None, arm=None, arm_error="skipped")
+    # D2's treatment (S11) needs the arm, so it comes after it; a self-bound here is no deny.
+    reason = None
+    try:
+        row.update(treatment(row, n_treat))
+        if row.get("denied"):
+            reason = deny_reason(row)
+    except Bounded:
+        row.update(denied=False, treat_error="self-bounded")
+    except Exception as e:
+        row.update(denied=False, treat_error=f"{e.__class__.__name__}: {e}"[:120])
     row["latency_ms"] = {
         "wall": round((time.monotonic() - t0) * 1000, 2),
         "cpu": round(time.process_time() * 1000, 2),
         "timeout_s": TIMEOUT_S,
     }
     lines = encode(row)
+    written = False
     try:
         os.makedirs(os.path.dirname(log), exist_ok=True)
         fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
@@ -569,10 +673,27 @@ def main() -> None:
                 os.write(
                     fd, line
                 )  # one write() per row: O_APPEND keeps concurrent rows whole
+            written = bool(lines)
         finally:
             os.close(fd)
     except OSError:
         pass
+    # The deny is printed only after its row is written (§3: arms rows are written before acting).
+    if reason and written:
+        signal.alarm(0)
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": reason,
+                    }
+                }
+            )
+            + "\n"
+        )
+        sys.stdout.flush()
 
 
 def _bound(_sig: int, _frm: Any) -> None:

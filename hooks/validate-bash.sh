@@ -87,8 +87,13 @@ IFS=$'\t' read -r _P_SID _P_BG _P_AID _P_TS <<<"$_META"
 # FOLLOW pipe (plan § W7+ §4 S3): after a would-deny the shadow leaves a marker named for the agent_id,
 # and that agent's NEXT Bash call is piped too, whatever its timeout or backgrounding, so the shadow
 # records what the agent did next (kind=d4_follow). A subagent call pays one builtin `test -e`; the
-# marker dir is resolved exactly as the shadow resolves it. Still log-only: nothing here denies.
+# marker dir is resolved exactly as the shadow resolves it.
+# TREATMENT (plan § W7+ §4 S11): the shadow prints nothing unless it treats a poll loop (lever D4's
+# arm = treat at a pct above 0), and then one `D4-DENY<TAB><reason>` line. Its stdout is kept only
+# when it is exactly that shape, and the deny is issued below, once deny() exists. At pct 0 (S0) no
+# arm is treat, the shadow prints nothing, and this block is the same fail-open passenger as before.
 _slb_follow=""
+_slb_deny=""
 if [ "$_P_AID" != "-" ]; then
   case "$_P_AID" in
     *[!A-Za-z0-9._-]*|.*) ;;
@@ -100,7 +105,8 @@ if [ "$_P_AID" != "-" ]; then
 fi
 if [ "$_P_AID" != "-" ] && { [ -n "$_slb_follow" ] || { [ "$_P_BG" != "true" ] && [[ $INPUT == *'"timeout"'* ]]; }; } \
    && [ "${CC_SUBAGENT_LONG_BASH:-shadow}" != off ] && [ -f "${BASH_SOURCE[0]%/*}/subagent-long-bash-shadow.sh" ]; then
-  printf '%s' "$INPUT" | /bin/bash "${BASH_SOURCE[0]%/*}/subagent-long-bash-shadow.sh" >/dev/null 2>&1 || true
+  _slb_out="$(printf '%s' "$INPUT" | /bin/bash "${BASH_SOURCE[0]%/*}/subagent-long-bash-shadow.sh" 2>/dev/null)" || true
+  case "$_slb_out" in D4-DENY$'\t'?*) _slb_deny="${_slb_out#D4-DENY$'\t'}" ;; esac
 fi
 
 # Source the argv-aware flag detector. If unavailable, caller can force
@@ -196,6 +202,9 @@ warn() {
 EOF
   exit 0
 }
+
+# Lever D4's treated poll loop (the shadow's verdict, captured at the passenger block above).
+[ -z "$_slb_deny" ] || deny "$_slb_deny"
 
 # check_real_flag <flag> — returns 0 if CMD contains <flag> as a real argv
 # token (in a non-inert head, outside message bodies). Returns 1 otherwise.
