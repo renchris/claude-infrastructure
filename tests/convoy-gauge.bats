@@ -531,14 +531,18 @@ hsrow() { row '[.hs_state,(.hs_why//"null"),.hs_transition,.hs_page]|join(",")';
   gauge
   [ "$status" -eq 0 ]
   [ "$(hsrow)" = "stall,cpu-flat,stall,desk" ]
-  [ "$(row '[.hs_pid,.hs_cpu_delta_s,.hs_wall_s]|join(",")')" = "1073,0.02,60" ]
+  [ "$(row '[.hs_pid,.hs_cpu_delta_s]|join(",")')" = "1073,0.02" ]
+  # wall is the fixture's 60 s plus the fixture-to-gauge gap: 62 at load ~280 (2026-10-25), so a range
+  local w; w="$(row .hs_wall_s)"
+  [ "$w" -ge 60 ]
+  [ "$w" -lt 90 ]
   local s; s="$(row .hs_sample)"
   [[ "$s" == "$FX/evidence/convoy-hs-"*"/hammerspoon.sample.txt" ]] || false
   [ -s "$s" ]
   grep -qx "1073 1 -file $s" "$FX/sample.argv"
   grep -q 'sample hammerspoon pid=1073 rc=0' "$(dirname "$s")/meta.txt"
   [ "$(lines "$FX/notify.argv")" = 1 ]
-  grep -q -- '--role desk HAMMERSPOON Hammerspoon stalled ~60s (main thread used no CPU); sample at .*; report-only, nothing was killed' "$FX/notify.argv"
+  grep -q -- "--role desk HAMMERSPOON Hammerspoon stalled ~${w}s (main thread used no CPU); sample at .*; report-only, nothing was killed" "$FX/notify.argv"
   grep -q 'state=stall ' "$FX/hs.state"
   [ "$(row .state)" = clear ]                                     # the daemon verdict is untouched
 }
