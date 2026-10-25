@@ -568,15 +568,19 @@ KEEP_SHELLS = os.environ.get("CC_RESTORE_KEEP_SHELLS") == "1"
 # leaf), never relaunched. A tab is rebuilt in ONE live OS window, that of its first live pane: a
 # live pane of the same recorded tab that sits in another OS window stays there, because moving a
 # pane between OS windows is what crashed kitty 0.48.2 on 2026-10-15.
-LIVE, LIVE_OS = {}, {}
+# A line "host <recorded OS window id> <live window id>" rebuilds that recorded window inside the
+# live OS window of that pane (a placeholder holding its Desktop), the host kept as an extra pane.
+LIVE, LIVE_OS, HOST = {}, {}, {}
 if os.environ.get("CC_RESTORE_LIVE_MAP"):
     for ln in open(os.environ["CC_RESTORE_LIVE_MAP"]):
         f = ln.split()
-        if len(f) >= 2 and f[0].isdigit() and f[1].isdigit():
+        if len(f) >= 3 and f[0] == "host" and f[1].isdigit() and f[2].isdigit():
+            HOST[f[1]] = f[2]
+        elif len(f) >= 2 and f[0].isdigit() and f[1].isdigit():
             LIVE[f[0]] = f[1]
             LIVE_OS[f[0]] = f[2] if len(f) >= 3 else "?"
 # a pane whose process is Claude Code, or the launcher that resumes it
-CLAUDE_RE = re.compile(r"(^|[/ ])(claude|claude\.exe|reso-resume-one|cc-close-attrib|cc-pane-runner)( |$)")
+CLAUDE_RE = re.compile(r"(^|[/ ])(claude|claude\.exe|reso-resume-one|cc-close-attrib|cc-pane-runner)( |\Z)")
 TEAMMATE_RE = re.compile(r"--agent-id|--parent-session-id")
 def key(wt):
     try:
@@ -641,11 +645,11 @@ def load(path):
     return data, pane_sid, disp, (kp if kp.isdigit() else "tree")
 # ── PANE → SESSION (2026-10-25). The roster names a pane for each session, but a reconstructed
 #    roster can name the wrong pane, or none (after the 2026-10-25 reboot voiceink came back in a new
-#    window although pane 12 still ran `reso-resume-one … 509e3aad…`). In order of proof: a pane
+#    window although pane 12 still ran "reso-resume-one … 509e3aad…"). In order of proof: a pane
 #    whose process argv carries the session id (a resume launcher, not a teammate: a teammate argv
 #    names its PARENT session); the roster pane, when its recorded cwd agrees with the row; the one
 #    unclaimed pane recorded in the cwd of the row, a Claude pane first; the roster pane regardless.
-#    A pane cwd is that of its Claude PROCESS, never kitty `cwd`, which is the shell cwd: pane 297
+#    A pane cwd is that of its Claude PROCESS, never the kitty "cwd" field, which is the shell cwd: pane 297
 #    read lead-idle-fix there while its claude (pid 3378, the tombstone of 3f1c1301) ran in
 #    lkw-scope-floor. A teammate pane never takes a session. ──
 def norm(p):
@@ -810,6 +814,7 @@ for path in trees:
         src = "k%sw%s" % (kp, o.get("id"))
         ls = [l for _, n in tabs for l in leaves(n)]
         wins.append({"src": src, "pwid": pwid, "disp": disp.get(pwid), "tabs": tabs, "grp": src,
+                     "host": HOST.get(str(o.get("id"))),
                      "prompt": sum(1 for l in ls if l[0] == "row" and l[2])})
 ntree = len(wins)
 
@@ -881,7 +886,8 @@ def emit_live(w, ti, layout, node):
     lives = [n for n in ls if n["leaf"][0] == "live"]
     for n in lives:
         key[id(n)] = op("live", n["leaf"][1], "", "live", "")
-    anchor = key[id(lives[0])]
+    # the host: a live pane outside the record, kept as an extra (the read-back appends it)
+    anchor = key[id(lives[0])] if lives else op("live", w["host"], "", "live", "")
     for n in ls:
         if n["leaf"][0] == "row":
             key[id(n)] = op("row", str(n["leaf"][1]), "", "vsplit", anchor)
@@ -892,7 +898,7 @@ def emit_live(w, ti, layout, node):
     w.setdefault("live_specs", []).append((ti, kt_tree(node, {i: str(k) for i, k in key.items()})))
     return ops
 def emit(w, ti, layout, node):
-    if any(l[0] == "live" for l in leaves(node)):
+    if any(l[0] == "live" for l in leaves(node)) or (ti == 0 and w.get("host")):
         return emit_live(w, ti, layout, node)
     ops, sim = [], {}
     def op(leaf, how, anchor, bias=""):
@@ -1231,7 +1237,12 @@ for o in ops:
             wid[o[3]] = str(hit[0]); have_ids.add(hit[0])
 want = kt.relabel(plan, resolve)
 extra = [w for w in tab["windows"] if w not in set(kt.leaves(want))]
-want = kt.append_row(want, extra)
+def cols(n):    # side-by-side columns a tree spans
+    if not kt.is_pair(n):
+        return 1
+    return cols(n["one"]) + cols(n["two"]) if n["h"] else max(cols(n["one"]), cols(n["two"]))
+for x in extra:  # each pane the record does not know gets one more equal column on the right
+    want = x if want is None else {"h": True, "b": cols(want) / (cols(want) + 1.0), "one": want, "two": x}
 d = kt.diff(want, tab["tree"])
 if not d:
     print("ok"); sys.exit(0)

@@ -470,3 +470,18 @@ readback_ls() { awk '/ launch / { n = 0; next } / ls$/ { n++ } END { print n - 1
   run python3 "$TT" spec "$KLOG.spec" "$SM/hb.kitty-ls.json" "$SM/hb.roster.json" "$KLOG.map"
   [ "$status" -eq 0 ]; [ "$output" = spec-ok ]
 }
+
+@test "live map: a host pane rebuilds a recorded window inside its live OS window, kept beside the record" {
+  # The placeholder shell of a recorded window holds that window's Desktop. Rebuilding there keeps
+  # the Desktop order; a new window would go fullscreen after every other Desktop.
+  small_tree
+  printf 'host\t6\t900\n' > "$BATS_TEST_TMPDIR/live.map"
+  echo "host 900" > "$KLOG.map"
+  printf '[{"id":1,"platform_window_id":900,"tabs":[{"id":1,"layout":"splits","layout_state":{"class":"Splits","all_windows":{"window_groups":[{"id":1,"window_ids":[900]},{"id":2,"window_ids":["@sid-a@"]},{"id":3,"window_ids":["@sid-b@"]},{"id":4,"window_ids":["@sid-c@"]}]},"pairs":{"one":1,"two":{"one":2,"two":{"one":3,"two":4}}}},"windows":[{"id":900},{"id":"@sid-a@"},{"id":"@sid-b@"},{"id":"@sid-c@"}]}]}]\n' > "$KLOG.lstpl"
+  run --separate-stderr /bin/bash "$LAYOUT" --desktops --restore --to unix:/tmp/cc-fake-sock --tree "$SM/hb.kitty-ls.json" --file "$ROWS" --live-map "$BATS_TEST_TMPDIR/live.map"
+  [ "$status" -eq 0 ]
+  ! grep -q -- '--type=os-window' "$KLOG" || false
+  [ "$(grep ' launch ' "$KLOG" | grep -c -- '--location=vsplit --match window_id:900 --next-to id:900')" -eq 3 ]
+  # the spec is the record (a over b) | c with the host appended to its right
+  [ "$(jq -c '.pairs.two' "$KLOG.spec")" = 900 ]
+}
