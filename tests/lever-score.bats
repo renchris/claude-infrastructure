@@ -14,7 +14,7 @@
 #   · one event per decision: S3's kind=slots and kind=d4_follow rows are filtered by kind
 #   · plumbing fails closed on a missing root and on >0.1% unparseable rows (each with its
 #     positive control), and is never CLEAN while any check lacks data
-#   · ledger --write merges by sid; the verbs wave S5 owns exit 3
+#   · ledger --write merges by sid; a bad window is a usage error (the S5 verbs: lever-verdicts.bats)
 # RED-proof: (a) file-absence: before S4 there is no bin/cc-lever-score. (b) mutation, run by hand
 # 2026-10-25 on a scratch copy of bin/ scripts/lib/ hooks/lib/: dropping scan()'s seen_mid check
 # turns test 2 red (responses 4); deleting the root-status branch turns test 4 red; dropping the
@@ -112,12 +112,8 @@ check() { /usr/bin/python3 -I "$CLI" plumbing --since 7d --json 2>/dev/null | jq
   [ "$(jq -r .sid "$CC_LEVER_LOG_DIR/lever-ledger.jsonl" | sort -u | wc -l | tr -d ' ')" -eq 3 ] || false
 }
 
-@test "the verbs wave S5 owns exit 3, and a bad window is a usage error" {
-  for v in score aa report failures guards; do
-    run /usr/bin/python3 -I "$CLI" "$v"
-    [ "$status" -eq 3 ] || { echo "$v → $status"; false; }
-    [[ "$output" == *"wave S5"* ]] || false
-  done
+@test "a bad window is a usage error" {
   run /usr/bin/python3 -I "$CLI" ledger --since nonsense
   [ "$status" -eq 2 ] || false
+  [[ "$output" == *"bad window"* ]] || false
 }

@@ -15,8 +15,9 @@ precedence in hooks/lib/lever_flags.py. Only the operator raises a stage; the gu
 A RAISE (stage up, candidate, promote) is refused (exit 3) unless all hold: --confirm (bare, or
 naming the lever), the latest lever-score row for that lever at its current stage, written since
 the stage began, says ADVANCE (candidate excepted: it runs only inside S2/S3); a guard heartbeat no
-older than CC_LEVER_DEADMAN_S; and no un-acked trip. Until cc-lever-score lands (wave S5) there is
-no verdict, so every raise is refused. Lowering needs none of it.
+older than CC_LEVER_DEADMAN_S; and no un-acked trip. Verdict rows (kind score) come from
+`cc-lever-score score --write`; its kind=aa rows in the same file are never read as a verdict.
+Lowering needs none of it.
 
 Writes are tmp+rename under an exclusive flock on flags.lock; every write appends one audit row
 (one write(), at most 2 KB, UTC Z). A missing flags.json is created on first use with every lever
@@ -183,13 +184,15 @@ def latest_advance(lever, e):
                     r = json.loads(raw)
                 except ValueError:
                     continue
-                if isinstance(r, dict) and r.get("lever") == lever and r.get("stage") == e.get("stage"):
+                # verdict rows only: cc-lever-score also logs kind=aa rows here, which carry no verdict
+                if isinstance(r, dict) and r.get("kind", "score") == "score" and \
+                        r.get("lever") == lever and r.get("stage") == e.get("stage"):
                     last = r
     except OSError:
         pass
     if last is None:
-        raise Refused("no lever-score verdict for %s at %s (%s absent or silent; cc-lever-score lands in "
-                      "wave S5): a raise needs the latest verdict to be ADVANCE" % (lever, e.get("stage"), p))
+        raise Refused("no lever-score verdict for %s at %s (%s absent or silent; "
+                      "cc-lever-score score --write writes it): a raise needs the latest verdict to be ADVANCE" % (lever, e.get("stage"), p))
     if last.get("verdict") != "ADVANCE":
         raise Refused("the latest lever-score verdict for %s at %s is %s, not ADVANCE" %
                       (lever, e.get("stage"), last.get("verdict")))

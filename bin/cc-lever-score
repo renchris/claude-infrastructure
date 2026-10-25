@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """cc-lever-score — the usage levers' scorer (docs/plans/USAGE_LEVERS.md § W7+ §3 row "Scorer").
 
-Wave S4 builds the core; the verbs S5 owns exit 3 with a pointer.
+Wave S4 built the core (ledger, plumbing, selftest); wave S5 the statistics, guards and verdicts
+(scripts/lib/lever_stats.py, scripts/lib/lever_guards.py, config/levers.json).
 
   cc-lever-score ledger   [--since W] [--until T] [--write]
       One row per session over the window: sid, lineage, acct, D1/D2 arms and per-lever event
@@ -12,16 +13,37 @@ Wave S4 builds the core; the verbs S5 owns exit 3 with a pointer.
   cc-lever-score plumbing [--since W] [--until T] [--json]
       Every §2 "Plumbing gate" check. A check with no data today (or one a later wave builds) is
       NO-DATA, and any FAIL or NO-DATA makes the verdict PLUMBING: there is no pass by absence.
+  cc-lever-score score [--lever Dn] [--since W] [--until T] [--split train|test [--unseal]]
+                       [--write] [--json]
+      Each lever's verdict over its stage (default window: the stage start): ADVANCE, KEEP,
+      REVERT, PARK, NOT-MERGED or PLUMBING, with the savings estimate in fleet pp/wk (ctrl − treat
+      per event × eligible events/wk), its cluster-bootstrap CI at the Haybittle-Peto bound of the
+      current look at both read-weight ends, CUPED when the covariate is balanced, SRM, the
+      pseudo-salt A/A and the guards at 95%. stat_verdict is the statistics alone; verdict also
+      needs plumbing clean. --write appends lever-score.jsonl (cc-lever raises read the latest
+      ADVANCE there) and merges the ledger the guards read; with --split it appends
+      lever-rounds.jsonl instead. Refused (exit 3): a thresholds sha pinned at the raise that
+      config/levers.json no longer matches; --split test without --unseal.
+  cc-lever-score aa [--lever Dn] [--reps 200] [--since W] [--write] [--json]
+      Pseudo-salt A/A on the real unit: FPR at |z| >= 1.96 in [2%, 8%] and the MDE at the final
+      look below SIA, else the lever's savings verdict is offline-only (§2 "Before S2").
+  cc-lever-score report [--lever Dn] [--json]      the latest score, A/A and guard rows; no scan
+  cc-lever-score failures --split train [--lever Dn] [--top N]
+      Treated train events costing more than their account's control mean, tallied by cause
+      bucket, for the next hillclimb round. Any other split is refused (exit 3).
+  cc-lever-score guards [--look] [--write] [--json]
+      T1-T5 from ledger rows only (scripts/lib/lever_guards.py), one-sided 99% Holm (95% with
+      --look); exit 0 OK/IDLE, 1 BREACH, 4 NO-DATA/PLUMBING. --write appends lever-guard.jsonl.
   cc-lever-score selftest [--keep DIR]
       Builds a synthetic fleet with a planted effect, scores it twice in fresh processes, and
       requires: byte-identical output, the effect recovered, dedupe across roots, hook denies split
       out, a context-wall death found, plumbing clean where it has data, and plumbing failing closed
       on a missing root and on >0.1% unparseable rows.
-  cc-lever-score score|aa|report|failures|guards → exit 3 (wave S5 builds them)
 
   W = <N>d | <N>h | YYYY-MM-DD (UTC); default 7d. T = YYYY-MM-DD[THH:MM:SSZ]; default now.
-Exit: 0 ok / plumbing CLEAN / selftest PASS · 1 plumbing PLUMBING / selftest FAIL · 2 usage ·
-3 not built yet. Env: CC_NOW (epoch "now", tests), plus scripts/lib/lever_events.py's seams.
+Exit: 0 ok / plumbing CLEAN / selftest PASS · 1 plumbing PLUMBING / selftest FAIL / guard BREACH ·
+2 usage · 3 refused · 4 guards blind. Env: CC_NOW (epoch "now", tests), plus
+scripts/lib/lever_events.py's seams.
 Reads only; it never changes a flag, a stage or a session.
 """
 
@@ -29,6 +51,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -41,13 +64,14 @@ import time
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "scripts", "lib"))
 import lever_events as le  # noqa: E402
+import lever_guards as lg  # noqa: E402
+import lever_stats as lsx  # noqa: E402
 
 lf = le.lf
 PARSE_MAX = 0.001       # §2: parse failures above 0.1%
 FLAG_SRC_MAX = 0.01     # §2: flag_src != file on more than 1% of rows
 RECOMPUTE_MAX = 0.005   # §2: logged arm != recomputed arm on more than 0.5% of rows
 DIFF_MAX = {"join_coverage": 3.0, "imputed_output_share": 5.0, "outcome_missing": 3.0}  # points
-S5_VERBS = ("score", "aa", "report", "failures", "guards")
 MAX_ROW = 2048
 
 
@@ -188,7 +212,9 @@ def recompute_ok(salt, unit, arm, u, pct):
     return False
 
 
-def plumbing(c):
+def plumbing(c, lever_checks=None):
+    """lever_checks: the per-lever S5 checks (SRM, covariate balance, placebo history, bootstrap vs
+    A/A SD), already folded across levers by fold_lever_checks()."""
     checks = []
     # 1. roots
     rs = le.root_status()
@@ -296,20 +322,16 @@ def plumbing(c):
             d = abs(per["ctrl"] - per["treat"]) * 100
             checks.append(chk(label, "fail" if d > DIFF_MAX[name] else "pass",
                               "ctrl %s, treat %s" % (_pct(per["ctrl"]), _pct(per["treat"]))))
-    # 9. the fingerprint: observed today, pinned by S5's config/levers.json
-    vers = sorted({s["cc_version"] for s in c["sess"].values() if s["cc_version"]})
-    models = sorted({m for s in c["sess"].values() for m in s["models"]})
-    checks.append(chk("fingerprint and thresholds sha unchanged mid-stage", "no-data",
-                      "observed CC %s; main models %s; no pin to compare (config/levers.json)" % (
-                          ",".join(vers[-3:]) or "-", ",".join(models[:4]) or "-"), "S5"))
-    for name, owner in (("SRM p >= 0.001 overall and per account; arm x account chi2", "S5"),
-                        ("treatment exposure >= 80%", "S11/S12"),
-                        ("covariate balance", "S5"),
-                        ("placebo-salt A/A significant in <= 3 of last 20", "S5"),
-                        ("bootstrap SD within 20% of A/A SD", "S5"),
-                        ("weekly fleet meter/wpp in [1.1, 1.5]", "S5"),
-                        ("successor/predecessor arms agree >= 95%", "S8")):
-        checks.append(chk(name, "no-data", "built by wave " + owner, owner))
+    # 9. the fingerprint and the thresholds pin (config/levers.json), the meter calibration
+    checks.extend(s5_global_checks(c))
+    for k in lever_checks or ():
+        checks.append(k)
+    for name, owner, levers in (("treatment exposure >= 80%", "S11/S12", None),
+                                ("successor/predecessor arms agree >= 95%", "S8", ("D1",))):
+        k = chk(name, "no-data", "built by wave " + owner, owner)
+        if levers:
+            k["levers"] = list(levers)
+        checks.append(k)
     n_fail = sum(1 for k in checks if k["status"] == "fail")
     n_nd = sum(1 for k in checks if k["status"] == "no-data")
     verdict = "CLEAN" if not (n_fail or n_nd) else "PLUMBING"
@@ -336,7 +358,7 @@ def _outcome_missing(evs, c):
     miss = 0
     for e in evs:
         rq = c["reqs"].get(e["sid"]) or ()
-        if not any(t >= e["t"] for t, _ in rq):
+        if not any(q[0] >= e["t"] for q in rq):
             miss += 1
     return miss / len(evs)
 
@@ -344,7 +366,11 @@ def _outcome_missing(evs, c):
 def cmd_plumbing(a):
     t_now = now()
     since, until = parse_since(a.since, t_now), parse_until(a.until, t_now)
-    res = plumbing(collect(since, until))
+    c = collect(since, until)
+    cfg, _sha = load_cfg()
+    hist = read_store(SCORE_LOG)
+    per = {L: analyze(c, cfg, L, since, hist=hist) for L in lf.LEVERS}
+    res = plumbing(c, fold_lever_checks(per))
     if a.json:
         print(json.dumps(res, sort_keys=True))
     else:
@@ -353,6 +379,695 @@ def cmd_plumbing(a):
         print("verdict: %s (%d fail, %d no-data) window %s..%s" % (
             res["verdict"], res["fail"], res["no_data"], res["window"]["since"], res["window"]["until"]))
     return 0 if res["verdict"] == "CLEAN" else 1
+
+
+# ── S5: pre-registration, events priced, per-lever statistics ─────────────────────────────────
+CFG_PATH = os.path.join(HERE, "..", "config", "levers.json")
+SCORE_LOG = "lever-score.jsonl"
+GUARD_LOG = "lever-guard.jsonl"
+ROUNDS_LOG = "lever-rounds.jsonl"
+UTIL_LOG = "account-utilization.jsonl"
+ENDS = ("lo", "mid", "hi")
+PP_METRICS = ("d3_gap_pp", "d4_call_pp")
+
+
+class Refused(Exception):
+    pass
+
+
+def load_cfg():
+    """→ (config dict, sha256 of the file's bytes: the value cc-lever pins at a raise)."""
+    with open(CFG_PATH, "rb") as f:
+        raw = f.read()
+    return json.loads(raw), hashlib.sha256(raw).hexdigest()
+
+
+def flag_entry(flags, L):
+    doc, src = flags
+    return (lf._norm_lever(((doc or {}).get("levers") or {}).get(L)) if src == "file" else None) or {}
+
+
+def check_thresholds(flags, sha, levers):
+    """The scorer refuses a lever whose pinned thresholds sha differs from the file today."""
+    doc, _ = flags
+    for L in levers:
+        pin = (((doc or {}).get("levers") or {}).get(L) or {}).get("thresholds_sha")
+        if pin and pin != sha:
+            raise Refused("%s: config/levers.json changed mid-stage (pinned %s, now %s); score it after "
+                          "the next stage change or restore the pinned file" % (L, pin[:12], sha[:12]))
+
+
+def stage_start(flags, L):
+    doc, _ = flags
+    return le.parse_ts((((doc or {}).get("levers") or {}).get(L) or {}).get("stage_started_at"))
+
+
+def read_store(name):
+    rows, _ = le.read_jsonl(le.log_path(name))
+    return rows
+
+
+def design_share(e):
+    """The treated share the flag file asks for (holdback carved off the top)."""
+    if e.get("mode") != "live" or not e.get("pct"):
+        return 0.0
+    return min(e["pct"], 100 - (e.get("holdback") or 0)) / 100.0
+
+
+def event_value(c, lc, e):
+    """{end: pp} of one event's outcome, or None when the outcome never arrived.
+    d3_gap_pp: the wake request(s) inside the gap plus the first request after the return.
+    d4_call_pp: input-side pp (write re-priced at the lever's weight) over horizon_s from the call."""
+    rq = c["reqs"].get(e["sid"]) or ()
+    t0 = e["t"]
+    if lc["metric"] == "d3_gap_pp":
+        dur = e.get("dur")
+        if not isinstance(dur, (int, float)):
+            return None
+        t_ret = t0 + dur - lc.get("return_grace_s", 5)
+        ret = next((q for q in rq if q[0] >= t_ret), None)
+        if ret is None:
+            return None
+        wake = [q for q in rq if t0 < q[0] < t_ret]
+        return {end: sum(le.req_pp(q, end) for q in wake) + le.req_pp(ret, end) for end in ENDS}
+    if lc["metric"] == "d4_call_pp":
+        if not any(q[0] >= t0 for q in rq):
+            return None
+        w = lc.get("weights") or {}
+        ww, wo = w.get("write", le.W_WRITE), w.get("output", le.W_OUT)
+        h = lc.get("horizon_s", 900)
+        return {end: sum(le.req_pp(q, end, ww, wo) for q in rq if t0 <= q[0] < t0 + h) for end in ENDS}
+    return None
+
+
+def offline_sign(lc):
+    """Sign of the latest kind=offline row for the lever's eval flow in lever-rounds.jsonl (the
+    incumbent's offline pp/wk), else None: ADVANCE needs the offline replay to agree in sign."""
+    last = None
+    for r in read_store(ROUNDS_LOG):
+        if r.get("kind") == "offline" and r.get("flow") == lc.get("offline_flow") and \
+                isinstance(r.get("pp_wk"), (int, float)):
+            last = r
+    if last is None:
+        return None
+    return 1 if last["pp_wk"] > 0 else (-1 if last["pp_wk"] < 0 else 0)
+
+
+def placebo_history(hist, L, n):
+    return [r.get("placebo_sig") for r in hist
+            if r.get("lever") == L and r.get("placebo_sig") is not None][-n:]
+
+
+def analyze(c, cfg, L, since, split=None, guard=None, hist=()):
+    """One lever's statistics and verdict over events at t >= since. → dict (JSON-safe)."""
+    lc = cfg["levers"][L]
+    e_fl = flag_entry(c["flags"], L)
+    stage = e_fl.get("stage", "S0")
+    evs = [e for e in c["events"] if e["lever"] == L and e["t"] >= since and
+           (split is None or e.get("split") == split)]
+    res = {"lever": L, "stage": stage, "metric": lc["metric"], "split": split, "events": len(evs),
+           "checks": [], "reasons": [], "stat_verdict": None}
+
+    def why(v, msg):
+        res["stat_verdict"] = v
+        res["reasons"].append(msg)
+        return res
+
+    if lc.get("metric_owner"):
+        return why("PLUMBING", "metric %s is built by wave %s" % (lc["metric"], lc["metric_owner"]))
+    units = {}
+    for e in evs:
+        units.setdefault(e["unit"], e["arm"])
+    n_ut = sum(1 for a in units.values() if a == "treat")
+    n_uc = sum(1 for a in units.values() if a in ("ctrl", "holdback"))
+    # SRM over distinct units, overall and per account; arm x account independence
+    share = design_share(e_fl)
+    if n_ut + n_uc:
+        p_all = lsx.srm_p(n_ut, n_ut + n_uc, share)
+        acc = {}
+        for e in evs:
+            if e["arm"] in ("treat", "ctrl", "holdback"):
+                acc.setdefault(e.get("acct") or "?", {})[e["unit"]] = e["arm"] == "treat"
+        p_acc = {a: lsx.srm_p(sum(v.values()), len(v), share) for a, v in sorted(acc.items())}
+        p_tab = lsx.contingency_p([[sum(v.values()), len(v) - sum(v.values())] for _, v in sorted(acc.items())])
+        worst = min([p_all] + list(p_acc.values()) + ([p_tab] if p_tab is not None else []))
+        res["checks"].append(chk("SRM p >= 0.001 overall and per account; arm x account chi2",
+                                 "fail" if worst < cfg["srm_min_p"] else "pass",
+                                 "%s: %d treat / %d units at design %.0f%%, min p %.3g" % (
+                                     L, n_ut, n_ut + n_uc, 100 * share, worst)))
+    if lc["metric"] == "d2_compliance":
+        return analyze_compliance(res, evs, lc, guard, c, L)
+    # values
+    rows = []
+    missing = 0
+    for e in evs:
+        if e["arm"] not in ("treat", "ctrl", "holdback"):
+            continue
+        v = event_value(c, lc, e)
+        if v is None:
+            missing += 1
+            continue
+        rows.append((e, "treat" if e["arm"] == "treat" else "ctrl", v))
+    weeks = max((c["until"] - since) / (7 * 86400.0), 1e-9)
+    res["outcome_missing"] = missing
+    # fleet scale: every eligible event a week, both split halves (a half is a sample of the fleet)
+    n_all = sum(1 for e in c["events"] if e["lever"] == L and e["t"] >= since)
+    res["per_week"] = len(rows) / weeks * (n_all / float(len(evs)) if evs else 1.0)
+    if lc.get("population_gate"):
+        pg = lc["population_gate"]
+        tgt = [v for e, _, v in rows if e.get("would")]
+        calls_wk, pp_wk = len(tgt) / weeks, sum(v["mid"] for v in tgt) / weeks
+        res["population"] = {"calls_wk": round(calls_wk, 2), "pp_wk": round(pp_wk, 4)}
+        if calls_wk < pg["min_calls_wk"] or pp_wk < pg["min_pp_wk"]:
+            return why("PARK", "population gate: %.1f would-deny calls/wk at %.2f pp/wk (needs >= %d and "
+                       ">= %.1f)" % (calls_wk, pp_wk, pg["min_calls_wk"], pg["min_pp_wk"]))
+    # covariate (CUPED) only when balanced
+    y = {end: [v[end] for _, _, v in rows] for end in ENDS}
+    cov = lc.get("covariate")
+    res["cuped"] = None
+    if cov and rows:
+        xs = [e.get(cov) for e, _, _ in rows]
+        if all(isinstance(x, (int, float)) for x in xs):
+            xt = [x for x, (_, a, _) in zip(xs, rows) if a == "treat"]
+            xc = [x for x, (_, a, _) in zip(xs, rows) if a == "ctrl"]
+            ok, ksp, smdv = lsx.covariate_ok(xt, xc, cfg["covariate"]["ks_min_p"], cfg["covariate"]["smd_max"])
+            if xt and xc:
+                res["checks"].append(chk("covariate balance", "pass" if ok else "fail",
+                                         "%s %s: KS p %s, SMD %s" % (L, cov, _g(ksp), _g(smdv))))
+            if ok:
+                adj = {}
+                for end in ENDS:
+                    th, r2, adj[end] = lsx.cuped(y[end], xs)
+                    if end == "mid":
+                        res["cuped"] = {"covariate": cov, "theta": round(th, 9), "r2": round(r2, 4)}
+                y = adj
+        else:
+            res["reasons"].append("covariate %s missing on some events: unadjusted" % cov)
+    rr = {end: [(e.get("acct") or "?", e["sid"], a, y[end][i]) for i, (e, a, _) in enumerate(rows)]
+          for end in ENDS}
+    bc = cfg["bootstrap"]
+    boot = {end: lsx.cluster_bootstrap_diff(rr[end], bc["reps"], bc["seed"]) for end in ENDS}
+    if boot["mid"] is None:
+        return why("PLUMBING", "one arm only (%d treat, %d ctrl event(s)): nothing to compare" % (
+            sum(1 for _, a, _ in rows if a == "treat"), sum(1 for _, a, _ in rows if a == "ctrl")))
+    pw = res["per_week"]
+    pt, sd, n_c, n_t = boot["mid"]
+    res["n"] = {"ctrl": n_c, "treat": n_t}
+    # A/A on the real unit over CONTROL events only (a pseudo-split of treated events would carry the
+    # effect into the null), and the placebo-salt single run. The bootstrap is validated like for
+    # like: its SD on one pseudo-split of those controls against the A/A's SD across splits (the
+    # real arms cannot be compared to it: a multiplicative effect shrinks the treated arm's variance).
+    aa_units = [(e.get("acct") or "?", e["sid"], e["unit"], y["mid"][i])
+                for i, (e, a_, _) in enumerate(rows) if a_ == "ctrl"]
+    aa = lsx.pseudo_salt_aa(aa_units, cfg["aa"]["reps"], lc["aa_salt"])
+    res["aa"] = {"fpr": aa["fpr"], "sd": aa["sd"], "band_ok": aa["band_ok"], "n": len(aa_units)}
+    one = [(s_, c_, "treat" if lsx.unit_hash(lc["aa_salt"] + ":boot", u_) & 1 else "ctrl", v_)
+           for s_, c_, u_, v_ in aa_units]
+    bb = lsx.cluster_bootstrap_diff(one, bc["reps"], bc["seed"]) if aa["sd"] else None
+    if bb:
+        off = abs(bb[1] / aa["sd"] - 1)
+        res["checks"].append(chk("bootstrap SD within 20% of A/A SD", "fail" if off > cfg["aa"]["boot_vs_aa_max"]
+                                 else "pass", "%s: bootstrap %.3g vs A/A %.3g on %d control event(s) (%.0f%% apart)" % (
+                                     L, bb[1], aa["sd"], len(aa_units), 100 * off)))
+    pl = lsx.pseudo_salt_aa(aa_units, 1, "%s:placebo:%s" % (lc["aa_salt"], le.iso(c["until"])))
+    res["placebo_sig"] = (pl["hits"] > 0) if pl["runs"] else None
+    if split is None:
+        h = placebo_history(hist, L, cfg["aa"]["history"] - 1) + [res["placebo_sig"]]
+        h = [x for x in h if x is not None]
+        nsig = sum(1 for x in h if x)
+        res["checks"].append(chk("placebo-salt A/A significant in <= 3 of last 20",
+                                 "fail" if nsig > cfg["aa"]["history_max_sig"] else "pass",
+                                 "%s: %d of the last %d" % (L, nsig, len(h))))
+    # the look
+    t_stage = stage_start(c["flags"], L)
+    day = (c["until"] - t_stage) / 86400.0 if t_stage else None
+    looks = lc["looks_d"]
+    k = sum(1 for d in looks if day is not None and d <= day)
+    bound = lsx.hp_bound(k, len(looks)) if k else lsx.HP_FINAL
+    res["look"] = {"day": round(day, 2) if day is not None else None, "k": k, "of": len(looks), "z": bound}
+    est = {"pp_wk": round(pt * pw, 4)}
+    for end in ("lo", "hi"):
+        p_e, s_e = boot[end][0], boot[end][1]
+        est["ci_" + end] = [round((p_e - bound * s_e) * pw, 4), round((p_e + bound * s_e) * pw, 4)]
+    res["estimate"] = est
+    lo_min = min(est["ci_lo"][0], est["ci_hi"][0])
+    hi_max = max(est["ci_lo"][1], est["ci_hi"][1])
+    sign = offline_sign(lc)
+    res["offline_sign"] = sign
+    breach = bool(guard and guard.get("verdict") == "BREACH")
+    if breach:
+        return why("REVERT", "guard breach: " + ",".join(k_ for k_, g in guard["guards"].items()
+                                                          if g["status"] == "breach"))
+    if hi_max < 0:
+        return why("REVERT", "CI upper bound %.3f < 0 pp/wk at z %.2f" % (hi_max, bound))
+    if stage in ("S2", "S3"):
+        aa0 = [r for r in hist if r.get("kind") == "aa" and r.get("lever") == L and r.get("stage") == "S0"]
+        if not aa0 or not aa0[-1].get("online_ok"):
+            return why("KEEP", "offline-only: the S0 pseudo-salt A/A did not qualify the online verdict "
+                       "(FPR in [2%, 8%] and final-look MDE < SIA); the lever runs under guards only")
+    if not k:
+        return why("KEEP", "before the first look (day %s of d%d)" % (res["look"]["day"], looks[0]))
+    g_ok = bool(guard and guard.get("verdict") == "OK")   # blind guards block an ADVANCE too
+    if lo_min > 0 and pt * pw >= lc["sia_pp_wk"] and sign is not None and sign > 0 and g_ok:
+        return why("ADVANCE", "CI lower %.3f > 0 at both read ends, point %.3f >= SIA %.1f, offline agrees, "
+                   "guards OK" % (lo_min, pt * pw, lc["sia_pp_wk"]))
+    if k >= len(looks) or (day is not None and day >= lc["max_dwell_d"]):
+        return why("NOT-MERGED", "final look with CI [%.3f, %.3f] pp/wk not clear of 0 or below SIA %.1f" % (
+            lo_min, hi_max, lc["sia_pp_wk"]))
+    miss = []
+    if lo_min <= 0:
+        miss.append("CI lower %.3f <= 0" % lo_min)
+    if pt * pw < lc["sia_pp_wk"]:
+        miss.append("point %.3f < SIA %.1f" % (pt * pw, lc["sia_pp_wk"]))
+    if sign is None or sign <= 0:
+        miss.append("offline sign %s" % ("unknown (no kind=offline row for %s)" % lc.get("offline_flow")
+                                          if sign is None else sign))
+    if not g_ok:
+        miss.append("guards %s" % ((guard or {}).get("verdict") or "unread"))
+    return why("KEEP", "look %d/%d: " % (k, len(looks)) + "; ".join(miss))
+
+
+def analyze_compliance(res, evs, lc, guard, c, L):
+    """D2: the share of treated denies followed, within comply_within_s in the same session, by a
+    Workflow call that would not be denied (the edited resubmit). Wilson 95% against the bar."""
+    by_sid = {}
+    for e in evs:
+        by_sid.setdefault(e["sid"], []).append(e)
+    x = n = 0
+    for sid, es in by_sid.items():
+        es.sort(key=lambda e: e["t"])
+        for i, e in enumerate(es):
+            if e["arm"] != "treat" or not e.get("would"):
+                continue
+            n += 1
+            nxt = es[i + 1] if i + 1 < len(es) else None
+            if nxt is not None and nxt["t"] - e["t"] <= lc["comply_within_s"] and not nxt.get("would"):
+                x += 1
+    lo, hi = lsx.wilson(x, n)
+    res["compliance"] = {"complied": x, "denies": n, "wilson": [round(lo, 4), round(hi, 4)]}
+    bar = lc["compliance_bar"]
+    t_stage = stage_start(c["flags"], L)
+    day = (c["until"] - t_stage) / 86400.0 if t_stage else 0.0
+    if guard and guard.get("verdict") == "BREACH":
+        res["stat_verdict"] = "REVERT"
+        res["reasons"].append("guard breach")
+    elif not n:
+        res["stat_verdict"] = "PLUMBING"
+        res["reasons"].append("no treated deny in the window")
+    elif hi < bar:
+        res["stat_verdict"] = "REVERT"
+        res["reasons"].append("compliance Wilson upper %.3f < %.2f" % (hi, bar))
+    elif lo >= bar and guard and guard.get("verdict") == "OK":
+        res["stat_verdict"] = "ADVANCE"
+        res["reasons"].append("compliance Wilson lower %.3f >= %.2f (%d/%d)" % (lo, bar, x, n))
+    elif n >= lc["max_events"] or day >= lc["max_dwell_d"]:
+        res["stat_verdict"] = "NOT-MERGED"
+        res["reasons"].append("%d denies / day %.1f with Wilson [%.3f, %.3f] spanning %.2f" % (n, day, lo, hi, bar))
+    else:
+        res["stat_verdict"] = "KEEP"
+        res["reasons"].append("compliance %d/%d, Wilson [%.3f, %.3f]" % (x, n, lo, hi))
+    return res
+
+
+def _g(v):
+    return "-" if v is None else "%.3g" % v
+
+
+def fold_lever_checks(per):
+    """Per-lever S5 checks → one global row per check name: fail if any lever fails, pass if any
+    lever passed and none failed, no-data otherwise."""
+    names = ("SRM p >= 0.001 overall and per account; arm x account chi2", "covariate balance",
+             "placebo-salt A/A significant in <= 3 of last 20", "bootstrap SD within 20% of A/A SD")
+    out = []
+    for nm in names:
+        ks = [k for r in per.values() for k in r["checks"] if k["check"] == nm]
+        if any(k["status"] == "fail" for k in ks):
+            st = "fail"
+        elif ks:
+            st = "pass"
+        else:
+            st = "no-data"
+        out.append(chk(nm, st, "; ".join(k["detail"] for k in ks) or "no lever has data for it"))
+    return out
+
+
+def s5_global_checks(c):
+    """The fingerprint and thresholds pin against config/levers.json; weekly fleet meter/wpp."""
+    out = []
+    try:
+        cfg, sha = load_cfg()
+    except (OSError, ValueError) as e:
+        return [chk("thresholds sha unchanged mid-stage", "fail", "config/levers.json unreadable: %s" % e),
+                chk("fingerprint unchanged mid-stage", "fail", "config/levers.json unreadable")]
+    doc, _ = c["flags"]
+    pins = {L: (((doc or {}).get("levers") or {}).get(L) or {}).get("thresholds_sha") for L in lf.LEVERS}
+    moved = sorted(L for L, p in pins.items() if p and p != sha)
+    out.append(chk("thresholds sha unchanged mid-stage", "fail" if moved else "pass",
+                   ("changed under " + ",".join(moved)) if moved else
+                   "%s; pinned: %s" % (sha[:12], ",".join(L for L, p in sorted(pins.items()) if p) or
+                                       "none (S0: pinned at the first raise)")))
+    fp = cfg["fingerprint"]
+    w_now = {"read_lo": le.W_READ["lo"], "read_mid": le.W_READ["mid"], "read_hi": le.W_READ["hi"],
+             "write": le.W_WRITE, "output": le.W_OUT}
+    starts = [t for t in (stage_start(c["flags"], L) for L in lf.LEVERS) if t]
+    t0 = min(starts) if starts else c["since"]
+    sess = [s for s in c["sess"].values() if s["first_ts"] and le.parse_ts(s["first_ts"] + "Z") >= t0]
+    vers = sorted({s["cc_version"] for s in sess if s["cc_version"]})
+    models = sorted({m for s in sess for m in s["models"]})
+    bad = []
+    if w_now != fp["weights"]:
+        bad.append("weights %s != pinned %s" % (w_now, fp["weights"]))
+    bad += ["CC %s != pinned %s" % (v, fp["cc_version"]) for v in vers if v != fp["cc_version"]]
+    bad += ["model %s not pinned" % m for m in models if m not in fp["models"]]
+    if bad:
+        out.append(chk("fingerprint unchanged mid-stage", "fail", "; ".join(bad[:4])))
+    elif not sess:
+        out.append(chk("fingerprint unchanged mid-stage", "no-data", "no session since the stage start"))
+    else:
+        out.append(chk("fingerprint unchanged mid-stage", "pass", "%d session(s): CC %s, models %s" % (
+            len(sess), ",".join(vers) or "-", ",".join(models) or "-")))
+    out.append(meter_check(c, cfg))
+    return out
+
+
+def meter_check(c, cfg):
+    """Weekly fleet meter pp (meter.py's step sum over account-utilization.jsonl) over the window's
+    weighted-token pp; needs at least 6.5 days of window and readings."""
+    name = "weekly fleet meter/wpp in [%g, %g]" % tuple(cfg["meter_wpp_band"])
+    if c["until"] - c["since"] < 6.5 * 86400:
+        return chk(name, "no-data", "window shorter than 6.5 d")
+    rows, st = le.read_jsonl(le.log_path(UTIL_LOG), c["since"], c["until"])
+    by = {}
+    for r in rows:
+        if r.get("auth") not in ("ok", "healed") or r.get("stale"):
+            continue
+        wp, wr = r.get("weekly_pct"), le.parse_ts(r.get("weekly_reset_at"))
+        if not isinstance(wp, (int, float)) or wr is None:
+            continue
+        by.setdefault(r.get("acct"), []).append((r["_t"], int(wp), round(wr / 3600.0)))
+    if not by:
+        return chk(name, "no-data", "no usable %s readings in the window" % UTIL_LOG)
+    meter = sum(lsx.meter_consumption(v)[0] for v in by.values())
+    wpp = sum(s["pp"]["mid"] for s in c["sess"].values())
+    if wpp <= 0:
+        return chk(name, "no-data", "no priced tokens in the window")
+    r = meter / wpp
+    lo, hi = cfg["meter_wpp_band"]
+    return chk(name, "pass" if lo <= r <= hi else "fail", "meter %.1f pp / wpp %.1f pp = %.3f" % (meter, wpp, r))
+
+
+def lever_plumbing(pl, L):
+    """The global plumbing checks that bind lever L, plus L's own S5 checks."""
+    return [k for k in pl["checks"] if not k.get("levers") or L in k["levers"]]
+
+
+def final_verdict(res, pchecks):
+    sv = res["stat_verdict"]
+    bad = [k for k in pchecks if k["status"] != "pass"]
+    if sv in ("PARK",) or (sv == "REVERT" and "guard breach" in " ".join(res["reasons"])):
+        return sv
+    if bad:
+        return "PLUMBING"
+    return sv
+
+
+def score_row(res, t_now, sha, pchecks):
+    bad = [k for k in pchecks if k["status"] != "pass"]
+    row = {"v": 1, "kind": "score", "ts": le.iso(t_now), "lever": res["lever"], "stage": res["stage"],
+           "verdict": res["verdict"], "stat_verdict": res["stat_verdict"], "metric": res["metric"],
+           "events": res["events"], "estimate": res.get("estimate"), "look": res.get("look"),
+           "n": res.get("n"), "aa": res.get("aa"), "cuped": res.get("cuped"),
+           "compliance": res.get("compliance"), "population": res.get("population"),
+           "offline_sign": res.get("offline_sign"), "placebo_sig": res.get("placebo_sig"),
+           "thresholds_sha": sha, "reasons": [x[:200] for x in res["reasons"][:3]],
+           "plumbing": ["%s:%s" % (k["status"], k["check"][:60]) for k in bad[:8]]}
+    while len(json.dumps(row, separators=(",", ":"))) + 1 > MAX_ROW and row["plumbing"]:
+        row["plumbing"].pop()
+    return row
+
+
+def append_rows(name, rows):
+    path = le.log_path(name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        for r in rows:
+            line = json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n"
+            if len(line) <= MAX_ROW:
+                os.write(fd, line.encode())       # one write() per row, <= 2 KB
+    finally:
+        os.close(fd)
+    return path
+
+
+def window_for(a, flags, levers, t_now):
+    """--since, else each lever's stage start (else 28 d). → ({L: since}, scan since, until)."""
+    until = parse_until(a.until, t_now)
+    per = {}
+    for L in levers:
+        if a.since:
+            per[L] = parse_since(a.since, t_now)
+        else:
+            per[L] = stage_start(flags, L) or (t_now - 28 * 86400)
+    return per, min(per.values()), until
+
+
+def levers_arg(a):
+    if a.lever and a.lever not in lf.LEVERS:
+        raise ValueError("unknown lever %r" % a.lever)
+    return (a.lever,) if a.lever else lf.LEVERS
+
+
+def guard_inputs(c, cfg, rows, look):
+    g_since = c["until"] - cfg["guards"]["window_d"] * 86400
+    crashes, _ = lg.read_counts_by_sid(lg.CRASH_LOG, g_since, c["until"], lambda r: r.get("class") == "CRASH")
+    res = lg.evaluate(rows, {"age_s": 0.0, "missing": False}, c["flags"], cfg, g_since, c["until"], look,
+                      crashes, None, all(r["ok"] for r in le.root_status()))
+    return res
+
+
+def cmd_score(a):
+    if a.split == "test" and not a.unseal:
+        raise Refused("the test split is sealed: score --split test needs --unseal")
+    t_now = now()
+    cfg, sha = load_cfg()
+    flags = le.read_flags()
+    levers = levers_arg(a)
+    check_thresholds(flags, sha, levers)
+    per_since, since, until = window_for(a, flags, levers, t_now)
+    c = collect(since, until)
+    rows = le.ledger_rows(c["sess"], c["arms"], c["flags"], c["events"], c["lands"], since, until)
+    guards = guard_inputs(c, cfg, rows, look=True)
+    hist = read_store(SCORE_LOG)
+    per = {L: analyze(c, cfg, L, per_since[L], a.split, guards.get(L), hist) for L in levers}
+    pl = plumbing(c)   # the global checks; each lever adds only its own S5 checks below
+    out = []
+    for L in levers:
+        r = per[L]
+        pchecks = lever_plumbing(pl, L) + r["checks"]
+        r["verdict"] = final_verdict(r, pchecks)
+        r["guard"] = guards[L]["verdict"]
+        out.append(score_row(r, t_now, sha, pchecks))
+        out[-1]["guard"] = r["guard"]
+        if a.split:
+            out[-1].update(kind="online-split", split=a.split)
+    if a.write:
+        if a.split:
+            p = append_rows(ROUNDS_LOG, out)
+        else:
+            p = append_rows(SCORE_LOG, out)
+            lines = [x for x in (fit_row(r) for r in rows) if x]
+            write_ledger(lines)
+        sys.stderr.write("score: %d row(s) appended to %s\n" % (len(out), p.replace(le.home(), "~")))
+    for r in out:
+        if a.json:
+            print(json.dumps(r, sort_keys=True))
+        else:
+            est = r.get("estimate") or {}
+            print("%s %-3s %-10s (stat %s) %s%s — %s" % (
+                r["lever"], r["stage"], r["verdict"], r["stat_verdict"],
+                ("%+.3f pp/wk CI@lo %s CI@hi %s · " % (est["pp_wk"], est["ci_lo"], est["ci_hi"])) if est else "",
+                "guard %s" % r["guard"], "; ".join(r["reasons"]) or "-"))
+            for p_ in r["plumbing"]:
+                print("    plumbing %s" % p_)
+    return 0
+
+
+def cmd_aa(a):
+    t_now = now()
+    cfg, sha = load_cfg()
+    flags = le.read_flags()
+    levers = levers_arg(a)
+    per_since, since, until = window_for(a, flags, levers, t_now)
+    c = collect(since, until)
+    out = []
+    for L in levers:
+        lc = cfg["levers"][L]
+        row = {"v": 1, "kind": "aa", "ts": le.iso(t_now), "lever": L, "stage": flag_entry(flags, L).get("stage", "S0"),
+               "reps": a.reps, "thresholds_sha": sha}
+        if lc["metric"] not in PP_METRICS:
+            row.update(status="n/a", why="metric %s has no pp-per-event A/A" % lc["metric"])
+            out.append(row)
+            continue
+        vals = []
+        for e in c["events"]:
+            # control events only: at S0 that is every event; later, treated ones would carry the effect
+            if e["lever"] != L or e["t"] < per_since[L] or e["arm"] not in ("ctrl", "holdback"):
+                continue
+            v = event_value(c, lc, e)
+            if v is not None:
+                vals.append((e, v["mid"]))
+        if len(vals) < 20:
+            row.update(status="no-data", why="%d priced event(s); the A/A needs >= 20" % len(vals))
+            out.append(row)
+            continue
+        ys = [v for _, v in vals]
+        cov = lc.get("covariate")
+        if cov and all(isinstance(e.get(cov), (int, float)) for e, _ in vals):
+            _, r2, ys = lsx.cuped(ys, [e[cov] for e, _ in vals])
+            row["cuped_r2"] = round(r2, 4)
+        units = [(e.get("acct") or "?", e["sid"], e["unit"], ys[i]) for i, (e, _) in enumerate(vals)]
+        r = lsx.pseudo_salt_aa(units, a.reps, lc["aa_salt"])
+        weeks = max((until - per_since[L]) / (7 * 86400.0), 1e-9)
+        # fleet scale: every eligible event a week, all arms; the 50/50 A/A SD of n controls shrinks
+        # as √(n / N) to the N events a 50/50 stage would see by its final look
+        pw = sum(1 for e in c["events"] if e["lever"] == L and e["t"] >= per_since[L]) / weeks
+        n_final = pw * lc["max_dwell_d"] / 7.0
+        mde_final = lsx.ZPOW * r["sd"] * math.sqrt(len(vals) / n_final) * pw if r["sd"] else None
+        row.update(status="ok", events=len(vals), per_week=round(pw, 2), fpr=r["fpr"], hits=r["hits"],
+                   runs=r["runs"], band_ok=r["band_ok"], sd=r["sd"],
+                   mde_final_pp_wk=round(mde_final, 4) if mde_final is not None else None,
+                   sia_pp_wk=lc["sia_pp_wk"],
+                   online_ok=bool(r["band_ok"] and mde_final is not None and mde_final < lc["sia_pp_wk"]))
+        out.append(row)
+    if a.write:
+        p = append_rows(SCORE_LOG, out)
+        sys.stderr.write("aa: %d row(s) appended to %s\n" % (len(out), p.replace(le.home(), "~")))
+    for r in out:
+        if a.json:
+            print(json.dumps(r, sort_keys=True))
+        elif r["status"] != "ok":
+            print("%s A/A %s — %s" % (r["lever"], r["status"].upper(), r["why"]))
+        else:
+            print("%s A/A FPR %.1f%% (%d/%d) %s band [2%%, 8%%] · MDE at the final look %s pp/wk vs SIA %.1f → %s" % (
+                r["lever"], 100 * r["fpr"], r["hits"], r["runs"], "in" if r["band_ok"] else "OUT of",
+                _g(r["mde_final_pp_wk"]), r["sia_pp_wk"], "online verdict qualifies" if r["online_ok"]
+                else "offline-only"))
+    return 0
+
+
+def cmd_report(a):
+    hist = read_store(SCORE_LOG)
+    guards = read_store(GUARD_LOG)
+    flags = le.read_flags()
+    out = {}
+    for L in levers_arg(a):
+        sc = [r for r in hist if r.get("lever") == L and r.get("kind", "score") == "score"]
+        aa = [r for r in hist if r.get("lever") == L and r.get("kind") == "aa"]
+        gd = [r for r in guards if r.get("lever") == L]
+        out[L] = {"stage": flag_entry(flags, L).get("stage", "S0"), "score": sc[-1] if sc else None,
+                  "aa": aa[-1] if aa else None, "guard": gd[-1] if gd else None}
+    if a.json:
+        print(json.dumps(out, sort_keys=True))
+        return 0
+    for L, r in out.items():
+        s, x, g = r["score"], r["aa"], r["guard"]
+        print("%s at %s" % (L, r["stage"]))
+        print("  verdict  %s" % ("none yet (cc-lever-score score --write)" if not s else "%s %s (stat %s) %s — %s" % (
+            s["ts"], s["verdict"], s.get("stat_verdict"),
+            ("%+.3f pp/wk" % s["estimate"]["pp_wk"]) if s.get("estimate") else "",
+            "; ".join(s.get("reasons") or []) or "-")))
+        print("  A/A      %s" % ("none yet (cc-lever-score aa --write)" if not x else "%s %s fpr %s mde_final %s online_ok %s" % (
+            x["ts"], x.get("status"), _g(x.get("fpr")), _g(x.get("mde_final_pp_wk")), x.get("online_ok"))))
+        print("  guard    %s" % ("none yet (cc-lever-score guards --write)" if not g else "%s %s" % (g["ts"], g["verdict"])))
+    return 0
+
+
+def cmd_failures(a):
+    if a.split != "train":
+        raise Refused("failures reads the train split only (the test split stays sealed)")
+    t_now = now()
+    cfg, _ = load_cfg()
+    flags = le.read_flags()
+    levers = levers_arg(a)
+    per_since, since, until = window_for(a, flags, levers, t_now)
+    c = collect(since, until)
+    for L in levers:
+        lc = cfg["levers"][L]
+        if lc["metric"] not in PP_METRICS:
+            print("%s: no per-event pp metric (%s)" % (L, lc["metric"]))
+            continue
+        vals = []
+        for e in c["events"]:
+            if e["lever"] == L and e["t"] >= per_since[L] and e.get("split") == "train" and \
+                    e["arm"] in ("treat", "ctrl", "holdback"):
+                v = event_value(c, lc, e)
+                if v is not None:
+                    vals.append((e, v["mid"]))
+        base = {}
+        for e, v in vals:
+            if e["arm"] != "treat":
+                base.setdefault(e.get("acct") or "?", []).append(v)
+        mean = {k: sum(v) / len(v) for k, v in base.items()}
+        bad = []
+        for e, v in vals:
+            if e["arm"] == "treat" and (e.get("acct") or "?") in mean:
+                bad.append((v - mean[e.get("acct") or "?"], e))
+        bad.sort(key=lambda x: (-x[0], x[1]["unit"]))
+        if not bad:
+            print("%s: no treated train event with a control baseline in its account" % L)
+            continue
+        tally = {}
+        for ex, e in bad:
+            if ex <= 0:
+                continue
+            b = _bucket(L, e)
+            n_, s_ = tally.get(b, (0, 0.0))
+            tally[b] = (n_ + 1, s_ + ex)
+        print("%s: %d treated train event(s); %d cost more than their account's control mean" % (
+            L, len(bad), sum(1 for ex, _ in bad if ex > 0)))
+        for b, (n_, s_) in sorted(tally.items(), key=lambda kv: -kv[1][1])[:8]:
+            print("  cause %-28s %4d event(s), excess %.4f pp" % (b, n_, s_))
+        for ex, e in bad[:a.top]:
+            print("  %+.4f pp  %s  %s  %s" % (ex, e["unit"], e.get("acct") or "?", le.iso(e["t"])))
+    return 0
+
+
+def _bucket(L, e):
+    if L == "D3":
+        d = e.get("dur") or 0
+        return "acct=%s dur=%s" % (e.get("acct") or "?", "<2h" if d < 7200 else ("<4h" if d < 14400 else ">=4h"))
+    if L == "D4":
+        return "acct=%s class=%s" % (e.get("acct") or "?", e.get("class") or "?")
+    return "acct=%s" % (e.get("acct") or "?")
+
+
+def cmd_guards(a):
+    t0 = time.time()
+    t_now = now()
+    cfg, _ = load_cfg()
+    since = t_now - cfg["guards"]["window_d"] * 86400
+    res, inp = lg.run(cfg, since, t_now, look=a.look)
+    rows = [{"v": 1, "kind": "guard", "ts": le.iso(t_now), "lever": L, "stage": r["stage"], "verdict": r["verdict"],
+             "look": r["look"], "alpha": r["alpha"], "sessions": r["sessions"], "ledger": r["ledger"],
+             "guards": {k: {kk: (round(vv, 6) if isinstance(vv, float) else vv) for kk, vv in g.items()}
+                        for k, g in r["guards"].items()}} for L, r in sorted(res.items())]
+    if a.write:
+        append_rows(GUARD_LOG, rows)
+    if a.json:
+        for r in rows:
+            print(json.dumps(r, sort_keys=True))
+    else:
+        for r in rows:
+            gs = " ".join("%s:%s" % (k, g["status"]) for k, g in sorted(r["guards"].items()))
+            print("%s %-3s %-8s treat %d / ctrl %d sessions · ledger %s · %s" % (
+                r["lever"], r["stage"], r["verdict"], r["sessions"]["treat"], r["sessions"]["ctrl"], r["ledger"], gs))
+        print("guards: %d ledger row(s), %.1f s, alpha %g%s" % (
+            inp["ledger_rows"], time.time() - t0, rows[0]["alpha"] if rows else 0, " (look)" if a.look else ""))
+    vs = {r["verdict"] for r in rows}
+    if "BREACH" in vs:
+        return 1
+    return 4 if vs & {"NO-DATA", "PLUMBING"} else 0
 
 
 # ── selftest ──────────────────────────────────────────────────────────────────────────────────
@@ -381,7 +1096,7 @@ def make_fixture(base, n=240, seed=7):
     doc = {"v": 1, "rev": 3, "levers": {L: {"stage": "S2", "pct": 50, "holdback": 0, "mode": "live",
                                             "salt": "st-" + L, "split_salt": "sp-" + L,
                                             "params_id": "p0", "candidate": None, "trip": None,
-                                            "thresholds_sha": "t0"} for L in lf.LEVERS}}
+                                            "thresholds_sha": load_cfg()[1]} for L in lf.LEVERS}}
     with open(os.path.join(state, "flags.json"), "w") as f:
         json.dump(doc, f)
     os.environ.update(CC_LEVER_STATE_DIR=state, CC_LEVER_LOG_DIR=logs)
@@ -564,24 +1279,41 @@ def main(argv):
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("selftest")
     p.add_argument("--keep")
-    for v in S5_VERBS:
+    for v in ("score", "aa", "failures"):
         p = sub.add_parser(v)
-        p.add_argument("rest", nargs=argparse.REMAINDER)
+        p.add_argument("--lever")
+        p.add_argument("--since")
+        p.add_argument("--until")
+        if v != "failures":
+            p.add_argument("--write", action="store_true")
+            p.add_argument("--json", action="store_true")
+        if v == "score":
+            p.add_argument("--split", choices=("train", "test"))
+            p.add_argument("--unseal", action="store_true")
+        if v == "aa":
+            p.add_argument("--reps", type=int, default=200)
+        if v == "failures":
+            p.add_argument("--split", required=True)
+            p.add_argument("--top", type=int, default=10)
+    p = sub.add_parser("report")
+    p.add_argument("--lever")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("guards")
+    p.add_argument("--look", action="store_true")
+    p.add_argument("--write", action="store_true")
+    p.add_argument("--json", action="store_true")
     try:
         a = ap.parse_args(argv)
     except SystemExit as e:
         return 2 if e.code else 0
-    if a.verb in S5_VERBS:
-        sys.stderr.write("cc-lever-score %s: not built yet — wave S5 owns it "
-                         "(docs/plans/USAGE_LEVERS.md § W7+ §4)\n" % a.verb)
-        return 3
+    verbs = {"ledger": cmd_ledger, "plumbing": cmd_plumbing, "selftest": cmd_selftest, "score": cmd_score,
+             "aa": cmd_aa, "report": cmd_report, "failures": cmd_failures, "guards": cmd_guards}
     try:
-        if a.verb == "ledger":
-            return cmd_ledger(a)
-        if a.verb == "plumbing":
-            return cmd_plumbing(a)
-        if a.verb == "selftest":
-            return cmd_selftest(a)
+        if a.verb in verbs:
+            return verbs[a.verb](a)
+    except Refused as e:
+        sys.stderr.write("cc-lever-score %s: refused — %s\n" % (a.verb, e))
+        return 3
     except ValueError as e:
         sys.stderr.write("cc-lever-score: %s\n" % e)
         return 2

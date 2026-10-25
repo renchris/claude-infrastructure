@@ -1,0 +1,83 @@
+{
+  "v": 1,
+  "doc": "Pre-registration of the usage levers (docs/plans/USAGE_LEVERS.md § W7+ §2). cc-lever pins sha256 of THIS FILE's bytes into flags.json thresholds_sha at every raise; cc-lever-score refuses to score a lever whose pin differs (thresholds changed mid-stage). Arm salts live in flags.json (fixed across stages, rotated after a trip); aa_salt is the pseudo-salt prefix of the A/A. Edit only between stages.",
+  "fingerprint": {
+    "cc_version": "2.1.293",
+    "models": ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"],
+    "weights": {"read_lo": 0.0057, "read_mid": 0.0067, "read_hi": 0.0076, "write": 0.245, "output": 0.404}
+  },
+  "looks": {"hp_interim_z": 3.0, "hp_final_z": 1.959964},
+  "aa": {"reps": 200, "fpr_band": [0.02, 0.08], "boot_vs_aa_max": 0.20, "history": 20, "history_max_sig": 3},
+  "bootstrap": {"reps": 2000, "seed": 20261025},
+  "covariate": {"ks_min_p": 0.05, "smd_max": 0.1},
+  "srm_min_p": 0.001,
+  "meter_wpp_band": [1.1, 1.5],
+  "guards": {
+    "window_d": 7,
+    "hourly_alpha": 0.01,
+    "look_alpha": 0.05,
+    "ledger_max_age_s": 7200,
+    "min_ctrl_sessions": 20,
+    "T1": {"what": "tool errors per 100 requests, hook denies excluded", "baseline": 2.86},
+    "T2": {"what": "failed lands per landed land", "baseline": 0.605, "failed_exits": [5, 6, 11, 143], "excluded_exits": [42]},
+    "T3": {"what": "prompt-too-long main-session deaths in treated sessions, count over all four roots", "trip_ge": {"S0": 2, "S1": 2, "S2": 3, "S3": 3}},
+    "T4": {"what": "CRASH rows in claude-crashes.jsonl per session", "baseline": 0.186, "baseline_src": "692 CRASH rows / 3712 main transcripts touched, 28 d to 2026-10-25 (est.)"},
+    "T5": {"what": "judged re-ask rate per session", "log": "lever-judge.jsonl", "owner": "S8"}
+  },
+  "levers": {
+    "D1": {
+      "decision": "43da49891e75",
+      "metric": "d1_chain_net_pp",
+      "metric_owner": "S8",
+      "unit": "lineage root",
+      "sia_pp_wk": 4.0,
+      "looks_d": [28],
+      "max_dwell_d": 28,
+      "max_events": 60,
+      "min_act": 10.0,
+      "aa_salt": "aa-D1",
+      "offline_flow": "d1_successor"
+    },
+    "D2": {
+      "decision": "a4c54d1744d1",
+      "metric": "d2_compliance",
+      "unit": "lineage root",
+      "compliance_bar": 0.80,
+      "comply_within_s": 3600,
+      "max_events": 25,
+      "max_dwell_d": 28,
+      "looks_d": [28],
+      "min_act": 10.0,
+      "aa_salt": "aa-D2",
+      "offline_flow": "d2_lean"
+    },
+    "D3": {
+      "decision": "c0f9d5368147",
+      "metric": "d3_gap_pp",
+      "unit": "sid:gap_start",
+      "return_grace_s": 5,
+      "covariate": "ctx",
+      "sia_pp_wk": 3.0,
+      "looks_d": [7, 14, 28],
+      "max_dwell_d": 28,
+      "min_act": 1.0,
+      "aa_salt": "aa-D3",
+      "offline_flow": "d3_keepalive"
+    },
+    "D4": {
+      "decision": "3df527edd333",
+      "metric": "d4_call_pp",
+      "unit": "agent_id",
+      "horizon_s": 900,
+      "weights": {"write": 0.20, "output": 0.0},
+      "covariate": null,
+      "sia_pp_wk": 2.0,
+      "looks_d": [14, 28],
+      "max_dwell_d": 28,
+      "min_act": 1.0,
+      "population_gate": {"min_calls_wk": 20, "min_pp_wk": 1.0},
+      "aa_salt": "aa-D4",
+      "offline_flow": "d4_pollloop"
+    }
+  }
+}

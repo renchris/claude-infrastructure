@@ -436,7 +436,7 @@ def price(tok, end):
 
 
 def scan_sessions(since, until):
-    """→ (sessions {sid: dict}, scan meta, request index {sid: [(t, pp_mid)]}).
+    """→ (sessions {sid: dict}, scan meta, request index {sid: [(t, pp_mid, write, read, output)]}).
 
     One scan() over the window; a session is the tree under one main sid (its subagents and
     workflow agents included), the unit cc-token-ledger calls a task."""
@@ -509,7 +509,8 @@ def scan_sessions(since, until):
                 s["last_real"] = max(s["last_real"], ts)
             t = parse_ts(ts + "Z") if ts else None
             if t is not None:
-                reqs[sid].append((t, price(tok, "mid")))
+                w = tok["uncached_input"] + tok["cache_write_5m"] + tok["cache_write_1h"]
+                reqs[sid].append((t, price(tok, "mid"), w, tok["cache_read"], tok["output"]))
     for s in sess.values():
         s["models"] = sorted(s["models"])
         # a context-wall death: the main session's last word was the refusal
@@ -521,18 +522,28 @@ def scan_sessions(since, until):
     return sess, meta, dict(reqs)
 
 
-def window_pp(reqs, sid, t0, t1):
-    """pp_mid of a session's requests with t0 <= t < t1 (S5 prices events through this)."""
-    return sum(p for t, p in reqs.get(sid, ()) if t0 <= t < t1)
+def req_pp(q, end="mid", w_write=W_WRITE, w_out=W_OUT):
+    """One request index entry (t, pp_mid, write, read, output tokens) priced at a read end."""
+    return (q[2] * w_write + q[3] * W_READ[end] + q[4] * w_out) / 1e6
+
+
+def window_pp(reqs, sid, t0, t1, end="mid", w_write=W_WRITE, w_out=W_OUT):
+    """pp of a session's requests with t0 <= t < t1 (S5 prices events through this)."""
+    return sum(req_pp(q, end, w_write, w_out) for q in reqs.get(sid, ()) if t0 <= q[0] < t1)
 
 
 # ── the ledger row ────────────────────────────────────────────────────────────────────────────
 def ledger_rows(sess, arms, flags, events, lands, since, until):
     """One row per session, sorted by sid. Arms: the session's D1/D2 (its lineage's) plus a
-    per-arm event count for every lever. Intention to treat: the cost runs to the window's end."""
+    per-arm event count for every lever, and first_arm: the arm of the session's FIRST event per
+    lever (the guards' session arm for per-event levers — a coin flip whatever the session's length,
+    where "any treated event" would favour long sessions). Intention to treat: the cost runs to the
+    window's end."""
     ev_by_sid = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
-    for e in events:
+    first = defaultdict(dict)
+    for e in events:  # sorted by (lever, t): the first seen per (sid, lever) is the earliest
         ev_by_sid[e["sid"]][e["lever"]][e["arm"] or "?"] += 1
+        first[e["sid"]].setdefault(e["lever"], e["arm"] or "?")
     rows = []
     for sid in sorted(sess):
         s = sess[sid]
@@ -556,6 +567,7 @@ def ledger_rows(sess, arms, flags, events, lands, since, until):
                 L: dict(sorted(c.items()))
                 for L, c in sorted(ev_by_sid.get(sid, {}).items())
             },
+            "first_arm": dict(sorted(first.get(sid, {}).items())),
             "tokens": dict(s["tokens"], output_recorded=s["output_recorded"]),
             "responses": s["responses"],
             "responses_imputed": s["responses_imputed"],

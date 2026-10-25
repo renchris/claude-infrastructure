@@ -161,7 +161,8 @@ print(len(t[10]), len(t[50]))' "$REPO/hooks/lib"
   printf '{"ts":"2000-01-01T00:00:00Z","lever":"D2","stage":"S0","verdict":"ADVANCE"}\n' > "$CC_LEVER_LOG_DIR/lever-score.jsonl"
   run "$PY" "$CLI" stage D2 S1 --confirm;        [ "$status" -eq 3 ]; [[ "$output" == *"predates the stage start"* ]] || false
   jq '.levers.D2.trip = {"id":"trip-9"}' "$F" > "$F.n" && mv "$F.n" "$F"
-  printf '{"ts":"2099-01-01T00:00:00Z","lever":"D2","stage":"S0","verdict":"ADVANCE"}\n' > "$CC_LEVER_LOG_DIR/lever-score.jsonl"
+  # an A/A row logged after the ADVANCE carries no verdict and must not shadow it (the raise below)
+  printf '{"ts":"2099-01-01T00:00:00Z","lever":"D2","stage":"S0","verdict":"ADVANCE"}\n{"ts":"2099-01-02T00:00:00Z","kind":"aa","lever":"D2","stage":"S0"}\n' > "$CC_LEVER_LOG_DIR/lever-score.jsonl"
   run "$PY" "$CLI" stage D2 S1 --confirm;        [ "$status" -eq 3 ]; [[ "$output" == *"un-acked trip trip-9"* ]] || false
   # nothing above changed the file: D2 is still S0 at pct 0
   [ "$(jq -c '.levers.D2 | [.stage, .pct, .mode]' "$F")" = '["S0",0,"shadow"]' ]

@@ -1,5 +1,5 @@
 {"v":1,"rev":1,"updated_at":"2026-10-01T00:00:00Z","updated_by":"fixture","levers":{
-"D1":{"decision":"43da49891e75","stage":"S0","pct":0,"holdback":0,"mode":"shadow","salt":"fx-D1","split_salt":"fs-D1","params_id":"p0","candidate":null,"thresholds_sha":"t0","trip":null},
-"D2":{"decision":"a4c54d1744d1","stage":"S0","pct":0,"holdback":0,"mode":"shadow","salt":"fx-D2","split_salt":"fs-D2","params_id":"p0","candidate":null,"thresholds_sha":"t0","trip":null},
-"D3":{"decision":"c0f9d5368147","stage":"S0","pct":0,"holdback":0,"mode":"shadow","salt":"fx-D3","split_salt":"fs-D3","params_id":"p0","candidate":null,"thresholds_sha":"t0","trip":null},
-"D4":{"decision":"3df527edd333","stage":"S0","pct":0,"holdback":0,"mode":"shadow","salt":"fx-D4","split_salt":"fs-D4","params_id":"p0","candidate":null,"thresholds_sha":"t0","trip":null}}}
+"D1":{"decision":"43da49891e75","stage":"S0","pct":0,"holdback":0,"mode":"shadow","salt":"fx-D1","split_salt":"fs-D1","params_id":"p0","candidate":null,"thresholds_sha":null,"trip":null},
+"D2":{"decision":"a4c54d1744d1","stage":"S0","pct":0,"holdback":0,"mode":"shadow","salt":"fx-D2","split_salt":"fs-D2","params_id":"p0","candidate":null,"thresholds_sha":null,"trip":null},
+"D3":{"decision":"c0f9d5368147","stage":"S0","pct":0,"holdback":0,"mode":"shadow","salt":"fx-D3","split_salt":"fs-D3","params_id":"p0","candidate":null,"thresholds_sha":null,"trip":null},
+"D4":{"decision":"3df527edd333","stage":"S0","pct":0,"holdback":0,"mode":"shadow","salt":"fx-D4","split_salt":"fs-D4","params_id":"p0","candidate":null,"thresholds_sha":null,"trip":null}}}
