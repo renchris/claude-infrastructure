@@ -1,0 +1,660 @@
+#!/usr/bin/env python3
+"""cc-lever-judge — the usage levers' blind LLM judge (docs/plans/USAGE_LEVERS.md § W7+ §3 row
+"Judge"; wave S8). It judges only what code cannot check, against config/lever-rubrics.json.
+
+  cc-lever-judge run <rubric> --dossiers FILE [--seed N] [--write]
+      One batch: the dossiers (JSONL {id, sid?, sections: {name: text}}), the rubric's anchors
+      (judge.anchors_per_batch labelled items), every known negative judge.known_negative_reps
+      times, and judge.rejudge_share of the dossiers judged again with their sections in reverse
+      order, all in one seeded blind order (items carry a neutral token, never an id, an arm or an
+      anchor mark). VOID — no verdict, PLUMBING — when kappa against the anchor labels falls below
+      judge.kappa_min on any field, when a known negative does not FAIL in every judgement, or when
+      fewer anchors than the batch needs parse. --write appends to ~/.claude/logs/lever-judge.jsonl
+      one kind=batch row and, for a batch that held, one row per dossier (kind = the rubric's
+      row_kind); a parse failure is a kind=judge-error row and is never scored.
+  cc-lever-judge reask [--since 1d] [--until T] [--seed N] [--write]
+      T5's re-ask rows: operator prompts within 24 h after each D1 would-recycle point, in both
+      arms (the session itself in control, its lineage successor in treatment), each prompt once.
+      The rubric's programmatic pre-filter picks the candidates the judge sees; the rest are written
+      as re-ask=false (src=prefilter). A session's rows are written only together, from a batch
+      that held, so a void batch never reaches the guards.
+  cc-lever-judge anchors import | status
+      import builds the D1 return anchors (60 production returns, labels second pass) from the
+      files config/lever-rubrics.json names under ~/.claude/hillclimb/_imports/, into
+      ~/.claude/hillclimb/judge/anchors/d1_return.jsonl (0600: they are operator transcripts).
+  cc-lever-judge probe [--write]     one real call: asserts the served model, parses, and requires
+                                     a known negative to FAIL. Counts no dossier.
+  cc-lever-judge status              today's dossiers against the daily cap; anchors per rubric
+
+THE CALL: `claude -p --model sonnet --tools "" --setting-sources "" --output-format stream-json
+--verbose`, the prompt on stdin, cwd /tmp/lev-eval, CC_LEVER_EXCLUDE=1. The init line's model is
+asserted to be none of judge.forbidden_models (the model under test is claude-opus-5-5); a missing
+init line or a forbidden model stops the batch at once (exit 4). At most judge.daily_dossier_cap
+dossiers a day (UTC), counted under flock in ~/.claude/state/levers/judge-day.json when a batch
+starts, spent whether or not it holds; anchors, known negatives and re-judgements are not dossiers.
+
+exit: 0 batch held / ok · 1 batch VOID · 2 usage · 3 refused (daily cap, too few anchors, missing
+import) · 4 served-model or call plumbing. Env: CC_LEVER_JUDGE_CLAUDE (the claude binary; the tests
+stub it), CC_HILLCLIMB_DIR, CC_LEVER_LOG_DIR, CC_LEVER_STATE_DIR, CC_NOW (epoch "now").
+It never wakes, denies or recycles a session and never changes a flag or a stage.
+"""
+
+import argparse
+import ast
+import concurrent.futures as cf
+import fcntl
+import glob
+import hashlib
+import json
+import math
+import os
+import random
+import re
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+REPO = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(REPO, "scripts", "lib"))
+import lever_chain as lch  # noqa: E402
+import lever_events as le  # noqa: E402
+
+lf = le.lf
+RUBRICS = os.path.join(REPO, "config", "lever-rubrics.json")
+JUDGE_LOG = "lever-judge.jsonl"
+MAX_ROW = 2048
+
+
+class Refused(Exception):
+    pass
+
+
+class CallPlumbing(Exception):
+    pass
+
+
+def now():
+    try:
+        return float(os.environ["CC_NOW"])
+    except (KeyError, ValueError):
+        return time.time()
+
+
+def load_rubrics():
+    with open(RUBRICS) as fh:
+        return json.load(fh)
+
+
+def hc_root():
+    return os.environ.get("CC_HILLCLIMB_DIR") or os.path.join(os.path.expanduser("~"), ".claude", "hillclimb")
+
+
+def anchors_path(rubric):
+    return os.path.join(hc_root(), "judge", "anchors", rubric + ".jsonl")
+
+
+def read_jsonl(path):
+    out = []
+    with open(path) as fh:
+        for ln in fh:
+            if ln.strip():
+                out.append(json.loads(ln))
+    return out
+
+
+def append_rows(rows):
+    path = le.log_path(JUDGE_LOG)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    n = 0
+    try:
+        for r in rows:
+            line = json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n"
+            if len(line) <= MAX_ROW:
+                os.write(fd, line.encode())       # one write() per row, <= 2 KB
+                n += 1
+    finally:
+        os.close(fd)
+    return n
+
+
+# ── the daily cap ─────────────────────────────────────────────────────────────────────────────
+def _day(t):
+    return time.strftime("%Y-%m-%d", time.gmtime(t))
+
+
+def day_count():
+    try:
+        with open(os.path.join(lf.state_dir(), "judge-day.json")) as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return 0
+    return d.get("n", 0) if d.get("day") == _day(now()) else 0
+
+
+def reserve(k, cap):
+    """Count k dossiers against today's cap under flock. → dossiers used today after the reserve."""
+    d = lf.state_dir()
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "judge-day.lock"), "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        used = day_count()
+        if used + k > cap:
+            raise Refused("daily cap: %d of %d dossiers used today (UTC), this batch needs %d" % (used, cap, k))
+        p = os.path.join(d, "judge-day.json")
+        tmp = p + ".tmp%d" % os.getpid()
+        with open(tmp, "w") as fh:
+            json.dump({"day": _day(now()), "n": used + k}, fh)
+        os.replace(tmp, p)
+        return used + k
+
+
+# ── one call ──────────────────────────────────────────────────────────────────────────────────
+def prompt_for(rub, sections, token, swapped=False):
+    names = [n for n in rub["sections"] if n in sections]
+    if swapped:
+        names.reverse()
+    out = ["You are a blind grader. Judge ONE item against the claims below; each claim is checkable",
+           "from the item's text alone. Do not use tools.", "", "CLAIMS:"]
+    for f, d in rub["fields"].items():
+        out.append("- %s (%s): %s" % (f, " / ".join(d["values"]), d["claim"]))
+    out += ["", "ITEM %s:" % token]
+    for n in names:
+        t = sections.get(n)
+        out.append("<<%s>>\n%s\n<</%s>>" % (n.upper(), t if t else "(empty)", n.upper()))
+    out += ["", "Reply with ONLY one JSON object and no prose, one key per claim above:",
+            '{"<claim>": {"v": "<one of its values>", "quote": "<at most 120 characters copied from the '
+            'item that support it, or empty>"}}']
+    return "\n".join(out)
+
+
+def call(jc, prompt):
+    """→ {model, text}. Raises CallPlumbing on a missing init line or a forbidden served model."""
+    exe = os.environ.get("CC_LEVER_JUDGE_CLAUDE") or "claude"
+    os.makedirs(jc["cwd"], exist_ok=True)
+    env = dict(os.environ, CC_LEVER_EXCLUDE="1")
+    try:
+        p = subprocess.run([exe] + jc["argv"], input=prompt, capture_output=True, text=True,
+                           cwd=jc["cwd"], env=env, timeout=jc["timeout_s"])
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"model": None, "text": None, "error": "call: %s" % e.__class__.__name__}
+    model, text = None, None
+    for ln in p.stdout.splitlines():
+        try:
+            j = json.loads(ln)
+        except ValueError:
+            continue
+        if not isinstance(j, dict):
+            continue
+        if j.get("type") == "system" and j.get("subtype") == "init":
+            model = j.get("model")
+        elif j.get("type") == "result":
+            text = j.get("result")
+    if model is None:
+        raise CallPlumbing("no init line from the judge (rc %s): %s" % (p.returncode, p.stderr.strip()[-200:]))
+    if any(str(model).startswith(m) for m in jc["forbidden_models"]):
+        raise CallPlumbing("the judge was served %s, a forbidden model (the model under test)" % model)
+    return {"model": model, "text": text}
+
+
+def parse(rub, text):
+    """→ ({field: value}, quotes) or raises ValueError."""
+    if not isinstance(text, str) or "{" not in text:
+        raise ValueError("no JSON object in the reply")
+    j = json.loads(text[text.index("{"):text.rindex("}") + 1])
+    labels, quotes = {}, {}
+    for f, d in rub["fields"].items():
+        x = j.get(f)
+        v = x.get("v") if isinstance(x, dict) else x
+        v = str(v or "").strip().upper()
+        if v not in d["values"]:
+            raise ValueError("field %s: %r not in %s" % (f, v, d["values"]))
+        labels[f] = v
+        if isinstance(x, dict):
+            quotes[f] = str(x.get("quote") or "")[:120]
+    return labels, quotes
+
+
+def fails(rub, labels):
+    return any(labels.get(f) == v for f, v in rub["fail_if"])
+
+
+def kappa(gold, judged):
+    """Cohen's kappa of two binary lists; 1.0 when they agree on every item."""
+    n = len(gold)
+    if not n:
+        return None
+    po = sum(1 for a, b in zip(gold, judged) if a == b) / float(n)
+    if po == 1.0:
+        return 1.0
+    pa, pb = sum(gold) / float(n), sum(judged) / float(n)
+    pe = pa * pb + (1 - pa) * (1 - pb)
+    return (po - pe) / (1 - pe) if pe < 1 else 0.0
+
+
+# ── a batch ───────────────────────────────────────────────────────────────────────────────────
+def anchor_set(cfg, name):
+    """→ (anchor rubric name, anchors). A rubric with too few of its own borrows anchors_from."""
+    need = cfg["judge"]["anchors_per_batch"]
+    own = anchors_path(name)
+    if os.path.exists(own):
+        a = read_jsonl(own)
+        if len(a) >= need:
+            return name, a
+    src = (cfg["rubrics"][name].get("anchors") or {}).get("from")
+    if src and os.path.exists(anchors_path(src)):
+        return src, read_jsonl(anchors_path(src))
+    return src or name, []
+
+
+def pick_anchors(rub, anchors, n, rng):
+    """n anchors, up to half of them positive on some field, so kappa has positives to see."""
+    pos = [a for a in anchors if any(a["labels"].get(f) == d["positive"] for f, d in rub["fields"].items())]
+    neg = [a for a in anchors if a not in pos]
+    k = min(len(pos), n // 2)
+    got = rng.sample(pos, k) + rng.sample(neg, min(len(neg), n - k))
+    if len(got) < n:
+        got += rng.sample([a for a in pos if a not in got], min(n - len(got), len(pos) - k))
+    return got
+
+
+def run_batch(cfg, name, dossiers, seed, out=sys.stderr):
+    """→ (batch row, per-dossier results {id: (labels, quotes)}, error rows, detail rows)."""
+    jc = cfg["judge"]
+    rub = cfg["rubrics"][name]
+    a_name, anchors = anchor_set(cfg, name)
+    need = jc["anchors_per_batch"]
+    if len(anchors) < need:
+        raise Refused("rubric %s: %d anchor(s) under %s (and no %s import); a batch needs %d — run "
+                      "`cc-lever-judge anchors import`" % (name, len(anchors), anchors_path(name), a_name, need))
+    a_rub = cfg["rubrics"][a_name]
+    rng = random.Random(seed)
+    items = [("dossier", name, d, False) for d in dossiers]
+    n_swap = int(math.ceil(len(dossiers) * jc["rejudge_share"])) if dossiers else 0
+    items += [("swap", name, d, True) for d in rng.sample(dossiers, n_swap)]
+    items += [("anchor", a_name, a, False) for a in pick_anchors(a_rub, anchors, need, rng)]
+    for kn in rub["known_negatives"]:
+        items += [("kn", name, kn, False)] * jc["known_negative_reps"]
+    rng.shuffle(items)
+    batch = "%s-%s-%d" % (name, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now())), seed)
+    res = [None] * len(items)
+    model = {}
+
+    def one(i):
+        kind, rn, it, sw = items[i]
+        r = call(jc, prompt_for(cfg["rubrics"][rn], it["sections"], "item-%03d" % i, sw))
+        model[r.get("model")] = model.get(r.get("model"), 0) + 1
+        try:
+            return parse(cfg["rubrics"][rn], r.get("text")), None
+        except (ValueError, TypeError) as e:
+            return None, r.get("error") or str(e)[:160]
+
+    workers = max(1, int(os.environ.get("CC_LEVER_JUDGE_WORKERS") or jc["workers"]))
+    ex = cf.ThreadPoolExecutor(max_workers=workers)
+    try:
+        futs = {ex.submit(one, i): i for i in range(len(items))}
+        for f in cf.as_completed(futs):
+            res[futs[f]] = f.result()          # CallPlumbing propagates: the batch stops here
+    finally:
+        ex.shutdown(wait=True, cancel_futures=True)
+    errs, detail = [], []
+    dossier_out, swap_out = {}, {}
+    gold = {f: [] for f in a_rub["fields"]}
+    judged = {f: [] for f in a_rub["fields"]}
+    kn_fail, kn_n = {}, {}
+    n_anchor_ok = 0
+    for i, (kind, rn, it, sw) in enumerate(items):
+        got, err = res[i]
+        detail.append({"token": "item-%03d" % i, "kind": kind, "rubric": rn, "id": it.get("id"), "swapped": sw,
+                       "labels": got[0] if got else None, "quotes": got[1] if got else None, "error": err})
+        if got is None:
+            errs.append({"v": 1, "kind": "judge-error", "ts": le.iso(now()), "batch": batch, "rubric": rn,
+                         "item": kind, "id": str(it.get("id"))[:64], "error": err})
+            if kind == "kn":
+                kn_n[it["id"]] = kn_n.get(it["id"], 0) + 1
+            continue
+        labels = got[0]
+        if kind == "dossier":
+            dossier_out[it["id"]] = got
+        elif kind == "swap":
+            swap_out[it["id"]] = labels
+        elif kind == "anchor":
+            n_anchor_ok += 1
+            for f, d in a_rub["fields"].items():
+                gold[f].append(it["labels"].get(f) == d["positive"])
+                judged[f].append(labels.get(f) == d["positive"])
+        elif kind == "kn":
+            kn_n[it["id"]] = kn_n.get(it["id"], 0) + 1
+            kn_fail[it["id"]] = kn_fail.get(it["id"], 0) + (1 if fails(rub, labels) else 0)
+    kap = {f: (round(kappa(gold[f], judged[f]), 4) if gold[f] else None) for f in a_rub["fields"]}
+    pairs = [(dossier_out[k][0], v) for k, v in swap_out.items() if k in dossier_out]
+    why = []
+    if n_anchor_ok < need:
+        why.append("%d of %d anchors parsed" % (n_anchor_ok, need))
+    low = sorted(f for f, k in kap.items() if k is not None and k < jc["kappa_min"])
+    if low:
+        why.append("kappa %s below %.2f" % (", ".join("%s %.2f" % (f, kap[f]) for f in low), jc["kappa_min"]))
+    bad_kn = sorted(k for k in kn_n if kn_fail.get(k, 0) < jc["known_negative_reps"])
+    if bad_kn:
+        why.append("known negative(s) not failed %d/%d: %s" % (jc["known_negative_reps"], jc["known_negative_reps"],
+                                                              ", ".join("%s %d" % (k, kn_fail.get(k, 0)) for k in bad_kn)))
+    row = {"v": 1, "kind": "batch", "ts": le.iso(now()), "batch": batch, "rubric": name, "anchors_from": a_name,
+           "seed": seed, "verdict": "VOID" if why else "OK", "why": "; ".join(why)[:300],
+           "models": {str(k): v for k, v in sorted(model.items(), key=lambda kv: str(kv[0]))},
+           "dossiers": len(dossiers), "judged": len(dossier_out), "errors": len(errs), "anchors": n_anchor_ok,
+           "kappa": kap, "known_negatives": {k: [kn_fail.get(k, 0), kn_n[k]] for k in sorted(kn_n)},
+           "swap": {"n": len(pairs), "agree": sum(1 for x, y in pairs if x == y)}}
+    out.write("batch %s: %s%s — %d dossier(s), %d judged, anchors %d (%s) kappa %s, known negatives %s, "
+              "swap %d/%d agree\n" % (batch, row["verdict"], (" (" + row["why"] + ")") if why else "",
+                                       len(dossiers), len(dossier_out), n_anchor_ok, a_name, kap,
+                                       row["known_negatives"], row["swap"]["agree"], row["swap"]["n"]))
+    return row, dossier_out, errs, detail
+
+
+def write_detail(batch, detail):
+    d = os.path.join(hc_root(), "judge", "batches")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, batch + ".jsonl")
+    with open(p, "w") as fh:
+        for r in detail:
+            fh.write(json.dumps(r, sort_keys=True) + "\n")
+    os.chmod(p, 0o600)
+    return p
+
+
+def judge_and_record(cfg, name, dossiers, seed, write):
+    reserve(len(dossiers), cfg["judge"]["daily_dossier_cap"])
+    row, out, errs, detail = run_batch(cfg, name, dossiers, seed)
+    write_detail(row["batch"], detail)
+    rub = cfg["rubrics"][name]
+    rows = [row] + errs
+    if row["verdict"] == "OK" and rub["row_kind"] == "judged":
+        for d in dossiers:
+            if d["id"] in out:
+                lab = out[d["id"]][0]
+                rows.append({"v": 1, "kind": "judged", "ts": row["ts"], "batch": row["batch"], "rubric": name,
+                             "id": str(d["id"])[:64], "sid": d.get("sid"), "labels": lab, "pass": not fails(rub, lab)})
+    return row, out, rows
+
+
+def cmd_run(a, cfg):
+    if a.rubric not in cfg["rubrics"]:
+        raise SystemExit("cc-lever-judge: unknown rubric %r (known: %s)" % (a.rubric, ", ".join(sorted(cfg["rubrics"]))))
+    dossiers = read_jsonl(a.dossiers)
+    ids = [d.get("id") for d in dossiers]
+    if not dossiers or len(set(ids)) != len(ids) or not all(isinstance(d.get("sections"), dict) for d in dossiers):
+        raise SystemExit("cc-lever-judge: --dossiers needs JSONL rows with unique ids and a sections object")
+    row, _, rows = judge_and_record(cfg, a.rubric, dossiers, a.seed, a.write)
+    if a.write:
+        append_rows(rows)
+    print(json.dumps(row, sort_keys=True))
+    return 0 if row["verdict"] == "OK" else 1
+
+
+# ── T5 re-asks ────────────────────────────────────────────────────────────────────────────────
+def transcripts(sid):
+    """Main transcripts of a sid across the account roots, earliest first (the cc-token-ledger rule)."""
+    ps = []
+    for root in le.account_roots():
+        ps += glob.glob(os.path.join(root, "*", sid + ".jsonl"))
+    seen, out = set(), []
+    for p in sorted(ps, key=lambda p: (os.stat(p).st_mtime, p)):
+        rp = os.path.realpath(p)
+        if rp not in seen:
+            seen.add(rp)
+            out.append(p)
+    return out
+
+
+def _text(c):
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+            return None
+        return " ".join(b.get("text") or "" for b in c if isinstance(b, dict) and b.get("type") == "text")
+    return None
+
+
+def prompts(sid, t0, t1, successor=False):
+    """Operator prompts of a session's main thread with t0 <= t < t1, each with the assistant text
+    before it. Machine-shaped inputs (tags, notices, bash mode, meta) are not operator prompts, and
+    neither is a successor's first prompt: that is the handoff bridge."""
+    paths = transcripts(sid)
+    if not paths:
+        return []
+    out, last_asst, first = [], "", True
+    with open(paths[0], "rb") as fh:
+        for raw in fh:
+            if b'"type":"user"' not in raw and b'"type":"assistant"' not in raw:
+                continue
+            try:
+                x = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(x, dict) or x.get("isSidechain") or x.get("isMeta"):
+                continue
+            msg = x.get("message") or {}
+            t = le.parse_ts(x.get("timestamp"))
+            txt = _text(msg.get("content"))
+            if x.get("type") == "assistant":
+                if txt and txt.strip():
+                    last_asst = txt
+                continue
+            if not txt or not txt.strip():
+                continue
+            if first and successor:
+                first = False
+                continue
+            first = False
+            if t is None or not t0 <= t < t1:
+                continue
+            s = txt.strip()
+            if s.startswith("<") or s.startswith("Caveat:") or s.startswith("[Request interrupted"):
+                continue
+            out.append({"t": t, "ts": x.get("timestamp"), "text": s, "before": last_asst})
+    return out
+
+
+def judged_ids():
+    p = le.log_path(JUDGE_LOG)
+    if not os.path.exists(p):
+        return set()
+    rows, _ = le.read_jsonl(p)
+    return {r.get("id") for r in rows if r.get("kind") == "reask"}
+
+
+def cmd_reask(a, cfg):
+    t_now = now()
+    until = le.parse_ts(a.until) if a.until else t_now
+    since = t_now - parse_window(a.since)
+    rub = cfg["rubrics"]["reask"]
+    flags = le.read_flags()
+    arm_rows, _ = le.read_jsonl(le.log_path(le.ARMS_LOG), since - lch.HORIZON_S, until)
+    arms = le.Arms(arm_rows)
+    events, _ = le.load_events(since - lch.HORIZON_S, until, arms, flags)
+    eds = lch.edges(arm_rows, {})
+    succ_of = {}
+    for e in eds:
+        succ_of.setdefault(e["pred"], []).append(e["succ"])
+    rx = [re.compile(p, re.I) for p in rub["prefilter"]]
+    done = judged_ids()
+    per_sid = {}
+    for e in events:
+        if e["lever"] != "D1" or not e.get("would") or e["arm"] not in ("treat", "ctrl", "holdback"):
+            continue
+        sids = succ_of.get(e["sid"], ()) if e["arm"] == "treat" else (e["sid"],)
+        for s in sids:
+            for p in prompts(s, max(e["t"] - 5, since), min(e["t"] + lch.HORIZON_S, until), e["arm"] == "treat"):
+                pid = hashlib.sha1(("%s:%s" % (s, p["ts"])).encode()).hexdigest()[:16]
+                if pid in done:
+                    continue
+                done.add(pid)
+                cand = any(r.search(p["text"]) for r in rx)
+                per_sid.setdefault(s, []).append((pid, cand, p))
+    cap = cfg["judge"]["daily_dossier_cap"]
+    room = min(cap - day_count(), a.max if a.max is not None else cap)
+    take, dossiers, deferred = [], [], 0
+    for s in sorted(per_sid):
+        c = [x for x in per_sid[s] if x[1]]
+        if len(dossiers) + len(c) > room:
+            deferred += 1
+            continue
+        take.append(s)
+        dossiers += [{"id": pid, "sid": s, "sections": {"assistant_before": p["before"][-1500:],
+                                                         "operator_prompt": p["text"][:1200]}} for pid, _, p in c]
+    sys.stderr.write("reask: %d prompt(s) in %d session(s), %d candidate(s) for the judge, %d session(s) "
+                     "deferred by the daily cap\n" % (sum(len(v) for v in per_sid.values()), len(per_sid),
+                                                       len(dossiers), deferred))
+    rows, verdict, batch = [], "OK", None
+    if dossiers:
+        row, out, rows = judge_and_record(cfg, "reask", dossiers, a.seed, a.write)
+        verdict, batch = row["verdict"], row["batch"]
+        print(json.dumps(row, sort_keys=True))
+    else:
+        out = {}
+    if verdict == "OK":
+        ts = le.iso(now())
+        for s in take:
+            if any(cand and pid not in out for pid, cand, _ in per_sid[s]):
+                continue   # a candidate the judge could not parse: the session waits for the next run
+            for pid, cand, _ in per_sid[s]:
+                rows.append({"v": 1, "kind": "reask", "ts": ts, "sid": s, "id": pid, "batch": batch,
+                             "reask": bool(cand and out[pid][0].get("R") == "Y"),
+                             "src": "judge" if cand else "prefilter"})
+    n = append_rows(rows) if a.write and rows else 0
+    sys.stderr.write("reask: %s; %d row(s) %s\n" % (verdict, n if a.write else len(rows),
+                                                   "appended" if a.write else "computed (no --write)"))
+    return 0 if verdict == "OK" else 1
+
+
+def parse_window(w):
+    m = re.match(r"^(\d+)([dh])$", w or "")
+    if not m:
+        raise SystemExit("cc-lever-judge: --since takes <N>d or <N>h")
+    return int(m.group(1)) * (86400 if m.group(2) == "d" else 3600)
+
+
+# ── anchors ───────────────────────────────────────────────────────────────────────────────────
+SEC = {"PREV OPERATOR PROMPT": "prev_operator_prompt", "PREDECESSOR FINAL MSG": "predecessor_final_msg",
+       "GAP OPENER": "gap_openers", "LAST ASSISTANT BEFORE PROMPT": "last_assistant_before_prompt",
+       "OPERATOR PROMPT": "operator_prompt"}
+LINE = re.compile(r"^  ([A-Z][A-Z ]+?)(?: \[([\w-]+)\])?(?: \([^)]*\))?: (.*)$")
+
+
+def parse_blind_view(text):
+    """→ [(n, pid, sections)] from the 43da49891e75 blind view (no reply, no labels)."""
+    out, cur = [], None
+    for ln in text.splitlines():
+        m = re.match(r"^#(\d+) pid=(\d+) ", ln)
+        if m:
+            cur = (int(m.group(1)), int(m.group(2)), {})
+            out.append(cur)
+            continue
+        m = LINE.match(ln)
+        if cur is None or not m or m.group(1) not in SEC:
+            continue
+        v = ast.literal_eval(m.group(3))
+        k = SEC[m.group(1)]
+        if k == "gap_openers":
+            cur[2][k] = (cur[2].get(k, "") + "\n[%s] %s" % (m.group(2), v)).strip()
+        else:
+            cur[2][k] = v
+    return out
+
+
+def cmd_anchors(a, cfg):
+    if a.what == "status":
+        for name in sorted(cfg["rubrics"]):
+            src, an = anchor_set(cfg, name)
+            print("%-11s %3d anchor(s)%s" % (name, len(an), "" if src == name else " borrowed from " + src))
+        return 0
+    imp = cfg["rubrics"]["d1_return"]["anchors"]["import"]
+    bv, lp = os.path.expanduser(imp["blind_view"]), os.path.expanduser(imp["labels"])
+    try:
+        with open(bv) as fh:
+            blocks = parse_blind_view(fh.read())
+        with open(lp) as fh:
+            labels = json.load(fh)["labels"]
+    except (OSError, ValueError, KeyError) as e:
+        raise Refused("anchors import: %s" % e)
+    rows = []
+    for n, pid, sections in blocks:
+        lab = labels.get(str(n))
+        if not lab or lab[0] != pid or "operator_prompt" not in sections:
+            raise Refused("anchors import: block #%02d (pid %d) has no matching label row" % (n, pid))
+        rows.append({"id": "d1r-%02d" % n, "pid": pid, "sections": sections,
+                     "labels": {f: ("Y" if lab[i] else "N") for f, i in imp["label_fields"].items()}})
+    p = anchors_path("d1_return")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp%d" % os.getpid()
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        for r in rows:
+            fh.write(json.dumps(r, sort_keys=True) + "\n")
+    os.replace(tmp, p)
+    pos = {f: sum(1 for r in rows if r["labels"][f] == "Y") for f in imp["label_fields"]}
+    print("anchors: %d D1 return(s) → %s (positives %s)" % (len(rows), p.replace(os.path.expanduser("~"), "~"), pos))
+    return 0
+
+
+def cmd_probe(a, cfg):
+    rub = cfg["rubrics"]["reask"]
+    kn = rub["known_negatives"][0]
+    r = call(cfg["judge"], prompt_for(rub, kn["sections"], "item-000"))
+    try:
+        labels, quotes = parse(rub, r.get("text"))
+    except (ValueError, TypeError) as e:
+        print("probe: served %s, reply did not parse: %s" % (r.get("model"), e))
+        return 1
+    ok = fails(rub, labels)
+    print("probe: served %s (not %s), parsed %s, known negative %s" % (
+        r["model"], "/".join(cfg["judge"]["forbidden_models"]), labels, "FAILED as it must" if ok else "PASSED (wrong)"))
+    if a.write:
+        append_rows([{"v": 1, "kind": "probe", "ts": le.iso(now()), "model": r["model"], "labels": labels, "ok": ok}])
+    return 0 if ok else 1
+
+
+def cmd_status(a, cfg):
+    print("dossiers today (UTC %s): %d of %d" % (_day(now()), day_count(), cfg["judge"]["daily_dossier_cap"]))
+    return cmd_anchors(argparse.Namespace(what="status"), cfg)
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="cc-lever-judge")
+    sub = ap.add_subparsers(dest="verb")
+    p = sub.add_parser("run")
+    p.add_argument("rubric")
+    p.add_argument("--dossiers", required=True)
+    p.add_argument("--seed", type=int, default=20261025)
+    p.add_argument("--write", action="store_true")
+    p = sub.add_parser("reask")
+    p.add_argument("--since", default="1d")
+    p.add_argument("--until")
+    p.add_argument("--seed", type=int, default=20261025)
+    p.add_argument("--max", type=int)
+    p.add_argument("--write", action="store_true")
+    p = sub.add_parser("anchors")
+    p.add_argument("what", choices=("import", "status"))
+    p = sub.add_parser("probe")
+    p.add_argument("--write", action="store_true")
+    sub.add_parser("status")
+    a = ap.parse_args(argv)
+    if not a.verb:
+        ap.print_help(sys.stderr)
+        return 2
+    cfg = load_rubrics()
+    fn = {"run": cmd_run, "reask": cmd_reask, "anchors": cmd_anchors, "probe": cmd_probe, "status": cmd_status}[a.verb]
+    try:
+        return fn(a, cfg)
+    except Refused as e:
+        sys.stderr.write("cc-lever-judge: refused: %s\n" % e)
+        return 3
+    except CallPlumbing as e:
+        sys.stderr.write("cc-lever-judge: PLUMBING: %s\n" % e)
+        return 4
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

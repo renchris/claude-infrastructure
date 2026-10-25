@@ -1,0 +1,40 @@
+#!/usr/bin/python3 -I
+"""A stand-in for `claude -p ... --output-format stream-json` in tests/lever-judge-chain.bats.
+
+It answers from labels the FIXTURE planted, never from the judge's own rules: an item whose text
+carries [[gold:F=V,...]] gets those labels (inverted under STUB_MODE=flip), an item carrying any
+known negative's text from config/lever-rubrics.json gets a failing answer (a passing one under
+STUB_MODE=kn-pass), anything else gets every field N. STUB_MODEL is the init line's model;
+STUB_MODE=noinit prints no init line. Each call appends its first ITEM line to $STUB_LOG.
+"""
+import json
+import os
+import re
+import sys
+
+p = sys.stdin.read()
+if os.environ.get("STUB_LOG"):
+    with open(os.environ["STUB_LOG"], "a") as fh:
+        m = re.search(r"^ITEM [^\n]*", p, re.M)
+        fh.write((m.group(0) if m else "?") + "\n")
+mode = os.environ.get("STUB_MODE", "gold")
+fields = re.findall(r"^- (\w+) \(([^)]*)\):", p, re.M)
+cfg = json.load(open(os.environ["STUB_RUBRICS"]))
+rub = next(r for r in cfg["rubrics"].values() if [f for f, _ in fields] == list(r["fields"]))
+kn = any(len(t) >= 20 and t in p for k in rub["known_negatives"] for t in k["sections"].values())
+lab = {f: "N" for f, _ in fields}
+g = re.search(r"\[\[gold:([^\]]*)\]\]", p)
+if kn:
+    if mode == "kn-pass":
+        bad = {f: v for f, v in rub["fail_if"]}
+        lab = {f: next(v for v in vals.split(" / ") if bad.get(f) != v) for f, vals in fields}
+    else:
+        f, v = rub["fail_if"][0]
+        lab[f] = v
+elif g:
+    for kv in g.group(1).split(","):
+        f, v = kv.split("=")
+        lab[f] = ({"Y": "N", "N": "Y"}.get(v, v) if mode == "flip" else v)
+if mode != "noinit":
+    print(json.dumps({"type": "system", "subtype": "init", "model": os.environ.get("STUB_MODEL", "claude-sonnet-5-5")}))
+print(json.dumps({"type": "result", "result": json.dumps({f: {"v": v, "quote": ""} for f, v in lab.items()})}))
