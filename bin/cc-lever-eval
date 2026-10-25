@@ -16,7 +16,7 @@ usage:
   cc-lever-eval check <flow> [all|repro|oracle|null|aa|served-model|truncation] [--ref CASES]
   cc-lever-eval check d4_pollloop --population                 PASS|PARK; PARK exits 1
   cc-lever-eval round <flow> --candidate JSON [--text FILE]
-  cc-lever-eval report <flow>
+  cc-lever-eval report <flow>                                  also appends the kind=offline row
   cc-lever-eval approve-harness <flow> --confirm <sha12>        the operator's act
   cc-lever-eval harness-sha <flow>
 
@@ -83,6 +83,21 @@ def half_stats(F, cases, cand, base, share, wkf, reps=2000):
         if worst is None or (s["lo"], s["point"]) < (worst["lo"], worst["point"]):
             worst = s
     return worst
+
+
+def offline_row(F, flow, cases, params, share, wkf, verdict, split, sha=None):
+    """kind=offline: the incumbent's own savings (not a paired delta) over one half, at the WORSE
+    read end, scaled to the fleet's pp/wk. Points flows carry no pp/wk and write none."""
+    if hc.FLOWS[flow]["kind"] != "pp_wk" or not cases:
+        return None
+    worst = None
+    for _rn, r in F.policy.READS:
+        v = F.evaluate(cases, params, r)
+        rows = [(g["acct"], g["sid"], v[g["case_id"]]) for g in cases]
+        point, lo, _hi, _sd = hc.cluster_bootstrap(rows, wkf / share if share else 0.0)
+        if worst is None or (lo, point) < (worst[1], worst[0]):
+            worst = (point, lo)
+    return hc.record_offline(flow, worst[0], worst[1], verdict, split, params, sha[:12] if sha else None)
 
 
 def shares(flow):
@@ -214,6 +229,8 @@ def cmd_round(a, F):
         fails = F.failures(hc.read_train(a.flow), base)
         row = hc.record_round(a.flow, dict(verdict=hc.STALL, reason="3 non-KEEP rounds: sort train failures, no edit",
                                            failures=fails[:6], harness=sha[:12], candidate=None))
+        offline_row(F, a.flow, hc.read_test(a.flow, unseal=True), base, shares(a.flow)[1],
+                    F.wk(build_meta(a.flow)), hc.STALL, "test", sha)
         print(json.dumps(row, sort_keys=True))
         return 0
     cand = F.validate_params(params_arg(a.candidate))
@@ -239,6 +256,7 @@ def cmd_round(a, F):
         verdict=v, reason=why, candidate=cand, baseline=base, changed=changed[0], harness=sha[:12],
         train=round(s_tr["point"], 4), nf_train=round(s_tr["nf"], 4), test=round(s_te["point"], 4),
         test_lo=round(s_te["lo"], 4), test_hi=round(s_te["hi"], 4), nf_test=round(s_te["nf"], 4)))
+    offline_row(F, a.flow, test, cand if v == hc.KEEP else base, te, wkf, v, "test", sha)
     print(json.dumps(row, sort_keys=True))
     return 0
 
@@ -258,6 +276,17 @@ def cmd_report(a, F):
             r["n"], r["verdict"], r["changed"], json.dumps(r["candidate"][r["changed"]]), r["test"],
             r["test_lo"], r["test_hi"], r["train"], r["nf_train"], mark))
     print("best params: %s" % json.dumps(F.baseline_params(st), sort_keys=True))
+    try:
+        cases = hc.read_jsonl(os.path.join(hc.flow_dir(a.flow), "cases.jsonl"))
+        wkf = F.wk(build_meta(a.flow))
+    except OSError:
+        print("offline: no built cases (cc-lever-eval build %s), no kind=offline row" % a.flow)
+        return 0
+    off = offline_row(F, a.flow, cases, F.baseline_params(st), 1.0, wkf,
+                      st["rounds"][-1]["verdict"] if st["rounds"] else "BASELINE", "all")
+    if off:
+        print("offline: incumbent %+.3f pp/wk (CI95 lower %+.3f) over all %d case(s) → kind=offline row" % (
+            off["pp_wk"], off["lo"], len(cases)))
     return 0
 
 

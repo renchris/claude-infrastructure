@@ -7,7 +7,9 @@ them in its own favour:
   * state     ~/.claude/hillclimb/<flow>/ (CC_HILLCLIMB_DIR overrides the root), SCHEMA 2:
               cases.jsonl, build.json, train.jsonl, test.sealed.jsonl (mode 0400), split.json,
               state.json (harness approval, best params, rounds). Rounds also append to
-              ~/.claude/logs/lever-rounds.jsonl.
+              ~/.claude/logs/lever-rounds.jsonl (kind=round), and every round and report of a
+              pp/wk flow a kind=offline row: the incumbent's offline pp/wk (flow, pp_wk, verdict,
+              split), which cc-lever-score reads for ADVANCE's offline sign.
   * split     test iff int(sha1(case_id), 16) % 5 == 0. Assignment is by hash alone, so it is stable
               as cases are added; "stratified by account" is then a CHECK, not a re-draw: every
               account with at least 20 cases must land 10-30% in test, or the split is PLUMBING.
@@ -444,6 +446,29 @@ def next_action(rounds):
     return STALL if streak >= STALL_AFTER else EDIT
 
 
+def _append_rounds_line(line):
+    p = rounds_log()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, (line + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def record_offline(flow, pp_wk, lo, verdict, split, params, harness=None):
+    """Append the incumbent's offline savings as a kind=offline row of lever-rounds.jsonl: the row
+    cc-lever-score's ADVANCE reads for "the offline replay agrees in sign" (pp/wk flows only)."""
+    row = dict(kind="offline", flow=flow, ts=utc(), pp_wk=round(pp_wk, 4), lo=round(lo, 4),
+               verdict=verdict, split=split, params=params, harness=harness)
+    line = json.dumps(row, separators=(",", ":"), sort_keys=True)
+    if len(line) > 2048:
+        row.pop("params")
+        line = json.dumps(dict(row, truncated=True), separators=(",", ":"), sort_keys=True)
+    _append_rounds_line(line)
+    return row
+
+
 def record_round(flow, row):
     """Append a round to state.json and lever-rounds.jsonl (one write, UTC Z, ≤ 2 KB)."""
     st = load_state(flow)
@@ -465,11 +490,5 @@ def record_round(flow, row):
             ),
             separators=(",", ":"),
         )
-    p = rounds_log()
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-    try:
-        os.write(fd, (line + "\n").encode("utf-8"))
-    finally:
-        os.close(fd)
+    _append_rounds_line(line)
     return row

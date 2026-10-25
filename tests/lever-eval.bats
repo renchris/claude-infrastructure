@@ -268,8 +268,10 @@ PY
 	[ "$status" -eq 0 ]
 	v="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["verdict"])' "$output")"
 	[[ " KEEP REVERT NOT-MERGED " == *" $v "* ]] || false
-	[ "$(wc -l <"$CC_LEVER_ROUNDS_LOG")" -eq 1 ]
-	[ "$(awk '{ print length($0) }' "$CC_LEVER_ROUNDS_LOG")" -le 2048 ]
+	# one kind=round row and one kind=offline row (the incumbent's test-half pp/wk, ADVANCE's offline sign)
+	[ "$(wc -l <"$CC_LEVER_ROUNDS_LOG")" -eq 2 ]
+	[ "$(python3 -c 'import json,sys; print(" ".join(sorted(json.loads(l)["kind"] for l in open(sys.argv[1]))))' "$CC_LEVER_ROUNDS_LOG")" = "offline round" ]
+	[ "$(awk '{ print length($0) }' "$CC_LEVER_ROUNDS_LOG" | sort -n | tail -1)" -le 2048 ]
 	# seed two more non-KEEP rounds: the next round must be a STALL that scores no candidate
 	python3 - "$CC_HILLCLIMB_DIR/d3_keepalive/state.json" <<'PY'
 import json, sys
