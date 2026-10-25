@@ -30,6 +30,15 @@
 # length, the rebuild the next request actually paid) come from the SYNCHRONOUS Stop hook
 # hooks/cache-expiry-tracker.sh, which is already registered, so the ledger runs before 0077 does.
 #
+# W7+ S2 (docs/plans/USAGE_LEVERS.md § W7+ §2 D3 "Arm", §3 "Telemetry rows"): at EACH due time,
+# before anything else happens there, it re-reads the lever flag file and computes D3's arm for the
+# gap episode (hooks/lib/lever-flags.sh lf_arm, unit "<sid>:<episode start>", the lever's salt), and
+# appends one kind=arm row to ~/.claude/logs/lever-arms.jsonl (UTC Z, ≤ 2 KB, one write) in BOTH
+# arms; the arm then rides on the would-wake row (wake v3). The episode start is the gap state's own
+# (hooks/lib/idle_gap.py), so the arm, wake and gap rows join on one unit. D3's busy-scoped
+# eligibility is decided on the wake row, where the session's jobs are read. Nothing reads the arm
+# back to act on it: no treatment branch exists yet (wave S12), and the trap still forces exit 0.
+#
 # Kill switch: CC_IDLE_KEEPALIVE=off. Seams (tests): CC_IDLE_KEEPALIVE_HARNESS_ARGV /
 # CC_IDLE_KEEPALIVE_HARNESS_FD1 (as mailbox-wake-arm.sh's), CC_IDLE_KEEPALIVE_SETTLE_S,
 # CC_IDLE_KEEPALIVE_POLL_S, CC_KEEPALIVE_WAKE_S, CC_KEEPALIVE_MAX_WAKES. bash 3.2-safe.
@@ -120,6 +129,38 @@ _watcher() {
   printf 'false'
 }
 
+# The gap episode's start: the state file idle_gap.py wrote at this same Stop, when it is this
+# gap's (started within 300 s of this timer's launch); else the launch itself.
+_episode() {
+  local _st="${CC_IDLE_KEEPALIVE_STATE:-$HOME/.claude/state/idle-keepalive}/$_sid.json" _r _s _e
+  _r="$(jq -r '[(.start // ""), (.episode // .start // "")] | map(tostring) | join(" ")' "$_st" 2>/dev/null)" || _r=""
+  _s="${_r%% *}"; _e="${_r#* }"; _s="${_s%.*}"; _e="${_e%.*}"
+  case "$_s$_e" in ''|*[!0-9]*) printf '%s' "$_launch"; return ;; esac
+  if [ $(( _s - _launch )) -le 300 ] && [ $(( _launch - _s )) -le 300 ] && [ "$_e" -le "$_s" ]; then
+    printf '%s' "$_e"
+  else
+    printf '%s' "$_launch"
+  fi
+}
+
+# The D3 arm at this due time (a FRESH flag read) and its kind=arm row; sets _aj for the wake row.
+_arm_row() {
+  _aj=""
+  [ -f "$_lib/lever-flags.sh" ] || return 0
+  # shellcheck source=lib/lever-flags.sh
+  # shellcheck disable=SC1091
+  . "$_lib/lever-flags.sh" 2>/dev/null || return 0
+  command -v lf_arm >/dev/null 2>&1 || return 0
+  lf_arm D3 "$_sid:$(_episode)" || return 0
+  _aj="$(lf_arm_json)"
+  local _cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" _logd="${CC_LEVER_LOG_DIR:-$HOME/.claude/logs}" _r
+  _cfg="${_cfg%/}"; _cfg="${_cfg##*/}"
+  _r="${_aj%\}},\"acct\":$(lf_jstr "${_cfg:-.claude}"),\"due_n\":$_n,\"gap_start\":\"$(date -u -r "$_launch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)\",\"hook\":\"idle-keepalive\",\"kind\":\"arm\",\"sid\":\"$_sid\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"v\":1}"
+  [ "${#_r}" -lt 2048 ] || return 0
+  [ -d "$_logd" ] || mkdir -p "$_logd" 2>/dev/null || return 0
+  printf '%s\n' "$_r" >> "$_logd/lever-arms.jsonl" 2>/dev/null || true
+}
+
 _n=0
 _due=$(( _launch + _wake_s ))
 while [ "$_n" -lt "$_max" ]; do
@@ -132,7 +173,8 @@ while [ "$_n" -lt "$_max" ]; do
     ! _turned || exit 0                               # the gap ended: a new turn wrote the transcript
   done
   _n=$(( _n + 1 ))
-  /usr/bin/env python3 -I "$_lib/idle_gap.py" would-wake "$_sid" "$_launch" "$(_watcher)" "$_n" \
+  _arm_row                                            # before anything acts at this due time
+  /usr/bin/env python3 -I "$_lib/idle_gap.py" would-wake "$_sid" "$_launch" "$(_watcher)" "$_n" "$_aj" \
     >/dev/null 2>&1 || true
   _due=$(( _due + _wake_s ))
 done

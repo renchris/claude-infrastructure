@@ -20,6 +20,20 @@ row per idle gap so the keepalive can be judged before it is ever allowed to wak
               the cache expires (watcher_fires_before_ttl): the busy-scoped redesign wakes only
               when busy and not watcher_fires_before_ttl. Both come from hooks/lib/session_jobs.py.
 
+W7+ S2 (docs/plans/USAGE_LEVERS.md § W7+ §2 D3, §3 "Telemetry rows") — version bumps, no change in
+behaviour; readers of v1 gap / v2 wake rows keep working because only fields are ADDED:
+  gap v2   episode_id  the original idle start (ISO), carried across gaps a wake splits, and unit
+                       "<sid>:<episode epoch>" — the D3 arm unit, so arm, wake and gap rows join exactly
+           ended_by    wake (a FIRED wake, which only a treatment branch can set, ended it) | record
+           return_s    episode start → the operator's real return; null while a wake keeps it open
+           wake_req, wake_tokens  the wake turn's requests and tokens (null unless ended_by=wake)
+           busy, watcher_armed, watcher_fires_before_ttl, eligible, arm, variant  copied from the
+                       wake decision made in this gap (null when the gap never reached its due time)
+  wake v3  lever D3, arm, variant, unit_id, flag_src, u (from hooks/lib/lever-flags.sh lf_arm, computed
+           by the timer at the due time), eligible = busy and not watcher_fires_before_ttl (D3's
+           busy-scoped rule with watcher skip; null when the jobs are unreadable), fired = false.
+  The wake decision is also kept in the gap's state file (state["wake"]) for the gap row above.
+
 COST MODEL (weekly-meter pp per Mtok; reads are charged, round 3):
   a keepalive wake = one cache read of the context + a short turn (~300 written, ~150 output tokens)
   a rebuild        = one cache write of the context, instead of the warm read the next turn would pay
@@ -228,6 +242,42 @@ def gap_end(recs, start, complete):
     return end, src, cw, cr
 
 
+def wake_turn(recs, end):
+    """→ (requests, tokens) of the turn a wake opened: every main-thread request from `end` on."""
+    n, tok = 0, dict(input=0, cw=0, cr=0, out=0)
+    for rec in recs:
+        t = _ts(rec)
+        u = _usage(rec) if rec.get("type") == "assistant" else None
+        if t is None or t < end or not u:
+            continue
+        n += 1
+        for k, f in (
+            ("input", "input_tokens"),
+            ("cw", "cache_creation_input_tokens"),
+            ("cr", "cache_read_input_tokens"),
+            ("out", "output_tokens"),
+        ):
+            tok[k] += int(u.get(f) or 0)
+    return n, tok
+
+
+# Copied from the gap's wake decision onto its gap row (null when the gap never reached its due time).
+WAKE_FIELDS = (
+    "busy",
+    "watcher_armed",
+    "watcher_fires_before_ttl",
+    "eligible",
+    "arm",
+    "variant",
+)
+
+
+def episode_of(st):
+    """The episode start of a gap's state: its own start unless an earlier wake carried one over."""
+    e = st.get("episode")
+    return e if isinstance(e, (int, float)) and e <= st["start"] else st["start"]
+
+
 # ── io ───────────────────────────────────────────────────────────────────────────────────────────
 def acct():
     d = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude")
@@ -276,18 +326,32 @@ def cmd_stop(payload):
     sid, tp = payload.get("session_id") or "", payload.get("transcript_path") or ""
     if not SID_RX.match(sid) or not tp:
         return
-    t = int(now())   # whole seconds: the gap start is compared with second-resolution records
+    # whole seconds: the gap start is compared with second-resolution records
+    t = int(now())
     recs, complete = tail_records(tp)
     st = load_state(sid)
+    episode = t
     if st and isinstance(st.get("start"), (int, float)) and st["start"] < t:
         end, src, cw, cr = gap_end(recs, st["start"], complete)
         if end is None:
             end, src = t, "stop"
         dur = max(0.0, end - st["start"])
         ctx = int(st.get("ctx") or 0)
+        ep = episode_of(st)
+        wk = st.get("wake") if isinstance(st.get("wake"), dict) else {}
+        woke = (
+            wk.get("fired") is True
+            and isinstance(wk.get("at"), (int, float))
+            and wk["at"] <= end
+        )
+        if woke:
+            episode = ep  # the wake split the episode: the next gap continues it
+            wreq, wtok = wake_turn(recs, end)
+        else:
+            wreq = wtok = None
         row = dict(
             kind="gap",
-            v=1,
+            v=2,
             ts=iso(t),
             sid=sid,
             acct=st.get("acct") or acct(),
@@ -303,12 +367,28 @@ def cmd_stop(payload):
             would_wake_at=iso(st["start"] + WAKE_S),
             obs_cw=cw,
             obs_cr=cr,
+            episode_id=iso(ep),
+            unit="%s:%d" % (sid, ep),
+            ended_by="wake" if woke else "record",
+            return_s=None if woke else round(max(0.0, end - ep), 1),
+            wake_req=wreq,
+            wake_tokens=wtok,
         )
+        row.update({k: wk.get(k) for k in WAKE_FIELDS})
         row.update(gap_costs(ctx, dur))
         append(row)
     ctx, model = context_size(recs)
     save_state(
-        sid, dict(sid=sid, start=t, ctx=ctx, model=model, acct=acct(), transcript=tp)
+        sid,
+        dict(
+            sid=sid,
+            start=t,
+            episode=episode,
+            ctx=ctx,
+            model=model,
+            acct=acct(),
+            transcript=tp,
+        ),
     )
 
 
@@ -337,16 +417,32 @@ def jobs_at_wake(transcript, t, gap_start):
         return {}
 
 
-def cmd_would_wake(sid, launch, watcher, n):
+def parse_arm(s):
+    """The timer's lf_arm_json object (hooks/lib/lever-flags.sh), or {} when absent or malformed."""
+    try:
+        a = json.loads(s) if s else {}
+    except ValueError:
+        return {}
+    return a if isinstance(a, dict) and a.get("lever") == "D3" else {}
+
+
+def cmd_would_wake(sid, launch, watcher, n, arm_json=""):
     if not SID_RX.match(sid):
         return
     t = now()
     st = load_state(sid) or {}
     ctx = int(st.get("ctx") or 0)
     wk = sorted(round(wake_cost(ctx, r), 6) for r in READ_PP)
+    a = parse_arm(arm_json)
+    jobs = jobs_at_wake(st.get("transcript"), t, float(launch))
+    eligible = (
+        bool(jobs["busy"]) and not jobs.get("watcher_fires_before_ttl")
+        if "busy" in jobs
+        else None
+    )
     row = dict(
         kind="wake",
-        v=2,
+        v=3,
         ts=iso(t),
         sid=sid,
         acct=st.get("acct") or acct(),
@@ -358,9 +454,27 @@ def cmd_would_wake(sid, launch, watcher, n):
         watcher_armed={"true": True, "false": False}.get(watcher),
         wake_pp=wk,
         mode="shadow",
+        lever="D3",
+        arm=a.get("arm"),
+        variant=a.get("variant"),
+        unit_id=a.get("unit"),
+        flag_src=a.get("flag_src"),
+        u=a.get("u"),
+        eligible=eligible,
+        fired=False,  # no branch here wakes anything; the treatment wake is wave S12's
     )
-    row.update(jobs_at_wake(st.get("transcript"), t, float(launch)))
+    row.update(jobs)
     append(row)
+    # Keep the decision on this gap's state for its gap row, only while the state is still this
+    # gap's (a Stop since the timer launched would have opened a newer one).
+    if (
+        isinstance(st.get("start"), (int, float))
+        and abs(st["start"] - float(launch)) <= 300
+    ):
+        st["wake"] = dict(
+            {k: row.get(k) for k in WAKE_FIELDS}, n=int(n), at=t, fired=False
+        )
+        save_state(sid, st)
 
 
 def main(argv):
@@ -374,11 +488,12 @@ def main(argv):
                 return 0
             if isinstance(payload, dict):
                 cmd_stop(payload)
-        elif argv[:1] == ["would-wake"] and len(argv) == 5:
-            cmd_would_wake(argv[1], argv[2], argv[3], argv[4])
+        elif argv[:1] == ["would-wake"] and len(argv) in (5, 6):
+            cmd_would_wake(*argv[1:])
         else:
             sys.stderr.write(
-                "usage: idle_gap.py stop < payload | would-wake <sid> <launch> <watcher> <n>\n"
+                "usage: idle_gap.py stop < payload"
+                " | would-wake <sid> <launch> <watcher> <n> [<arm json>]\n"
             )
             return 2
     except Exception as e:  # fail-open: a hook must never die on its ledger

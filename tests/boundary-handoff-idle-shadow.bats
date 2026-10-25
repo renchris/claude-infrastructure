@@ -69,6 +69,10 @@ transcript() {
 # stop <on|off> — one Stop; stdout to $BATS_TEST_TMPDIR/<arm>.out, the IDL row (minus its clock) to .idl
 stop() {
   rm -f "$CC_IDL"
+  # fresh telemetry at every Stop: under heavy load a test's second Stop can run past AGE_MAX (180 s)
+  # after setup, and the hook then abstains as stale before it reaches the shadow block
+  jq --argjson ts "$(date +%s)" '.ts = $ts' "$CC_TELEMETRY_DIR/sidS.json" > "$BATS_TEST_TMPDIR/tel.tmp" \
+    && mv "$BATS_TEST_TMPDIR/tel.tmp" "$CC_TELEMETRY_DIR/sidS.json"
   jq -cn --arg t "$TP" '{session_id:"sidS",transcript_path:$t}' \
     | CC_IRS="$1" "$HOOK" > "$BATS_TEST_TMPDIR/$1.out" 2>/dev/null
   jq -c 'del(.ts)' "$CC_IDL" > "$BATS_TEST_TMPDIR/$1.idl"

@@ -20,6 +20,8 @@
 # Hermetic: $HOME, the ledger, the state dir and the mailbox dir are fixtures; the timer's harness
 # argv and fd 1 come through the same seams mailbox-wake-arm.sh uses.
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude"
@@ -47,7 +49,7 @@ backdate() { # <seconds> — move the open gap's start into the past
 }
 timer() { # runs the timer as an interactive session would, with a 1 s wake
   run env CC_IDLE_KEEPALIVE_HARNESS_ARGV="${ARGV:-claude --model x}" CC_IDLE_KEEPALIVE_HARNESS_FD1=/dev/ttys009 \
-    CC_KEEPALIVE_WAKE_S=1 CC_IDLE_KEEPALIVE_SETTLE_S=0 CC_IDLE_KEEPALIVE_POLL_S=1 \
+    CC_KEEPALIVE_WAKE_S="${WAKE:-1}" CC_IDLE_KEEPALIVE_SETTLE_S=0 CC_IDLE_KEEPALIVE_POLL_S=1 \
     bash -c 'printf "%s" "$1" | /bin/bash "$2"' _ "$PAYLOAD" "$REPO/hooks/idle-keepalive.sh"
 }
 
@@ -118,11 +120,14 @@ PY
   [ "$(grep -c '"kind":"wake"' "$CC_IDLE_KEEPALIVE_LOG")" -eq 1 ]
   [ "$(jq -r 'select(.kind=="wake") | [.n,.ctx,.watcher_armed,.mode] | join(" ")' "$CC_IDLE_KEEPALIVE_LOG")" \
     = "1 150600 true shadow" ]
-  # the gap ends mid-wait (a new turn writes the transcript): no row
-  ( sleep 0.5; printf '{"type":"user"}\n' >> "$TX" ) &
-  timer
-  wait
+  # the gap ends mid-wait (a new turn writes the transcript): no row. The record is written by a
+  # `sleep` stub on the timer's SECOND sleep (its first poll, after the size snapshot), with a 30 s
+  # wake, so a loaded box cannot land it before the snapshot or reach the due time first.
+  cc_stub "$BATS_TEST_TMPDIR/bin" sleep "$(printf '#!/bin/bash\nn=$(( $(cat "%s/n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "%s/n"\n[ "$n" != 2 ] || echo %s >> "%s"\nexec /bin/sleep "$@"\n' \
+    "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" "'{\"type\":\"user\"}'" "$TX")"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" WAKE=30 timer
   [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/n")" -ge 2 ]
   [ "$(grep -c '"kind":"wake"' "$CC_IDLE_KEEPALIVE_LOG")" -eq 1 ]
 }
 
@@ -164,7 +169,7 @@ wake_row() { jq -r "select(.kind==\"wake\") | $1" "$CC_IDLE_KEEPALIVE_LOG" | tai
   [ "$status" -eq 0 ]; [ -z "$output" ]
   [ "$(grep -c '"kind":"wake"' "$CC_IDLE_KEEPALIVE_LOG")" -eq 1 ]
   [ "$(wake_row '[.v,.busy,(.busy_kinds|join("+")),.watcher_running,.watcher_fires_before_ttl] | join(" ")')" \
-    = "2 true bash true true" ]
+    = "3 true bash true true" ]
   # the job finishes (its notice carries a status) and only a long cc-await-ping watcher remains:
   # not busy, and that watcher does not fire before the cache expires
   printf '{"type":"user","timestamp":"%s","message":{"content":"<task-notification>\\n<task-id>bx1q2w3e4</task-id>\\n<tool-use-id>tu_b</tool-use-id>\\n<status>completed</status>\\n</task-notification>"}}\n' "$(iso $((now - 10)))" >> "$TX"

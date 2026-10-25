@@ -499,6 +499,14 @@ if [ -n "$_bsj" ] && printf '%s' "$_bsj" | jq -e 'type=="object"' >/dev/null 2>&
 #                     "still yours", or asks through AskUserQuestion (pq_why names which)
 #   guarded, guarded_k2  would_advise / would_advise_k2 with G1 and G4 applied (null if unreadable)
 # They come from hooks/lib/session_jobs.py, run only when a line is written (≈38 a day).
+#
+# IRS v2 (W7+ S2, docs/plans/USAGE_LEVERS.md § W7+ §2 D1 "Gate S0→S1": its 7-day shadow counts from
+# these rows) adds, still log-only: schema 2; ts_z (UTC Z beside the epoch ts); k2_thousand and
+# would_advise_k2 on EVERY row (null when v is not ok); prompt_sha (sha256 of the whole prompt that
+# ended the gap, G6's "next operator prompt") and prompt_head (its first 200 chars); lever D1, arm,
+# variant, lineage, lineage_src and d1 (the rest of the arm) from hooks/lib/lever-flags.sh lf_arm on
+# the lineage root, salt_D1. Each row is at most 2 KB (prompt_head shrinks first). The arm is
+# recorded, never read back to act: D1's due-time decision and its arm row are wave S12's.
 # COST GATE, weaker than the predicate by construction: context only grows inside a session, so the
 # telemetry's current `input_tokens` is at least the context at idle. Below IRS_K now ⇒ below IRS_K
 # then ⇒ no fork at all. A compaction during the turn is the one way through it, in the safe direction
@@ -514,11 +522,15 @@ if [ "${CC_IRS:-on}" != off ] && [ "$_tk" -ge $(( IRS_K * 1000 )) ] 2>/dev/null 
   # The whole transcript fits in the window (ce_size measured it above): a turn with no request
   # before it is then the session's FIRST turn, a fact with no idle gap, not a gap outside the tail.
   _irs_whole=false; { [ "${_txb:-0}" -gt 0 ] && [ "${_txb:-0}" -le "$IRS_TAIL" ]; } 2>/dev/null && _irs_whole=true
-  _irs="$(tail -c "$IRS_TAIL" "$tp" 2>/dev/null | jq -nRc \
-    --argjson k "$IRS_K" --argjson n "$IRS_N" --argjson now "$now" --arg sid "$sid" --argjson whole "$_irs_whole" \
+  # --rawfile, not -R: jq 1.7.1 (both builds) turns a multibyte character that straddles its 4 KB
+  # -R read buffer into U+FFFD, which would hash a long non-ASCII prompt wrong (prompt_sha, v2).
+  # Splitting the whole window drops the partial first and last lines exactly as -R + fromjson? did.
+  _irs="$(tail -c "$IRS_TAIL" "$tp" 2>/dev/null | jq -nc --rawfile tx /dev/stdin \
+    --argjson k "$IRS_K" --argjson k2 "$IRS_K2" --argjson n "$IRS_N" --argjson now "$now" --arg sid "$sid" \
+    --argjson whole "$_irs_whole" \
     --arg cfg "${CLAUDE_CONFIG_DIR:-}" '
     def tsec: (.timestamp // "") | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch null);
-    [ inputs | fromjson? | objects | select(.isSidechain != true)
+    [ $tx | split("\n")[] | fromjson? | objects | select(.isSidechain != true)
       | if .type == "assistant" then
           (.message.usage // null) as $u
           | if ($u | type) == "object" and (.message.model // "") != "<synthetic>" then
@@ -531,7 +543,9 @@ if [ "${CC_IRS:-on}" != off ] && [ "$_tk" -ge $(( IRS_K * 1000 )) ] 2>/dev/null 
             else ($c | if type == "string" then . else tostring end) as $s
               | {k: "o", t: tsec,
                  job: (($s | contains("<task-notification>\n<task-id>"))
-                       and (($s | test("cc-await-ping|Monitor")) | not))}
+                       and (($s | test("cc-await-ping|Monitor")) | not)),
+                 p: ($c | if type == "string" then .
+                          else [.[]? | select(type == "object" and .type == "text") | .text // ""] | join("\n") end)}
             end
         else empty end ] as $r
     | [range(0; $r | length)] as $ix
@@ -548,13 +562,16 @@ if [ "${CC_IRS:-on}" != off ] && [ "$_tk" -ge $(( IRS_K * 1000 )) ] 2>/dev/null 
                     | (($t1 - $t0) | floor) as $gap
                     | {v: "ok", idle_start: $t0, turn_start: $t1, gap_s: $gap, ctx_at_idle: $r[$pa].c,
                        busy_notice: $busy,
-                       would_advise: ($gap >= $n * 60 and $r[$pa].c >= $k * 1000 and ($busy | not))}
+                       would_advise: ($gap >= $n * 60 and $r[$pa].c >= $k * 1000 and ($busy | not)),
+                       would_advise_k2: ($gap >= $n * 60 and $r[$pa].c >= $k2 * 1000 and ($busy | not)),
+                       prompt_head: ($r[$lo].p | .[0:200]), _p: $r[$lo].p}
                   end
               end
           end
       end)
     | select(.v != "first-turn" and (.v != "ok" or .gap_s >= $n * 60))
-    | {ts: $now, sid: $sid, config_dir: $cfg, k_thousand: $k, n_min: $n} + .' 2>/dev/null || true)"
+    | {ts: $now, ts_z: ($now | todate), sid: $sid, config_dir: $cfg, k_thousand: $k, n_min: $n,
+       k2_thousand: $k2, would_advise_k2: null} + .' 2>/dev/null || true)"
   _irs_t0="$(printf '%s' "$_irs" | jq -r 'select(.v == "ok") | .idle_start' 2>/dev/null || true)"
   case "$_irs_t0" in ''|*[!0-9]*) _irs_t0="" ;; esac
   if [ -n "$_irs_t0" ]; then
@@ -563,13 +580,42 @@ if [ "${CC_IRS:-on}" != off ] && [ "$_tk" -ge $(( IRS_K * 1000 )) ] 2>/dev/null 
       _irs_sj="$(cd "$(dirname "$_irs_h")" 2>/dev/null && pwd)/lib/session_jobs.py"; }
     _irs_g="$(/usr/bin/env python3 -I "$_irs_sj" gap "$tp" "$_irs_t0" $(( _irs_t0 + IRS_N * 60 )) "$IRS_TAIL" 2>/dev/null || true)"
     printf '%s' "$_irs_g" | jq -e 'type == "object"' >/dev/null 2>&1 || _irs_g='{}'
-    _irs_m="$(printf '%s' "$_irs" | jq -c --argjson g "$_irs_g" --argjson k2 "$IRS_K2" '
-      . + $g + {k2_thousand: $k2,
-                would_advise_k2: (.gap_s >= .n_min * 60 and .ctx_at_idle >= $k2 * 1000 and (.busy_notice | not))}
+    _irs_m="$(printf '%s' "$_irs" | jq -c --argjson g "$_irs_g" '
+      . + $g
       | (if ($g | has("busy_tool")) then ((.busy_tool | not) and (.pending_question | not)) else null end) as $ok
       | . + {guarded: (if $ok == null then null else .would_advise and $ok end),
              guarded_k2: (if $ok == null then null else .would_advise_k2 and $ok end)}' 2>/dev/null || true)"
     [ -z "$_irs_m" ] || _irs="$_irs_m"
+  fi
+  # v2: the prompt's sha and the D1 arm of the lineage root, then the 2 KB cap. The full prompt (_p)
+  # rides only as far as its hash: a row is written only through this last filter, which drops it.
+  if [ -n "$_irs" ]; then
+    _irs_ps=""; _irs_a=""; LF_LINEAGE_SRC=""
+    _irs_lf="$_bscd/lib/lever-flags.sh"
+    [ -f "$_irs_lf" ] || { _irs_h="$0"; [ -L "$_irs_h" ] && _irs_h="$(readlink "$_irs_h")"
+      _irs_lf="$(cd "$(dirname "$_irs_h")" 2>/dev/null && pwd)/lib/lever-flags.sh"; }
+    # shellcheck source=lib/lever-flags.sh
+    # shellcheck disable=SC1091
+    if [ -f "$_irs_lf" ] && . "$_irs_lf" 2>/dev/null && command -v lf_arm >/dev/null 2>&1; then
+      if [ -n "$_irs_t0" ]; then
+        _irs_ps="$(printf '%s' "$_irs" | jq -j '._p // ""' 2>/dev/null | "$LF_SHA256" 2>/dev/null)"
+        _irs_ps="${_irs_ps:0:64}"; case "$_irs_ps" in *[!0-9a-f]*) _irs_ps="" ;; esac
+        [ "${#_irs_ps}" -eq 64 ] || _irs_ps=""
+      fi
+      lf_lineage "$sid"
+      lf_arm D1 "$LF_LINEAGE" && _irs_a="$(lf_arm_json)"
+    fi
+    _irs="$(printf '%s' "$_irs" | jq -c --arg ps "$_irs_ps" --arg a "$_irs_a" --arg lsrc "${LF_LINEAGE_SRC:-}" '
+      ($a | try fromjson catch null) as $a
+      | del(._p) + {schema: 2, prompt_sha: (if $ps == "" then null else $ps end), lever: "D1"}
+      + (if ($a | type) == "object"
+         then {arm: $a.arm, variant: $a.variant, lineage: $a.unit, lineage_src: $lsrc,
+               d1: ($a | del(.lever, .decision, .unit, .arm, .variant))}
+         else {arm: null, variant: null} end)
+      | if (tojson | utf8bytelength) > 2047 and (.prompt_head | type) == "string"
+        then .prompt_head |= .[0:40] else . end
+      | if (tojson | utf8bytelength) > 2047 then .prompt_head = null else . end
+      | select((tojson | utf8bytelength) <= 2047)' 2>/dev/null || true)"
   fi
   if [ -n "$_irs" ]; then
     [ -d "${IRS_LOG%/*}" ] || mkdir -p "${IRS_LOG%/*}" 2>/dev/null || true
