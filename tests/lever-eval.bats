@@ -299,8 +299,10 @@ PY
 	[ "$output" = "1 $(cd /tmp/lev-eval && pwd -P)" ]
 }
 
+# S10 built d2_lean, so the refusal is pinned on d1_successor (wave S9); when S9 lands it flips the
+# last unbuilt flow and this test goes with it
 @test "a flow whose wave has not landed is refused with exit 3, never stubbed" {
-	run ev check d2_lean
+	run ev check d1_successor
 	[ "$status" -eq 3 ]
-	[[ "$output" == *"not built yet (wave S10)"* ]]
+	[[ "$output" == *"not built yet (wave S9)"* ]]
 }
