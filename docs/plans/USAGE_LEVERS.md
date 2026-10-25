@@ -460,3 +460,8 @@ Total about 1.61M output tokens (est.: sum of the rows). The critical path to th
 - The post-land red rate cannot be measured (postland-verify fired 2 times vs 94 lock-held in October [INV]). No guard claims it; T2 uses ship-land exit codes only.
 - Savings could come from doing less work. Quality stays a guardrail (D2 pass rate, re-asks, lands per arm shown descriptively), never a pp-per-work headline.
 - Trips clear by occurrence (`ack <trip_id>`), never because the condition went away. Pages go to ~/.claude/autonomy/pages, which operator-readout reads, not to launchd stderr.
+
+### 7. Wave progress (lead: session 2b3becea, recycled from b287d693; briefs in /tmp/lev-fire/)
+- **S7a — DONE** (`f4d626ba9`, landed + converged 2026-10-24). hc.py, cc-lever-eval, D3 build_cases/policy; tests/lever-eval.bats 1..15, 0 not ok. The /tmp sources (idle-recycle-risk/b, conv-tests, lev-design, plus lean-idle-rv, which recompute.py needs) are copied under `~/.claude/hillclimb/_imports/`. D3 replay reproduces recompute.out 3.79/2.67/5.07/4.23 within 0.17%. **Finding for D3 before S2:** on the current 28 d the busy-scoped replay prices 2.80/2.18 pp/wk and the one-wake candidate 1.84/1.64, both below SIA 3.0, so D3's expected 3.9-5.1 does not hold on fresh data; re-check at S0 before any S2 raise.
+- **S1** — in flight (pane 295): committed, bats 1..10 0 not ok, landing.
+- **S7b** — briefed; held once by the fire capacity gate (12 sessions mid-turn > ceiling 8), fired when a slot frees.
