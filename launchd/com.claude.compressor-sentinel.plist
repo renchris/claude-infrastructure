@@ -6,7 +6,9 @@
   reads `"compressor_exhausted": 1` while 20 GB is free, swap is idle and pressure is normal, so every
   level-based sensor on this machine reports a healthy box at the moment of death.
 
-  THERE IS NO ProcessType KEY, AND ITS ABSENCE IS THE MOST LOAD-BEARING LINE IN THIS FILE.
+  ProcessType IS Interactive (2026-10-25), AND THAT KEY IS THE MOST LOAD-BEARING LINE IN THIS FILE.
+  Until then this file had NO ProcessType key, on the reasoning below. The reasoning about
+  Background and Adaptive stands; the claim about omitting the key was wrong (CORRECTED below).
   It must be neither Background nor Adaptive, and this is measured, not theorised:
     · Background: com.claude.capacity-alarm ran at ProcessType Background through the 2026-07-30
       panic-reboot and then emitted NOTHING FOR 6 HOURS 24 MINUTES — a 23,749 s inter-sample gap
@@ -19,10 +21,14 @@
       firing ~3 minutes before the wedge. That makes "which band does the sentinel live in" a
       correctness question, not a politeness one: the guard for an event must not be in a band the
       event is known to starve.
-    · Omitting the key entirely leaves the job in the DEFAULT (Standard) band — the same treatment an
-      interactive process gets. That is the point. Nice and LowPriorityIO are omitted for the same
-      reason: every one of those keys is a request to be deprioritised, and this is the one job on
-      the box that must not be.
+    · CORRECTED (2026-10-25): omitting the key does NOT give "the same treatment an interactive
+      process gets". Measured on the incident box, the keyless sentinel ran at PRI 20, below the
+      Interactive band (PRI 31+), and at that band its 03:43:05 lockup snapshot came back EMPTY
+      (~/incident-2026-10-25/solution/DESIGN.md C2, F23; own-instruments.md:87). The sentinel now
+      HOSTS lockprobe.py, the lockup sensor, whose captures inherit this band, so the job declares
+      ProcessType Interactive. Applied by migrations/0082-sentinel-interactive-band.sh (c10).
+      Nice and LowPriorityIO stay omitted: every one of those keys is a request to be deprioritised,
+      and this is the one job on the box that must not be.
 
   WHY THAT IS AFFORDABLE. Measured on this 10-core box, 5 trials each, INCLUDING bash startup (which
   the daemon pays once, not per tick — so these are upper bounds):
@@ -102,8 +108,11 @@
     <key>KeepAlive</key>
     <true/>
 
-    <!-- NO ProcessType. NO Nice. NO LowPriorityIO. See the header — the background band starves
+    <!-- ProcessType Interactive (2026-10-25): the keyless default measured PRI 20, not the
+         interactive band. NO Nice. NO LowPriorityIO. See the header — the background band starves
          first, and this is the job that must survive the storm it exists to report. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
 
     <key>StandardOutPath</key>  <string>/tmp/claude-compressor-sentinel.stdout.log</string>
     <key>StandardErrorPath</key><string>/tmp/claude-compressor-sentinel.stderr.log</string>

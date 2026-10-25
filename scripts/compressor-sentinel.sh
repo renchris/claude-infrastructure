@@ -16,7 +16,9 @@
 #     capacity report and wrong for this: §6 discriminator 4 records that the background-band
 #     sampler's own DEATH — the absence of its row — was the earliest machine-readable distress
 #     signal in all three events, firing ~3 min before the wedge. A sampler that dies during the
-#     event cannot be the guard for the event. Hence: internal loop, no launchd band, no ProcessType.
+#     event cannot be the guard for the event. Hence: internal loop, no Background or Adaptive band.
+#     CORRECTED (2026-10-25): "no ProcessType" measured PRI 20, below the interactive band; the
+#     plist now declares ProcessType Interactive (migrations/0082-sentinel-interactive-band.sh).
 #
 # WHY IT KEYS ON RATE, NOT ON A CEILING (§4a). The kernel's own edge signal fires at 98% of the
 # segment limit, which at the measured ramp is SEVEN POINT SIX SECONDS of warning. Any actuator keyed
@@ -304,6 +306,47 @@ FREEZE_TAIL_ROWS="${CC_FREEZE_TAIL_ROWS:-400}"
 FREEZE_RESET_SLACK_S="${CC_FREEZE_RESET_SLACK_S:-120}"
 TICKS_FREEZE_ONLY=0
 TICKS_FREEZE_COUNT=0
+
+# ── LOCKWATCH HOST (incident 2026-10-25 — ~/incident-2026-10-25/solution/DESIGN.md C2, C7) ────────
+# On 2026-10-25 a poisoned /dev node wedged every `ps`, `login` and fresh zsh on the box for ~9 h,
+# and this daemon was the only instrument that stayed alive. So it HOSTS the lockup sensor rather
+# than being it: it spawns and respawns ONE child, scripts/lockwatch/lockprobe.py, which senses,
+# captures, diagnoses and pages. Nothing on the lockup axis runs in this bash tick, whose gaps that
+# morning reached 277-380 s. The host's whole job is: keep lockprobe alive, rate-limited; page a
+# crashloop; run cc-fleet every 5 min and page stalled producers; spawn the post-boot classifier and
+# page its verdict once. Every fork it adds is a disposable child whose output goes to a FILE and
+# which the tick never waits on past a deadline (the I2 pattern below, br_sync / br_async_*).
+# Seams: CC_SENTINEL_LOCKPROBE=off (kill switch; spawn side) · CC_LOCKWATCH_DIR · CC_LOCKPROBE_SCRIPT
+#        CC_LOCKPROBE_PY · CC_LOCKPROBE_RESPAWN_S (60) · CC_LOCKPROBE_LOOP_N (5) ·
+#        CC_LOCKPROBE_LOOP_WIN_S (600) · CC_FORENSICS_ACTIVE · CC_SENTINEL_FLEET=off ·
+#        CC_SENTINEL_FLEET_EVERY_S (300) · CC_SENTINEL_FLEET_BIN · CC_SENTINEL_FLEET_SOLO_S (1800) ·
+#        CC_SENTINEL_BOOT_CLASSIFY=off · CC_SENTINEL_LR_PAGE · CC_SENTINEL_PS_DEADLINE_S (15) ·
+#        CC_SENTINEL_LOCKWATCH_BOUNDED=1 (run the host in a --ticks run; the suite's switch)
+SENTINEL_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+LW_DIR="${CC_LOCKWATCH_DIR:-$HOME/.claude/autonomy/lockwatch}"
+LW_HOST_DIR="$LW_DIR/host"
+LP_MODE="${CC_SENTINEL_LOCKPROBE:-on}"
+LP_SCRIPT="${CC_LOCKPROBE_SCRIPT:-$SENTINEL_HERE/lockwatch/lockprobe.py}"
+BC_SCRIPT="${CC_BOOT_CLASSIFY_SCRIPT:-$SENTINEL_HERE/lockwatch/boot_classify.py}"
+LP_PIDFILE="$LW_DIR/lockprobe.pid"
+LP_DEATHS="$LW_HOST_DIR/lockprobe-deaths.tsv"
+LP_RESPAWN_S="${CC_LOCKPROBE_RESPAWN_S:-60}"
+LP_LOOP_N="${CC_LOCKPROBE_LOOP_N:-5}"
+LP_LOOP_WIN_S="${CC_LOCKPROBE_LOOP_WIN_S:-600}"
+FX_ACTIVE="${CC_FORENSICS_ACTIVE:-$HOME/.claude/autonomy/forensics/active.pids}"
+PTY_JSON="$LW_DIR/pty.json"
+LW_STATE="$LW_DIR/state.json"
+LW_PROCSCAN="$LW_DIR/procscan.json"
+FLEET_MODE="${CC_SENTINEL_FLEET:-on}"
+FLEET_BIN="${CC_SENTINEL_FLEET_BIN:-$SENTINEL_HERE/../bin/cc-fleet}"
+FLEET_EVERY_S="${CC_SENTINEL_FLEET_EVERY_S:-300}"
+FLEET_SOLO_S="${CC_SENTINEL_FLEET_SOLO_S:-1800}"
+FLEET_EPISODES="$LW_HOST_DIR/fleet-episodes.tsv"
+BC_MODE="${CC_SENTINEL_BOOT_CLASSIFY:-on}"
+LR_PAGE="${CC_SENTINEL_LR_PAGE:-$SENTINEL_HERE/limit-recover/lr-page.sh}"
+for _v in LP_RESPAWN_S LP_LOOP_N LP_LOOP_WIN_S FLEET_EVERY_S FLEET_SOLO_S; do
+  case "${!_v}" in ''|*[!0-9]*) printf 'compressor-sentinel.sh: %s must be a non-negative integer\n' "$_v" >&2; exit 64 ;; esac
+done
 
 while [ $# -gt 0 ]; do
   if   [ "$1" = "--ticks" ]; then
@@ -737,6 +780,7 @@ exe_classify() { # [gui] — stdin: optional "@N <pid>" (kernel exec name is nod
     }'
 }
 
+# shellcheck disable=SC2329  # also invoked indirectly, as a br_sync command argument.
 exe_table() { # [gui] → exe_classify over the live table; `gui` adds the automation-argv read and class 2
   local mode="${1:-}"
   # Three reads, three instants: a pid reused between them can be misread for one tick, and the
@@ -747,18 +791,31 @@ exe_table() { # [gui] → exe_classify over the live table; `gui` adds the autom
   # a flagged Chrome at ppid 1 rises to 2. Selection is safe either way (any class but 0 is spared),
   # but a reader that RESUMES protected rows is not (gui_protected), so each read that ran to exit 0
   # with at least one row says so with `@OK N` / `@OK A`, and exe_classify passes them through.
-  { { ps -axo pid=,ucomm= 2>/dev/null && echo '@DONE'; } \
+  # BOUNDED (2026-10-25): each of the three reads runs through br_sync, so a ps asleep in a kernel
+  # wait costs one deadline and leaves its part EMPTY — an absent marker or table, which every reader
+  # of this table already treats as "could not read" (no @OK, no rows ⇒ nothing selectable).
+  local dl="${CC_SENTINEL_PS_DEADLINE_S:-15}" urc=124 arc=124 trc=124 uf="" af="" tf=""
+  br_sync exeu "$dl" ps -axo pid=,ucomm=; urc=$?; uf="$BR_OUT"
+  if [ "$mode" = gui ]; then br_sync exea "$dl" ps -axwwo pid=,args=; arc=$?; af="$BR_OUT"; fi
+  br_sync exet "$dl" ps -axwwo pid=,ppid=,rss=,comm=; trc=$?; tf="$BR_OUT"
+  { if [ "$urc" -ne 124 ] && [ -n "$uf" ]; then
+      { cat "$uf"; [ "$urc" -eq 0 ] && echo '@DONE'; } \
       | awk '$1 == "@DONE" { ok = 1; next } $1 ~ /^[0-9]+$/ { r++ }
              $1 ~ /^[0-9]+$/ && NF == 2 && $2 == "node" { print "@N", $1 }
              END { if (ok && r) print "@OK", "N" }'
-    if [ "$mode" = gui ]; then
-      { ps -axwwo pid=,args= 2>/dev/null && echo '@DONE'; } \
+    fi
+    if [ "$mode" = gui ] && [ "$arc" -ne 124 ] && [ -n "$af" ]; then
+      { cat "$af"; [ "$arc" -eq 0 ] && echo '@DONE'; } \
         | awk '$1 == "@DONE" { ok = 1; next } $1 ~ /^[0-9]+$/ { r++ }
                $1 ~ /^[0-9]+$/ && /--remote-debugging-|--enable-automation|--headless|--test-type|--user-data-dir=/ { print "@A", $1 }
                END { if (ok && r) print "@OK", "A" }'
     fi
-    ps -axwwo pid=,ppid=,rss=,comm= 2>/dev/null
+    [ "$trc" -ne 124 ] && [ -n "$tf" ] && cat "$tf"
   } | exe_classify "$mode"
+  # An ABANDONED table read is not an empty box: say so, for the one reader that counts (census_tally).
+  # Every other reader keys on a numeric $1 or on @OK, so the marker is invisible to them.
+  [ "$trc" -eq 124 ] && echo '@BLIND'
+  return 0
 }
 
 # THE RESUME LIST — the one reader of the class that turns it into a SIGCONT (the kill rung's belt and
@@ -798,11 +855,90 @@ gui_protected() { # [<exe_file>] (else stdin) → " pid pid " of classes 2/3 fro
 # counted). The census reads the PLAIN table, so a GUI process reads 0 here anyway; class 3 is listed
 # explicitly. Neither is ever a target — the point is the trip's "protected-class spared" count, which
 # is "class 2/3 over the floor and NOT on the roster", i.e. only the genuinely new ones.
+# shellcheck disable=SC2329  # invoked indirectly, as a br_sync command argument (census_read).
 census() { # <rss_floor_kb>
-  exe_table | awk -v floor="${1:-0}" '
+  exe_table | census_tally "${1:-0}"
+}
+
+census_tally() { # <rss_floor_kb> — stdin: exe_classify rows → the census line
+  awk -v floor="${1:-0}" '
+    $1 == "@BLIND" { blind = 1; next }
     $4 ~ /^node/ { c++; rss += $3; if ($2 == 1) orph++ }
     ($6 == "0" || $6 == "2" || $6 == "3") && $3 + 0 >= floor + 0 { pids = pids " " $1 }
-    END { printf "%d %d %d|%s", c + 0, orph + 0, rss / 1024, pids }'
+    END { if (blind) exit; printf "%d %d %d|%s", c + 0, orph + 0, rss / 1024, pids }'
+}
+
+# THE CENSUS WITHOUT A ps FORK (DESIGN C2). While lockprobe is live its procscan child publishes the
+# process table every ~10 s (procscan.json: own-uid rows carry rss_mb and the exec path), so the
+# census reads that instead of forking three `ps`. Fresh = same boot and ts_epoch within 30 s
+# (lane A's contract). Only own-uid rows with a path and an rss reach the classifier — exactly the
+# population a target can come from (a process we may not signal is never one). The exec path
+# replaces ps's argv-derived comm, which only ever ADDS roster members (a newer census is stricter).
+# Stale, absent or unparseable ⇒ the bounded ps census, and blind ⇒ empty (the caller keeps the
+# previous census, as it always has for an empty one).
+procscan_rows() { # → exe_classify input rows from a FRESH procscan.json, or rc 1
+  local now
+  [ -n "${LW_BOOT:-}" ] && [ -s "${LW_PROCSCAN:-}" ] || return 1   # before any fork: off-host this costs nothing
+  now="$(date +%s)"
+  jq -r --arg boot "$LW_BOOT" --argjson now "$now" '
+    select(.boot == $boot and (($now - (.ts_epoch // 0)) | . >= 0 and . <= 30))
+    | (.procs // []) as $p
+    | ($p[] | select(.comm == "node") | "@N \(.pid)"),
+      (if ($p | length) > 0 then "@OK N" else empty end),
+      ($p[] | select(.path != null and .path != "" and .rss_mb != null)
+            | "\(.pid) \(.ppid) \(((.rss_mb * 1024) | floor)) \(.path)")' "$LW_PROCSCAN" 2>/dev/null
+}
+
+census_read() { # <rss_floor_kb> → the census line; empty when blind (both sources unreadable)
+  local f
+  f="$(br_dir)/procscan.rows"
+  if procscan_rows > "$f" 2>/dev/null && [ -s "$f" ] && grep -q '^[0-9]' "$f" 2>/dev/null; then
+    exe_classify < "$f" | census_tally "${1:-0}"
+    return 0
+  fi
+  census "${1:-0}"      # exe_table bounds each of its reads (br_sync); a cut read leaves no rows
+  return 0
+}
+
+# ── THE NEVER-LIST AND THE pty GUARD (DESIGN C2, critique 1.1/1.10) ───────────────────────────────
+# Lockup forensics run `sample` and `log collect` against a 3.9 GB kitty; a compressor trip during a
+# lockup must never freeze or kill them. capture.sh registers each step in active.pids ("pid
+# lstart_epoch bootuuid"); a same-boot row whose pid is alive is spared. OVER-INCLUSIVE ON PURPOSE —
+# no lstart check: sparing a reused pid costs one fewer frozen process, while an identity read here
+# would be one more fork that can wedge. lockprobe itself rides along.
+fx_never_list() { # → " pid pid " (always at least " ")
+  local l="" p ls b
+  if [ "${LW_HOST:-0}" = 1 ] && [ -s "${FX_ACTIVE:-}" ]; then   # the daemon's live file, never a --ticks run's
+    while read -r p ls b; do
+      case "$p" in ''|*[!0-9]*) continue ;; esac
+      [ -n "${LW_BOOT:-}" ] && [ -n "$b" ] && [ "$b" != "$LW_BOOT" ] && continue
+      kill -0 "$p" 2>/dev/null && l="$l $p"
+    done < "$FX_ACTIVE"
+  fi
+  [ -n "${LP_PID:-}" ] && l="$l $LP_PID"
+  printf '%s ' "$l"
+}
+
+# A pty session leader killed by pid is the incident's Likely trigger: its exit revokes the node,
+# and a member still asleep in open() on it poisons /dev for every later lookup (RCA-draft R3/R4).
+# lockprobe publishes the pty leaders, master and slave holders and open() members in pty.json; while
+# it is fresh (same boot, ts_epoch within ttl_s) every pid anywhere in it is spared.
+pty_guard_pids() { # → " pid pid " from a FRESH pty.json, else " "
+  local now l=""
+  if [ -n "${LW_BOOT:-}" ] && [ -s "${PTY_JSON:-}" ]; then
+    now="$(date +%s)"
+    l="$(jq -r --arg boot "$LW_BOOT" --argjson now "$now" '
+      select(.boot == $boot and ($now - (.ts_epoch // 0)) <= (.ttl_s // 90))
+      | [(.. | objects | .pid? // empty), (.master_holders // {} | .[]? | .[]?),
+         (.slave_holders // {} | .[]? | .[]?), (.members_open // [])[]?]
+      | map(select(type == "number")) | unique | .[]' "$PTY_JSON" 2>/dev/null | tr '\n' ' ')"
+  fi
+  printf ' %s ' "$l"
+}
+
+pty_comm_guarded() { # <comm> → rc 0 for the session-owning programs spared when pty.json is not fresh
+  case "$1" in expect|script|login|tmux|tmux:*|sshd|sshd:*|screen) return 0 ;; esac
+  return 1
 }
 
 # ── actuator target selection ─────────────────────────────────────────────────────────────────────
@@ -847,8 +983,8 @@ census() { # <rss_floor_kb>
 # throughout: absent from the exe table, or disagreeing with it, means not a target here (and, in
 # select_break_parents, PROTECTED — there the same ignorance means the claude/claude.exe name test
 # cannot be applied, so the only safe reading is that it might be one).
-select_stop_targets() { # <exe_file> <prev_census_pids> <rss_floor_kb> <cap>
-  awk -v prev=" $2 " -v floor="$3" -v cap="$4" '
+select_stop_targets() { # <exe_file> <prev_census_pids> <rss_floor_kb> <cap> [<never " pid " list>]
+  awk -v prev=" $2 " -v floor="$3" -v cap="$4" -v never=" ${5:-} " '
     # NO BASELINE ⇒ NO GENERIC ARM. `prev` is the previous census roster, and "new since the last
     # census" is the gate doing nearly all of the safety work once the cohort stopped being keyed on
     # one executable name (175 processes over the floor on a healthy box, 2 of them new). An EMPTY
@@ -876,6 +1012,8 @@ select_stop_targets() { # <exe_file> <prev_census_pids> <rss_floor_kb> <cap>
       if (b == "claude.exe" || b == "claude") next
       if (args ~ /claude/) next
       if (args ~ /(^|[\/ _-])mcp([-_\/ @.]|$)|modelcontextprotocol/) next
+      if (index(never, " " pid " ") > 0) next          # a live forensics step or lockprobe (fx_never_list)
+      if (args ~ /lockwatch|cc-forensics|break-glass|devfs-canary/) next   # the lockup tooling, by argv
       if (rss <= floor) next
       if (index(prev, " " pid " ") > 0) next          # present at the last census ⇒ not the burst
       if (++k > cap) exit
@@ -1053,8 +1191,10 @@ rss_by_exe() { # <n>
 # blindest part of it — and a process born after the trip appeared in no section at all.
 # <agg_n> 0 omits the coarse total, which is a standing shape rather than a ramp.
 render_attribution() { # <top_n> <argv_max_chars> <agg_n>
-  local rows exe
-  rows="$(ps -Awwo pid=,ppid=,rss=,pcpu=,args= 2>/dev/null)" || rows=""
+  local rows="" exe="" dl="${CC_SENTINEL_PS_DEADLINE_S:-15}"
+  # Bounded (I2); a follow-up runs concurrently with the trip, so it owns its own output slot (BR_TAG).
+  br_sync "snap${BR_TAG:-t}" "$dl" ps -Awwo pid=,ppid=,rss=,pcpu=,args=
+  [ $? -ne 124 ] && [ -n "$BR_OUT" ] && [ -s "$BR_OUT" ] && rows="$(cat "$BR_OUT")"
   if [ -z "$rows" ]; then
     # An empty section would read as an idle machine. Say which of the two it is: this is the same
     # contract the readers hold, where "could not measure" must never render as the healthy value.
@@ -1066,7 +1206,8 @@ render_attribution() { # <top_n> <argv_max_chars> <agg_n>
   fi
 
   [ "$3" -gt 0 ] || return 0
-  exe="$(ps -Awwo rss=,comm= 2>/dev/null)" || exe=""
+  br_sync "snapx${BR_TAG:-t}" "$dl" ps -Awwo rss=,comm=
+  [ $? -ne 124 ] && [ -n "$BR_OUT" ] && [ -s "$BR_OUT" ] && exe="$(cat "$BR_OUT")"
   if [ -z "$exe" ]; then
     printf '\n--- RSS by executable ---\n(NO ROWS — ps was unreadable.)\n'
   else
@@ -1099,6 +1240,7 @@ snapshot_trip() { # <ts> <why> <headline> [<cliff 0|1>]
 # right, so a self-inflicted gap would poison the one channel the post-mortem trusts most.
 snapshot_followup() {
   local i=0
+  BR_TAG=f   # this runs as a background job beside the trip: its own bounded-read slots
   while [ "$i" -lt "$FOLLOWUP_N" ]; do
     sleep "$FOLLOWUP_SEC"
     i=$((i + 1))
@@ -1188,16 +1330,101 @@ write_page() { # <ts> <why> <headline> <detail>
 # process fails that compare and is dropped WITHOUT a signal — SIGCONT to an innocent stopped
 # process (a debugger target, an operator ^Z) is the one harm this arm could do, and the guard is
 # what forecloses it.
-proc_lstart() { # <pid> → TZ-pinned start time, empty if the pid is gone
-  TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'
+#
+# BOUNDED (2026-10-25). Both reads used to be `$(ps … | tr | sed)` — unbounded, one per custody row
+# per tick. That morning 23 `ps` sat asleep in a devfs lookup for hours and never returned; a `$()`
+# around one blocks its caller for exactly as long. They now run through br_sync, and an abandoned
+# read returns rc 124 with NO output — which every caller must treat as UNKNOWN (hold, never signal),
+# not as "gone": empty already means gone, and a wedged ps must not read as a dead pid.
+proc_lstart() { # <pid> → TZ-pinned start time, empty if the pid is gone; rc 124 = read abandoned (unknown)
+  br_ps_line lstart -x -o lstart= -p "$1"
 }
 
 # THE SAME READ, PLUS THE PROCESS STATE, in ONE fork — so custody costs what it cost before. The
 # lstart half is byte-identical to proc_lstart (verified live under /bin/bash 3.2 for $$, 1 and a GUI
 # pid); callers split it as `st="${sl%% *}"; cur="${sl#* }"`. Darwin reports a SIGSTOPped task as T,
 # which is what lets custody notice that someone ELSE resumed a pid it still thinks it holds.
-proc_stat_lstart() { # <pid> → "<stat> <lstart>", empty if the pid is gone
-  TZ=UTC ps -o stat=,lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'
+proc_stat_lstart() { # <pid> → "<stat> <lstart>", empty if the pid is gone; rc 124 = read abandoned
+  br_ps_line statls -x -o stat=,lstart= -p "$1"
+}
+
+# ── BOUNDED FORKS: the I2 runner (DESIGN 2026-10-25 §2) ──────────────────────────────────────────
+# The parent owns the deadline, the child's output goes to a FILE (never a pipe or `$()` — a stuck
+# child holds a pipe's write end, so a caller reading it blocks even after a wrapper gave up; this is
+# why `perl -e 'alarm N; exec'` around `$()` bounds nothing), and the parent never waits past the
+# deadline. An abandoned child is LEFT, never killed (a ps in an uninterruptible wait cannot die
+# anyway) and it keeps its output slot; at CC_SENTINEL_BR_STUCK_CAP (2) abandoned live children a
+# key spawns nothing more and answers 124 at once, so a wedged kernel path costs one deadline, not
+# one per call. Stuck children are tracked in a FILE, not a variable, because callers reach this
+# from inside `$()` subshells, where a variable would not survive the call.
+# Builtins only on the polling path, except one /bin/sleep per poll (10 ms doubling to 250 ms).
+br_dir() { # → the per-daemon run dir (created on first use)
+  local d="${CC_SENTINEL_RUN_DIR:-${TMPDIR:-/tmp}/cc-sentinel-br.$$}"
+  [ -d "$d" ] || mkdir -p "$d" 2>/dev/null
+  printf '%s' "$d"
+}
+
+br_sync() { # <key> <deadline_s> <cmd...> → rc of cmd, its stdout in the file $BR_OUT names; 124 = abandoned (BR_OUT empty)
+  local key="$1" dl="$2" d sf live="" slot used pid p s rc t0 cs=0 step=1 n=0 out rcf
+  shift 2
+  case "$dl" in ''|*[!0-9]*) dl=15 ;; esac
+  d="$(br_dir)"; sf="$d/$key.stuck"
+  BR_OUT=""
+  if [ -s "$sf" ]; then
+    while read -r p s; do
+      [ -n "$p" ] && kill -0 "$p" 2>/dev/null && { live="$live$p $s
+"; n=$((n + 1)); }
+    done < "$sf"
+    printf '%s' "$live" > "$sf" 2>/dev/null
+  fi
+  [ "$n" -lt "${CC_SENTINEL_BR_STUCK_CAP:-2}" ] || return 124
+  slot=0
+  while :; do
+    used=0
+    case "
+$live" in *" $slot
+"*) used=1 ;; esac
+    [ "$used" = 0 ] && break
+    slot=$((slot + 1))
+  done
+  out="$d/$key.$slot.out"; rcf="$d/$key.$slot.rc"
+  : > "$rcf" 2>/dev/null
+  ( "$@" > "$out" 2>/dev/null; echo "$?" > "$rcf" ) < /dev/null > /dev/null 2>&1 &
+  pid=$!
+  t0=$SECONDS
+  while :; do
+    if [ -s "$rcf" ]; then
+      read -r rc < "$rcf"
+      BR_OUT="$out"
+      return "${rc:-1}"
+    fi
+    if [ $((SECONDS - t0)) -ge "$dl" ] || [ "$cs" -ge $((dl * 100)) ]; then
+      printf '%s %s\n' "$pid" "$slot" >> "$sf" 2>/dev/null
+      printf '%s compressor-sentinel: ABANDON %s after %ss (pid %s left running; no output used)\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" "$key" "$dl" "$pid" >&2
+      return 124
+    fi
+    if [ "$step" -lt 10 ]; then sleep "0.0$step"; else sleep "0.$step"; fi
+    cs=$((cs + step))
+    step=$((step * 2)); [ "$step" -gt 25 ] && step=25
+  done
+}
+
+# lstart renders in the ambient zone; custody compares UTC on both sides.
+# shellcheck disable=SC2329  # invoked indirectly, as a br_sync command argument.
+ps_utc() {
+  TZ=UTC ps "$@"
+}
+
+br_ps_line() { # <key> <ps args…> → the first line, whitespace-collapsed; empty when ps printed none; rc 124 = abandoned
+  local key="$1" w
+  shift
+  br_sync "$key" "${CC_SENTINEL_PS_DEADLINE_S:-15}" ps_utc "$@"
+  [ $? -eq 124 ] && return 124
+  [ -n "$BR_OUT" ] && [ -s "$BR_OUT" ] || return 0
+  read -r -a w < "$BR_OUT"
+  [ "${#w[@]}" -gt 0 ] && printf '%s' "${w[*]}"
+  return 0
 }
 
 # A ledger row's age for a LOG line only. Never arithmetic on an unchecked field: under `set -u` a
@@ -1210,14 +1437,26 @@ frozen_age() { # <now-epoch> <frozen-at> → seconds held, or `?` when frozen-at
 # is (pid, lstart), so a stale pidfile — a dead pid, or a reused one — never reads as an owner.
 loop_owner_live() { # <pidfile> → rc 0 when it names a LIVE instance other than $$
   local pid ls
+  local cur
   pid="$(sed -n 1p "$1" 2>/dev/null)"
   ls="$(sed -n 2p "$1" 2>/dev/null)"
-  [ -n "$pid" ] && [ -n "$ls" ] && [ "$pid" != "$$" ] && [ "$(proc_lstart "$pid")" = "$ls" ]
+  [ -n "$pid" ] && [ -n "$ls" ] && [ "$pid" != "$$" ] || return 1
+  # A live pid whose identity read was ABANDONED is treated as the owner: two actuators over one
+  # ledger is the harm this mutex exists to prevent, and a respawn costs only one throttle window.
+  cur="$(proc_lstart "$pid")" || return 0
+  [ "$cur" = "$ls" ]
 }
 
 record_frozen() { # <pid> <kind> <comm> — ledger one REAL SIGSTOP so it can be undone
   local ls
-  ls="$(proc_lstart "$1")"
+  # An ABANDONED read (rc 124) is not a death: the pid may well still be stopped, and a freeze with
+  # no ledger row has no SIGCONT sender ever. So the freeze is undone on the spot instead.
+  if ! ls="$(proc_lstart "$1")"; then
+    kill -CONT "$1" 2>/dev/null
+    printf 'UNLEDGERED-RESUMED pid=%s kind=%s comm=%s (identity read abandoned; freeze undone, nothing owed)\n' \
+      "$1" "$2" "$3" >> "$SNAP" 2>/dev/null || true
+    return 0
+  fi
   # No lstart means the process died between the signal and this read. Nothing to owe it.
   [ -n "$ls" ] || return 0
   printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$ls" "$2" "$(date +%s)" "$3" >> "$FROZEN_DB" 2>/dev/null || true
@@ -1275,7 +1514,12 @@ release_frozen() { # <now-epoch> <mode: clear|ceiling|exit|sweep> [<parent_ok 0|
   src="$(frozen_read)"                        # one row per process — see frozen_merge
   while IFS="$(printf '\t')" read -r pid ls kind at comm; do
     [ -n "$pid" ] || continue
-    sl="$(proc_stat_lstart "$pid")"; st="${sl%% *}"; cur="${sl#* }"
+    if ! sl="$(proc_stat_lstart "$pid")"; then                 # read abandoned: UNKNOWN ⇒ hold as is
+      held=$((held + 1))
+      printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$ls" "$kind" "$at" "$comm" >> "$keep"
+      continue
+    fi
+    st="${sl%% *}"; cur="${sl#* }"
     # Gone, or the pid now belongs to someone else. Either way we owe it nothing and must not signal.
     # Logged per pid: before this line a custody row that ended this way left no record at all, and
     # 73 recorded stops had no recorded end.
@@ -1371,7 +1615,9 @@ probation_refreeze() { # <now-epoch> → "refroze=N" on stdout; re-ledgers each 
   while IFS="$(printf '\t')" read -r pid ls at comm; do
     [ -n "$pid" ] || continue
     [ $((now - at)) -le "$PROBATION_S" ] || continue          # window over: stamp expires silently
-    cur="$(proc_lstart "$pid")"
+    if ! cur="$(proc_lstart "$pid")"; then                     # read abandoned: keep the stamp, no signal
+      printf '%s\t%s\t%s\t%s\n' "$pid" "$ls" "$at" "$comm" >> "$keep"; continue
+    fi
     if [ -z "$cur" ] || [ "$cur" != "$ls" ]; then continue; fi # gone or recycled: never signal
     if kill -STOP "$pid" 2>/dev/null; then
       n=$((n + 1))
@@ -1428,7 +1674,7 @@ kill_due() { # <pct> <srate> <trip_now 0|1> <debt_n> → reason | rc 1
 # REJECTED ON PURPOSE: exempting kind=parent from the kill, and gating retrip-over-debt on a
 # non-empty cohort. Both reopen panic #5, whose spawners are exactly the rows this rung exists for.
 kill_escalate() { # <now-epoch> <reason> [<exe_file>] → "killed=N spared=N" on stdout
-  local now="$1" reason="$2" exef="${3:-}" own="" prot keep src killed=0 spared=0 pid ls kind at comm cur age sl st
+  local now="$1" reason="$2" exef="${3:-}" own="" prot keep src killed=0 spared=0 pid ls kind at comm cur age sl st never ptyp why
   [ -s "$FROZEN_DB" ] || { printf 'killed=0 spared=0'; return 0; }
   src="$(frozen_read)"                        # one row per process — see frozen_merge
   printf 'actuator: KILL-INTENT reason=%s debt=%s (write-ahead: signals follow this line)\n' \
@@ -1438,11 +1684,17 @@ kill_escalate() { # <now-epoch> <reason> [<exe_file>] → "killed=N spared=N" on
     exef="$own"
   fi
   prot="$(gui_protected "$exef")"; [ -n "$prot" ] || prot=" "      # classes 2/3, complete capture — else abstain
+  never="$(fx_never_list)"; ptyp="$(pty_guard_pids)"              # file reads only — no ps
   keep="$(mktemp -t cc-sentinel-frozen)" || {
     [ -n "$own" ] && rm -f "$own"; [ "$src" = "$FROZEN_DB" ] || rm -f "$src"; printf 'killed=0 spared=0'; return 0; }
   while IFS="$(printf '\t')" read -r pid ls kind at comm; do
     [ -n "$pid" ] || continue
-    sl="$(proc_stat_lstart "$pid")"; st="${sl%% *}"; cur="${sl#* }"
+    if ! sl="$(proc_stat_lstart "$pid")"; then                    # read abandoned: UNKNOWN ⇒ never killed, kept
+      spared=$((spared + 1))
+      printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$ls" "$kind" "$at" "$comm" >> "$keep"
+      continue
+    fi
+    st="${sl%% *}"; cur="${sl#* }"
     if [ -z "$sl" ] || [ "$cur" != "$ls" ]; then                  # gone/recycled: drop, never signal
       printf 'DROP-STALE pid=%s held_s=%s kind=%s comm=%s (gone or pid reused; no signal)\n' \
         "$pid" "$(frozen_age "$now" "$at")" "$kind" "$comm" >> "$SNAP" 2>/dev/null || true
@@ -1473,6 +1725,21 @@ kill_escalate() { # <now-epoch> <reason> [<exe_file>] → "killed=N spared=N" on
           "$pid" "$age" "$kind" "$comm" >> "$SNAP" 2>/dev/null || true
         continue ;;
     esac
+    # THE NEVER-LIST AND THE pty GUARD (2026-10-25): a live forensics step, a pty session leader or
+    # a pty master/slave holder is never killed — resumed and dropped, the protected-class shape.
+    # SIGKILL of a pty session leader by pid is the incident's Likely trigger (DESIGN I9).
+    case "$never" in *" $pid "*) why="never-list" ;; *) why="" ;; esac
+    if [ -z "$why" ]; then
+      case "$ptyp" in *" $pid "*) why="pty-guard" ;; esac
+    fi
+    [ -z "$why" ] && pty_comm_guarded "$comm" && why="pty-guard-comm"
+    if [ -n "$why" ]; then
+      kill -CONT "$pid" 2>/dev/null
+      spared=$((spared + 1))
+      printf 'SIGCONT pid=%s held_s=%s kind=%s comm=%s reason=%s\n' \
+        "$pid" "$age" "$kind" "$comm" "$why" >> "$SNAP" 2>/dev/null || true
+      continue
+    fi
     # Resumed outside the sentinel (release_frozen's relinquish arm, same test): the ROOT CAUSE of the
     # 15:51:34Z kill, where a hand SIGCONT left row 18285 owed and the next retrip killed Dia for it.
     if [ "$age" -ge "$RELINQUISH_GRACE_S" ] 2>/dev/null && case "$st" in [RSI]*) true ;; *) false ;; esac; then
@@ -1831,18 +2098,284 @@ freeze_scan() {
          --arg lts "${last_ts:-}" --arg lsrc "${last_src:-}" --arg ssrc "$ssrc" \
          --argjson dark "$dark_min" \
          --argjson ticks "$ticks" \
+         --arg bclass "${LW_DIR:-$HOME/.claude/autonomy/lockwatch}/boot-$boot.json" \
     '{ts:$ts,kind:"freeze",boot:$boot,booted_at:$biso,
       signature:$sig,signature_source:$src,boot_faults:$faults,shutdown_reason:$reason,
       reset_report:$diag,
       dark_from:(if $lts == "" then null else $lts end),dark_to:$biso,dark_minutes:$dark,
       sampler:(if $lsrc == "" then null else $lsrc end),sampler_source:$ssrc,
       last_ticks:$ticks,
+      boot_class:$bclass,
       note:"forced power-off with no panic report: the OS stopped answering and a human held the button. last_ticks holds each sampler final pre-freeze row — the only description of the trigger that survives."}' \
     >> "$PANIC_LEDGER" 2>/dev/null || return 3
 
   printf 'freeze-scan: recorded FREEZE boot=%s dark=%s min from %s (%s)\n' \
     "$boot" "$dark_min" "${last_ts:-<no sampler row>}" "$sig" >&2
   return 0
+}
+
+# ── LOCKWATCH HOST: the functions (config at the top, under LOCKWATCH HOST) ──────────────────────
+# Everything here is a file read, a builtin, or a disposable background child the tick never waits
+# on. It never signals lockprobe: the flock lease inside lockprobe forbids a second writer, so there
+# is no replacement while it lives, and a wedged lockprobe is Hammerspoon's dead-man page, not ours.
+lw_ts() {
+  date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?'
+}
+
+lw_py() { # → the first executable of lane A's interpreter list (all Mach-O — no #! exec), else rc 1
+  local c
+  for c in "${CC_LOCKPROBE_PY:-}" \
+           /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 \
+           /Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9 \
+           /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9 \
+           /usr/bin/python3; do
+    [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+# DETACHED: its own session (setsid), stdio regular files, never awaited. Spawned as a direct child
+# so that lockprobe's getppid()==1 test means "the host died" — and it then exits on its own.
+lw_detach() { # <logfile> <cmd…> → LW_DPID
+  local log="$1"
+  shift
+  /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or exit 127' -- "$@" < /dev/null >> "$log" 2>&1 &
+  LW_DPID=$!
+}
+
+# A page is a FILE in PAGES_DIR (the sentinel's own channel) plus lr-page (Notification Center and,
+# with H5's credential, the phone). lr-page bounds its own legs; it runs detached and is never awaited.
+lw_page() { # <key> <title> <message>
+  mkdir -p "$PAGES_DIR" "$LW_HOST_DIR" 2>/dev/null || true
+  { date +%s 2>/dev/null || echo 0; printf '%s\n%s\n' "$2" "$3"; } > "$PAGES_DIR/$1.page" 2>/dev/null || true
+  if [ -f "$LR_PAGE" ]; then
+    /bin/bash "$LR_PAGE" --title "$2" -- "$3" < /dev/null >> "$LW_HOST_DIR/lr-page.out" 2>&1 &
+  fi
+  printf '%s compressor-sentinel: PAGE %s — %s\n' "$(lw_ts)" "$1" "$2" >&2
+}
+
+lw_level() { # → lockprobe's level from a FRESH state.json (same boot, within ttl_s), else -1
+  local now v
+  now="$(date +%s)"
+  v="$(jq -r --arg boot "${LW_BOOT:-}" --argjson now "$now" '
+        (.ts_epoch // ((.ts // "") | sub("\\.[0-9]+"; "") | (fromdateiso8601? // 0))) as $t
+        | if ($boot != "" and .boot == $boot and ($now - $t) <= (.ttl_s // 90)) then (.level // -1) else -1 end' \
+        "$LW_STATE" 2>/dev/null)"
+  case "$v" in ''|*[!0-9-]*) v=-1 ;; esac
+  printf '%s' "$v"
+}
+
+lp_note() { # <state> — log a lockprobe host state once per transition, not once per tick
+  [ "${LP_LAST_NOTE:-}" = "$1" ] && return 0
+  LP_LAST_NOTE="$1"
+  printf '%s compressor-sentinel: lockprobe %s\n' "$(lw_ts)" "$1" >&2
+}
+
+# A death of OUR child with a non-zero rc is a crash. rc 0 is a clean exit (the lease held by another
+# instance, CC_LOCKWATCH=off, host_dead), and an ADOPTED process's rc is unknowable — neither counts
+# toward the crashloop, both still respawn on the rate limit. rc 3 (blind: the struct self-test
+# failed) counts, and the 60 s rate limit is what keeps it from spinning.
+lp_death() { # <now> <rc>
+  local now="$1" rc="$2" n mark m
+  printf '%s compressor-sentinel: lockprobe DIED pid=%s rc=%s\n' "$(lw_ts)" "${LP_PID:-?}" "$rc" >&2
+  case "$rc" in 0|'?') return 0 ;; esac
+  mkdir -p "$LW_HOST_DIR" 2>/dev/null || true
+  printf '%s\t%s\n' "$now" "$rc" >> "$LP_DEATHS" 2>/dev/null || true
+  n="$(awk -F'\t' -v now="$now" -v w="$LP_LOOP_WIN_S" '$1 ~ /^[0-9]+$/ && now - $1 <= w { n++ } END { print n + 0 }' "$LP_DEATHS" 2>/dev/null)"
+  [ "${n:-0}" -ge "$LP_LOOP_N" ] || return 0
+  mark="$LW_HOST_DIR/crashloop.paged"
+  if [ -s "$mark" ] && read -r m < "$mark" && [ $((now - ${m:-0})) -lt "$LP_LOOP_WIN_S" ] 2>/dev/null; then return 0; fi
+  printf '%s\n' "$now" > "$mark" 2>/dev/null || true
+  lw_page lockprobe-crashloop "lockwatch: lockprobe crashloop ($n deaths in ${LP_LOOP_WIN_S}s)" \
+    "lockprobe.py died $n times in ${LP_LOOP_WIN_S}s (last rc=$rc), so the lockup sensor is down. Respawn continues at most once per ${LP_RESPAWN_S}s. Its output: $LW_HOST_DIR/lockprobe.out. Kill switch: CC_SENTINEL_LOCKPROBE=off."
+}
+
+# THE (pid, lstart, boot) CHECK, DEFERRED: one disposable child reads lockprobe's start time (as an
+# epoch) into a file; a LATER tick compares it with the pidfile lockprobe wrote. The tick never
+# waits on a ps. A check outstanding past 60 s is abandoned and left — kill -0 then stands alone.
+lp_lstart_epoch() { # <pid> → start time as epoch (run only inside the disposable child)
+  local s
+  s="$(TZ=UTC ps -x -o lstart= -p "$1" 2>/dev/null)"
+  [ -n "$s" ] || return 1
+  # shellcheck disable=SC2086  # deliberate word split: collapses ps's column padding
+  set -- $s
+  # Darwin renders lstart day-first ("Sun 25 Oct 21:34:50 2026") here; month-first is the
+  # other locale order. Either parses; neither is a verdict on its own when it fails.
+  TZ=UTC date -j -f '%a %d %b %T %Y' "$*" +%s 2>/dev/null || TZ=UTC date -j -f '%a %b %d %T %Y' "$*" +%s 2>/dev/null
+}
+
+lp_verify() { # <now> → sets LP_IDENT=bad when lockprobe's pidfile identity no longer matches LP_PID
+  local now="$1" d p ls b got
+  d="$(br_dir)"
+  if [ -n "${LPV_PID:-}" ]; then
+    if [ -s "$d/lpv.rc" ]; then
+      got=""; [ -f "$d/lpv.out" ] && read -r got < "$d/lpv.out"
+      LPV_PID=""
+      if [ "${LPV_FOR:-}" = "$LP_PID" ] && [ -n "$got" ] && [ -f "$LP_PIDFILE" ] && read -r p ls b < "$LP_PIDFILE" \
+         && [ "$p" = "$LP_PID" ]; then
+        if [ "$ls" != "$got" ] || { [ -n "${LW_BOOT:-}" ] && [ "$b" != "$LW_BOOT" ]; }; then
+          LP_IDENT=bad
+          printf '%s compressor-sentinel: lockprobe pid %s identity MISMATCH (pidfile lstart %s, live %s) — treated as dead, never signalled\n' \
+            "$(lw_ts)" "$LP_PID" "$ls" "$got" >&2
+        else
+          LP_IDENT=ok
+        fi
+      fi
+    elif [ $((now - LPV_T0)) -ge 60 ]; then
+      printf '%s compressor-sentinel: ABANDON lockprobe identity read (pid %s left running)\n' "$(lw_ts)" "$LPV_PID" >&2
+      LPV_PID=""; LPV_STUCK=$((${LPV_STUCK:-0} + 1))
+    fi
+    return 0
+  fi
+  [ "${LPV_STUCK:-0}" -lt 2 ] || return 0
+  : > "$d/lpv.rc" 2>/dev/null
+  ( lp_lstart_epoch "$LP_PID" > "$d/lpv.out" 2>/dev/null; echo "$?" > "$d/lpv.rc" ) < /dev/null > /dev/null 2>&1 &
+  LPV_PID=$!; LPV_T0="$now"; LPV_FOR="$LP_PID"
+}
+
+lp_tick() { # <now> — keep exactly one lockprobe alive: adopt, verify, respawn rate-limited, page a crashloop
+  local now="$1" rc py p ls b
+  [ "$LP_MODE" = off ] && { lp_note "disabled (CC_SENTINEL_LOCKPROBE=off)"; return 0; }
+  if [ -n "${LP_PID:-}" ]; then
+    if kill -0 "$LP_PID" 2>/dev/null && [ "${LP_IDENT:-}" != bad ]; then
+      lp_verify "$now"
+      [ "${LP_IDENT:-}" != bad ] && return 0
+    fi
+    rc='?'
+    if [ "${LP_OURS:-0}" = 1 ] && ! kill -0 "$LP_PID" 2>/dev/null; then
+      wait "$LP_PID" 2>/dev/null; rc=$?
+      [ "$rc" = 127 ] && rc='?'          # already reaped and forgotten: unknown, not a crash
+    fi
+    lp_death "$now" "$rc"
+    LP_DEAD_PID="$LP_PID"                # never re-adopt this pid off a stale pidfile (it may be reused)
+    LP_PID=""; LP_OURS=0; LP_IDENT=""; LPV_PID=""
+  fi
+  [ -f "$LP_SCRIPT" ] || { lp_note "absent ($LP_SCRIPT) — nothing to host yet"; return 0; }
+  # ADOPT a same-boot live lockprobe a previous sentinel spawned: the lease forbids a second, so
+  # spawning over it would only mint an rc-0 exit per minute. lp_verify then checks its identity.
+  if [ -f "$LP_PIDFILE" ] && read -r p ls b < "$LP_PIDFILE" && [ -n "$p" ] && [ "$p" != "${LP_DEAD_PID:-}" ] \
+     && [ -n "${LW_BOOT:-}" ] && [ "$b" = "$LW_BOOT" ] && kill -0 "$p" 2>/dev/null; then
+    LP_PID="$p"; LP_OURS=0; LP_IDENT=""
+    lp_note "adopted pid $p"
+    return 0
+  fi
+  [ $((now - ${LP_LAST_SPAWN:-0})) -ge "$LP_RESPAWN_S" ] || return 0
+  py="$(lw_py)" || { lp_note "no interpreter (lane A's list is all absent)"; return 0; }
+  mkdir -p "$LW_HOST_DIR" 2>/dev/null || true
+  lw_detach "$LW_HOST_DIR/lockprobe.out" "$py" -I "$LP_SCRIPT" run
+  LP_PID="$LW_DPID"; LP_OURS=1; LP_IDENT=""; LP_LAST_SPAWN="$now"
+  LP_LAST_NOTE="spawned"
+  printf '%s compressor-sentinel: lockprobe SPAWN pid=%s at=%s (%s -I %s run)\n' "$(lw_ts)" "$LP_PID" "$now" "$py" "$LP_SCRIPT" >&2
+}
+
+# ── PRODUCER FRESHNESS via cc-fleet (DESIGN C2) — replaces a hand-listed watchdog of watchdogs ────
+# Every FLEET_EVERY_S, one detached `cc-fleet --json` writes to a file a LATER tick reads (60 s
+# deadline; abandoned past it, at most 2 left). A FAILING (S4) or STALLED (S5) label pages ONCE PER
+# EPISODE (the episode ends when the label leaves the rows), when corroborated — lockprobe level ≥ 1,
+# or ≥ 2 labels STALLED at once (a box-wide stall, not one job) — or uncorroborated after
+# FLEET_SOLO_S. All due labels of one evaluation share one page.
+fleet_eval() { # <now> <cc-fleet --json output file>
+  local now="$1" f="$2" rows nst lvl due="" tmp label state detail first paged nl
+  rows="$(jq -r 'select(.kind == "fleet-inert" and (.state == "FAILING" or .state == "STALLED"))
+                 | [.subject, .state, (.detail // "")] | @tsv' "$f" 2>/dev/null)"
+  nst="$(printf '%s\n' "$rows" | awk -F'\t' '$2 == "STALLED" { n++ } END { print n + 0 }')"
+  lvl="$(lw_level)"
+  mkdir -p "$LW_HOST_DIR" 2>/dev/null || true
+  tmp="$FLEET_EPISODES.tmp.$$"; : > "$tmp"
+  nl='
+'
+  while IFS="$(printf '\t')" read -r label state detail; do
+    [ -n "$label" ] || continue
+    first="$now"; paged=0
+    if [ -s "$FLEET_EPISODES" ]; then
+      read -r first paged <<EOF_FE
+$(awk -F'\t' -v l="$label" '$1 == l { print $2, $3; exit }' "$FLEET_EPISODES" 2>/dev/null)
+EOF_FE
+      case "$first" in ''|*[!0-9]*) first="$now"; paged=0 ;; esac
+    fi
+    if [ "$paged" != 1 ] && { [ "$lvl" -ge 1 ] || [ "$nst" -ge 2 ] || [ $((now - first)) -ge "$FLEET_SOLO_S" ]; }; then
+      due="$due  $label $state${detail:+ ($detail)}$nl"; paged=1
+    fi
+    printf '%s\t%s\t%s\n' "$label" "$first" "$paged" >> "$tmp"
+  done <<EOF_FR
+$rows
+EOF_FR
+  mv -f "$tmp" "$FLEET_EPISODES" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  [ -n "$due" ] || return 0
+  lw_page fleet-producers "fleet: producer(s) failing or stalled" \
+    "$(printf 'cc-fleet reports (lockprobe level %s, %s stalled):\n%sDetail and recover commands: cc-fleet --table' "$lvl" "$nst" "$due")"
+}
+
+fleet_tick() { # <now>
+  local now="$1" d
+  [ "$FLEET_MODE" = off ] && return 0
+  d="$(br_dir)"
+  if [ -n "${FL_PID:-}" ]; then
+    if [ -s "$d/fleet.$FL_SLOT.rc" ]; then
+      FL_PID=""
+      fleet_eval "$now" "$d/fleet.$FL_SLOT.out"
+    elif [ $((now - FL_T0)) -ge 60 ]; then
+      printf '%s compressor-sentinel: ABANDON cc-fleet --json after 60s (pid %s left running)\n' "$(lw_ts)" "$FL_PID" >&2
+      FL_STUCK="${FL_STUCK:-} $FL_PID"; FL_PID=""
+    fi
+    return 0
+  fi
+  [ $((now - ${FL_LAST:-0})) -ge "$FLEET_EVERY_S" ] || return 0
+  [ -f "$FLEET_BIN" ] || return 0
+  local p live="" n=0
+  for p in ${FL_STUCK:-}; do kill -0 "$p" 2>/dev/null && { live="$live $p"; n=$((n + 1)); }; done
+  FL_STUCK="$live"
+  [ "$n" -lt 2 ] || return 0
+  FL_SLOT=$(( (${FL_SLOT:-0} + 1) % 3 )); FL_LAST="$now"; FL_T0="$now"
+  : > "$d/fleet.$FL_SLOT.rc" 2>/dev/null
+  ( /bin/bash "$FLEET_BIN" --json > "$d/fleet.$FL_SLOT.out" 2>/dev/null; echo "$?" > "$d/fleet.$FL_SLOT.rc" ) \
+    < /dev/null > /dev/null 2>&1 &
+  FL_PID=$!
+}
+
+# ── POST-BOOT CLASSIFIER, host half (DESIGN C7) ───────────────────────────────────────────────────
+# Spawned detached right after freeze_scan (the post-mortem never delays the sensor). Its verdict
+# lands at a DETERMINISTIC path, boot-<kern.boottime>.json, which is what lets freeze_scan's row
+# carry the pointer before the file exists. A later tick pages a non-CLEAN class exactly once — the
+# marker file makes it idempotent across restarts. A null class is a panic boot (panic_scan owns it).
+bc_spawn() {
+  local py
+  [ "$BC_MODE" = off ] && return 0
+  [ -f "$BC_SCRIPT" ] || return 0
+  py="$(lw_py)" || return 0
+  mkdir -p "$LW_HOST_DIR" 2>/dev/null || true
+  lw_detach "$LW_HOST_DIR/boot-classify.out" "$py" -I "$BC_SCRIPT" run
+  printf '%s compressor-sentinel: boot-classify SPAWN pid=%s\n' "$(lw_ts)" "$LW_DPID" >&2
+}
+
+bc_page_tick() { # <now> <started-at> — page the classifier's verdict once; gives up 30 min after start
+  local now="$1" t0="$2" f m cls summ conf
+  [ "$BC_MODE" = off ] && return 0
+  [ "${BC_DONE:-0}" = 1 ] || [ -z "${BOOT_EPOCH:-}" ] && return 0
+  f="$LW_DIR/boot-$BOOT_EPOCH.json"; m="$LW_HOST_DIR/boot-class-$BOOT_EPOCH.paged"
+  if [ -e "$m" ]; then BC_DONE=1; return 0; fi
+  if [ ! -s "$f" ]; then
+    [ $((now - t0)) -ge 1800 ] && BC_DONE=1
+    return 0
+  fi
+  cls="$(jq -r '.class // "null"' "$f" 2>/dev/null)"
+  [ -n "$cls" ] || return 0                                   # mid-write or unparseable: next tick
+  summ="$(jq -r '.summary // ""' "$f" 2>/dev/null | cut -c1-300)"
+  conf="$(jq -r '.confidence // "?"' "$f" 2>/dev/null)"
+  case "$cls" in
+    null|CLEAN) : ;;
+    *) lw_page "boot-class-$BOOT_EPOCH" "lockwatch: the last boot ended $cls ($conf)" \
+         "$summ  Evidence: $f" ;;
+  esac
+  mkdir -p "$LW_HOST_DIR" 2>/dev/null || true
+  printf '%s %s\n' "$now" "$cls" > "$m" 2>/dev/null || true
+  BC_DONE=1
+}
+
+lw_host_tick() { # <now> — the whole host, once per tick, AFTER the row (it can never delay the row)
+  lp_tick "$1"
+  fleet_tick "$1"
+  bc_page_tick "$1" "${LW_T0:-$1}"
 }
 
 # The CC_SENTINEL=off drain (see the kill-switch gate): release a predecessor's ledger, unless
@@ -1869,6 +2402,18 @@ fi
 # cost the evidence for the NEXT one.
 [ "$PANIC_SCAN" = "off" ] || panic_scan || true
 [ "$FREEZE_SCAN" = "off" ] || freeze_scan || true
+
+# ── LOCKWATCH HOST: startup ───────────────────────────────────────────────────────────────────────
+# Daemon only (a --ticks run is the smoke and the suite, and must never spawn a real lockprobe or
+# read the live lockwatch files), unless the suite opts in with CC_SENTINEL_LOCKWATCH_BOUNDED=1.
+LW_HOST=0; LP_PID=""; LP_OURS=0; LP_IDENT=""; LP_LAST_SPAWN=0; LW_T0=""
+if [ "$TICKS" -eq 0 ] || [ "${CC_SENTINEL_LOCKWATCH_BOUNDED:-0}" = 1 ]; then
+  LW_HOST=1; LW_T0="$(date +%s)"
+  LW_BOOT="${CC_SENTINEL_BOOTUUID:-$(/usr/sbin/sysctl -n kern.bootsessionuuid 2>/dev/null)}"
+  BOOT_EPOCH="${CC_SENTINEL_BOOT_EPOCH:-$(freeze_boot_epoch 2>/dev/null)}"
+  mkdir -p "$LW_HOST_DIR" 2>/dev/null || true
+  bc_spawn
+fi
 
 # ── self-restart on changed source ────────────────────────────────────────────────────────────────
 # A land that changes this file reaches nothing until the daemon restarts: bash holds the bytes it
@@ -2072,7 +2617,7 @@ while :; do
   # A stale CENSUS_PIDS in cliff only WIDENS the cohort ("new since the last census" excludes fewer
   # pids), which is the safe direction there.
   if [ "$CLIFF" = "0" ] && [ $((TICK % CENSUS_EVERY)) -eq 0 ]; then
-    CRAW="$(census "$ACT_RSS_KB")"
+    CRAW="$(census_read "$ACT_RSS_KB")"
     if [ -n "$CRAW" ]; then
       CENSUS_PIDS="${CRAW#*|}"
       CHEAD="${CRAW%%|*}"
@@ -2119,6 +2664,8 @@ while :; do
     "$D_SEG" "$SEG_RATE" "$CBU" "$D_CBU" "$CBU_RATE" "$SWAP_B" "$D_SWAP" "$SWAP_RATE" \
     "$D_CMP" "$D_DCMP" "${INB:-null}" "${CPB:-null}" "${FAILS:-null}" \
     "$CENSUS_N" "$CENSUS_ORPH" "$CENSUS_RSS" "$STREAK"
+  # lp_pid rides only on rows the lockwatch host writes: a --ticks run's rows stay byte-identical.
+  [ "$LW_HOST" = 1 ] && ROW="${ROW%\}},\"lp_pid\":${LP_PID:-null}}"
   printf '%s\n' "$ROW" >> "$LOG" 2>/dev/null || true
   ROWS=$((ROWS + 1))
 
@@ -2148,10 +2695,15 @@ while :; do
       # that dies between them is simply absent from the table that selects.
       # `gui` mode, so class 2 (the operator's apps) is computed for the one read that selects. The
       # capture outlives this block: the kill rung below reuses it as its protected-class belt.
+      # Both reads are BOUNDED (I2): an abandoned read leaves its table EMPTY, and an empty table
+      # selects nothing — UNIDENTIFIABLE ⇒ NEVER ACTED ON, the polarity this block already has.
       EXEF="$(mktemp -t cc-sentinel-exe)"
       exe_table gui > "$EXEF" 2>/dev/null || true
-      PSTABLE="$(ps -axwwo pid=,ppid=,rss=,args= 2>/dev/null)"
-      TARGETS="$(printf '%s\n' "$PSTABLE" | select_stop_targets "$EXEF" "$CENSUS_PIDS" "$ACT_RSS_KB" "$ACT_CAP")"
+      PSTABLE=""
+      br_sync psact "${CC_SENTINEL_PS_DEADLINE_S:-15}" ps -axwwo pid=,ppid=,rss=,args=
+      [ $? -ne 124 ] && [ -n "$BR_OUT" ] && [ -s "$BR_OUT" ] && PSTABLE="$(cat "$BR_OUT")"
+      NEVER="$(fx_never_list)"
+      TARGETS="$(printf '%s\n' "$PSTABLE" | select_stop_targets "$EXEF" "$CENSUS_PIDS" "$ACT_RSS_KB" "$ACT_CAP" "$NEVER")"
       COHORT="$(printf '%s\n' "$TARGETS" | awk '$1 ~ /^[0-9]+$/ { printf "%s ", $1 }')"
       COHORT_N="$(printf '%s' "$COHORT" | wc -w | tr -d ' ')"   # derived from COHORT so they cannot disagree
       # THE POPULATION FLOOR (ACT_MIN_COHORT). Below it nothing is signalled and the tick says so in
@@ -2303,6 +2855,8 @@ while :; do
 
   PREV_T="$NOW"; PREV_SEG="$SEG_EST"; PREV_CBU="$CBU"; PREV_SWAP="$SWAP_B"
   PREV_CMP="$COMPRESSIONS"; PREV_DCMP="$DECOMPRESSIONS"
+
+  [ "$LW_HOST" = 1 ] && lw_host_tick "$NOW"
 
   # Daemon only: a bounded run (--ticks/--once) is the smoke and the suite, and has no successor.
   if [ "$TICKS" -eq 0 ] && [ "${CC_SENTINEL_SELF_RESTART:-on}" != "off" ] \
