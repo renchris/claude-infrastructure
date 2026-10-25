@@ -9,6 +9,8 @@
 # RED-proof, run against cc1d441f6's bin/cc-sessions: the fork-count case fails (60 rows took 180+
 # jq calls; measured 241), and the null-startedAt case fails (the placeholder row is kept for ever).
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"
   D="$BATS_TEST_TMPDIR"
@@ -94,7 +96,7 @@ calls() { cat "$D/$1.calls" 2>/dev/null | wc -l | tr -d ' '; }
 # RED-proof, run against ba9e991dc's bin/cc-sessions: the bulk read hangs to CC_SESSIONS_PS_TIMEOUT,
 # ps.hung is written, and the census falls back to one ps per row (3 calls, not 1).
 @test "multi-pid ps: the one bulk read passes -x, so a ps that hangs without it never wedges the census" {
-  cat > "$D/shim/ps" <<STUB
+  cc_stub "$D/shim" ps - <<STUB
 #!/bin/sh
 echo "\$*" >> "$D/ps.argv"; echo x >> "$D/ps.calls"
 x=0; multi=0; prev=
@@ -106,7 +108,6 @@ done
 if [ "\$multi" = 1 ] && [ "\$x" = 0 ]; then echo hung >> "$D/ps.hung"; exec sleep 300; fi
 exec /bin/ps "\$@"
 STUB
-  chmod +x "$D/shim/ps"
   PAR=$PPID
   PAR_LS="$(TZ=UTC LC_ALL=C /bin/ps -o lstart= -p "$PAR" | tr -s ' ' | sed 's/^ //;s/ $//')"
   now_ms="$(( $(date +%s) * 1000 ))"
