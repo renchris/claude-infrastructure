@@ -100,7 +100,7 @@ rc_state() { # $1=kitty_rc value $2=hb age in seconds (absent = no hb)
 
 @test "05 handoff-fire's kt() returns 75 without connecting while the breaker is open" {
   local kt_src
-  kt_src="$(sed -n '/^kt() {$/,/^}$/p' "$REPO/scripts/handoff-fire.sh")"
+  kt_src="$(sed -n '/^kt() /p' "$REPO/scripts/handoff-fire.sh")"
   [ -n "$kt_src" ] || { echo "kt() moved — this case asserts over nothing"; false; }
   rc_state dead 0
   CALLS="$CALLS" run bash -c '. "$1"; hf_bounded() { printf "hf_bounded %s\n" "$*" >> "$CALLS"; }; eval "$2"; kt ls' _ "$KQ" "$kt_src"
