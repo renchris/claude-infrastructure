@@ -15,7 +15,10 @@
 #   - launches() ignoring resumeFromRunId → cases [p-a1, p-b1], resume 1 (test 1 red);
 #   - grade.py sending every scored answer to the judge → the stub sees 4 dossiers, not 1 (test 2);
 #   - _boot() resampling slots instead of runs → CI [-50.0, 0.0] (the cluster test red);
-#   - the point ratio used as the requests bound → upper 1.25, PASS (the requests test red).
+#   - the point ratio used as the requests bound → upper 1.25, PASS (the requests test red);
+#   - the launch test is a found bug, not a mutant: the first smoke spliced `--effort high` between
+#     `--model` and its value, every lead refused ("unrecognized model --effort"), and the run still
+#     exited 0. On that code the test reads "--effort" as the model and status 0.
 
 setup() {
 	export HOME="$BATS_TEST_TMPDIR/home"
@@ -31,6 +34,7 @@ setup() {
 	REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 	CLI="$REPO/bin/cc-lever-eval"
 	D2="$REPO/tools/lever-evals/d2_lean"
+	load helpers/cc-stub
 }
 
 ev() { python3 "$CLI" "$@"; }
@@ -270,4 +274,39 @@ print("@@INPUT" in s, "\"variant\": \"lean\"" in s, "Say hi to p-1." in s, "Harn
 	[ "${lines[0]}" = "b0:d1@next/2 b0:l1@next/2 b0:l2@next/2 b0:d2@next/2 b1:l1@next2/1 b1:d1@next2/1 b1:d2@next2/1 b1:l2@next2/1" ]
 	[ "${lines[1]}" = "True True False True" ]
 	[ "${lines[2]}" = "False True True True" ]
+}
+
+# A stub `claude` records its argv (one per line), cwd and the two env vars the eval relies on, and
+# exits 0 without running a workflow — so the run must report the position incomplete (exit 1).
+@test "driver: each position launches a fresh lead with the model, effort, injected agents and session id it records" {
+	python3 - "$BATS_TEST_TMPDIR/cases.jsonl" "$CC_HILLCLIMB_DIR/d2_lean/key.json" <<'PY'
+import json, os, sys
+c = dict(case_id="p-1", src="prod", acct="next", repo=None, commit=None, brief="Say hi.", outputs=[], schema=False)
+open(sys.argv[1], "w").write(json.dumps(c) + "\n")
+os.makedirs(os.path.dirname(sys.argv[2]), exist_ok=True)
+json.dump({"p-1": dict(asks=["say hi"], facts=[])}, open(sys.argv[2], "w"))
+PY
+	cc_stub "$BATS_TEST_TMPDIR/bin" claude - <<STUB
+#!/bin/sh
+for a in "\$@"; do printf '%s\n' "\$a"; done > "$BATS_TEST_TMPDIR/argv"
+printf '%s\n' "\$(pwd -P)" "\$CLAUDE_CONFIG_DIR" "\$CC_LEVER_EXCLUDE" > "$BATS_TEST_TMPDIR/ctx"
+STUB
+	export CC_D2_CLAUDE="$BATS_TEST_TMPDIR/bin/claude"
+	sha="$(ev harness-sha d2_lean)"
+	run ev approve-harness d2_lean --confirm "${sha:0:12}"
+	[ "$status" -eq 0 ]
+	run ev run d2_lean --cases "$BATS_TEST_TMPDIR/cases.jsonl" --tag t2 --reps 1
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"2 position(s) ended without a completed workflow"* ]] || false
+	run python3 -c 'import json,os,sys
+a=open(sys.argv[1]).read().splitlines(); P=[json.loads(l) for l in open(sys.argv[2])]
+nxt=lambda f: a[a.index(f)+1]
+print(nxt("--model"), nxt("--effort"), nxt("--permission-mode"), nxt("--allowedTools"), os.path.basename(nxt("--agents")),
+      nxt("--session-id")==P[-1]["sid"], a[a.index("-p")+1].startswith("Run the workflow script at "+P[-1]["script"]))
+c=open(sys.argv[3]).read().splitlines()
+print(c[0]==os.path.realpath(P[-1]["workdir"]+"/_lead"), c[1]==os.environ["HOME"]+"/.claude-next", c[2], P[-1]["rc"], P[-1]["wf_status"])' \
+		"$BATS_TEST_TMPDIR/argv" "$CC_HILLCLIMB_DIR/d2_lean/runs/t2/positions.jsonl" "$BATS_TEST_TMPDIR/ctx"
+	[ "$status" -eq 0 ]
+	[ "${lines[0]}" = "claude-opus-5-5 high auto Workflow agents.json True True" ]
+	[ "${lines[1]}" = "True True 1 0 None" ]
 }

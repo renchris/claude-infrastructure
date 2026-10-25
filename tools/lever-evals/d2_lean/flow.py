@@ -427,7 +427,7 @@ def launch(
         "--verbose",
     ]
     if effort:
-        argv[4:4] = ["--effort", effort]
+        argv += ["--effort", effort]
     if agents:
         argv += ["--agents", agents]
     env = hc.eval_env()
@@ -556,6 +556,7 @@ def run_model(a):
         % (tag, len(cases), len(blocks), reps, rec_dir)
     )
     pos_log = os.path.join(rec_dir, "positions.jsonl")
+    incomplete = 0
     for b in blocks:
         for k, (variant, rep) in enumerate(b["order"]):
             workdir = os.path.join(run_root(), tag, b["block"], "p%d" % k)
@@ -623,8 +624,13 @@ def run_model(a):
                 print(
                     "    rc=%s workflow %s %s" % (rc, row["run_id"], row["wf_status"])
                 )
+                incomplete += row["wf_status"] != "completed"
             with open(pos_log, "a") as fh:
                 fh.write(json.dumps(row, sort_keys=True) + "\n")
+    if incomplete:
+        sys.stderr.write("cc-lever-eval: %d position(s) ended without a completed workflow — their slots grade "
+                         "as PLUMBING errors; read %s/*.stream.jsonl\n" % (incomplete, rec_dir))
+        return 1
     return 0
 
 
