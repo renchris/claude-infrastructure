@@ -447,3 +447,26 @@ readback_ls() { awk '/ launch / { n = 0; next } / ls$/ { n++ } END { print n - 1
   [ "$(layout_tail)" = 'tree_ok=0 tree_fixed=0 tree_mismatch=0 tree_unknown=1' ]
   ! grep -q ' kitten ' "$KLOG" || false
 }
+
+@test "live map: a recorded pane already running is kept; new panes open beside it in its window and the tab is set to the record" {
+  # 2026-10-25: 16 sessions had to come back into windows where others of their recorded tab were
+  # already live. Nothing may relaunch a live session or move a pane between OS windows: the live
+  # pane (sid-a, now window 900) stays, b and c open as splits beside it, and the read-back sets
+  # the tab to the recorded tree with the kitten, which only rearranges panes already in the tab.
+  # RED-proof: against the script before --live-map it dies "unknown argument: --live-map".
+  small_tree
+  grep -v 'sid-a' "$ROWS" > "$ROWS.t"; mv "$ROWS.t" "$ROWS"
+  printf '11\t900\t1\n' > "$BATS_TEST_TMPDIR/live.map"
+  echo "sid-a 900" > "$KLOG.map"
+  # what kitty shows after the launches: all three side by side, not the recorded (a over b) | c
+  printf '[{"id":1,"platform_window_id":900,"tabs":[{"id":1,"layout":"splits","layout_state":{"class":"Splits","all_windows":{"window_groups":[{"id":1,"window_ids":[900]},{"id":2,"window_ids":["@sid-b@"]},{"id":3,"window_ids":["@sid-c@"]}]},"pairs":{"one":1,"two":{"one":2,"two":3}}},"windows":[{"id":900},{"id":"@sid-b@"},{"id":"@sid-c@"}]}]}]\n' > "$KLOG.lstpl"
+  run --separate-stderr /bin/bash "$LAYOUT" --desktops --restore --to unix:/tmp/cc-fake-sock --tree "$SM/hb.kitty-ls.json" --file "$ROWS" --live-map "$BATS_TEST_TMPDIR/live.map"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c ' launch ' "$KLOG")" -eq 2 ]
+  ! grep -q -- '--type=os-window' "$KLOG" || false              # no new window
+  ! grep -q 'toggle_fullscreen' "$KLOG" || false                # the live window is already where it belongs
+  [ "$(grep ' launch ' "$KLOG" | grep -c -- '--location=vsplit --match window_id:900 --next-to id:900')" -eq 2 ]
+  [ "$(grep -c ' kitten ' "$KLOG")" -eq 1 ]
+  run python3 "$TT" spec "$KLOG.spec" "$SM/hb.kitty-ls.json" "$SM/hb.roster.json" "$KLOG.map"
+  [ "$status" -eq 0 ]; [ "$output" = spec-ok ]
+}

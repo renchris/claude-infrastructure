@@ -203,6 +203,7 @@ DRY_RUN=0
 RESTORE=0             # --restore: the unattended restore path (W3)
 TREE=""               # --tree FILE: the recorded kitty tree to replay (--restore only)
 KEEP_SHELLS=0         # --keep-shells: a recorded pane that held no session comes back as a shell
+LIVE_MAP=""           # --live-map FILE: recorded pane → live window id, for sessions already running
 FILE=""
 
 die() { printf 'cc-resume-layout: %s\n' "$*" >&2; exit 2; }
@@ -220,6 +221,7 @@ while [ $# -gt 0 ]; do
     --restore)         RESTORE=1; shift ;;
     --tree)            TREE="${2:?--tree needs a kitty ls JSON file}"; shift 2 ;;
     --keep-shells)     KEEP_SHELLS=1; shift ;;
+    --live-map)        LIVE_MAP="${2:?--live-map needs a file}"; shift 2 ;;
     -h|--help)         sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0 ;;
     *)                 die "unknown argument: $1" ;;
   esac
@@ -232,6 +234,10 @@ if [ -z "$STAGGER" ]; then
   if [ "$RESTORE" = 1 ]; then STAGGER="${CC_RESTORE_STAGGER:-2}"; else STAGGER=12; fi
 fi
 
+if [ -n "$LIVE_MAP" ]; then
+  [ -n "$TREE" ] || die "--live-map needs --tree"
+  [ -r "$LIVE_MAP" ] || die "--live-map: cannot read $LIVE_MAP"
+fi
 if [ -n "$TREE" ]; then
   [ "$DESKTOPS" = 1 ] && [ "$RESTORE" = 1 ] || die "--tree needs --desktops --restore"
   [ -r "$TREE" ] || die "--tree: cannot read $TREE"
@@ -551,12 +557,24 @@ for _, f in sorted(cands, reverse=True):
     PLAN="$(i=0; for r in "${ROWS[@]}"; do
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$(cell "$r" 3)" "$(cell "$r" 8)" "$(cell "$r" 9)" "$(cell "$r" 10)" "$(cell "$r" 2)"
         i=$((i + 1)); done \
-      | CC_RESTORE_KEEP_SHELLS="$KEEP_SHELLS" python3 -c '
+      | CC_RESTORE_KEEP_SHELLS="$KEEP_SHELLS" CC_RESTORE_LIVE_MAP="$LIVE_MAP" python3 -c '
 import json, os, subprocess, sys
 per = int(sys.argv[1]); trees = [t for t in sys.argv[2:] if t]
 S = "\x1f"
 import re
 KEEP_SHELLS = os.environ.get("CC_RESTORE_KEEP_SHELLS") == "1"
+# --live-map: "<recorded pane id> TAB <live window id> [TAB <live OS window id>]" for recorded panes
+# whose session is ALREADY running in the live kitty. Such a pane is used where it is (a "live"
+# leaf), never relaunched. A tab is rebuilt in ONE live OS window, that of its first live pane: a
+# live pane of the same recorded tab that sits in another OS window stays there, because moving a
+# pane between OS windows is what crashed kitty 0.48.2 on 2026-10-15.
+LIVE, LIVE_OS = {}, {}
+if os.environ.get("CC_RESTORE_LIVE_MAP"):
+    for ln in open(os.environ["CC_RESTORE_LIVE_MAP"]):
+        f = ln.split()
+        if len(f) >= 2 and f[0].isdigit() and f[1].isdigit():
+            LIVE[f[0]] = f[1]
+            LIVE_OS[f[0]] = f[2] if len(f) >= 3 else "?"
 # a pane whose process is Claude Code, or the launcher that resumes it
 CLAUDE_RE = re.compile(r"(^|[/ ])(claude|claude\.exe|reso-resume-one|cc-close-attrib|cc-pane-runner)( |$)")
 TEAMMATE_RE = re.compile(r"--agent-id|--parent-session-id")
@@ -717,10 +735,14 @@ def tab_node(t, pane_sid, given, panes):
           or [{"id": g.get("id"), "window_ids": g.get("windows")} for g in t.get("groups") or []]
           or [{"id": w, "window_ids": [w]} for w in wmap])
     groups = {g.get("id"): [w for w in g.get("window_ids") or [] if w in wmap] for g in gl}
+    home = next((LIVE_OS[str(w)] for g in gl for w in groups.get(g.get("id")) or [] if str(w) in LIVE), None)
     def leaf(gid):
         wids = groups.get(gid) or []
         if not wids:
             return None
+        for w in wids:                      # a pane whose session already runs in the live kitty
+            if str(w) in LIVE:
+                return {"leaf": ("live", LIVE[str(w)])} if LIVE_OS[str(w)] == home else None
         for w in wids:                      # a pane holding a row being restored
             sid = given.get(str(w))
             if sid in by_sid and sid not in used:
@@ -782,8 +804,8 @@ for path in trees:
         if not isinstance(o, dict):
             continue
         tabs = [tn for tn in (tab_node(t, pane_sid, given, panes) for t in o.get("tabs") or [] if isinstance(t, dict)) if tn]
-        if not tabs:
-            continue
+        if not tabs or all(l[0] == "live" for _, n in tabs for l in leaves(n)):
+            continue                        # nothing to launch here (a fully live window is left alone)
         pwid = str(o.get("platform_window_id") or "")
         src = "k%sw%s" % (kp, o.get("id"))
         ls = [l for _, n in tabs for l in leaves(n)]
@@ -840,7 +862,38 @@ for n, w in enumerate(wins, 1):
 # ── ops. A pair is built by splitting the pane that is already there: the new pane is the first
 #    leaf of the second half of the pair, and the --bias of kitty gives it the share of that half. ──
 nkey = [0]
+def kt_tree(n, key):   # planner node → scripts/lib/kitty_tree.py TREE, each leaf its op key
+    if "leaf" in n:
+        return key[id(n)]
+    return {"h": n["h"], "b": n["bias"], "one": kt_tree(n["one"], key), "two": kt_tree(n["two"], key)}
+def nodes(n):
+    return [n] if "leaf" in n else nodes(n["one"]) + nodes(n["two"])
+def emit_live(w, ti, layout, node):
+    """A tab that already runs in the live kitty: its live panes stay (kind live, no launch), each
+    new pane opens beside the first live one, and the tab is then SET to the planned tree by the
+    read-back (L line), so the order of the launches does not matter."""
+    ops, key = [], {}
+    def op(kind, a, b, how, anchor):
+        nkey[0] += 1; k = nkey[0]
+        ops.append([str(w["n"]), str(ti), str(k), kind, a, how, str(anchor), "", b, w["grp"], "keep"])
+        return k
+    ls = nodes(node)
+    lives = [n for n in ls if n["leaf"][0] == "live"]
+    for n in lives:
+        key[id(n)] = op("live", n["leaf"][1], "", "live", "")
+    anchor = key[id(lives[0])]
+    for n in ls:
+        if n["leaf"][0] == "row":
+            key[id(n)] = op("row", str(n["leaf"][1]), "", "vsplit", anchor)
+        elif n["leaf"][0] == "shell":
+            key[id(n)] = op("shell", "", n["leaf"][1], "vsplit", anchor)
+    if ti == 0:
+        w["head"] = anchor
+    w.setdefault("live_specs", []).append((ti, kt_tree(node, {i: str(k) for i, k in key.items()})))
+    return ops
 def emit(w, ti, layout, node):
+    if any(l[0] == "live" for l in leaves(node)):
+        return emit_live(w, ti, layout, node)
     ops, sim = [], {}
     def op(leaf, how, anchor, bias=""):
         nkey[0] += 1; k = nkey[0]
@@ -879,6 +932,9 @@ for w in wins:
                        str(sum(1 for l in ls if l[0] == "row")), str(sum(1 for l in ls if l[0] == "shell")),
                        ";".join("%s:%s" % (lay, sig(n)) for lay, n in w["tabs"])] + (w["disp"] or [""] * 10)))
 out.append(S.join(["T", str(ntree)]))
+for w in wins:
+    for ti, spec in w.get("live_specs", []):
+        out.append(S.join(["L", str(w["n"]), str(ti), json.dumps(spec)]))
 # Recorded windows launch in their recorded order, which is the order their Desktops come back in
 # (each goes fullscreen as its head opens); then the planned ones, most prompt rows first (R17).
 for w in wins[:ntree] + sorted(wins[ntree:], key=lambda w: -w["prompt"]):
@@ -1126,6 +1182,14 @@ EOF
     unset _kl
     TOPS=""; tree_ok=0; tree_fixed=0; tree_bad=0; tree_unk=0
     RB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cc-resume-tree.XXXXXX" 2>/dev/null)" || RB_DIR=""
+    # A live tab's planned tree (L lines): the read-back sets the tab to it, launches included.
+    if [ -n "$RB_DIR" ]; then
+      while IFS=$'\037' read -r _t lw lt lspec; do
+        [ "$_t" = L ] && printf '%s\n' "$lspec" > "$RB_DIR/live-$lw-$lt.json"
+      done <<EOF
+$PLAN
+EOF
+    fi
     # tree_check <ls.json> → prints "ok" | "differs <spec.json>" | "unknown <why>"; the spec holds
     # the planned tree in this tab's window ids, ready for the kitten.
     tree_check() {
@@ -1137,9 +1201,12 @@ ls_path, wids, spec_path, head = sys.argv[2], sys.argv[3], sys.argv[4], int(sys.
 ops = [l.split("\x1f") for l in sys.stdin.read().splitlines() if l.startswith("P\x1f")]
 wid = dict(p.split("=", 1) for p in wids.split())
 plan = None
-for o in ops:   # P win tab key kind idx how anchor bias sid — what the planner meant (TOPS)
-    key, how, anc, bias = o[3], o[6], o[7], o[8]
-    plan = key if plan is None else kt.split_at(plan, anc, key, how == "vsplit", bias or None)
+try:                # a live tab: the planner wrote its tree (L line)
+    plan = json.load(open(sys.argv[6]))
+except Exception:
+    for o in ops:   # P win tab key kind idx how anchor bias sid — what the planner meant (TOPS)
+        key, how, anc, bias = o[3], o[6], o[7], o[8]
+        plan = key if plan is None else kt.split_at(plan, anc, key, how == "vsplit", bias or None)
 try:
     tabs = kt.ls_tabs(json.load(open(ls_path)))
 except Exception as e:
@@ -1170,7 +1237,7 @@ if not d:
     print("ok"); sys.exit(0)
 json.dump({"pairs": kt.to_pairs(want), "result": spec_path + ".result", "diff": d}, open(spec_path, "w"))
 print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
-' "$KTREE_LIB" "$1" "$(for k2 in "${!WIDS[@]}"; do printf '%s=%s ' "$k2" "${WIDS[$k2]}"; done)" "$2" "$3" 2>/dev/null \
+' "$KTREE_LIB" "$1" "$(for k2 in "${!WIDS[@]}"; do printf '%s=%s ' "$k2" "${WIDS[$k2]}"; done)" "$2" "$3" "$RB_DIR/live-$cur-$ctab.json" 2>/dev/null \
         || printf 'unknown read-back-failed\n'
     }
     verify_restore_tab() {
@@ -1255,6 +1322,16 @@ print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
         case "$model" in *[!A-Za-z0-9._-]*) note "cc-resume-layout: model '$model' for $sid is malformed — dropped"; model="" ;; esac
       fi
       TOPS="${TOPS}P"$'\037'"$win"$'\037'"$tab"$'\037'"$key"$'\037'"$kind"$'\037'"$idx"$'\037'"$how"$'\037'"$anc"$'\037'"$bias"$'\037'"$sid"$'\n'
+      # A recorded pane whose session already runs here (--live-map): kept where it is, never launched.
+      if [ "$kind" = live ]; then
+        if [ "$DRY_RUN" = 0 ] && ! kr ls --match "id:$idx" >/dev/null 2>&1; then
+          note "  [CC-DESK-$win] live pane $idx is gone — the panes planned beside it open beside the next one"; continue
+        fi
+        WIDS[key]="$idx"; tlast="$idx"; [ -n "$thead" ] || thead="$idx"; [ -n "$head" ] || head="$idx"
+        note "$([ "$DRY_RUN" = 1 ] && printf 'DRY [CC-DESK-%s %s] live pane %s kept in place pane=#%s' "$win" "$grp" "$idx" "$key" \
+               || printf '  [CC-DESK-%s %s] win %s  live — kept in place' "$win" "$grp" "$idx")"
+        continue
+      fi
       if [ "$DRY_RUN" = 1 ]; then
         at=""; [ -n "$anc" ] && [ "$how" != tab ] && at=" next-to=#$anc"
         if [ "$kind" = row ]; then
