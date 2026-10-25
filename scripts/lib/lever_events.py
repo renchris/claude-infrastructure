@@ -21,9 +21,11 @@ that is missing or unreadable is PLUMBING, never a smaller population.
 ELIGIBLE EVENTS: the points where a lever DECIDES, logged in both arms by the shadow hooks, with
 `would` = the treatment would act there.
   D1  idle-recycle-shadow.jsonl  v=="ok" (an idle return evaluated)     would = would_advise_k2 (200k)
-  D2  workflow-lean-shadow.jsonl every Workflow call parsed             would = would_deny
+  D2  workflow-lean-shadow.jsonl every Workflow call parsed (no kind)   would = would_deny
   D3  idle-keepalive.jsonl       kind=="gap" with dur >= wake_s         would = True (a due wake)
-  D4  subagent-long-bash.jsonl   would_deny_class set                   would = not exempt
+  D4  subagent-long-bash.jsonl   kind=="subagent_bash", class set       would = not exempt
+Every reader filters on kind: S3 splits an over-2KB workflow row into kind=slots continuation rows,
+and writes kind=d4_follow rows beside the calls they follow.
 Units are lever_flags' (D1/D2 the lineage root, D3 "sid:gap_start", D4 the agent_id). An event's
 arm is the LOGGED one where lever-arms.jsonl has it (kind=session for D1/D2, kind=event rows per
 (lever, unit) once S2/S3 write them), else recomputed by lever_flags.arm() against the current flag
@@ -305,7 +307,12 @@ def _extract(lever, r):
             },
         )
     if lever == "D2":
-        if r.get("hook") != "workflow-lean-shadow" or r.get("parse") != "ok":
+        # the call row has no kind; an over-2KB row's slots continue in kind=slots rows (S3)
+        if (
+            r.get("kind") is not None
+            or r.get("hook") != "workflow-lean-shadow"
+            or r.get("parse") != "ok"
+        ):
             return None
         return (
             r.get("session_id"),

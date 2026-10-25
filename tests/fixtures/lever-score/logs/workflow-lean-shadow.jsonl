@@ -1,0 +1,2 @@
+{"ts":"2026-10-01T10:00:25Z","hook":"workflow-lean-shadow","session_id":"aaaaaaaa-0000-4000-8000-00000000000a","tool_use_id":"toolu_aw1","tool_name":"Workflow","resume_from_run_id":null,"source":"script","parse":"ok","calls":9,"calls_without_agent_type":9,"would_deny":true,"slots_shed":"split","slot_rows":1}
+{"kind":"slots","ts":"2026-10-01T10:00:25Z","hook":"workflow-lean-shadow","session_id":"aaaaaaaa-0000-4000-8000-00000000000a","tool_use_id":"toolu_aw1","part":0,"slots":[{"line":3,"label":"a","agent_type":null}]}

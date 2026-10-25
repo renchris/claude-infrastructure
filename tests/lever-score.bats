@@ -11,6 +11,7 @@
 #   · a transcript copied into a second root, and a root reached through ~/.claude-next's symlink,
 #     count once; a session's subagent transcripts are part of its row
 #   · tool errors exclude hook denies; a context-wall death is found; lands split by exit class
+#   · one event per decision: S3's kind=slots and kind=d4_follow rows are filtered by kind
 #   · plumbing fails closed on a missing root and on >0.1% unparseable rows (each with its
 #     positive control), and is never CLEAN while any check lacks data
 #   · ledger --write merges by sid; the verbs wave S5 owns exit 3
@@ -70,6 +71,15 @@ check() { /usr/bin/python3 -I "$CLI" plumbing --since 7d --json 2>/dev/null | jq
   [ "$b" = 1 ] || false
   c="$(printf '%s\n' "$output" | jq -c --arg s "$C" 'select(.sid==$s)|[.ptl.n,.ptl.death]')"
   [ "$c" = '[1,true]' ] || { echo "C=$c"; false; }
+}
+
+@test "events: one per decision; kind=slots and kind=d4_follow rows (S3's shapes) are not events" {
+  run ledger
+  [ "$status" -eq 0 ] || false
+  a="$(printf '%s\n' "$output" | jq -c --arg s "$A" 'select(.sid==$s)|.events')"
+  [ "$a" = '{"D2":{"ctrl":1},"D3":{"ctrl":1}}' ] || { echo "A=$a"; false; }
+  b="$(printf '%s\n' "$output" | jq -c --arg s "$B" 'select(.sid==$s)|.events')"
+  [ "$b" = '{"D4":{"ctrl":1}}' ] || { echo "B=$b"; false; }
 }
 
 @test "plumbing fails closed on a missing projects root (positive control: all four present)" {
