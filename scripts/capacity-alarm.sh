@@ -693,6 +693,32 @@ if [ -n "$VM_COUNTERS" ]; then
   fi
 fi
 
+# ── BOUNDED ps (2026-10-25 lockup, DESIGN C8) ────────────────────────────────────────────────────
+# That morning 23 `ps` sat asleep in a devfs lookup and never returned, and the Likely 03:48 hang on
+# this box was this file's own read_argv0 (`ps -p a,b,c | cut | awk`, a multi-pid read without -x:
+# docs/lessons/multi-pid-ps-without-x-hangs.md). A bound only bounds when the OUTPUT GOES TO A FILE:
+# a stuck child holds a pipe's write end, so `$(bounded ps | awk)` still blocks after perl gave up.
+# So every ps read here is `cap_ps <file> <args>` and the parse reads the file. A cut read leaves the
+# file empty (its fields render as they do when ps is unreadable — never a fabricated 0) and flags
+# the row `argv_blind`. The flag is a FILE, because the readers run inside `$()` subshells.
+zone_bounded() { # <seconds> <cmd...> — perl alarm, the zprint bound; rc 124 when cut
+  /usr/bin/perl -e 'my $t = shift; my $p = fork; exit 1 unless defined $p;
+    if (!$p) { exec @ARGV; exit 127 }
+    $SIG{ALRM} = sub { kill "KILL", $p; exit 124 };
+    alarm $t; waitpid($p, 0); exit($? >> 8)' "$@"
+}
+CAP_BLIND_F="${TMPDIR:-/tmp}/cc-cap-blind.$$"
+rm -f "$CAP_BLIND_F" 2>/dev/null
+trap 'rm -f "$CAP_BLIND_F" 2>/dev/null' EXIT   # this file sets no other EXIT trap
+cap_ps() { # <outfile> <ps args…> → rc of ps, 124 when cut (outfile then emptied, blind flag set)
+  local out="$1" rc
+  shift
+  zone_bounded "${CC_CAP_PS_TIMEOUT_S:-20}" "${CC_CAP_PS:-ps}" "$@" > "$out" 2>/dev/null; rc=$?
+  if [ "$rc" -eq 124 ]; then : > "$out"; echo 1 > "$CAP_BLIND_F"; fi
+  return "$rc"
+}
+cap_tmp() { mktemp "${TMPDIR:-/tmp}/cc-cap-ps.XXXXXX" 2>/dev/null; }
+
 # ── session census — BOTH pid families, counted as TREES, matched at the COMMAND POSITION ─────────
 # THREE separate census defects are fixed here, each measured, each of which silently understated or
 # overstated the fleet. This function is the reason the row exists, so the reasoning stays in-file.
@@ -768,7 +794,17 @@ census() { # → "<trees> <exe_trees> <bin_trees> <bg_trees>" | empty + rc 1 whe
   cc_sp_census
 }
 
-CENSUS="$(census || true)"
+# BOUNDED (2026-10-25): cc_sp_census runs a bare `ps` in a library, so it runs in a bounded child
+# writing to a file; a cut census reads as unreadable (empty, the rc-1 shape), never as 0 sessions.
+CENSUS=""
+_ca_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/spawn-presence.sh"
+if [ -r "$_ca_lib" ] && _cnf="$(cap_tmp)"; then
+  # shellcheck disable=SC2016  # single quotes on purpose: the child expands its own $1
+  zone_bounded "${CC_CAP_PS_TIMEOUT_S:-20}" /bin/bash -c '. "$1" 2>/dev/null && command -v cc_sp_census >/dev/null 2>&1 && cc_sp_census' _ "$_ca_lib" > "$_cnf" 2>/dev/null
+  [ $? -eq 124 ] && echo 1 > "$CAP_BLIND_F"
+  read -r CENSUS < "$_cnf" || true
+  rm -f "$_cnf"
+fi
 SESSIONS=0; SESSIONS_EXE=0; SESSIONS_BIN=0; SESSIONS_BG=0
 if [ -n "$CENSUS" ]; then
   # shellcheck disable=SC2086  # deliberate word-split of the 4-field awk output
@@ -860,15 +896,21 @@ read_top_procs() { # → lines "<pid> <mb> <cmd>"
 # RESIDUAL, stated rather than hidden: p_comm is truncated to 16 chars and may contain a space, in
 # which case $2 holds only its first word (`(Google`) and the anchored test below does not fire. That
 # row renders as it did before this change — no regression, and no false parenthesised claim either.
+# (The bounded-ps helpers this reader uses — cap_ps, zone_bounded — are defined above census.)
+
+
 read_argv0() { # $1 = comma-separated pids → lines "<pid> <argv0-basename>"
+  local f
   [ -n "${1:-}" ] || return 0
-  "${CC_CAP_PS:-ps}" -o pid=,command= -p "$1" 2>/dev/null \
-    | cut -c1-200 \
+  f="$(cap_tmp)" || return 0
+  cap_ps "$f" -x -o pid=,command= -p "$1"
+  cut -c1-200 < "$f" \
     | awk 'NF >= 2 && $1 ~ /^[0-9]+$/ {
              n = split($2, a, "/"); v = a[n]
              unreadable = (v ~ /^\(.*\)$/)
              gsub(/[^A-Za-z0-9._-]/, "", v)
              if (v != "") print $1, (unreadable ? "(" v ")" : v) }'
+  rm -f "$f"
 }
 
 # ── the attribution pass feeds rung 4 (fix row 11, docs/research/concurrency-scale-2026-10-04/
@@ -936,10 +978,13 @@ if [ -z "$TOP_PROCS" ]; then
   [ -n "$TOP_PROCS" ] && TOP_SRC="top"
 fi
 if [ -z "$TOP_PROCS" ]; then
-  TOP_PROCS="$(ps -eo pid=,rss=,comm= 2>/dev/null \
-                | sort -k2 -nr | head -3 \
+  # -A, not -e: on macOS -e means "show the environment", so -eo read only tty-attached processes —
+  # a devname(3) lookup per row, the I4 hazard, and the wrong population for a top-3.
+  _tf="$(cap_tmp)" && cap_ps "$_tf" -Ao pid=,rss=,comm=
+  TOP_PROCS="$(sort -k2 -nr < "${_tf:-/dev/null}" 2>/dev/null | head -3 \
                 | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
                          gsub(/[\\"]/, "", cmd); printf "%s %.0f %s\n", $1, $2/1024, cmd }' || true)"
+  [ -n "${_tf:-}" ] && rm -f "$_tf"
 fi
 
 # JSON array + the max, from the same rows — so the number in the verdict and the rows in the log can
@@ -1011,7 +1056,10 @@ read_coalition_procs() { # → "<procs> <app>" for the largest terminal coalitio
   # memory, and the libproc true count (read_coalition_true) cannot see them at all — measured
   # 2026-09-26, one kitty held 776 of them, which read coal_procs 888 against a true 159 and put
   # rung 6 into a live ALARM over nothing. They keep a parent[] entry; they are just not counted.
-  "${CC_CAP_PS:-ps}" -Ao pid=,ppid=,stat=,comm= 2>/dev/null | awk "$TREE_WALK_AWK"'
+  local f
+  f="$(cap_tmp)" || return 0
+  cap_ps "$f" -Ao pid=,ppid=,stat=,comm=
+  awk "$TREE_WALK_AWK"'
     { p = $1; pp = $2; c = $4; for (i = 5; i <= NF; i++) c = c " " $i
       sub(/.*\//, "", c)
       parent[p] = pp
@@ -1023,7 +1071,8 @@ read_coalition_procs() { # → "<procs> <app>" for the largest terminal coalitio
       best = -1; bestn = ""
       for (r in root) if (cnt[r] + 0 > best) { best = cnt[r] + 0; bestn = root[r] }
       if (bestn != "") printf "%d %s\n", best, bestn
-    }'
+    }' "$f"
+  rm -f "$f"
 }
 
 # ── per-session memory cost, DERIVED from live session TREES ──────────────────────────────────────
@@ -1046,7 +1095,10 @@ read_coalition_procs() { # → "<procs> <app>" for the largest terminal coalitio
 # rendering a fabricated value (rung 3's policy, and the `${SWAP_MB:-0}` lesson: one value that means
 # both "measured" and "could not measure" is how a dead instrument reads as healthy).
 read_session_tree_mb() { # → "<total_tree_mb> <trees>", or nothing when unreadable / no sessions
-  "${CC_CAP_PS:-ps}" -eo pid=,ppid=,rss=,args= 2>/dev/null | awk "$TREE_WALK_AWK"'
+  local f
+  f="$(cap_tmp)" || return 0
+  cap_ps "$f" -Ao pid=,ppid=,rss=,args=      # -A, not -e (see the top-procs fallback)
+  awk "$TREE_WALK_AWK"'
     {
       p = $1; pp = $2; kb = $3; cmd = $4
       if (p !~ /^[0-9]+$/ || pp !~ /^[0-9]+$/ || kb !~ /^[0-9]+$/) next
@@ -1064,7 +1116,8 @@ read_session_tree_mb() { # → "<total_tree_mb> <trees>", or nothing when unread
       tot = 0
       for (i = 1; i <= np; i++) if (tree_root(pids[i]) != "") tot += kbytes[pids[i]]
       printf "%.0f %d\n", tot / 1024, nroot
-    }'
+    }' "$f"
+  rm -f "$f"
 }
 
 COAL_ROW="$(read_coalition_procs || true)"
@@ -1108,7 +1161,11 @@ fi
 # absence. Kill-switch CC_CAP_COAL_FP=0.
 COAL_TRUE=""; COAL_ID=""; COAL_FP_MB=""; COAL_FP_SRC="off"
 read_coalition_true() { # → "<true_members> <coalition_id>" for the largest TERMINAL coalition
-  "${CC_CAP_PYTHON:-python3}" -c '
+  local _pf
+  _pf="$(cap_tmp)" || return 0
+  # BOUNDED (2026-10-25): the program forks `ps`; a python-side timeout kills then WAITS, so the
+  # bound lives out here, on python itself, with the output in a file.
+  zone_bounded "${CC_CAP_PY_TIMEOUT_S:-30}" "${CC_CAP_PYTHON:-python3}" -c '
 import ctypes, ctypes.util, os, subprocess, collections, sys
 try:
     libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
@@ -1148,11 +1205,17 @@ try:
     sys.stdout.write("%d %d\n" % (groups.get(best, 0), best))
 except Exception:
     sys.exit(0)
-' 2>/dev/null
+' > "$_pf" 2>/dev/null
+  [ $? -eq 124 ] && echo 1 > "$CAP_BLIND_F"
+  cat "$_pf"; rm -f "$_pf"
 }
 
 read_coalition_footprint() { # <coalition_id> → "<mb>" — shared pages counted ONCE. SLOW; damped.
-  "${CC_CAP_PYTHON:-python3}" -c '
+  local _pf
+  _pf="$(cap_tmp)" || return 0
+  # BOUNDED (2026-10-25): the program forks `ps`; a python-side timeout kills then WAITS, so the
+  # bound lives out here, on python itself, with the output in a file.
+  zone_bounded "${CC_CAP_PY_TIMEOUT_S:-90}" "${CC_CAP_PYTHON:-python3}" -c '
 import ctypes, ctypes.util, os, subprocess, sys, json, tempfile
 try:
     want = int(sys.argv[1])
@@ -1194,7 +1257,9 @@ try:
             pass
 except Exception:
     sys.exit(0)
-' "$1" 2>/dev/null
+' "$1" > "$_pf" 2>/dev/null
+  [ $? -eq 124 ] && echo 1 > "$CAP_BLIND_F"
+  cat "$_pf"; rm -f "$_pf"
 }
 
 if [ "${CC_CAP_COAL_FP:-1}" != 0 ]; then
@@ -1259,7 +1324,11 @@ fi
 # cannot starve each other, at the same CC_CAP_COAL_FP_MIN_S window.
 AUTO_COAL_PROCS=""; AUTO_COAL_ID=""; AUTO_COAL_FP_MB=""; AUTO_COAL_FP_SRC="off"
 read_automation_coalition() { # → "<members> <coalition_id>" for the largest NON-terminal CDP coalition
-  "${CC_CAP_PYTHON:-python3}" -c '
+  local _pf
+  _pf="$(cap_tmp)" || return 0
+  # BOUNDED (2026-10-25): the program forks `ps`; a python-side timeout kills then WAITS, so the
+  # bound lives out here, on python itself, with the output in a file.
+  zone_bounded "${CC_CAP_PY_TIMEOUT_S:-30}" "${CC_CAP_PYTHON:-python3}" -c '
 import ctypes, ctypes.util, os, subprocess, collections, sys
 try:
     libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
@@ -1304,7 +1373,9 @@ try:
     sys.stdout.write("%d %d\n" % (groups.get(best, 0), best))
 except Exception:
     sys.exit(0)
-' 2>/dev/null
+' > "$_pf" 2>/dev/null
+  [ $? -eq 124 ] && echo 1 > "$CAP_BLIND_F"
+  cat "$_pf"; rm -f "$_pf"
 }
 
 if [ "${CC_CAP_AUTO_COAL:-1}" != 0 ]; then
@@ -1743,7 +1814,8 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
   # 2026-07-31 blind spot. Assert the invariant a miscount breaks: the coalition is a SUBSET of the
   # process table, so 1 <= procs <= total. (Absent terminal ⇒ genuinely empty ⇒ reported, not failed.)
   cr="$(read_coalition_procs || true)"
-  ctot="$(ps -Ao pid= 2>/dev/null | wc -l | tr -d ' ')"
+  _cf="$(cap_tmp)" && cap_ps "$_cf" -Ao pid=
+  ctot="$(wc -l < "${_cf:-/dev/null}" | tr -d ' ')"; [ -n "${_cf:-}" ] && rm -f "$_cf"
   if [ -z "$cr" ]; then
     echo "  control SKIP coalition — no terminal app in the process table (instrument returned empty)"
   else
@@ -2015,8 +2087,31 @@ SEG_SOURCE_JSON='null'
 #
 # GAUGE ONLY — it feeds no rung and no verdict here, and no term in the admission gate
 # (scripts/lib/capacity-admit.sh is wave D's; a refusing term is operator-gated).
-PTY_USED=0
-for _p in /dev/ttys[0-9][0-9][0-9]; do [ -e "$_p" ] && PTY_USED=$((PTY_USED+1)); done
+#
+# NO /dev WALK IN THIS PROCESS (2026-10-25). A glob over /dev is a devfs lookup per entry, the path
+# that hung for hours that morning. lockprobe's fdscan publishes the same count as state.json `ptys`,
+# rewritten every 5 s, so a state.json under 90 s old is read instead (ptys_src lockwatch). Otherwise
+# the same glob runs in a BOUNDED child writing to a file (ptys_src glob), and a cut child leaves the
+# count UNKNOWN — null, never 0 (ptys_src blind).
+PTY_USED=""; PTY_SRC=blind
+_lw_state="${CC_CAP_LOCKWATCH_STATE:-$HOME/.claude/autonomy/lockwatch/state.json}"
+if [ -s "$_lw_state" ]; then
+  _lw_m="$(stat -f %m "$_lw_state" 2>/dev/null || stat -c %Y "$_lw_state" 2>/dev/null)"
+  case "$_lw_m" in ''|*[!0-9]*) _lw_m=0 ;; esac
+  if [ $(( $(date +%s) - _lw_m )) -le 90 ]; then
+    _lw_p="$(awk 'match($0, /"ptys"[ ]*:[ ]*[0-9]+/) { v = substr($0, RSTART, RLENGTH); sub(/.*:[ ]*/, "", v); print v; exit }' "$_lw_state" 2>/dev/null)"
+    case "$_lw_p" in ''|*[!0-9]*) : ;; *) PTY_USED="$_lw_p"; PTY_SRC=lockwatch ;; esac
+  fi
+fi
+if [ -z "$PTY_USED" ] && _ptf="$(cap_tmp)"; then
+  # shellcheck disable=SC2016  # single quotes on purpose: the child expands the glob, not this shell
+  zone_bounded "${CC_CAP_PTY_TIMEOUT_S:-10}" /bin/bash -c 'n=0; for p in /dev/ttys[0-9][0-9][0-9]; do [ -e "$p" ] && n=$((n+1)); done; echo "$n"' > "$_ptf" 2>/dev/null
+  if [ $? -ne 124 ]; then
+    read -r _ptn < "$_ptf"
+    case "${_ptn:-}" in ''|*[!0-9]*) : ;; *) PTY_USED="$_ptn"; PTY_SRC=glob ;; esac
+  fi
+  rm -f "$_ptf"
+fi
 # sysctl lives in /usr/sbin, which a restricted PATH does not carry. Resolved absolutely so the
 # limit cannot read empty, become 0, and render as a reassuring "0%" — one value meaning both
 # "empty" and "could not ask".
@@ -2027,9 +2122,9 @@ PTY_MAX=""
 [ -n "$PTY_SYSCTL" ] && PTY_MAX="$("$PTY_SYSCTL" -n kern.tty.ptmx_max 2>/dev/null || true)"
 case "$PTY_MAX" in ''|*[!0-9]*) PTY_MAX="" ;; esac
 PTY_PCT=""
-if [ -n "$PTY_MAX" ] && [ "$PTY_MAX" -gt 0 ]; then PTY_PCT=$(( PTY_USED * 100 / PTY_MAX )); fi
+if [ -n "$PTY_MAX" ] && [ "$PTY_MAX" -gt 0 ] && [ -n "$PTY_USED" ]; then PTY_PCT=$(( PTY_USED * 100 / PTY_MAX )); fi
 
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","auto_coal_procs":%s,"auto_coal_id":%s,"auto_coal_fp_mb":%s,"auto_coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s","swapfiles":%s,"swapfile_prefix":"%s","swapfile_warn":%s,"swapfile_alarm":%s,"kalloc1024_gb":%s,"kalloc1024_src":"%s","kalloc1024_at":%s,"kalloc_warn_gb":%s,"kalloc_alarm_gb":%s,"uptime_days":%s,"chronic_verdict":"%s","sessions_bg":%s,"top_src":"%s","kalloc_ceiling_pct":%s,"kalloc_tier":%s,"kalloc_slope_gib_day":%s,"kalloc_eta_days":%s}' \
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","auto_coal_procs":%s,"auto_coal_id":%s,"auto_coal_fp_mb":%s,"auto_coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s","swapfiles":%s,"swapfile_prefix":"%s","swapfile_warn":%s,"swapfile_alarm":%s,"kalloc1024_gb":%s,"kalloc1024_src":"%s","kalloc1024_at":%s,"kalloc_warn_gb":%s,"kalloc_alarm_gb":%s,"uptime_days":%s,"chronic_verdict":"%s","sessions_bg":%s,"top_src":"%s","kalloc_ceiling_pct":%s,"kalloc_tier":%s,"kalloc_slope_gib_day":%s,"kalloc_eta_days":%s,"argv_blind":%s,"ptys_src":"%s"}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-null}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
@@ -2042,11 +2137,12 @@ JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compre
   "${COMPRESSIONS:-null}" "${DECOMPRESSIONS:-null}" \
   "${LOAD_1M:-null}" "${LOAD_5M:-null}" "${LOAD_15M:-null}" "${NCPU:-null}" \
   "${LOAD_PER_CORE:-null}" "$LOAD_WARN_PER_CORE" "$LOAD_ALARM_PER_CORE" \
-  "$PTY_USED" "${PTY_MAX:-null}" "${PTY_PCT:-null}" "$PER_MB_SRC" \
+  "${PTY_USED:-null}" "${PTY_MAX:-null}" "${PTY_PCT:-null}" "$PER_MB_SRC" \
   "${SWAPFILES:-null}" "$SWAPFILE_PREFIX_JSON" "$SWAPFILE_WARN" "$SWAPFILE_ALARM" \
   "${KALLOC_GB:-null}" "$KALLOC_SRC" "${KALLOC_AT:-null}" "$KALLOC_WARN_GB" "$KALLOC_ALARM_GB" \
   "${UPTIME_DAYS:-null}" "$CHRONIC_VERDICT" "$SESSIONS_BG" "$TOP_SRC" \
-  "${ZONE_PCT:-null}" "${ZONE_TIER:-null}" "${ZONE_SLOPE:-null}" "${ZONE_ETA_DAYS:-null}")"
+  "${ZONE_PCT:-null}" "${ZONE_TIER:-null}" "${ZONE_SLOPE:-null}" "${ZONE_ETA_DAYS:-null}" \
+  "$([ -s "$CAP_BLIND_F" ] && echo true || echo false)" "$PTY_SRC")"
 
 if [ "$APPEND" = 1 ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
@@ -2220,12 +2316,7 @@ zone_mode_on() { # <mode value> → 0 when this run should act on it
     *)   [ "${XPC_SERVICE_NAME:-}" = "com.claude.capacity-alarm" ] ;;
   esac
 }
-zone_bounded() { # <seconds> <cmd...> — perl alarm, the zprint bound; rc 124 when cut
-  /usr/bin/perl -e 'my $t = shift; my $p = fork; exit 1 unless defined $p;
-    if (!$p) { exec @ARGV; exit 127 }
-    $SIG{ALRM} = sub { kill "KILL", $p; exit 124 };
-    alarm $t; waitpid($p, 0); exit($? >> 8)' "$@"
-}
+# zone_bounded is defined above read_argv0 (2026-10-25): every bounded ps read needs it first.
 zone_notify() { # <title> <message> → 0 only when the banner was posted
   local osa="${CC_CAP_OSASCRIPT:-/usr/bin/osascript}" lrp
   zone_mode_on "${CC_CAP_ZONE_NOTIFY:-auto}" || return 1
@@ -2383,7 +2474,7 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
     printf '%s\n' "$TOP_PROCS" | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
                                         printf "      pid %-7s %6s MB  %s\n", $1, $2, cmd }'
   fi
-  echo "  ptys (ptmx clones):     ${PTY_USED} / ${PTY_MAX:-unknown}   (${PTY_PCT:-unknown}% of kern.tty.ptmx_max · 1 per PANE · gauge only, feeds no rung)"
+  echo "  ptys (ptmx clones):     ${PTY_USED:-unknown} (${PTY_SRC}) / ${PTY_MAX:-unknown}   (${PTY_PCT:-unknown}% of kern.tty.ptmx_max · 1 per PANE · gauge only, feeds no rung)"
   echo "  swap used:              ${SWAP_MB:-unreadable} MB   (a LEVEL never alarms — it latches for days)"
   echo "  swap growth:            ${SWAP_DELTA:-unknown} MB in the last ${SWAP_WINDOW_S}s   (>=${SWAP_DELTA_MB} ⇒ ALARM)"
   echo "  est. room for:          >=${ROOM} more sessions   (~${PER_MB} MB/session · ${PER_MB_SRC}: ${PER_MB_NOTE})"
