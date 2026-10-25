@@ -488,6 +488,10 @@ SHIM
 }
 
 # ── 6. THE OTHER HALF OF THE ROOT CAUSE: the resumed pane now outlives its session ───────────────
+# Since husk-history FIX-DESIGN §4 W2 every FLEET launch of these two files is rooted in
+# bin/cc-pane-runner, which keeps the pane (or closes it) on their returned status, and neither execs a
+# shell under it (tests/reso-resume-one.bats TAIL, tests/fleet-launch-runner-rooted.bats). The shell
+# tails pinned below remain for a TYPED launch, the operator's own prompt, and are on that lint's allowlist.
 
 @test "reso-resume-one no longer makes expect the pane's TERMINAL process" {
   # The source-level assertion, because the behaviour needs a real pty and a real resume to observe.

@@ -224,8 +224,8 @@ wt=${wt%/}
 # `reso-resume-one … | tee log` would hand that shell (and any claude typed in it) the pipe as stdout,
 # and claude reads a non-tty stdout as print mode: re-point it at the pane's terminal first, as
 # lib/pane-successor.sh's loop does (recycle-failure-2026-10-14 F2). No controlling tty ⇒ unchanged.
-# The re-point is its own function so the script's normal end keeps its top-level
-# `exec "${SHELL:-/bin/zsh}" -l -i`, which tests/handoff-recycle-pane-survives.bats pins.
+# The re-point is its own function so the script's normal end keeps its top-level shell exec, which
+# tests/handoff-recycle-pane-survives.bats pins.
 rr_pane_tty() {
   if [ -t 0 ] && { [ ! -t 1 ] || [ ! -t 2 ]; } && [ -w /dev/tty ] && (: >/dev/tty) 2>/dev/null; then
     exec >/dev/tty 2>/dev/tty; printf '%s\n' "[reso-resume-one] output was not the terminal (a pipe or file); re-attached to /dev/tty" >&2
@@ -1133,70 +1133,20 @@ rr_pkt_delivered
 if [ -n "${CC_RR_NO_INTERACT:-}" ] || [ ! -t 0 ]; then
   exit "$rr_rc"
 fi
-# ── …UNLESS THE SESSION ENDED ON PURPOSE (pane-lifecycle fixes item 6, 2026-10-01) ──────────────────
-# The shell above exists for a crash, a usage limit and a recycle's typed /exit. A session that the
-# operator or a self-close ENDED cleanly leaves a husk instead: pane 10 (dl W3, 2026-10-01) finished,
-# its custody was returned, and /exit left a bare zsh that nothing closes. bin/cc-pane-runner already
-# closes from inside on exactly this condition (F-a, 74baff1ee); this is the same rule on the other
-# launcher every post-reboot resume goes through, reading the SAME recycle marker through the SAME
-# lib so the two closers cannot disagree about "pending". Close only when ALL hold: claude exited 0,
-# CC_PANE_CLOSE_ON_EXIT is not 0, the lib loads, and no recycle is pending for this pane. Anything
-# unreadable keeps the shell.
-# OWNERSHIP (FIX-DESIGN D13): bin/cc-pane-runner exports its kitty window id as CC_PANE_RUNNER_OWNS_CLOSE.
-# Equal to this pane's id ⇒ the runner is this process's parent and owns the pane's end, so this file
-# returns claude's real status instead of exec'ing a shell (a shell here is the husk: the runner never
-# sees the exit). Anything else — a typed relaunch, an operator pane, an older runner's `1` — keeps today's path.
+# ── …UNLESS bin/cc-pane-runner OWNS THIS PANE (FIX-DESIGN D13, §4 W2.7) ─────────────────────────────
+# The runner exports its kitty window id as CC_PANE_RUNNER_OWNS_CLOSE. Equal to this pane's id ⇒ the
+# runner is this process's parent and owns the pane's end, so this file returns claude's real status
+# instead of exec'ing a shell (a shell here is the husk: the runner never sees the exit). Every fleet
+# launch of this file is runner-rooted (W2), so the guarded close-on-clean-exit this file once ran for
+# its own bare-argv panes is gone: closing a pane is the runner's alone. Anything else — an operator's
+# typed launch, an older runner's `1` — keeps the shell below.
 rr_runner_owns() { [ -n "${KITTY_WINDOW_ID:-}" ] && [ "${CC_PANE_RUNNER_OWNS_CLOSE:-}" = "$KITTY_WINDOW_ID" ]; }
-rr_close_on_clean_exit() { # $1=claude's exit status → 0 close the pane / 1 keep the shell
-  local _s="$0" _t _sd _c _lib=""
-  [ "${1:-1}" = 0 ] || return 1
-  [ "${CC_PANE_CLOSE_ON_EXIT:-1}" != 0 ] || return 1
-  # Resolve the checkout through ~/.reso/bin's symlink, so the sibling lib is this checkout's.
-  while [ -L "$_s" ]; do
-    _t="$(readlink "$_s" 2>/dev/null)" || break
-    case "$_t" in /*) _s="$_t" ;; *) _s="$(dirname "$_s")/$_t" ;; esac
-  done
-  _sd="$(cd "$(dirname "$_s")" 2>/dev/null && pwd)" || _sd=""
-  for _c in "${_sd:+$_sd/../lib/pane-recycle-pending.sh}" "${HOME:-}/.claude/lib/pane-recycle-pending.sh"; do
-    [ -n "$_c" ] && [ -r "$_c" ] && { _lib="$_c"; break; }
-  done
-  [ -n "$_lib" ] || return 1
-  # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
-  . "$_lib" 2>/dev/null || return 1
-  command -v cc_pane_recycle_pending >/dev/null 2>&1 || return 1
-  cc_pane_recycle_pending "${KITTY_WINDOW_ID:-}" && return 1
-  # THE LAST GATE: kitty-fullscreen-guard in REFUSE mode (docs/research/kitty-crash-2026-10-15/README.md
-  # § Chosen fix) — emptying a native-fullscreen OS window crashed the whole kitty on 2026-10-15. Any
-  # rc != 0, or a guard that cannot be found, keeps the shell. Not in kitty ⇒ no gate.
-  # CC_KITTY_FS_GUARD=off is the operator's kill switch; a path overrides the guard.
-  [ -n "${KITTY_WINDOW_ID:-}" ] || return 0
-  _c="${CC_KITTY_FS_GUARD:-}"
-  if [ "$_c" = off ]; then
-    printf '[reso-resume-one] CC_KITTY_FS_GUARD=off — closing without the fullscreen guard\n' >&2
-    return 0
-  fi
-  if [ -z "$_c" ]; then
-    _c="${_sd:+$_sd/kitty-fullscreen-guard}"
-    [ -n "$_c" ] && [ -x "$_c" ] || _c="${HOME:-}/.claude/bin/kitty-fullscreen-guard"
-  fi
-  if [ ! -x "$_c" ] || ! cc_run "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool reso-resume-one >&2; then
-    printf '[reso-resume-one] last pane of a fullscreen (or unreadable) kitty window, or no guard at %s — keeping the shell\n' "$_c" >&2
-    return 1
-  fi
-  return 0
-}
-# A pane rooted in bin/cc-pane-runner is not closed from here: the runner decides close, hold or keep
-# from the status this process returns (FIX-DESIGN D13), so this arm runs only for a typed launch.
-if ! rr_runner_owns && rr_close_on_clean_exit "$rr_rc"; then
-  printf '\n[reso-resume-one] session ended cleanly (rc 0), no recycle pending — closing this pane (CC_PANE_CLOSE_ON_EXIT=0 keeps it).\n' >&2
-  exit 0
-fi
 # ── …OR A STAGED SUCCESSOR TAKES THE PANE (RECYCLE_KEYSTROKELESS_DELIVERY §D1) ──────────────────────
 # A recycle stages its successor for this pane's tty (lib/pane-successor.sh); the pane's own process
 # claims and execs it, so nothing is typed into the pane. A resumed pane falls through HERE rather
 # than to the parent zsh's precmd consumer, so this file is a consumer too. take refuses (rc≠0)
 # unless the stage is for this tty, its watcher is alive and it is inside its TTL; then the shell.
-# The lib is resolved exactly as rr_close_on_clean_exit resolves its own, after a test seam.
+# The lib is resolved through ~/.reso/bin's symlink to this checkout's sibling, after a test seam.
 rr_successor_take_exec() { # $1=1 keep a shell after the successor (default) | 0 return its status
   local _s="$0" _t _sd _c _lib="" claimed _keep="${1:-1}"
   while [ -L "$_s" ]; do

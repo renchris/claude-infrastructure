@@ -118,6 +118,20 @@ reg() { # <pane> <sid> <account label> <cwd>
   if grep -q 'SEND 10 : hs-.* claude --resume' "$CC_HUSK_IT2_LOG"; then false; fi
 }
 
+@test "--resume types the resume ROOTED IN cc-pane-runner, so the runner owns the resumed pane's end (W2.5)" {
+  reg 10 "abababab-0000-0000-0000-000000000018" claude-tertiary "$CWD_A"
+  transcript "$T/.claude-tertiary" "$CWD_A" "abababab-0000-0000-0000-000000000018" no
+  crashed "abababab-0000-0000-0000-000000000018"
+  : > "$T/runner"; chmod +x "$T/runner"   # only named in the typed line, never run here
+  CC_PANE_RUNNER_BIN="$T/runner" run "$SWEEP" --resume --yes --pane 10
+  [ "$status" -ne 2 ]
+  grep -qF "exec env CC_PANE_CMD='nocorrect CC_ACCOUNT_PINNED=1 claude3 --resume abababab-0000-0000-0000-000000000018' CC_PANE_CMD_INTERACTIVE=1 /bin/bash '$T/runner'" "$CC_HUSK_IT2_LOG"
+  # CONTROL: no runner anywhere ⇒ the bare line, as before W2
+  CC_PANE_RUNNER_BIN="$T/absent" run "$SWEEP" --resume --yes --pane 10
+  run grep -c 'SEND 10 : hs-[^;]*; nocorrect CC_ACCOUNT_PINNED=1 claude3 --resume abababab-0000-0000-0000-000000000018' "$CC_HUSK_IT2_LOG"
+  [ "$output" -ge 1 ]
+}
+
 @test "--resume skips DONE husks unless --all, and without --yes it types NOTHING" {
   git -C "$CWD_A" init -q && git -C "$CWD_A" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   git -C "$CWD_A" remote add origin "$CWD_A" && git -C "$CWD_A" fetch -q origin && git -C "$CWD_A" update-ref refs/remotes/origin/main HEAD

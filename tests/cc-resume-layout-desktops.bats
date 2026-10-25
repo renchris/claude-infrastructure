@@ -27,6 +27,10 @@ setup() {
   mkdir -p "$FIX/bin" "$FIX/scripts/lib"
   cp "$REPO/bin/cc-resume-layout.sh" "$FIX/bin/"
   LAYOUT="$FIX/bin/cc-resume-layout.sh"
+  # The fixture tree holds no runner and HOME is hermetic: pin the one every pane is rooted in
+  # (FIX-DESIGN §4 W2.4). kitty is a stub, so it is named in argv and never run.
+  export CC_PANE_RUNNER_BIN="$REPO/bin/cc-pane-runner"
+  unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE CC_PANE_CMD_DIR   # injected into every pane; never inherited
   # capacity stub: admits the first $ADMIT_ALLOW calls (default: all), refuses after.
   cat > "$FIX/scripts/lib/capacity-admit.sh" <<'SH'
 cc_capacity_admit() {
@@ -93,11 +97,14 @@ launches() { grep -c ' launch ' "$KLOG"; }
   [ "$(kv windows)" = 1 ]; [ "$(kv launched)" = 4 ]; [ "$(kv fullscreen_ok)" = 1 ]; [ "$(kv verdict)" = ok ]
 }
 
-@test "the pane command is a shell root: the resume runs under zsh, then an interactive zsh remains" {
+@test "the pane is rooted in cc-pane-runner: the resume rides in CC_PANE_CMD and the runner owns the pane's end" {
+  # husk-history FIX-DESIGN §4 W2.4 — inverts the old shell-root pin (a `zsh -ic` root plus a trailing shell).
   row repo-a 1
   run --separate-stderr bash "$LAYOUT" --desktops --to unix:/tmp/fake --file "$ROWS"
   [ "$status" -eq 0 ]
-  grep -q -- "-- zsh -ic 'env' 'CC_ADMIT_DONE=1' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br' || exec zsh -i" "$KLOG"
+  grep -q -- "--env CC_PANE_CMD='env' 'CC_ADMIT_DONE=1' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br' --env CC_PANE_CMD_INTERACTIVE=1 --env CC_PANE_RUNNER=.*/cc-pane-runner -- .* -l -i -c exec /bin/bash \"\$CC_PANE_RUNNER\"" "$KLOG"
+  run grep -c -- 'zsh -ic' "$KLOG"
+  [ "$output" = 0 ]
 }
 
 @test "6 rows over two projects (4+2) → two windows, and no window mixes the projects" {
@@ -508,20 +515,20 @@ never_waited() {
   restore
   [ "$status" -eq 0 ]
   # In reso-resume-one's own flag order, the prompt path one quoted word although it holds a space.
-  grep -q "'CC_RESUME_MODEL=claude-opus-5-5' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br' '--effort' 'xhigh' '--permission-mode' 'plan' '--prompt-file' '/tmp/prompt 1' || exec zsh -i" "$KLOG"
+  grep -q "'CC_RESUME_MODEL=claude-opus-5-5' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br' '--effort' 'xhigh' '--permission-mode' 'plan' '--prompt-file' '/tmp/prompt 1' --env CC_PANE_CMD_INTERACTIVE=1" "$KLOG"
   # An empty cell passes NO flag: the launcher's own default (auto, no prompt) then applies.
   ! grep 'sid-repo-a-2' "$KLOG" | grep -q 'prompt-file\|permission-mode' || false
-  grep -q "'sid-repo-a-2' 'br' || exec zsh -i" "$KLOG"
+  grep -q "'sid-repo-a-2' 'br' --env CC_PANE_CMD_INTERACTIVE=1" "$KLOG"
   ! grep 'sid-repo-a-2' "$KLOG" | grep -q 'CC_RESUME_MODEL\|--effort' || false
   printf '%s\n' "$stderr" | grep -q "effort 'turbo' for sid-repo-a-2 .* dropped"
 }
 
-@test "restore: a 5-column row launches as today — no model, no effort, cert store set, shell root kept" {
+@test "restore: a 5-column row launches as today — no model, no effort, cert store set, runner root" {
   restore_setup
   row repo-a 1
   restore
   [ "$status" -eq 0 ]
-  grep -q -- "-- zsh -ic 'env' 'CC_ADMIT_DONE=1' 'CLAUDE_CODE_CERT_STORE=bundled' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br' || exec zsh -i" "$KLOG"
+  grep -q -- "--env CC_PANE_CMD='env' 'CC_ADMIT_DONE=1' 'CLAUDE_CODE_CERT_STORE=bundled' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br' --env CC_PANE_CMD_INTERACTIVE=1 --env CC_PANE_RUNNER=" "$KLOG"
   grep -q -- '--env CLAUDE_CODE_CERT_STORE=bundled' "$KLOG"
 }
 

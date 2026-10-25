@@ -41,6 +41,9 @@ setup() {
   # no parser arms, so the preflight would refuse every case on a subject it does not test. Its own
   # cases, both directions, live in tests/lr-handoff-launcher-quoting.bats.
   export LRH_LIVE_PARSER_CHECK=off
+  # boot-resume-launch now hands the resume to cc-pane-runner, whose delivery variables this repo
+  # injects into every pane: an inherited one must not reach the subject.
+  unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE CC_PANE_CMD_DIR CC_PANE_RUNNER_BIN
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"
   HANDOFF="$REPO/scripts/limit-recover/lr-handoff.sh"
   POLLER="$REPO/scripts/limit-recover/lr-reset-poller.sh"
@@ -456,21 +459,28 @@ load_spawn_gui() {
   gone_out 'KITTY:'
 }
 
-# ── boot-resume-launch.sh — SURVIVABILITY (item 737525ee6892) ─────────────────────────────────────
-# `kitty @ launch … -- prog` makes `prog` the window's ROOT process: there is no shell under it, so
-# kitty destroys the window the moment that program returns, and a later `--recycle` of the pane
-# strands (pane 32, docs/research/recycle-pane-survivability-2026-08-26.md). The 2026-09-04 audit
-# found this launcher SAFE — but only because of a contract in ANOTHER file, which nothing pinned.
-# THE INVARIANT: any pane an agent may later be asked to recycle must end its command with an
-# interactive shell.
+# ── boot-resume-launch.sh — THE ROOT IS bin/cc-pane-runner (husk-history FIX-DESIGN §4 W2.4) ─────────
+# `kitty @ launch … -- prog` makes `prog` the window's ROOT process. A resume as the root dies with the
+# session and strands a later recycle (pane 32, docs/research/recycle-pane-survivability-2026-08-26.md);
+# a `zsh -ic "… || exec zsh -i"` root keeps a shell nothing closes (the husk, pane 289). So the root
+# is the runner, which owns the pane's end: close, hold until safe, or keep a shell for a crash or a
+# pending recycle. These cases INVERT the 2026-09-04 survivability pins, which required the resume
+# program itself to end in a shell.
 
-@test "boot-resume-launch: SURVIVABILITY — the kitty arm hands the program the pane's ROOT argv slot" {
+@test "boot-resume-launch: the kitty arm roots the window in cc-pane-runner, the resume riding in CC_PANE_CMD" {
   in_kitty 31
   run env CC_RESUME_ONE_BIN=/Users/x/.reso/bin/reso-resume-one \
       bash "$BRL" --dry-run next4 /Users/x/wt sid-123
   [ "$status" -eq 0 ]
-  # the shape the invariant is about: everything after `--` is argv, and its first word is the root
-  echo "$output" | grep -qE 'KITTY: .* -- .*reso-resume-one'
+  local k; k="$(printf '%s\n' "$output" | grep '^KITTY: ')"
+  # the resume is the runner's command (before `--`), not the window's root argv
+  printf '%s\n' "$k" | grep -qE 'CC_PANE_CMD=.*reso-resume-one.* -- '
+  printf '%s\n' "$k" | grep -qF 'CC_PANE_CMD_INTERACTIVE=1'
+  printf '%s\n' "$k" | grep -qE "CC_PANE_RUNNER=$REPO/scripts/\.\./bin/cc-pane-runner|CC_PANE_RUNNER=$REPO/bin/cc-pane-runner"
+  # shellcheck disable=SC2016  # the literal argv text, expanded by the pane's shell
+  printf '%s\n' "$k" | grep -qF -- '-l -i -c exec\ /bin/bash\ \"\$CC_PANE_RUNNER\"'
+  run grep -c -- 'zsh -ic' <<<"$k"
+  [ "$output" = 0 ]
 }
 
 @test "boot-resume-launch: the admission mark reaches the engine INSIDE the new window (kitty arm)" {
@@ -480,7 +490,7 @@ load_spawn_gui() {
   run env CC_RESUME_ONE_BIN=/Users/x/.reso/bin/reso-resume-one \
       bash "$BRL" --dry-run next4 /Users/x/wt sid-123
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qE 'KITTY: .* -- .*CC_ADMIT_DONE=1.*reso-resume-one'
+  echo "$output" | grep -qE 'KITTY: .*CC_PANE_CMD=.*CC_ADMIT_DONE=1.*reso-resume-one'
 }
 
 @test "boot-resume-launch: the admission mark reaches the engine (iTerm2 arm, typed line)" {
@@ -490,26 +500,30 @@ load_spawn_gui() {
   echo "$output" | grep -qE 'CC_ADMIT_DONE=1.*reso-resume-one'
 }
 
-@test "boot-resume-launch: SURVIVABILITY — the default program ends the pane in an interactive shell" {
+@test "boot-resume-launch: the default program hands its status to the runner, so the pane's end is the runner's" {
   # The subject is the program this launcher runs by DEFAULT, so first pin that the default is still
   # reso-resume-one; otherwise this case would certify a file the launcher no longer launches.
   run grep -cE 'RESUME_ONE=.*reso-resume-one' "$BRL"
   [ "$status" -eq 0 ]
   prog="$REPO/bin/reso-resume-one"
   [ -x "$prog" ]
-  run grep -Fc 'exec "${SHELL:-/bin/zsh}" -l -i' "$prog"
-  [ "$status" -eq 0 ]
+  # under its runner (CC_PANE_RUNNER_OWNS_CLOSE = this window) it exits with claude's status
+  run grep -cF 'rr_runner_owns; then' "$prog"
+  [ "$output" -ge 1 ]
+  run grep -cF 'exit "$rr_rc"' "$prog"
   [ "$output" -ge 1 ]
 }
 
-@test "boot-resume-launch: SURVIVABILITY CONTROL — the same check FAILS on a program that just exits" {
-  # Without this, the case above could pass over a predicate that cannot fail (the pre-fix shape of
-  # bin/reso-resume-one, and of every launcher argv that has not adopted the invariant, is exactly
-  # this fixture).
-  printf '#!/bin/bash\nexec expect -c "spawn claude --resume; interact"\n' > "$BATS_TEST_TMPDIR/no-shell"
-  chmod +x "$BATS_TEST_TMPDIR/no-shell"
-  run grep -Fc 'exec "${SHELL:-/bin/zsh}" -l -i' "$BATS_TEST_TMPDIR/no-shell"
-  [ "$status" -ne 0 ]
+@test "boot-resume-launch: no runner REFUSES (exit 3, the driver-unavailable code) and launches nothing" {
+  # CONTROL for the root case: without a runner the old bare root must not come back.
+  in_kitty 31
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/reso-resume-one"; chmod +x "$BATS_TEST_TMPDIR/reso-resume-one"
+  run env PATH="$STUB:$PATH" CC_PANE_RUNNER_BIN="$BATS_TEST_TMPDIR/no-runner" \
+      CC_RESUME_ONE_BIN="$BATS_TEST_TMPDIR/reso-resume-one" bash "$BRL" next4 "$BATS_TEST_TMPDIR" sid-123
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -q 'cc-pane-runner not found'
+  run grep -c -- 'launch' "$KITTY_LOG"
+  [ "$output" = 0 ]
 }
 
 # ── render-census.sh — the pane column ────────────────────────────────────────────────────────────

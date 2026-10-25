@@ -465,6 +465,25 @@ is_teammate() {  # <transcript> → 0 iff its records carry a non-empty "teamNam
   # c82dd5b9 and 6a000e4a; their member 210a2d21 carries it on every record).
   [ -f "$1" ] && LC_ALL=C /usr/bin/grep -q '"teamName":"[^"]' "$1" 2>/dev/null
 }
+# THE TYPED RESUME IS ROOTED IN THE RUNNER (husk-history FIX-DESIGN §4 W2.5). Typed bare, the resume runs
+# as the husk's zsh's child and its clean /exit leaves that zsh: the same husk again. Typed as
+# `exec env CC_PANE_CMD=<line> CC_PANE_CMD_INTERACTIVE=1 /bin/bash <runner>`, bin/cc-pane-runner replaces
+# the shell, runs the line under `$SHELL -l -i -c`, and owns the pane's end. No runner ⇒ the bare line.
+_HS_RUNNER="${CC_PANE_RUNNER_BIN:-}"
+if [ -z "$_HS_RUNNER" ]; then
+  for _c in "${_HS_SELF%/*}/cc-pane-runner" "${HOME:-}/.claude/bin/cc-pane-runner"; do
+    [ -x "$_c" ] && { _HS_RUNNER="$_c"; break; }
+  done
+fi
+resume_line() {  # <launcher> <sid> → the line typed into a husk
+  local l="nocorrect CC_ACCOUNT_PINNED=1 $1 --resume $2"
+  if [ -n "$_HS_RUNNER" ] && [ -x "$_HS_RUNNER" ]; then
+    printf "exec env CC_PANE_CMD='%s' CC_PANE_CMD_INTERACTIVE=1 /bin/bash '%s'" \
+      "$(printf '%s' "$l" | sed "s/'/'\\\\''/g")" "$(printf '%s' "$_HS_RUNNER" | sed "s/'/'\\\\''/g")"
+  else
+    printf '%s' "$l"
+  fi
+}
 type_line() {  # <pane> <line> — echo-verified type + submit (handoff-fire's shape)
   local pane="$1" line="$2" nonce wire want reread
   nonce="hs-$$-$RANDOM"; wire=": $nonce; $line"; want="$(printf '%s' "$wire" | tr -d '[:space:]')"
@@ -565,7 +584,7 @@ while IFS=$'\t' read -r pane sid launcher death close work v cwd _; do
   fi
 done <<<"$rows"
 [ -n "$plan" ] || { echo "cc-husk-sweep: nothing to resume (no husk is RESUME — a session that ended cleanly is never resumed; --all adds the DONE and UNKNOWN ones)"; exit 0; }
-echo; echo "Will type into each pane:  nocorrect CC_ACCOUNT_PINNED=1 <launcher> --resume <sid>"
+echo; echo "Will type into each pane:  nocorrect CC_ACCOUNT_PINNED=1 <launcher> --resume <sid>${_HS_RUNNER:+   (run by cc-pane-runner, which then owns the pane)}"
 printf '%s' "$plan" | awk -F'\t' '{printf "  pane %s → %s --resume %s   (cwd %s)\n",$1,$3,$2,$4}'
 if [ "$YES" != 1 ]; then
   echo "Each resume spends that account's quota. Type yes to proceed (or re-run with --yes):"
@@ -576,7 +595,7 @@ rc=0
 while IFS=$'\t' read -r pane sid launcher cwd; do
   [ -n "$pane" ] || continue
   type_line "$pane" 'unsetopt correct correct_all 2>/dev/null || true' >/dev/null 2>&1 || true
-  if type_line "$pane" "nocorrect CC_ACCOUNT_PINNED=1 $launcher --resume $sid"; then
+  if type_line "$pane" "$(resume_line "$launcher" "$sid")"; then
     up=0; for _ in 1 2 3 4 5 6 7 8; do sleep 1; PS_TABLE="$(ps -axo pid=,ppid=,command=)"; pid="$(panes_json | jq -r --arg p "$pane" '.[]|select((.id//.uuid)==$p)|.pid')"; [ -n "$pid" ] && has_claude_under "$pid" && { up=1; break; }; done
     if [ "$up" = 1 ]; then echo "pane $pane: $sid resumed ($launcher)"; verdict=resumed; else echo "pane $pane: typed, but no claude appeared within 8 s — look at the pane"; verdict=typed-unconfirmed; rc=1; fi
   else echo "pane $pane: the echo-verified type FAILED — nothing submitted"; verdict=type-failed; rc=1; fi

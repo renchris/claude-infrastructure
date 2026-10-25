@@ -3786,6 +3786,19 @@ hf_resume_cmd_set() { # $1=resumed sid → sets CMD
     CMD="cd $(printf %q "$RCY_CWD") && ${NC}bash $(printf %q "$RESUME_LAUNCHER")"
   fi
 }
+# THE TYPED RESUME IS ROOTED IN THE RUNNER (husk-history FIX-DESIGN §4 W2.5). Typed bare at a kept shell,
+# the resume runs as that zsh's child, and its clean /exit leaves the zsh: a husk no runner sees. Typed as
+# `exec env CC_PANE_CMD=<line> CC_PANE_CMD_INTERACTIVE=1 /bin/bash <runner>`, the runner replaces the
+# shell, runs the line under `$SHELL -l -i -c` as hf_argv_launch's panes do, and owns the pane's end.
+# Only the TYPED line is wrapped: a staged successor already runs inside the pane's own runner
+# (bin/cc-close-attrib, FIX-DESIGN D14). Kitty only, and only with a runner; otherwise the line is unchanged.
+hf_runner_typed_line() { # $1=the relaunch line → stdout: the line to type
+  if [ "${HF_TYPED_RUNNER:-on}" != off ] && in_kitty && [ -n "${CC_RUNNER_BIN:-}" ] && [ -x "${CC_RUNNER_BIN:-}" ]; then
+    printf 'exec env CC_PANE_CMD=%q CC_PANE_CMD_INTERACTIVE=1 /bin/bash %q' "$1" "$CC_RUNNER_BIN"
+  else
+    printf '%s' "$1"
+  fi
+}
 
 # THE WAKE GUARD. A lid-open wake leaves the terminal, the network and the pane's TUI settling for
 # seconds, and a keystroke into that window lands in a redraw it cannot be read back from. So the two
@@ -4410,7 +4423,7 @@ hf_exit_readback() { # $1=pane → 0 exact /exit read back and CR sent · 1 not 
 # runs the same shutdown() as /exit, and the proof measured it at rest: gone in ~1 s with exit 143,
 # the transcript appended and not truncated, the background shell stopped, the staged successor
 # claimed and run, and the watchdog reading RECYCLE once the marker exists. SIGTERM and never SIGINT:
-# a SIGINT exits 0, which rr_close_on_clean_exit reads as a clean exit and closes the pane on.
+# a SIGINT exits 0, which the pane's cc-pane-runner reads as a clean exit and closes the pane on.
 # It runs ONLY when all three facts hold; otherwise the typed path runs exactly as before:
 #   (1) the last rest read proved the transcript at rest (RCY_REST_PROVEN): a signal mid-turn kills
 #       the turn, and an in-turn self-recycle never has that proof. A move's proof is
@@ -13270,9 +13283,12 @@ EOF
   ok=0; rcy_type_round=0
   rcy_type_deadline=$(( $(date +%s) + ${CC_RECYCLE_TYPE_DEADLINE_S:-600} ))
   [ "$rcy_succ" != claimed ] || ok=1
+  # A RESUME relaunch (a resumed sid rides in $11) is typed rooted in the runner (hf_runner_typed_line).
+  rcy_typed="$(cat "$CMDFILE")"
+  if [ -n "${RCY_RESUME_SID:-}" ]; then rcy_typed="$(hf_runner_typed_line "$rcy_typed")"; fi
   while [ "$ok" = 0 ]; do
     rcy_type_round=$(( rcy_type_round + 1 ))
-    if HF_TYPE_TELEMETRY=- HF_TYPE_TTY="$TTY_PATH" it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")"; then ok=1; break; fi
+    if HF_TYPE_TELEMETRY=- HF_TYPE_TTY="$TTY_PATH" it2_type_verified "$IT2" "$RSID" "$rcy_typed"; then ok=1; break; fi
     if cc_alive; then
       echo "→ pane $RSID holds a claude after typing round $rcy_type_round — a typed line landed late"
       ok=1; break
@@ -13299,7 +13315,7 @@ EOF
   if [ "$rcy_succ" = claimed ]; then
     echo "→ relaunch delivered to $RSID by its own shell (staged, no keystrokes): $(cat "$CMDFILE")"
   else
-    echo "→ relaunch typed into $RSID: $(cat "$CMDFILE")"
+    echo "→ relaunch typed into $RSID: $rcy_typed"
   fi
   # ══ THE BOOT WAIT — POSITIVE DISCRIMINATORS ONLY, AND NO RETYPE (W2, 2026-09-19) ═══════════════
   # WHAT THIS REPLACES, and why the replacement is not a tuning. The old form waited 15 × 3 s for a

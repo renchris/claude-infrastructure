@@ -1323,8 +1323,9 @@ lr_runner_bin() { # → bin/cc-pane-runner, or rc 1
 # interactive login shell and then execs a shell. The command arrives by ARGV (no typing race), the
 # window SURVIVES a launcher refusal with the message on screen, ~/.zshrc synthesises ITERM_SESSION_ID
 # (the registry row is written), and pane_shell_root reads `yes` — the pane is recyclable next time.
-# `-- /bin/bash <launcher>` (today's shape) dies with the launcher and is what left panes 625/632
-# un-recyclable; it survives only as the fallback when no runner is installed.
+# `-- /bin/bash <launcher>` dies with the launcher and is what left panes 625/632 un-recyclable, so
+# with no runner installed there is no tail: rc 1, LR_SPAWN_SHAPE=refused, and the caller launches
+# nothing (husk-history FIX-DESIGN §4 W2.4).
 # shellcheck disable=SC2034  # this lib's OUTPUT contract, read by lr-handoff.sh / the poller (a directive binds to the NEXT construct only, hence one line)
 LR_LAUNCH_TAIL=(); LR_SPAWN_SHAPE=""
 # SC2034: LR_LAUNCH_TAIL/LR_SPAWN_SHAPE are this lib's OUTPUT contract, read by lr-handoff.sh and
@@ -1333,16 +1334,17 @@ LR_LAUNCH_TAIL=(); LR_SPAWN_SHAPE=""
 # `/bin/bash` in front: cc-pane-runner is #!/bin/bash, and a by-path #! exec at a session root keeps
 # ~1.1 KiB of kernel memory on macOS 15.8.1 (KALLOC_TRIGGER_ELIMINATION W4; bin/it2-kitty's form).
 # shellcheck disable=SC2034,SC2016
-lr_launch_tail() { # $1=launcher path → fills LR_LAUNCH_TAIL[] and LR_SPAWN_SHAPE (runner|argv)
+lr_launch_tail() { # $1=launcher path → fills LR_LAUNCH_TAIL[] and LR_SPAWN_SHAPE (runner|refused); rc 1 = refused
   local r
   if r="$(lr_runner_bin)"; then
     LR_LAUNCH_TAIL=(--env "CC_PANE_CMD=bash $1" --env "CC_PANE_CMD_INTERACTIVE=1" --env "CC_PANE_RUNNER=$r"
                     -- "${SHELL:-/bin/zsh}" -l -i -c 'exec /bin/bash "$CC_PANE_RUNNER"')
     LR_SPAWN_SHAPE="runner"
-  else
-    LR_LAUNCH_TAIL=(-- /bin/bash "$1")
-    LR_SPAWN_SHAPE="argv"
+    return 0
   fi
+  LR_LAUNCH_TAIL=(); LR_SPAWN_SHAPE="refused"
+  echo "lr-lib: bin/cc-pane-runner not found — refusing to root a recovery window in its launcher" >&2
+  return 1
 }
 
 # ── A VISIBLE kitty window for a recovery, from any context ──────────────────────────────────────
@@ -1360,7 +1362,7 @@ lr_kitty_spawn() { # $1=launcher $2=cwd $3=sid $4=target account [$5=anchor pane
   sock="$(lr_kitty_socket 2>/dev/null || true)"
   { [ -n "$sock" ] || [ -n "${KITTY_WINDOW_ID:-}" ]; } || return 1
   kb="$(lr_kitty_bin)" || return 1
-  lr_launch_tail "$launcher"
+  lr_launch_tail "$launcher" || return 1
   local to=(); [ -n "$sock" ] && to=(--to "$sock")
   local common=(--var "lr_continuation_of=$sid" --var "lr_source_pane=${anchor:-}" --var "lr_target_account=$acct")
   # THE PLACEMENT POLICY (lr-wake incident 2026-10-18, REPORT §4 Wave D). This function used to pick

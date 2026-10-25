@@ -228,34 +228,35 @@ if [ "$IN_KITTY" = 1 ]; then
   # but only becomes --cwd when it is a real directory: kitty refuses to launch on a bad --cwd, and
   # a resume that could have run in $HOME must not die over the working directory.
   #
-  # ── SURVIVABILITY: THE PANE MUST OUTLIVE THE SESSION IN IT ─────────────────────────────────────
-  # The same "argv, not a typed command line" property makes this window's ROOT process the program
-  # below rather than a shell, and kitty destroys a window whose root has exited — which is how a
-  # later `--recycle` of such a pane becomes a silent strand (pane 32,
-  # docs/research/recycle-pane-survivability-2026-08-26.md).
-  # AUDITED 2026-09-04 (item 737525ee6892): this arm is SAFE, and only because the program it
-  # launches ends in `exec "${SHELL:-/bin/zsh}" -l -i` when the resumed session ends
-  # (bin/reso-resume-one, tail). That is a CROSS-FILE contract this file cannot see, so it is PINNED
-  # by tests/kitty-recovery-launch.bats ("SURVIVABILITY") rather than left to this comment.
-  # THE INVARIANT, once: any pane an agent may later be asked to recycle must end its command with an
-  # interactive shell — bin/cc-pane-runner:46 states it for the split path, bin/reso-resume-one's tail
-  # for the resume path. Repointing CC_RESUME_ONE_BIN at a program that merely exits re-opens it.
-  # SHELL ROOT (LIMIT_RECOVER_FLEET_V2 W4). The root is now an interactive zsh that runs the resume
-  # and then execs another interactive zsh, so the pane stays at a shell even when the program does
-  # NOT end in one — the invariant no longer rests on the other file's tail alone, and an in-pane
-  # relaunch (handoff-fire --relaunch-at-shell) has a prompt to type into. The command string is
-  # the shq-quoted CMD: every word single-quoted, so no correction prompt can fire on it.
-  # `||`, not `;` (2026-10-02): reso-resume-one exits 0 ONLY when the session ended on purpose with
-  # no recycle pending (6347b1731), and that exit means "close this pane". `; exec zsh -i` re-opened
-  # a shell under every such close, so a stale replay left 7 husks the launcher had announced as
-  # closing. Every failure still exits non-zero and still gets the shell.
+  # ── THE PANE'S END BELONGS TO bin/cc-pane-runner (husk-history FIX-DESIGN §4 W2.4) ──────────────
+  # The window's root is the runner, in the argv shape scripts/handoff-fire.sh fires with
+  # (hf_argv_launch): the resume rides in CC_PANE_CMD and runs under `$SHELL -l -i -c`, and reso-resume-one,
+  # seeing CC_PANE_RUNNER_OWNS_CLOSE name this window, returns claude's status instead of exec'ing a
+  # shell. The runner then closes the pane, holds it until closing is safe, or keeps a shell for a
+  # reason a close would destroy (a crash, a pending recycle), and records which. This replaces the
+  # old `zsh -ic` root and its trailing interactive shell, which kept every pane the runner would close
+  # (pane 32, docs/research/recycle-pane-survivability-2026-08-26.md, is the opposite failure the
+  # runner also covers: a root that exits takes the window with it).
+  # No runner ⇒ exit 3 (driver unavailable): a bare root would bring back one of those two failures.
   # --next-to <pane> opens the resume as a window beside that pane, in its tab, instead of a new
   # os-window. The token rides as --env, ahead of `--`, so the program argv is unchanged.
+  BRL_RUNNER="${CC_PANE_RUNNER_BIN:-}"
+  if [ -z "$BRL_RUNNER" ]; then
+    for _brl_r in "$(dirname "$_CC_KS")/../bin/cc-pane-runner" "$(dirname "$0")/../bin/cc-pane-runner" "${HOME:-}/.claude/bin/cc-pane-runner"; do
+      [ -x "$_brl_r" ] && { BRL_RUNNER="$_brl_r"; break; }
+    done
+  fi
+  if [ -z "$BRL_RUNNER" ] || [ ! -x "$BRL_RUNNER" ]; then
+    echo "boot-resume-launch: bin/cc-pane-runner not found — refusing to root the window in the resume itself" >&2
+    exit 3
+  fi
   if [ -n "$NEXT_TO" ]; then KARGS=(launch --type=window --next-to "id:$NEXT_TO")
   else KARGS=(launch --type=os-window); fi
   KARGS+=(--env "CC_LAUNCH_TOKEN=$BRL_TOKEN")
   { [ -n "$cwd" ] && [ -d "$cwd" ]; } && KARGS+=(--cwd "$cwd")
-  KARGS+=(-- zsh -ic "$CMD || exec zsh -i")
+  # shellcheck disable=SC2016  # $CC_PANE_RUNNER expands in the PANE's shell, from the --env
+  KARGS+=(--env "CC_PANE_CMD=$CMD" --env "CC_PANE_CMD_INTERACTIVE=1" --env "CC_PANE_RUNNER=$BRL_RUNNER"
+          -- "${SHELL:-/bin/zsh}" -l -i -c 'exec /bin/bash "$CC_PANE_RUNNER"')
 else
   # CREATE ONLY — the command is typed separately, through osa_type_verified. Splitting create from
   # type is what makes the echo-verify possible at all: `write text` always appends the newline, so

@@ -3,6 +3,8 @@
 # Each function here replaced a per-caller re-derivation that had already produced an incident; the
 # suite pins the rule each one enforces and the parity between the two copies of the engagement core.
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LIB="$REPO/scripts/limit-recover/lr-lib.sh"
@@ -178,11 +180,24 @@ rc_row() { # $1=pane $2=account [$3=pid] — one registry row naming $SID
   printf '%s\n' "$joined" | grep -qx 'exec /bin/bash "$CC_PANE_RUNNER"'
   ! printf '%s\n' "$joined" | grep -q 'exec bash'
 }
-@test "launch tail CONTROL: with no runner anywhere the argv fallback is \`-- /bin/bash <launcher>\`" {
+@test "launch tail CONTROL: with no runner anywhere it REFUSES — rc 1, no tail, never a bare \`-- /bin/bash <launcher>\`" {
+  # husk-history FIX-DESIGN §4 W2.4: a launcher-rooted window dies with the session (panes 625/632).
   export LR_LIB_DIR="$BATS_TEST_TMPDIR/nowhere" CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/nowhere" CC_PANE_RUNNER_BIN="$BATS_TEST_TMPDIR/absent"
-  lr_launch_tail /tmp/lr-launch-x.sh
-  [ "$LR_SPAWN_SHAPE" = argv ]
-  [ "${LR_LAUNCH_TAIL[1]}" = /bin/bash ] && [ "${LR_LAUNCH_TAIL[2]}" = /tmp/lr-launch-x.sh ]
+  HOME="$BATS_TEST_TMPDIR/nowhere" run lr_launch_tail /tmp/lr-launch-x.sh
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cc-pane-runner not found"* ]] || false
+  HOME="$BATS_TEST_TMPDIR/nowhere" lr_launch_tail /tmp/lr-launch-x.sh || true
+  [ "$LR_SPAWN_SHAPE" = refused ]
+  [ "${#LR_LAUNCH_TAIL[@]}" -eq 0 ]
+}
+@test "kitty spawn: with no runner nothing is launched (rc 1, kitty never asked)" {
+  STUB="$BATS_TEST_TMPDIR/stub"; mkdir -p "$STUB"
+  cc_stub "$STUB" kitty "$(printf '#!/bin/bash\necho "$*" >> %q\necho 5\n' "$BATS_TEST_TMPDIR/kitty.log")"
+  export LR_LIB_DIR="$BATS_TEST_TMPDIR/nowhere" CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/nowhere" CC_PANE_RUNNER_BIN="$BATS_TEST_TMPDIR/absent"
+  export CC_TERM_KITTY="$STUB/kitty" CC_TERM_KITTY_TO="unix:/tmp/fake-kitty"
+  HOME="$BATS_TEST_TMPDIR/nowhere" run lr_kitty_spawn /tmp/lr-launch-x.sh "$BATS_TEST_TMPDIR" "$SID" next3
+  [ "$status" -eq 1 ]
+  [ ! -e "$BATS_TEST_TMPDIR/kitty.log" ]
 }
 
 # ── the kitty spawn: anchored beside the SOURCE, socket-addressed, provenance in --var ──────────

@@ -147,7 +147,26 @@ args=(launch --type=window --location="$location" --match "window_id:$anchor" --
 [ -n "$cwd" ] && args+=(--cwd "$cwd")
 [ -n "$title" ] && args+=(--title "$title")
 [ "${#keep_focus[@]}" -gt 0 ] && args+=("${keep_focus[@]}")
-args+=(-- "$@")
+# THE PANE IS ROOTED IN bin/cc-pane-runner (husk-history FIX-DESIGN §4 W2.6), in scripts/handoff-fire.sh's
+# argv shape. The command is an exact argv, so it rides in CC_PANE_CMD `%q`-quoted and the runner's
+# default (eval) mode runs that same argv; the runner then owns the pane's end — a claude session that
+# exits cleanly closes its pane, a crash or any other command keeps a shell — instead of the window
+# vanishing with its root. No runner (a partial deploy) degrades to the bare argv, with a warning.
+runner="${CC_PANE_RUNNER_BIN:-}"
+if [ -z "$runner" ]; then
+  for _r in "$(dirname "$_ks")/cc-pane-runner" "${HOME:-}/.claude/bin/cc-pane-runner"; do
+    [ -x "$_r" ] && { runner="$_r"; break; }
+  done
+fi
+if [ -n "$runner" ] && [ -x "$runner" ]; then
+  pane_cmd="$(printf '%q ' "$@")"
+  # shellcheck disable=SC2016  # $CC_PANE_RUNNER expands in the PANE's shell, from the --env
+  args+=(--env "CC_PANE_CMD=${pane_cmd% }" --env "CC_PANE_CMD_INTERACTIVE=0" --env "CC_PANE_RUNNER=$runner"
+         -- "${SHELL:-/bin/zsh}" -l -i -c 'exec /bin/bash "$CC_PANE_RUNNER"')
+else
+  echo "kitty-split-launch: bin/cc-pane-runner not found — launching the bare argv; the pane ends with it" >&2
+  args+=(-- "$@")
+fi
 
 # The no-stamp path keeps the `exec` verbatim: same stdout, same exit status, same process. Only
 # --self-retire needs this script to outlive the launch, so only it pays for a subshell.

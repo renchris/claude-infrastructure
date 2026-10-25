@@ -818,83 +818,10 @@ mk_live_worktree() { # <repo-name> <branch> <wtpath>   — a REAL worktree, left
   [ "$status" -eq 3 ]
 }
 
-# ── CLOSE FROM INSIDE on a clean exit (pane-lifecycle fixes item 6, 2026-10-01) ─────────────────────
-# The interactive tail cannot run under bats (it needs a tty), so the decision is a function and these
-# tests call the REAL one, extracted from the script, with $0 set to the script so its lib lookup
-# resolves exactly as in a pane. The recycle marker is the one handoff-fire takes (see
-# lib/pane-recycle-pending.sh), keyed "iterm2:<KITTY_WINDOW_ID>".
-rr_decide() { # $1=claude rc → runs rr_close_on_clean_exit; status 0 = close, 1 = keep
-  local fn; fn="$(sed -n '/^rr_close_on_clean_exit() {/,/^}/p' "$RRO")"
-  [ -n "$fn" ] || { echo "rr_close_on_clean_exit not found in $RRO"; return 2; }
-  # cc-run.sh first: the function runs the fullscreen guard through cc_run (plan KALLOC W4).
-  run bash -c ". \"\$2\""$'\n'"$fn"$'\n''rr_close_on_clean_exit "$1"' "$RRO" "$1" "$REPO_ROOT/scripts/lib/cc-run.sh"
-}
-rr_env() { # the fullscreen guard (the close's LAST gate) is a stub logging argv, exiting $GUARD_RC (default 0)
-  export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks" KITTY_WINDOW_ID=42
-  unset KITTY_LISTEN_ON KITTY_PID
-  RR_GUARD_LOG="$BATS_TEST_TMPDIR/guard-log"
-  # shellcheck disable=SC2016
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexit "${GUARD_RC:-0}"\n' "$RR_GUARD_LOG" > "$BATS_TEST_TMPDIR/fsguard"
-  chmod +x "$BATS_TEST_TMPDIR/fsguard"
-  export CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/fsguard"
-}
-rr_hold_recycle() { # a recycle lock for window 42 held by a LIVE pid (this test's shell)
-  local d; d="$LR_LOCKS_DIR/pane-$(printf '%s' "iterm2:42" | shasum -a 1 | cut -c1-40).recycle"
-  mkdir -p "$d"
-  printf '{"pid":%s,"lstart":"%s","role":"recycle"}\n' "$$" \
-    "$(TZ=UTC LC_ALL=C ps -o lstart= -p "$$" | tr -s ' ' | sed 's/^ *//; s/ *$//')" > "$d/holder"
-}
-
-@test "close-on-exit: claude exited 0 and no recycle is pending ⇒ the pane closes" {
-  rr_env
-  rr_decide 0
-  [ "$status" -eq 0 ] || { echo "a clean exit kept the shell: $output"; false; }
-}
-
-@test "close-on-exit: a non-zero exit (crash, limit, signal) keeps the shell" {
-  rr_env
-  rr_decide 1; [ "$status" -eq 1 ] || false
-  rr_decide 143; [ "$status" -eq 1 ] || false
-}
-
-@test "close-on-exit: a recycle pending for this pane keeps the shell, so the relaunch has a prompt" {
-  rr_env
-  rr_hold_recycle
-  rr_decide 0
-  [ "$status" -eq 1 ] || { echo "closed a pane mid-recycle"; false; }
-}
-
-# Fullscreen guard (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix). RED-proof: against
-# `git show HEAD:bin/reso-resume-one` the rc-3 and missing-guard cases return 0 (close) and the argv
-# case finds no guard log.
-@test "close-on-exit: the guard is asked in refuse mode for this window; its rc 0 closes" {
-  rr_env
-  rr_decide 0
-  [ "$status" -eq 0 ] || false
-  [ "$(cat "$RR_GUARD_LOG")" = "--window 42 --mode refuse --scope pane --tool reso-resume-one" ]
-}
-
-@test "close-on-exit: the guard refusing (rc 3: last pane of a fullscreen window) keeps the shell" {
-  rr_env; export GUARD_RC=3
-  rr_decide 0
-  [ "$status" -eq 1 ] || { echo "closed the last pane of a fullscreen window"; false; }
-  [[ "$output" == *"keeping the shell"* ]]
-}
-
-@test "close-on-exit: a guard that cannot be found keeps the shell (fail closed)" {
-  rr_env; export CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/no-such-guard"
-  rr_decide 0
-  [ "$status" -eq 1 ] || false
-  [[ "$output" == *"no-such-guard"* ]]
-}
-
-@test "close-on-exit: CC_PANE_CLOSE_ON_EXIT=0 keeps the shell" {
-  rr_env; export CC_PANE_CLOSE_ON_EXIT=0
-  rr_decide 0
-  [ "$status" -eq 1 ] || false
-}
-
-@test "close-on-exit: the expect program hands claude's own status back, not expect's" {
+# ── CLAUDE'S STATUS, HANDED BACK. This file no longer closes its own pane (husk-history FIX-DESIGN
+# §4 W2.7: rr_close_on_clean_exit is deleted, since every fleet launch is rooted in bin/cc-pane-runner,
+# which decides close, hold or keep). What it still owes the runner is claude's real exit status.
+@test "the expect program hands claude's own status back, not expect's" {
   # A script that ends at `interact` exits 0 however the session ended, which would make every crash
   # look clean. The tail of the expect program must reap the child and exit with ITS status.
   # shellcheck disable=SC2016  # a literal Tcl `$rr_w`, matched as text
@@ -1391,7 +1318,7 @@ rr_tail() { # → $RR_TAIL, a runnable copy of the post-session tail; $1 = claud
   { printf 'rr_rc=%s\nrr_pane_tty() { :; }\ncc_run() { "$@"; }\n' "$1"   # run as /bin/bash "$RR_TAIL"
     sed -n '/^rr_runner_owns() {/,$p' "$RRO"
   } > "$RR_TAIL"
-  grep -q 'rr_close_on_clean_exit "\$rr_rc"' "$RR_TAIL"   # extraction sanity
+  grep -q 'rr_successor_take_exec 1' "$RR_TAIL"   # extraction sanity
   mkdir -p "$BATS_TEST_TMPDIR/rrbin"; FAKESH="$BATS_TEST_TMPDIR/rrbin/fakesh"; GUARD="$BATS_TEST_TMPDIR/rrbin/guard"
   cc_stub "$BATS_TEST_TMPDIR/rrbin" fakesh "$(printf '#!/bin/bash\ntouch "%s/shell-ran"\nexit 7\n' "$BATS_TEST_TMPDIR")"
   # shellcheck disable=SC2016  # $* expands when the STUB runs
@@ -1423,4 +1350,15 @@ rr_tail() { # → $RR_TAIL, a runnable copy of the post-session tail; $1 = claud
   [ "$status" -eq 7 ]
   [ -e "$BATS_TEST_TMPDIR/shell-ran" ]
   [[ "$output" == *"ordinary shell"* ]]
+}
+
+@test "TAIL: a typed launch that ended cleanly keeps the shell too — this file no longer closes panes (W2.7)" {
+  # Before W2.7 rr_close_on_clean_exit asked the guard and exited 0 here, closing the pane from a
+  # second closer. The runner is now the only one; a typed launch's pane is the operator's prompt.
+  rr_tail 0
+  run env KITTY_WINDOW_ID=289 CC_KITTY_FS_GUARD="$GUARD" \
+    CC_PANE_SUCCESSOR_LIB=/nonexistent SHELL="$FAKESH" /bin/bash "$RR_TAIL"
+  [ "$status" -eq 7 ]
+  [ -e "$BATS_TEST_TMPDIR/shell-ran" ]
+  [ ! -e "$BATS_TEST_TMPDIR/guard.log" ]
 }

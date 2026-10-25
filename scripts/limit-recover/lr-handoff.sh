@@ -268,7 +268,11 @@ LR_LIB_DIR="$(cd "$(dirname "$LRH_LIB")" && pwd)"; export LR_LIB_DIR
 . "$LRH_LIB"
 lrh_tier_from_transcript() { lr_tier_from_transcript "$@"; }
 # shellcheck disable=SC2153  # LR_LAUNCH_TAIL / LR_SPAWN_SHAPE are lr-lib.sh's outputs, not LRH_ typos
-lrh_launch_tail() { lr_launch_tail "$LAUNCHER"; LRH_LAUNCH_TAIL=("${LR_LAUNCH_TAIL[@]}"); LRH_SPAWN_SHAPE="$LR_SPAWN_SHAPE"; }
+lrh_launch_tail() { # rc 1 = no runner, so no tail (lr-lib refuses a bare launcher root)
+  local rc=0; lr_launch_tail "$LAUNCHER" || rc=$?
+  LRH_LAUNCH_TAIL=(${LR_LAUNCH_TAIL[@]+"${LR_LAUNCH_TAIL[@]}"}); LRH_SPAWN_SHAPE="$LR_SPAWN_SHAPE"
+  return "$rc"
+}
 LRH_LAUNCH_TAIL=()
 LRH_SPAWN_SHAPE=""
 
@@ -2246,7 +2250,7 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
     # run; refuse the split rather than let --match fall through to the operator's ACTIVE window.
     case "$LRH_ANCHOR" in
       ''|*[!0-9]*) FIRED="" ;;
-      *) lrh_launch_tail
+      *) if ! lrh_launch_tail; then FIRED=""; else   # no runner: launch nothing (the window arm below says so)
          # --source-window pins `--cwd=current` to the ANCHOR. Without it kitty resolves `current`
          # against the operator's ACTIVE window — MEASURED 2026-09-09 (q-survivability-spawn § P4):
          # the successor inherited an unrelated live session's cwd AND title, the 2026-08-07
@@ -2305,7 +2309,7 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
            # cc_place_pane wrote its own row (a row means a pane exists); only the inline fallback logs here.
            { [ -n "$FIRED" ] && [[ $LRH_PLACED -eq 0 ]] && command -v cc_log_pane_spawn >/dev/null 2>&1 \
              && cc_log_pane_spawn split kitty "" "${PWD:-}" "lr-handoff vsplit anchor:$LRH_ANCHOR"; } || true
-         fi ;;
+         fi; fi ;;
     esac
   elif [[ -n "${ITERM_SESSION_ID:-}" ]]; then
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split iterm2 "" "${PWD:-}" "lr-handoff osascript split-vertically anchor:$LRH_ANCHOR"
@@ -2362,9 +2366,10 @@ OSA
         echo "lr-handoff: fired split pane (right of pane $LRH_ANCHOR, ${LRH_SPAWN_SHAPE:-argv}-rooted) on '$TARGET' (manual fallback: $_LRH_FB)" >&2
       fi
     fi
+  elif [[ $IN_KITTY -eq 1 ]] && ! lrh_launch_tail; then
+    echo "lr-handoff: no bin/cc-pane-runner — launched no kitty window (a bare launcher root dies with the session); $_LRH_FB" >&2
   elif [[ $IN_KITTY -eq 1 ]]; then
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "" "${PWD:-}" "lr-handoff fallback os-window"
-    lrh_launch_tail
     if KID="$(lrh_kitty launch --type=os-window --cwd="${WT_TOP:-$CWD}" \
          --var "lr_continuation_of=$SID" --var "lr_source_pane=${SOURCE_PANE:-}" --var "lr_target_account=$TARGET" \
          "${LRH_LAUNCH_TAIL[@]}" 2>/dev/null)"; then

@@ -62,6 +62,9 @@ setup() {
     [ ! -f "$REPO/$f" ] || cp "$REPO/$f" "$FIX/$f"
   done
   LAYOUT="$FIX/bin/cc-resume-layout.sh"
+  # The fixture tree holds no runner and HOME is hermetic: pin it (FIX-DESIGN §4 W2.4; kitty is a stub).
+  export CC_PANE_RUNNER_BIN="$REPO/bin/cc-pane-runner"
+  unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE CC_PANE_CMD_DIR   # injected into every pane; never inherited
   printf 'cc_capacity_admit() { return 0; }\ncc_capacity_probe() { return 0; }\ncc_capacity_admit_reason() { printf stub; }\n' \
     > "$FIX/scripts/lib/capacity-admit.sh"
   printf 'cc_log_pane_spawn() { :; }\n' > "$FIX/scripts/lib/pane-spawn-log.sh"

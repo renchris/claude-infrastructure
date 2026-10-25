@@ -241,6 +241,22 @@ fi
 # Its argv once: `kitty @ launch -- "${RESUME_ONE_ARGV[@]}"`, and resume_one_q (beside shq, below)
 # for the single-quoted command strings a pane's shell runs.
 cc_argv "$RESUME_ONE"; RESUME_ONE_ARGV=("${CC_ARGV[@]}")
+# Every resumed pane is rooted in bin/cc-pane-runner (husk-history FIX-DESIGN §4 W2.4), in
+# scripts/handoff-fire.sh's argv shape: the command rides in CC_PANE_CMD and runs under `$SHELL -l -i -c`,
+# reso-resume-one returns claude's status to the runner, and the runner closes, holds or keeps the pane
+# and records which. No runner ⇒ refuse: a bare root dies with the session or ends in a shell nothing closes.
+RUNNER="${CC_PANE_RUNNER_BIN:-}"
+if [ -z "$RUNNER" ]; then
+  for _r in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/cc-pane-runner" "${HOME:-}/.claude/bin/cc-pane-runner"; do
+    [ -x "$_r" ] && { RUNNER="$_r"; break; }
+  done
+fi
+[ "$DRY_RUN" = 1 ] || { [ -n "$RUNNER" ] && [ -x "$RUNNER" ]; } || die "bin/cc-pane-runner not found — refusing to root resumed panes in the resume itself"
+# shellcheck disable=SC2016  # $CC_PANE_RUNNER expands in the PANE's shell, from the --env
+runner_tail() { # $1=the pane's command line → appended to LA
+  LA+=(--env "CC_PANE_CMD=$1" --env "CC_PANE_CMD_INTERACTIVE=1" --env "CC_PANE_RUNNER=${RUNNER:-cc-pane-runner}"
+       -- "${SHELL:-/bin/zsh}" -l -i -c 'exec /bin/bash "$CC_PANE_RUNNER"')
+}
 
 # ── 1. the batch ────────────────────────────────────────────────────────────────────────────────
 # Read with IFS=$'\t' and -r. A tab IS IFS whitespace, so a run of empty fields would collapse and
@@ -1050,7 +1066,7 @@ print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
         [ -n "$effort" ] && cmd="$cmd '--effort' $(shq "$effort")"
         [ -n "$pmode" ] && cmd="$cmd '--permission-mode' $(shq "$pmode")"
         [ -n "$prompt_file" ] && cmd="$cmd '--prompt-file' $(shq "$prompt_file")"
-        LA+=(--env CC_ADMIT_DONE=1 --env CLAUDE_CODE_CERT_STORE=bundled -- zsh -ic "$cmd || exec zsh -i")
+        LA+=(--env CC_ADMIT_DONE=1 --env CLAUDE_CODE_CERT_STORE=bundled); runner_tail "$cmd"
       fi
       # A shell pane takes no command: kitty starts its configured shell in the recorded cwd.
       rc=0; wid="$(k "${LA[@]}" 2>&1)" || rc=$?
@@ -1343,8 +1359,7 @@ for n, (idx, gs) in enumerate(bins, 1):
       shed=$((N - done_rows)); break
     fi
     done_rows=$((done_rows + 1))
-    # SHELL ROOT, as scripts/boot-resume-launch.sh's kitty arm: the pane must outlive the session
-    # in it, or a later recycle of this pane strands (tests/kitty-recovery-launch.bats SURVIVABILITY).
+    # RUNNER ROOT (runner_tail, above): the runner owns the pane's end.
     cmd="'env' 'CC_ADMIT_DONE=1' $(resume_one_q) $(shq "$acct") $(shq "$wt") $(shq "$sid")"
     [ -n "$br" ] && cmd="$cmd $(shq "$br")"
     LA=(launch)
@@ -1354,9 +1369,7 @@ for n, (idx, gs) in enumerate(bins, 1):
       *) anc="${B:-$A}"; LA+=(--location=vsplit --match "window_id:$anc" --next-to "id:$anc") ;;
     esac
     { [ -n "$wt" ] && [ -d "$wt" ]; } && LA+=(--cwd "$wt")
-    # `||`: rc 0 is reso-resume-one's "ended on purpose, close the pane" (scripts/boot-resume-launch.sh
-    # carries the why); every failure keeps the shell.
-    LA+=(--env CC_ADMIT_DONE=1 -- zsh -ic "$cmd || exec zsh -i")
+    LA+=(--env CC_ADMIT_DONE=1); runner_tail "$cmd"
     wid="$(k "${LA[@]}" 2>&1)"
     case "$wid" in
       ''|*[!0-9]*) note "cc-resume-layout: launch failed for $sid: $wid"; failed=$((failed + 1)); continue ;;
