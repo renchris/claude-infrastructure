@@ -11,8 +11,9 @@ at a look; per-session units, stratified CR1 delta-method SE (lever_stats.ratio_
   T1  tool errors per 100 requests (hook denies are excluded; they are reported per arm apart)
   T2  failed lands per landed land: exits 5/6/11/143 failed, 42 excluded, any other code PLUMBING
   T4  CRASH rows in claude-crashes.jsonl per session
-  T5  judged re-ask rate per session (rows kind=reask in lever-judge.jsonl; the judge lands in S8,
-      until then T5 is "pending" and does not blind the lever)
+  T5  judged re-ask rate per session (rows kind=reask in lever-judge.jsonl, written only from a
+      valid batch by bin/cc-lever-judge reask; while that file does not exist T5 is "pending" and
+      does not blind the lever)
   No treated denominator: "ok" (nothing treated to harm). No control denominator (per-unit arms
   leave few all-control sessions): tested against config/levers.json's pre-registered baseline.
 COUNT ALARM, no Holm:
@@ -212,7 +213,7 @@ def evaluate(
         if judge is None:
             guards["T5"] = {
                 "status": "pending",
-                "detail": "the re-ask judge lands in wave " + g["T5"]["owner"],
+                "detail": "no %s yet (bin/cc-lever-judge reask --write)" % JUDGE_LOG,
             }
         else:
             jn = {s: v for s, v in judge.items()}
@@ -271,21 +272,29 @@ def evaluate(
     return out
 
 
+def read_judge(since, until):
+    """{sid: (re-asks, judged prompts)} from lever-judge.jsonl kind=reask rows; None while the file
+    does not exist (T5 pending). The judge writes those rows only for a batch that held its anchors
+    and known negatives, so a void batch never reaches a guard."""
+    jpath = le.log_path(JUDGE_LOG)
+    if not os.path.exists(jpath):
+        return None
+    jrows, _ = le.read_jsonl(jpath, since, until)
+    judge = {}
+    for r in jrows:
+        if r.get("kind") == "reask" and isinstance(r.get("sid"), str):
+            x, n = judge.get(r["sid"], (0, 0))
+            judge[r["sid"]] = (x + (1 if r.get("reask") else 0), n + 1)
+    return judge
+
+
 def run(cfg, since, until, look=False):
     """Read the small stores and evaluate. → (results, inputs summary)."""
     rows, st = read_ledger()
     crashes, cst = read_counts_by_sid(
         CRASH_LOG, since, until, lambda r: r.get("class") == "CRASH"
     )
-    judge = None
-    jpath = le.log_path(JUDGE_LOG)
-    if os.path.exists(jpath):
-        jrows, _ = le.read_jsonl(jpath, since, until)
-        judge = {}
-        for r in jrows:
-            if r.get("kind") == "reask" and isinstance(r.get("sid"), str):
-                x, n = judge.get(r["sid"], (0, 0))
-                judge[r["sid"]] = (x + (1 if r.get("reask") else 0), n + 1)
+    judge = read_judge(since, until)
     roots_ok = all(r["ok"] for r in le.root_status())
     res = evaluate(
         rows, st, le.read_flags(), cfg, since, until, look, crashes, judge, roots_ok

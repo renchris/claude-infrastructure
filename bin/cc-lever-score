@@ -42,6 +42,11 @@ Wave S4 built the core (ledger, plumbing, selftest); wave S5 the statistics, gua
       Prints one `job:` line; exit 124 when the bound fired (nothing half-written: each store's
       write is one append or one rename), else score's exit, else 0 (a guard BREACH or blind
       verdict is the guard tick's input, not a job failure).
+  score, D1 and D4 (wave S8)
+      D1 is scored by chain accounting (scripts/lib/lever_chain.py): net pp per treated recycle,
+      fleet-scaled by the would-recycle points a week, with the control-arm model check and the
+      predecessor/successor arm agreement as D1's own plumbing checks and the T5 re-ask Newcombe CI
+      from lever-judge.jsonl; D4 carries S1's "re-issued as told" Wilson from kind=d4_follow rows.
   cc-lever-score selftest [--keep DIR]
       Builds a synthetic fleet with a planted effect, scores it twice in fresh processes, and
       requires: byte-identical output, the effect recovered, dedupe across roots, hook denies split
@@ -72,6 +77,7 @@ import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "scripts", "lib"))
+import lever_chain as lch  # noqa: E402
 import lever_events as le  # noqa: E402
 import lever_guards as lg  # noqa: E402
 import lever_stats as lsx  # noqa: E402
@@ -352,12 +358,8 @@ def plumbing(c, lever_checks=None):
     checks.extend(s5_global_checks(c))
     for k in lever_checks or ():
         checks.append(k)
-    for name, owner, levers in (("treatment exposure >= 80%", "S11/S12", None),
-                                ("successor/predecessor arms agree >= 95%", "S8", ("D1",))):
-        k = chk(name, "no-data", "built by wave " + owner, owner)
-        if levers:
-            k["levers"] = list(levers)
-        checks.append(k)
+    checks.append(chk("treatment exposure >= 80%", "no-data", "built by wave S11/S12", "S11/S12"))
+    checks.extend(d1_chain_checks(c))
     n_fail = sum(1 for k in checks if k["status"] == "fail")
     n_nd = sum(1 for k in checks if k["status"] == "no-data")
     verdict = "CLEAN" if not (n_fail or n_nd) else "PLUMBING"
@@ -367,6 +369,36 @@ def plumbing(c, lever_checks=None):
 
 def _pct(x):
     return "-" if x is None else "%.1f%%" % (100 * x)
+
+
+def chain_state(c):
+    """D1's lineage edges, their arm agreement and the control-arm model check, once per collect()."""
+    if "_chain" not in c:
+        ch = load_cfg()[0]["levers"]["D1"].get("chain") or {}
+        eds = lch.edges(c["arms"].rows, c["sess"], ch.get("repair_pane_gap_s", lch.REPAIR_GAP_S))
+        evs = [e for e in c["events"] if e["lever"] == "D1"]
+        c["_chain"] = {"edges": eds, "agree": lch.arm_agreement(c["arms"], eds), "fresh": None,
+                       "mc": lch.model_check(c, evs, ch.get("model_check_tol", 0.25),
+                                             ch.get("model_check_min_points", 10)),
+                       "agree_min": ch.get("arm_agree_min", 0.95)}
+    return c["_chain"]
+
+
+def d1_chain_checks(c):
+    """§2 D1 plumbing: successor/predecessor arm agreement and the ±25% model check; both bind D1 only."""
+    st = chain_state(c)
+    x, n = st["agree"]
+    nrep = sum(1 for e in st["edges"] if e["src"] == "repair")
+    name = "successor/predecessor arms agree >= %g%%" % (100 * st["agree_min"])
+    if not n:
+        k1 = chk(name, "no-data", "no predecessor/successor edge with both D1 arms logged (%d edge(s))" % len(st["edges"]))
+    else:
+        k1 = chk(name, "fail" if x < st["agree_min"] * n else "pass",
+                 "%d/%d edge(s) agree, %d repaired by pane+time" % (x, n, nrep))
+    mc = st["mc"]
+    k2 = chk("D1 model check: control continuations projected within ±25%", mc["status"], mc["detail"])
+    k1["levers"] = k2["levers"] = ["D1"]
+    return [k1, k2]
 
 
 def _join_cov(evs, c):
@@ -543,6 +575,8 @@ def analyze(c, cfg, L, since, split=None, guard=None, hist=()):
                                      L, n_ut, n_ut + n_uc, 100 * share, worst)))
     if lc["metric"] == "d2_compliance":
         return analyze_compliance(res, evs, lc, guard, c, L)
+    if lc["metric"] == "d1_chain_net_pp":
+        return analyze_d1(res, c, cfg, L, evs, since, guard, hist, why)
     # values
     rows = []
     missing = 0
@@ -559,6 +593,12 @@ def analyze(c, cfg, L, since, split=None, guard=None, hist=()):
     # fleet scale: every eligible event a week, both split halves (a half is a sample of the fleet)
     n_all = sum(1 for e in c["events"] if e["lever"] == L and e["t"] >= since)
     res["per_week"] = len(rows) / weeks * (n_all / float(len(evs)) if evs else 1.0)
+    # a failing S1 trial outranks PARK: the deny it measures is live harm
+    if lc.get("compliance"):
+        cp = res["compliance"] = d4_compliance(c, lc["compliance"], since)
+        if stage in lc["compliance"]["binds"] and cp["denies"] and cp["wilson"][1] < cp["bar"]:
+            return why("REVERT", "re-issued as told: Wilson upper %.3f < %.2f (%d/%d)" % (
+                cp["wilson"][1], cp["bar"], cp["complied"], cp["denies"]))
     if lc.get("population_gate"):
         pg = lc["population_gate"]
         tgt = [v for e, _, v in rows if e.get("would")]
@@ -671,6 +711,126 @@ def analyze(c, cfg, L, since, split=None, guard=None, hist=()):
     if not g_ok:
         miss.append("guards %s" % ((guard or {}).get("verdict") or "unread"))
     return why("KEEP", "look %d/%d: " % (k, len(looks)) + "; ".join(miss))
+
+
+def d4_compliance(c, cc, since):
+    """D4 S1's "re-issued as told", from S3's kind=d4_follow rows (never the subagent_bash rows: a
+    sliced re-issue never reaches the >270 s gate): a follow of a TREATED deny (follows_verdict=deny)
+    complies when its call echoes rc and is not backgrounded. Wilson 95% against the bar."""
+    rows, _ = le.read_jsonl(le.log_path(le.SHADOW_LOGS["D4"]), since, c["until"])
+    fol = [r for r in rows if r.get("kind") == "d4_follow" and r.get("follows_verdict") == "deny"]
+    x = sum(1 for r in fol if r.get("echo_rc") is True and not r.get("run_in_background"))
+    lo, hi = lsx.wilson(x, len(fol)) if fol else (0.0, 1.0)
+    return {"complied": x, "denies": len(fol), "wilson": [round(lo, 4), round(hi, 4)], "bar": cc["bar"],
+            "ok": bool(len(fol) >= cc["min_n"] and lo >= cc["bar"])}
+
+
+def reask_compare(c, since):
+    """T5 on D1's arms: judged re-asks per judged prompt, treat vs ctrl, Newcombe CI95 of the
+    difference. None while lever-judge.jsonl does not exist."""
+    j = lg.read_judge(since, c["until"])
+    if j is None:
+        return None
+    x = {"treat": [0, 0], "ctrl": [0, 0]}
+    for sid, (r, n) in sorted(j.items()):
+        a = lch.d1_arm(c["arms"], sid)
+        if a in x:
+            x[a][0] += r
+            x[a][1] += n
+    out = {"treat": x["treat"], "ctrl": x["ctrl"], "d": None, "lo": None, "hi": None}
+    if x["treat"][1] and x["ctrl"][1]:
+        d, lo, hi = lsx.newcombe(x["treat"][0], x["treat"][1], x["ctrl"][0], x["ctrl"][1])
+        out.update(d=round(d, 4), lo=round(lo, 4), hi=round(hi, 4))
+    return out
+
+
+def analyze_d1(res, c, cfg, L, evs, since, guard, hist, why):
+    """D1: net pp per treated recycle by chain accounting (scripts/lib/lever_chain.py), fleet-scaled by
+    the would-recycle points a week. ADVANCE iff the CI lower bound > 0 at both read ends, the scaled
+    point >= SIA, the control-arm model check passes, the re-ask Newcombe CI does not exclude 0 on
+    the harmful side, the offline replay agrees in sign and the guards are OK (§2 D1 "S2"). The
+    S0 pseudo-salt A/A does not gate D1: its unit outcome is not compared across arms; the model
+    check is what qualifies the projection the verdict rests on."""
+    lc = cfg["levers"][L]
+    st = chain_state(c)
+    if st["fresh"] is None and any(e["arm"] == "treat" and e.get("would") for e in evs):
+        st["fresh"] = lch.fresh_first_turn(c, st["edges"])
+    recs = lch.treated_recycles(c, evs, st["edges"], st["fresh"] or {})
+    ok = [r for r in recs if "net" in r]
+    weeks = max((c["until"] - since) / (7 * 86400.0), 1e-9)
+    pw = res["per_week"] = sum(1 for e in c["events"] if e["lever"] == L and e["t"] >= since and e.get("would")) / weeks
+    res["outcome_missing"] = len(recs) - len(ok)
+    miss = {}
+    for r in recs:
+        if "missing" in r:
+            miss[r["missing"]] = miss.get(r["missing"], 0) + 1
+    res["chain"] = {"recycles": len(recs), "scored": len(ok), "missing": miss,
+                    "first_reqs_median": _median([r["first_reqs"] for r in ok]),
+                    "rework_tok_median": _median([r["rework_tok"] for r in ok])}
+    res["model_check"] = {k: st["mc"][k] for k in ("n", "ratio", "status")}
+    ra = res["reask"] = reask_compare(c, since)
+    if guard and guard.get("verdict") == "BREACH":
+        return why("REVERT", "guard breach: " + ",".join(k_ for k_, g in guard["guards"].items()
+                                                          if g["status"] == "breach"))
+    if not ok:
+        return why("PLUMBING", "no treated recycle with a successor in 24 h (%d treated would-recycle "
+                   "point(s)%s)" % (len(recs), (": " + ", ".join("%s %d" % kv for kv in sorted(miss.items())))
+                                    if miss else ""))
+    bc = cfg["bootstrap"]
+    boot = {end: lch.mean_ci([(r.get("acct") or "?", r.get("lineage") or r["sid"], r["net"][end]) for r in ok],
+                             bc["reps"], bc["seed"]) for end in ENDS}
+    pt = boot["mid"][0]
+    res["n"] = {"treat": len(ok), "ctrl": st["mc"]["n"]}
+    t_stage = stage_start(c["flags"], L)
+    day = (c["until"] - t_stage) / 86400.0 if t_stage else None
+    looks = lc["looks_d"]
+    k = sum(1 for d in looks if day is not None and d <= day)
+    if len(ok) >= lc["max_events"]:
+        k = len(looks)
+    bound = lsx.hp_bound(k, len(looks)) if k else lsx.HP_FINAL
+    res["look"] = {"day": round(day, 2) if day is not None else None, "k": k, "of": len(looks), "z": bound}
+    est = {"pp_wk": round(pt * pw, 4), "net_per_recycle": round(pt, 6)}
+    for end in ("lo", "hi"):
+        p_e, s_e = boot[end][0], boot[end][1]
+        est["ci_" + end] = [round((p_e - bound * s_e) * pw, 4), round((p_e + bound * s_e) * pw, 4)]
+    res["estimate"] = est
+    lo_min = min(est["ci_lo"][0], est["ci_hi"][0])
+    hi_max = max(est["ci_lo"][1], est["ci_hi"][1])
+    sign = res["offline_sign"] = offline_sign(lc)
+    if hi_max < 0:
+        return why("REVERT", "CI upper bound %.3f < 0 pp/wk at z %.2f" % (hi_max, bound))
+    if not k:
+        return why("KEEP", "before the first look (day %s of d%d, %d of %d recycles)" % (
+            res["look"]["day"], looks[0], len(ok), lc["max_events"]))
+    g_ok = bool(guard and guard.get("verdict") == "OK")
+    mc_ok = st["mc"]["status"] == "pass"
+    ra_ok = bool(ra and ra["lo"] is not None and ra["lo"] <= 0)
+    if lo_min > 0 and pt * pw >= lc["sia_pp_wk"] and mc_ok and ra_ok and sign is not None and sign > 0 and g_ok:
+        return why("ADVANCE", "CI lower %.3f > 0 at both read ends, point %.3f >= SIA %.1f, model check %s, "
+                   "re-ask CI lower %.3f <= 0, offline agrees, guards OK" % (
+                       lo_min, pt * pw, lc["sia_pp_wk"], st["mc"]["ratio"], ra["lo"]))
+    if k >= len(looks) or (day is not None and day >= lc["max_dwell_d"]):
+        return why("NOT-MERGED", "final look with CI [%.3f, %.3f] pp/wk not clear of 0 or below SIA %.1f, or a "
+                   "gate unmet" % (lo_min, hi_max, lc["sia_pp_wk"]))
+    m = []
+    if lo_min <= 0:
+        m.append("CI lower %.3f <= 0" % lo_min)
+    if pt * pw < lc["sia_pp_wk"]:
+        m.append("point %.3f < SIA %.1f" % (pt * pw, lc["sia_pp_wk"]))
+    if not mc_ok:
+        m.append("model check %s" % st["mc"]["status"])
+    if not ra_ok:
+        m.append("re-ask %s" % ("unjudged" if not ra or ra["lo"] is None else "CI lower %.3f > 0" % ra["lo"]))
+    if sign is None or sign <= 0:
+        m.append("offline sign %s" % sign)
+    if not g_ok:
+        m.append("guards %s" % ((guard or {}).get("verdict") or "unread"))
+    return why("KEEP", "look %d/%d: " % (k, len(looks)) + "; ".join(m))
+
+
+def _median(xs):
+    xs = sorted(x for x in xs if isinstance(x, (int, float)))
+    return xs[len(xs) // 2] if xs else None
 
 
 def analyze_compliance(res, evs, lc, guard, c, L):
@@ -824,6 +984,7 @@ def score_row(res, t_now, sha, pchecks):
            "events": res["events"], "estimate": res.get("estimate"), "look": res.get("look"),
            "n": res.get("n"), "aa": res.get("aa"), "cuped": res.get("cuped"),
            "compliance": res.get("compliance"), "population": res.get("population"),
+           "chain": res.get("chain"), "model_check": res.get("model_check"), "reask": res.get("reask"),
            "offline_sign": res.get("offline_sign"), "placebo_sig": res.get("placebo_sig"),
            "thresholds_sha": sha, "reasons": [x[:200] for x in res["reasons"][:3]],
            "plumbing": ["%s:%s" % (k["status"], k["check"][:60]) for k in bad[:8]]}
@@ -868,7 +1029,7 @@ def guard_inputs(c, cfg, rows, look):
     g_since = c["until"] - cfg["guards"]["window_d"] * 86400
     crashes, _ = lg.read_counts_by_sid(lg.CRASH_LOG, g_since, c["until"], lambda r: r.get("class") == "CRASH")
     res = lg.evaluate(rows, {"age_s": 0.0, "missing": False}, c["flags"], cfg, g_since, c["until"], look,
-                      crashes, None, all(r["ok"] for r in le.root_status()))
+                      crashes, lg.read_judge(g_since, c["until"]), all(r["ok"] for r in le.root_status()))
     return res
 
 
@@ -1185,14 +1346,19 @@ def make_fixture(base, n=240, seed=7):
                   "message": {"role": "user", "content": "go"}}]
         nreq = 6 + rnd.randrange(6)
         tok_sum = {"w": 0, "r": 0, "o": 0}
+        ctx_idle = None
         for j in range(nreq):
+            # the context grows by each request's write, so D1's control-arm model check (lever_chain)
+            # sees a continuation its projection describes
             u = {"input_tokens": int(40 * scale), "cache_creation_input_tokens": int(3000 * scale),
-                 "cache_read_input_tokens": int(90000 * scale), "output_tokens": int(800 * scale),
+                 "cache_read_input_tokens": int((90000 + 3040 * j) * scale), "output_tokens": int(800 * scale),
                  "cache_creation": {"ephemeral_5m_input_tokens": int(3000 * scale),
                                     "ephemeral_1h_input_tokens": 0}}
             tok_sum["w"] += u["input_tokens"] + u["cache_creation_input_tokens"]
             tok_sum["r"] += u["cache_read_input_tokens"]
             tok_sum["o"] += u["output_tokens"]
+            if 10 + 60 * j < 300:
+                ctx_idle = u["input_tokens"] + u["cache_creation_input_tokens"] + u["cache_read_input_tokens"]
             # 60 s apart: the last request (>= t+310) follows every planted event, so no outcome is missing
             lines.append({"type": "assistant", "timestamp": le.iso(t + 10 + 60 * j), "sessionId": sid,
                           "message": {"id": "msg_%d_%d" % (i, j), "model": "claude-opus-5-5",
@@ -1221,7 +1387,7 @@ def make_fixture(base, n=240, seed=7):
             truth["copies"] += 1
         irs.append({"ts": t + 300, "sid": sid, "config_dir": "/x/" + accts[k], "v": "ok",
                     "turn_start": t + 300, "would_advise": True, "would_advise_k2": i % 2 == 0,
-                    "ctx_at_idle": 210000, "gap_s": 1000})
+                    "ctx_at_idle": ctx_idle, "gap_s": 1000})
         gaps.append({"kind": "gap", "v": 1, "ts": le.iso(t + 200), "sid": sid, "acct": accts[k],
                      "start": le.iso(t + 100), "dur": 3400.0, "wake_s": 3300, "outcome": "no_wake"})
         if i % 3 == 0:

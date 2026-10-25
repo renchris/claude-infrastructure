@@ -491,7 +491,8 @@ def price(tok, end):
 
 
 def scan_sessions(since, until):
-    """→ (sessions {sid: dict}, scan meta, request index {sid: [(t, pp_mid, write, read, output)]}).
+    """→ (sessions {sid: dict}, scan meta, request index {sid: [(t, pp_mid, write, read, output, main)]}),
+    main True for the main thread's requests (lever_chain follows one context stream through them).
 
     One scan() over the window; a session is the tree under one main sid (its subagents and
     workflow agents included), the unit cc-token-ledger calls a task."""
@@ -526,9 +527,12 @@ def scan_sessions(since, until):
                 "cc_version": None,
                 "models": set(),
                 "main_seen": False,
+                "main_paths": [],
             }
         if ctx == "main" and not s["main_seen"]:
             s["main_seen"], s["root"], s["slug"] = True, cdir, slug
+        if ctx == "main":
+            s["main_paths"].append(f["path"])  # lever_chain reads file touches from these
         s["files"] += 1
         s["tool_results"] += f["tool_n"]
         s["tool_errors"] += f["tool_err"] - f["tool_err_hook"]
@@ -569,8 +573,11 @@ def scan_sessions(since, until):
                     + tok["cache_write_5m"]
                     + tok["cache_write_1h"]
                 )
+                # a <synthetic> refusal carries no tokens: in the main stream it would read as a
+                # context of 0, i.e. a compaction
+                main = ctx == "main" and r[tl.R_MODEL] != "<synthetic>"
                 reqs[sid].append(
-                    (t, price(tok, "mid"), w, tok["cache_read"], tok["output"])
+                    (t, price(tok, "mid"), w, tok["cache_read"], tok["output"], main)
                 )
     for s in sess.values():
         s["models"] = sorted(s["models"])

@@ -22,13 +22,12 @@
     "T2": {"what": "failed lands per landed land", "baseline": 0.605, "failed_exits": [5, 6, 11, 143], "excluded_exits": [42]},
     "T3": {"what": "prompt-too-long main-session deaths in treated sessions, count over all four roots", "trip_ge": {"S0": 2, "S1": 2, "S2": 3, "S3": 3}},
     "T4": {"what": "CRASH rows in claude-crashes.jsonl per session", "baseline": 0.186, "baseline_src": "692 CRASH rows / 3712 main transcripts touched, 28 d to 2026-10-25 (est.)"},
-    "T5": {"what": "judged re-ask rate per session", "log": "lever-judge.jsonl", "owner": "S8"}
+    "T5": {"what": "judged re-ask rate per session (kind=reask rows, bin/cc-lever-judge reask)", "log": "lever-judge.jsonl"}
   },
   "levers": {
     "D1": {
       "decision": "43da49891e75",
       "metric": "d1_chain_net_pp",
-      "metric_owner": "S8",
       "unit": "lineage root",
       "sia_pp_wk": 4.0,
       "looks_d": [28],
@@ -36,7 +35,11 @@
       "max_events": 60,
       "min_act": 10.0,
       "aa_salt": "aa-D1",
-      "offline_flow": "d1_successor"
+      "offline_flow": "d1_recycle",
+      "quality_flow": "d1_successor",
+      "chain": {"horizon_s": 86400, "model_check_tol": 0.25, "model_check_min_points": 10,
+                "arm_agree_min": 0.95, "repair_pane_gap_s": 1800},
+      "reask": {"log": "lever-judge.jsonl", "rule": "Newcombe CI95 of treat - ctrl re-ask rate must not exclude 0 on the harmful side (lower bound <= 0)"}
     },
     "D2": {
       "decision": "a4c54d1744d1",
@@ -76,6 +79,7 @@
       "max_dwell_d": 28,
       "min_act": 1.0,
       "population_gate": {"min_calls_wk": 20, "min_pp_wk": 1.0},
+      "compliance": {"what": "re-issued as told: d4_follow rows after a treated deny (follows_verdict=deny) whose call echoes rc and is not backgrounded", "bar": 0.60, "min_n": 6, "binds": ["S1"]},
       "aa_salt": "aa-D4",
       "offline_flow": "d4_pollloop"
     }
