@@ -88,13 +88,14 @@
 #       CC_HEARTBEAT_DIR (default <dir>/heartbeat) and the heartbeat library's own seams
 set -uo pipefail
 
-DRY=0 ARM=0
+DRY=0 ARM=0 FILES_ONLY=0
 case "${1:-}" in
   -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d'; exit 0 ;;
   --dry-run) DRY=1 ;;
   --arm-restart) ARM=1 ;;
+  --files-only) FILES_ONLY=1 ;;
   '') ;;
-  *) echo "usage: $0 [--dry-run | --arm-restart] [--help]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--dry-run | --arm-restart | --files-only] [--help]" >&2; exit 2 ;;
 esac
 
 DIR="${CC_REBOOT_PREP_DIR:-$HOME/.claude/autonomy}"
@@ -121,6 +122,55 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 fi
 printf '%s\n' "$$" > "$LOCK/pid" 2>/dev/null
 trap 'rm -f "$LOCK/pid" 2>/dev/null; rmdir "$LOCK" 2>/dev/null' EXIT
+
+# ── --files-only (incident 2026-10-25, DESIGN.md C6): the roster before a LOCKUP reboot ──────────────
+# In a lockup the process table is what hangs: `ps`, `cc-sessions` (which runs ps) and `kitty @` all
+# blocked on 2026-10-25, and the heartbeat had recorded nobody for hours. So this mode reads FILES
+# only and calls no ps, no cc-sessions, no kitty: Claude Code's own pid files
+# (~/.claude*/sessions/<pid>.json, lost at the reboot), the newest heartbeat's rosters, and the
+# shutdown tombstones of the last CC_REBOOT_PREP_TOMB_WINDOW seconds (600). It writes the same
+# reboot-<date>.roster.json + .start boot-resume reads, merged by session id (a heartbeat row, which
+# knows the pane, wins), and prints one `alarm-reboot-prep: files-only roster=… sessions=N` line.
+if [ "$FILES_ONLY" = 1 ]; then
+  now="$(date +%s)"
+  roster="$DIR/reboot-$DAY.roster.json"
+  hbr="${CC_HEARTBEAT_DIR:-$DIR/heartbeat}"
+  tombs="${CC_SHUTDOWN_TOMB_DIR:-$DIR/shutdown-tombstones}"
+  win="${CC_REBOOT_PREP_TOMB_WINDOW:-600}"
+  newest=""; nst=0
+  for st in "$hbr"/*/*/hb.start; do
+    [ -f "$st" ] || continue
+    t="$(head -n 1 "$st" | awk '{ print $1 }')"; case "$t" in ''|*[!0-9]*) continue ;; esac
+    [ "$t" -gt "$nst" ] && { nst="$t"; newest="$(dirname "$(dirname "$st")")"; }
+  done
+  {
+    for c in "${CC_REBOOT_PREP_CC_HOMES:-$HOME/.claude}"*/sessions; do
+      [ -d "$c" ] || continue
+      acct="$(basename "$(dirname "$c")")"; acct="${acct#.}"
+      for f in "$c"/*.json; do
+        [ -f "$f" ] && jq -c --arg a "$acct" 'select(type == "object" and (.sessionId // "") != "" and (.kind // "interactive") == "interactive")
+          | {session_id: .sessionId, account: $a, cwd, pid, startedAt, name: (.name // ""), source: "sessions-file"}' "$f" 2>/dev/null
+      done
+    done
+    if [ -n "$newest" ]; then
+      for r in "$newest"/*/hb.roster.json; do
+        [ -f "$r" ] && jq -c '.[]? | select(type == "object" and (.session_id // "") != "") | . + {source: "heartbeat"}' "$r" 2>/dev/null
+      done
+    fi
+    for f in "$tombs"/*.json; do
+      [ -f "$f" ] && jq -c --argjson lo "$((now - win))" 'select(type == "object" and (.session_id // "") != ""
+          and ((.endedAt // 0) | type) == "number" and .endedAt >= $lo) | del(.endedAt, .endReason, .hostShutdown) | . + {source: "tombstone"}' "$f" 2>/dev/null
+    done
+  } | jq -s 'group_by(.session_id) | map(sort_by(if .source == "heartbeat" then 2 elif .source == "tombstone" then 1 else 0 end)
+        | reduce .[] as $x ({}; . + ($x | with_entries(select(.value != null and .value != "")))))' \
+    > "$roster.tmp" 2>/dev/null
+  if jq -e 'type == "array"' "$roster.tmp" >/dev/null 2>&1; then
+    mv -f "$roster.tmp" "$roster"; printf '%s\n' "$now" > "$DIR/reboot-$DAY.start"
+    echo "alarm-reboot-prep: files-only roster=$roster sessions=$(jq length "$roster") heartbeat=${newest:-none}"
+    exit 0
+  fi
+  rm -f "$roster.tmp"; echo "alarm-reboot-prep: files-only roster could not be written" >&2; exit 1
+fi
 
 # bounded <seconds> <cmd...> — run it in its own process group and kill the group at the bound
 # (exit 124), so a wedged defaults/kitten read cannot hold the reboot procedure open (E-8).
