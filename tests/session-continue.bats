@@ -910,4 +910,7 @@ ma_unarm() { # the chain ended (cap or clear of the sentinel only): drop the sen
   run ma_actuate sid-blk-5 ""
   fired "$output"
   [[ "$(printf '%s' "$output" | jq -r .reason)" == *'run round 27'* ]] || false
+  # …and the block it carries under ⛔ names a HELD ⛔, not any ⛔, as the disarm state (design §3.4
+  # (iii)): a ⛔ with ungated scope is work to drive, so "blocked on the user" no longer disarms it
+  [[ "$(printf '%s' "$output" | jq -r .reason)" == *'held on the user for everything that remains (a held ⛔)'* ]] || false
 }
