@@ -57,6 +57,13 @@ printf "%s\n" "$*" >> "$T/kitty-log"'
   export SHELL="$S/fakeshell"
 }
 
+# A held runner ignores every catchable signal, so a failed background arm would leave it holding
+# forever: KILL whatever an arm started (its process group too, for A1g).
+teardown() {
+  if [ -n "${pid:-}" ]; then kill -KILL -- "-$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null; fi
+  return 0
+}
+
 # guard answers, one per refuse-mode call: 0 · 2 · 3fs (last pane of a fullscreen window) ·
 # 3unreadable (a read that failed) · 3kf (the kitten itself failed: remote control down)
 seq_guard() {
@@ -257,35 +264,46 @@ def tail():
 def ended():
     p, st = os.waitpid(pid, os.WNOHANG | os.WUNTRACED)
     return None if p == 0 else st
-end = time.time() + 10
+def fail(msg):  # a held runner ignores every catchable signal: never leave one behind
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        pass
+    sys.exit(msg)
+end = time.time() + 30  # start-up, not the hold: bash + stubs under load
 while tail() != "hold:fs":
     drain(); time.sleep(0.1)
+    st = ended()
+    if st is not None:
+        sys.exit("ended before holding: wait status %d, tail %r" % (st, tail()))
     if time.time() > end:
-        sys.exit("never held")
+        fail("never held: tail %r, guard calls %r" % (tail(), os.path.exists(T + "/guard-log") and open(T + "/guard-log").read()))
 for ch in (b"\x03", b"\x1c", b"\x1a"):
     os.write(fd, ch); time.sleep(0.3); drain()
     st = ended()
     if st is not None:
-        sys.exit("ended or stopped by %r: wait status %d" % (ch, st))
+        fail("ended or stopped by %r: wait status %d" % (ch, st))
 open(T + "/release", "w").close()
-end = time.time() + 10
+t0 = time.time(); end = t0 + 30
 while True:
     drain(); st = ended()
     if st is not None:
         break
     if time.time() > end:
-        sys.exit("still held 10 s after release")
+        fail("still held 30 s after release: tail %r" % tail())
     time.sleep(0.1)
-print("exit=%d" % os.waitstatus_to_exitcode(st))
+print("exit=%d after %ds" % (os.waitstatus_to_exitcode(st), time.time() - t0))
 '
 
 @test "A1t pty: ^C ^\\ ^Z typed at the held pane's terminal do not end or stop it" {
   /usr/bin/python3 -I -c 'import pty' 2>/dev/null || skip "no python3 pty module to type through (an environment precondition)"
   seq_guard 3fs
-  export CC_PANE_HOLD_STEP_S=1 CC_PANE_CMD=claude
+  # the paint goes to a file: the painter on a pty nobody reads is a different test (A1 painted)
+  export CC_PANE_HOLD_STEP_S=1 CC_PANE_CMD=claude CC_PANE_RUNNER_TTY="$T/tty"; : > "$T/tty"
   run /usr/bin/python3 -I -c "$PTY_DRIVER" "$RUNNER"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$output" = "exit=0" ] || { echo "$output"; false; }
+  [[ "$output" == "exit=0 after "* ]] || { echo "$output"; false; }
+  echo "# $output" >&3
   [ ! -e "$T/shell-ran" ]
   tail_is closed
 }
