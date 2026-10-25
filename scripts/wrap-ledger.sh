@@ -21,8 +21,11 @@
 #   This ledger computes SIX rungs {⛔, 🔧, 📦, 🚀, 👤, ✅}. Only 📤 (out-of-context) remains
 #   model-state — nothing on disk knows how full a context window is — so only 📤 is overlaid by the
 #   model; when present it dominates everything below it. Derivation:
-#     ⛔  an open class-C decision packet THIS SESSION filed — a human-gated fork, unresolved
+#     ⛔  an open class-C decision packet THIS SESSION filed — a human-gated fork, unresolved. It
+#         carries SCOPE_UNGATED/HELD (§ LOOP): a ⛔ with ungated own scope is a decision to relay
+#         AND work to drive
 #     🔧  dirty tree ∨ gate ran-but-stale-on-HEAD ∨ DoD remainder > 0   (loose ends / unverified)
+#         ∨ an own recorded loop scope with no recorded stop (§ LOOP), ranked just above ✅
 #     📦  clean ∧ verified-or-n/a ∧ committed-but-unlanded (ahead>0 ∨ git-cherry '+')  (parked)
 #     🚀  landed, but the LIVE LAYER (the store behaviour actually reads) is behind PAST its
 #         converge budget, ∨ a migration FAILED to reach its enforcing store — landed and INERT
@@ -634,7 +637,8 @@ if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
     # Every input that can change the answer, in one string. The seams are the ones the header's
     # "Env seams" line lists — a caller that overrides one is asking a different question and must
     # not be served another caller's.
-    _wl_k="v1|$WL_TRANSCRIPT|$_wl_ms|$PWD|$SESSION_FLAG|${WRAP_SESSION_ID:-}|${CLAUDE_SESSION_ID:-}"
+    # v2 (§ LOOP): the emit shape gained the loop-scope fields, so no v1 body may be served for it.
+    _wl_k="v2|$WL_TRANSCRIPT|$_wl_ms|$PWD|$SESSION_FLAG|${WRAP_SESSION_ID:-}|${CLAUDE_SESSION_ID:-}"
     _wl_k="$_wl_k|${WRAP_TRUNK:-}|${WRAP_DOD_DIR:-}|${WRAP_DOD_FILE:-}|${WRAP_GATE_GREEN:-}"
     _wl_k="$_wl_k|${CC_BACKLOG_BIN:-}|${CC_DECIDE_BIN:-}|${CC_CUSTODY_BIN:-}|${CC_CUSTODY_DIR:-}"
     # THE PANE ID JOINS THE KEY (backlog a9ede190ee3b). Custody is now PANE-ATTRIBUTED, so the pane
@@ -648,6 +652,10 @@ if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
     _wl_k="$_wl_k|${WRAP_LIVE_REPO:-}|${WRAP_LIVE_BUDGET_COMMITS:-}|${WRAP_LIVE_BUDGET_MIN:-}"
     _wl_k="$_wl_k|${CC_MIGRATIONS_STATE:-}|${WRAP_LAND_INFLIGHT_LIB:-}"
     _wl_k="$_wl_k|${WRAP_RESEARCH:-}|${CC_RESEARCH_BIN:-}|${CC_RESEARCH_REGISTRY:-}"
+    # § LOOP's two kill switches change the rung and the readout, so both are inputs. The file flag
+    # is a builtin test in this shell: a `$(…)` here would fork on every memoized close.
+    _wl_lsoff=""; [ -e "$HOME/.claude/state/loop-scope.off" ] && _wl_lsoff=F
+    _wl_k="$_wl_k|${WRAP_LOOP_SCOPE:-}|${_wl_lsoff}"
     # WRAP_BUSY joins the key (2026-10-04): session-continue asks with WRAP_BUSY=off to skip the
     # process-table scan, and a BUSY-less ledger served to a BUSY reader (operator-readout, notify,
     # cc-classify) would read BUSY_STATE=UNKNOWN for a session that is working.
@@ -903,13 +911,29 @@ else
   fi
   _WL_DOD_SOURCES=""; [ -f "$DOD_FILE" ] && _WL_DOD_SOURCES="$DOD_FILE"
 fi
+# § LOOP's one definition of "this scope is a loop" (hooks/lib/loop-scope.sh, shared with the
+# producer dod-persist.sh), resolved beside dod-path.sh. Unresolvable ⇒ LOOP_RE stays empty and
+# compute_loop_scope reads LOOP_SRC=nolib with every field 0: today's rung.
+LOOP_RE=""
+_wl_lslib="${_wl_dplib%/*}/loop-scope.sh"
+[ -f "$_wl_lslib" ] || _wl_lslib="$HOME/.claude/hooks/lib/loop-scope.sh"
+# shellcheck source=../hooks/lib/loop-scope.sh
+# shellcheck disable=SC1090,SC1091
+[ -f "$_wl_lslib" ] && . "$_wl_lslib" 2>/dev/null
 DOD="absent"; REMAINDER=0
 # DOD_SCOPE = the CURRENT CONTRACT — the newest `Scope (frozen):` line of this wave's lineage-filtered
 # captures (the same line hooks/dod-persist.sh:210 injects as "THE CURRENT CONTRACT"). DRAIN_SCOPE=1
 # when that contract is ABOUT THE BACKLOG (backlog|drain, case-insensitive) — the population the
 # drain floor below applies to. Read from the same filtered stream as REMAINDER so the two cannot
 # disagree about whose contract this is.
+# A `(stop-capture)` block never sets DOD_SCOPE (§ LOOP, design §3.1 (i)): DOD_SCOPE is shared by every
+# session in the checkout and DRAIN_SCOPE=1 arms CLOSE_FLOOR for all of them, so one session's captured
+# "loop until the backlog is empty" would hand its siblings a false CLOSE_FLOOR 🔧. The capturing
+# session reads its loop through its own LOOP_* fields instead. Same single fork as the grep it replaces.
 DOD_SCOPE=""; DRAIN_SCOPE=0
+_WL_FF_ALL=""                                   # § LOOP reads it after _wl_resolve_sid
+# shellcheck disable=SC2016  # an awk program: its `$0` is awk's, never the shell's
+_WL_SCOPE_AWK='/^## / { sc = ($0 ~ /\(stop-capture\)/); next } !sc && /Scope \(frozen\):/ { s = $0 } END { print s }'
 while IFS= read -r _wl_df; do
   [ -n "$_wl_df" ] && [ -f "$_wl_df" ] || continue
   DOD="present"
@@ -921,9 +945,12 @@ while IFS= read -r _wl_df; do
   _wl_ff=""
   if command -v dod_filter_for >/dev/null 2>&1; then
     _wl_ff="$(dod_filter_for "$PWD" "$_wl_df")"
-    _wl_s="$(printf '%s\n' "$_wl_ff" | grep 'Scope (frozen):' 2>/dev/null | tail -1 || true)"
+    _WL_FF_ALL="${_WL_FF_ALL}${_wl_ff}
+"
+    _wl_s="$(printf '%s\n' "$_wl_ff" | awk "$_WL_SCOPE_AWK" 2>/dev/null || true)"
   else
-    _wl_s="$(grep 'Scope (frozen):' "$_wl_df" 2>/dev/null | tail -1 || true)"
+    # no lib: _WL_FF_ALL stays empty, so every § LOOP field reads 0 (LOOP_SRC=nolib)
+    _wl_s="$(awk "$_WL_SCOPE_AWK" "$_wl_df" 2>/dev/null || true)"
   fi
   [ -n "$_wl_s" ] && DOD_SCOPE="$_wl_s"
   # LINEAGE-FILTERED (row 4de3d0f9c0e1). The repo key is shared by every worktree of the repo, so
@@ -1356,7 +1383,7 @@ _resolve_decide_bin() {
 # store we cannot read must leave the rung EXACTLY where it was, never invent the top rung.
 # The open/class predicate is cc-decide's (`list --open --class C --json`), not ours — this asks the
 # ONE question the packet cannot answer for itself: is it MINE?
-BLOCKED=0; BLOCKED_SRC="skip"; BLOCKED_WHAT=""
+BLOCKED=0; BLOCKED_SRC="skip"; BLOCKED_WHAT=""; BLOCKED_IDS=""; BLOCKED_GLOSS=""
 # BLOCKED_RECHECKED = open class-C packets filed by ANOTHER session whose latest `.rechecks[]` entry
 # is THIS session's, carries a conviction and a receipt, and is stamped at or after the last genuine
 # human prompt — research this turn produced that now waits on the operator's sign-off (REPORT A3,
@@ -1532,9 +1559,14 @@ count_blocking_decisions() {
                              or ((.conviction != null) and ((.receipt // "") != "")) ))) as $ask
       | [ ($ask | length | tostring),
           ((($mine | length) - ($ask | length)) | tostring),
+          (if ($ask | length) == 0 then "-"
+           else ($ask | map((.id // "?") | tostring | gsub("[\\t\\r\\n,]"; " ")) | sort | join(",")) end),
           (if ($ask | length) == 1
            then ($ask[0].what_plain // "" | tostring | gsub("[\\t\\r\\n]"; " "))
            else "" end) ] | @tsv,
+        ( $ask[] | select(((.id // "") | tostring) != "")
+          | [ "GL", (.id | tostring | gsub("[\\t\\r\\n]"; " ")),
+              ((.what_plain // "") | tostring | gsub("[\\t\\r\\n]"; " ") | .[0:90]) ] | @tsv ),
         ( $all[] | select((.session_sid // "") != $sid) | select(((.id // "") | tostring) != "")
           | (if (.rechecks | type) == "array" then .rechecks | last else null end) as $r
           | select(($r | type) == "object" and (($r.sid // "") == $sid)
@@ -1545,12 +1577,26 @@ count_blocking_decisions() {
                | floor | tostring),
               (.what_plain // "" | tostring | gsub("[\\t\\r\\n]"; " ")) ] | @tsv )' 2>/dev/null)" \
     || { BLOCKED=0; BLOCKED_SRC="error"; return 0; }
-  local u
+  local u ids
   # Line 1 only: `read` stops at the first newline, so the RC rows below can never shift a field.
-  IFS=$'\t' read -r n u what <<< "$line"
+  # § LOOP: the id cell is the sorted id list or the literal `-`, never empty, so the free text stays
+  # the only collapsible cell (an empty cell would be eaten by IFS-tab `read` and shift `what` left).
+  IFS=$'\t' read -r n u ids what <<< "$line"
   case "${n:-}" in ''|*[!0-9]*) BLOCKED=0; BLOCKED_SRC="error"; return 0 ;; esac
   case "${u:-}" in ''|*[!0-9]*) u=0 ;; esac
   BLOCKED="$n"; BLOCKED_SRC="$SID_SRC"; UNCONVICTED_PKTS="$u"
+  BLOCKED_IDS=""; [ "${ids:--}" = "-" ] || BLOCKED_IDS="$ids"
+  # The glosses ride the same fork: one `GL<TAB>id<TAB>what` row per decision, after line 1. Pure
+  # bash, no fork: this runs at every close.
+  local gtag gid gwhat nl='
+'
+  BLOCKED_GLOSS=""
+  case "$line" in *"${nl}GL"$'\t'*)
+    while IFS=$'\t' read -r gtag gid gwhat; do
+      [ "$gtag" = "GL" ] || continue
+      BLOCKED_GLOSS="${BLOCKED_GLOSS:+$BLOCKED_GLOSS; }${gid} (\"${gwhat}\")"
+    done <<< "${line#*"$nl"}" ;;
+  esac
   # BLOCKED_WHAT is set ONLY in the single-decision case — that is the only case where naming one
   # decision is the right answer; N>1 gets the command that lists them, and a stale "what" leaking
   # into that line would name one fork while claiming to describe several. A hand-written packet can
@@ -1615,6 +1661,126 @@ count_rechecked() {
     w1="${w1%.}"
     [ -n "$w1" ] || w1="an open class-C decision — see cc-decide list --open --class C"
     RECHECKED_WHAT="$w1"
+  fi
+}
+
+# ── § LOOP — THIS session's recorded contract and whether ⛔ gates it (ruling d610f8473106) ─────────
+# docs/research/lead-keeps-working-2026-10-24.md §3.1 (ii)-(vi). Read from the session's OWN recorded
+# contract, never the toplevel's newest line (DOD_SCOPE is shared by every session in the checkout:
+# alarm polarity, header ⛔ note). Rules:
+#  · Only INTENTIONAL captures count: every label but PreCompact:*. PreCompact blocks scrape any user
+#    OR assistant text (dod-persist.sh PreCompact arm), so an assistant quote of a loop line could
+#    otherwise open a loop, and a quoted non-loop line close one.
+#  · The thread is the session's newest intentional `Scope (frozen):` line, matched at column 0.
+#  · done: a `Scope (done):` line in ANY lineage session whose current frozen text equals the thread
+#    text (a successor inherits its predecessor's stop).
+#  · superseded: a later intentional frozen line with the same text by ANOTHER session (the successor's
+#    capture) — the handed-off predecessor stops driving it.
+#  · hold: the newest own `Scope (held): <id|none> [until=<epoch>] — <why>` after the thread line.
+#  · answered: a 12-hex packet id named in the thread line whose packet is actioned or vetoed.
+# Fail OPEN: any unknown leaves every field 0, i.e. today's rung and readout bytes.
+LOOP_SCOPE=0; LOOP_OPEN=0; LOOP_SRC="n-a"; LOOP_HEAD=""; LOOP_RUNG=0; OWN_REMAINDER=0
+HELD=0; HELD_SRC="n-a"; HELD_WHY=""; _WL_HELD_ID=""; _WL_HELD_UNTIL=""; SCOPE_UNGATED=0
+
+# _wl_any_resolved <id>… → `yes` when any named packet is actioned or vetoed, `no` when none is, and
+# nothing on any failure (the caller reads that as LOOP_SRC=error). cc-decide is the arbiter of the
+# store; the same bounder and binary as count_blocking_decisions. A fired class-B default
+# (`expired-actioned`) does NOT count: B13's packet defaults to "keep running rounds", the loop's own
+# course.
+_wl_any_resolved() {
+  local bin json
+  bin="$(_resolve_decide_bin)" || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  json="$(_bounded "${WRAP_DECIDE_TIMEOUT_S:-5}" "$bin" list --all --json 2>/dev/null)" || return 0
+  printf '%s' "$json" | jq -r 'if any(.[]; (.id as $i | $ARGS.positional | index($i))
+                                          and (.status == "actioned" or .status == "vetoed"))
+                               then "yes" else "no" end' --args "$@" 2>/dev/null
+}
+
+compute_loop_scope() {
+  case "${WRAP_LOOP_SCOPE:-on}" in off|0|no|OFF|NO) LOOP_SRC="off"; return 0 ;; esac
+  [ -e "$HOME/.claude/state/loop-scope.off" ] && { LOOP_SRC="off"; return 0; }
+  [ -n "$SID" ] || { LOOP_SRC="nosid"; return 0; }
+  # no store file for this checkout yet: nothing is recorded, so the capture is eligible
+  # (dod-persist's persist_dod creates the file)
+  [ "$DOD" = present ] || { LOOP_SRC="none"; return 0; }
+  [ -n "$_WL_FF_ALL" ] && [ -n "$LOOP_RE" ] || { LOOP_SRC="nolib"; return 0; }
+  local out has lp dn sup bx head held
+  out="$(printf '%s' "$_WL_FF_ALL" | awk -v sid="$SID" -v re="$LOOP_RE" '
+    /^## / { s=""; if (match($0, /session=[^ ]+/)) s=substr($0, RSTART+8, RLENGTH-8)
+             lab=""; if (match($0, /\([^)]*\)/)) lab=substr($0, RSTART+1, RLENGTH-2)
+             intent=(lab !~ /^PreCompact/); own=(s==sid); next }
+    !intent { next }
+    /^Scope \(frozen\):/ { t=$0; sub(/^Scope \(frozen\):[ \t]*/, "", t); cur[s]=t
+                           if (s != "") last_by[t]=s
+                           if (own) { L=t; held=""; nb=0 }; next }
+    /^Scope \(done\):/   { if (cur[s] != "") fin[cur[s]]=1; next }
+    /^Scope \(held\):/   { if (own && L != "") held=$0; next }
+    /^[ \t]*[-*][ \t]+\[[ \t]\]/ { if (own && L != "") nb++; next }
+    END { if (L == "") { print "0"; exit }
+          lp=(tolower(L) ~ re); sup=(last_by[L] != "" && last_by[L] != sid)
+          gsub(/[\t\r\037]/, " ", L); gsub(/[\t\r\037]/, " ", held)
+          printf "1\037%d\037%d\037%d\037%d\037%s\037%s\n", lp, (fin[L] ? 1 : 0), sup, nb, L, held }' \
+      2>/dev/null)" || { LOOP_SRC="error"; return 0; }
+  IFS=$'\037' read -r has lp dn sup bx head held <<< "$out"
+  [ "$has" = 1 ] || { LOOP_SRC="none"; return 0; }      # no own intentional contract → capture eligible
+  case "$bx" in ''|*[!0-9]*) bx=0 ;; esac
+  OWN_REMAINDER="$bx"; LOOP_HEAD="${head:0:160}"         # bash slicing: whole characters under UTF-8
+  # Regexes live in variables: bash 3.2 and 5.x parse an inline `=~` pattern differently.
+  local re_id='^Scope \(held\): ([0-9a-f]{12}|none)' re_until='(^|[[:space:]])until=([0-9]+)([[:space:]]|$)'
+  case "$held" in "Scope (held): "*)
+    # a malformed id reads `?`, which can match no ⛔ id: the hold reads stale, never held
+    _WL_HELD_ID="?"; [[ "$held" =~ $re_id ]] && _WL_HELD_ID="${BASH_REMATCH[1]}"
+    [[ "$held" =~ $re_until ]] && _WL_HELD_UNTIL="${BASH_REMATCH[2]}"
+    HELD_WHY="${held:0:200}" ;;
+  esac
+  [ "$lp" = 1 ] || { LOOP_SRC="n-a"; return 0; }
+  LOOP_SCOPE=1
+  [ "$dn" = 1 ]  && { LOOP_SRC="done"; return 0; }
+  [ "$sup" = 1 ] && { LOOP_SRC="superseded"; return 0; }
+  # research programs: residuals are not open work (§ Follow-On Gate exemption). compute_research runs
+  # only in machine/full mode before the ladder; call it here so RUNG is identical in every mode.
+  case "$MODE" in machine|full) ;; *) compute_research ;; esac
+  [ "$RESEARCH_PROGRAM" = none ] || { LOOP_SRC="program"; OWN_REMAINDER=0; return 0; }
+  # An operator answer given through cc-decide, not in chat, ends a loop whose line names the packet
+  # (B13's line ends "…or the operator answers decision b4780d7bb60e 'stop'"). Pure-bash scan of the
+  # FULL line (LOOP_HEAD is cut at 160); one bounded cc-decide fork only when an id is named.
+  local ids="" r="$head" re_hex='(^|[^0-9a-f])([0-9a-f]{12})([^0-9a-f]|$)'
+  while [[ "$r" =~ $re_hex ]]; do ids="$ids ${BASH_REMATCH[2]}"; r="${r#*"${BASH_REMATCH[2]}"}"; done
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2086  # word-split on purpose: one argument per id
+    case "$(_wl_any_resolved $ids)" in
+      yes) LOOP_SRC="answered"; return 0 ;; no) ;; *) LOOP_SRC="error"; return 0 ;; esac
+  fi
+  LOOP_OPEN=1; LOOP_SRC="own"
+}
+
+# compute_held — a hold counts only while it names a packet in THIS session's ⛔ set (§3.1 (iv)).
+# Zero forks but one `date`, and that only for a lapsing hold.
+compute_held() {
+  [ -n "$_WL_HELD_ID" ] || { HELD_SRC="absent"; return 0; }
+  [ "$_WL_HELD_ID" = none ] && { HELD_SRC="released"; return 0; }
+  # RECHECKED_IDS is space-separated; BLOCKED_IDS is comma-separated.
+  case ",${BLOCKED_IDS},${RECHECKED_IDS// /,}," in *",${_WL_HELD_ID},"*) ;;
+    *) HELD_SRC="stale"; return 0 ;; esac  # answered (or never this session's) ⇒ the loop resumes on its own
+  if [ -n "$_WL_HELD_UNTIL" ]; then       # a lapsing hold: counts only until its epoch
+    [ "$(date +%s)" -lt "$_WL_HELD_UNTIL" ] 2>/dev/null || { HELD_SRC="lapsed"; return 0; }
+    HELD=1; HELD_SRC="lapsing"; return 0
+  fi
+  HELD=1; HELD_SRC="own"
+}
+
+# _wl_scope_clause — the ⛔ readout's second sentence (§3.1 (v)), shared by the filed-by-me ⛔ and the
+# re-check ⛔. The prefix is never touched, so every `⛔ Blocked — …` reader still matches. The hold
+# command is never named here: a readout that teaches the escape gets the escape taken.
+_wl_scope_clause() {
+  local ug
+  if [ "$SCOPE_UNGATED" -gt 0 ]; then
+    if [ "$LOOP_OPEN" -eq 1 ]; then ug="your loop scope (\"${LOOP_HEAD:0:80}…\")"
+    else ug="${OWN_REMAINDER} item(s) of your frozen DoD"; fi
+    READOUT="${READOUT} Not gated by it: ${ug} — keep driving it; the frozen scope is the course until it is answered."
+  elif [ "$HELD" -eq 1 ]; then
+    READOUT="${READOUT} Held by this session: ${HELD_WHY#Scope (held): }."
   fi
 }
 
@@ -2600,14 +2766,23 @@ case "$MODE" in machine|full) compute_research ;; esac
 # but its ⛔ rides the ✅-eligible path, just above 👤: a store write must not mask agent-drivable
 # work, so dirty, remainder, unlanded, custody, resident, filed, unconvicted, floor, no-trunk and 🚀
 # all still win over it. Only the filed-by-me ⛔ below outranks everything.
+# § LOOP — the session's own contract, read before ⛔ so the ⛔ arm can say what it does NOT gate.
+compute_loop_scope
 count_blocking_decisions
+# HELD and SCOPE_UNGATED need the ⛔ ids, so they follow the fork that produced them (zero forks).
+[ "$LOOP_SRC" = off ] || compute_held
+if [ "$HELD" -eq 1 ]; then SCOPE_UNGATED=0; else SCOPE_UNGATED=$(( LOOP_OPEN + OWN_REMAINDER )); fi
 if [ "$BLOCKED" -gt 0 ]; then
   RUNG="⛔"
+  # Custody and residents are skipped under ⛔ (a worse rung governs) EXCEPT when ungated own scope
+  # exists: the scope floor needs them to tell "awaiting lanes" from "idle" (§3.1 (v)).
+  if [ "$SCOPE_UNGATED" -gt 0 ]; then count_open_custody; count_resident_members; fi
   if [ "$BLOCKED" -eq 1 ]; then
     READOUT="⛔ Blocked — need your call: ${BLOCKED_WHAT}."
   else
     READOUT="⛔ Blocked — ${BLOCKED} decision(s) need your call: cc-decide list --open"
   fi
+  _wl_scope_clause
 elif [ "$DIRTY" -eq 1 ]; then
   RUNG="🔧"; READOUT="🔧 Loose ends — ${DIRTY_N} uncommitted change(s) in the tree; continuing."
 elif [ "$REMAINDER" -gt 0 ]; then
@@ -2723,6 +2898,7 @@ else
     else
       READOUT="⛔ Blocked — research done, implementation pending: ${BLOCKED_RECHECKED} decision(s) need your call: cc-decide list --open"
     fi
+    _wl_scope_clause                  # a successor that re-checked and holds, or drives on (§3.1 (v))
   elif [ "$YOURS" -gt 0 ]; then
     # 👤 outranks the absent-DoD note: an unrun operator step is a fact, an unverifiable scope is not.
     # The peer clause appears only when a fired session filed some of them, so a close with none
@@ -2732,6 +2908,13 @@ else
     else
       RUNG="👤"; READOUT="👤 My side is done & landed — ${YOURS} step(s) need you; see the OPERATOR block."
     fi
+  elif [ "$LOOP_OPEN" -eq 1 ]; then
+    # § LOOP, ranked just above the ✅ arms so it never masks 🚀, the re-check ⛔ or 👤 (👤 is the
+    # release for "every remaining round needs an operator-only act"). A loop has no boxes, so
+    # REMAINDER=0 cannot say it is unfinished; without this arm a class-B re-file turns the false ⛔
+    # into a false ✅ and boundary-handoff's free-win advises a recycle. DOD=absent cannot co-occur.
+    RUNG="🔧"; LOOP_RUNG=1
+    READOUT="🔧 Loose ends — your frozen scope is a loop with no recorded stop (\"${LOOP_HEAD:0:80}…\"); run the next round as scoped, or record its stop: ~/.claude/hooks/dod-persist.sh done \"<evidence>\"."
   elif [ "$DOD" = "absent" ]; then
     # ✅-eligible git state, but no durable DoD to confirm the scope was met → say so, never silent ✅.
     # The rung stays ✅ (operator ruling 2026-10-01: no new glyph for this); SCOPE=unknown carries
@@ -2911,6 +3094,23 @@ emit_machine() {
   printf 'BLOCKED_RECHECKED=%s\n' "$BLOCKED_RECHECKED"
   printf 'RECHECKED_IDS=%s\n' "$RECHECKED_IDS"
   printf 'RECHECKED_SRC=%s\n' "$RECHECKED_SRC"
+  # § LOOP (§3.1 (viii)) — the scope floor's contract (session-continue reads these by name).
+  # Numeric and enum fields first, free text last.
+  printf 'BLOCKED_IDS=%s\n' "$BLOCKED_IDS"
+  printf 'LOOP_SCOPE=%s\n' "$LOOP_SCOPE"
+  printf 'LOOP_OPEN=%s\n' "$LOOP_OPEN"
+  # n-a|own|done|superseded|program|answered|none|nosid|nolib|off|error
+  printf 'LOOP_SRC=%s\n' "$LOOP_SRC"
+  printf 'LOOP_RUNG=%s\n' "$LOOP_RUNG"
+  printf 'OWN_REMAINDER=%s\n' "$OWN_REMAINDER"
+  printf 'HELD=%s\n' "$HELD"
+  # n-a|own|lapsing|lapsed|stale|released|absent
+  printf 'HELD_SRC=%s\n' "$HELD_SRC"
+  printf 'HELD_UNTIL=%s\n' "$_WL_HELD_UNTIL"
+  printf 'SCOPE_UNGATED=%s\n' "$SCOPE_UNGATED"
+  printf 'LOOP_HEAD=%s\n' "$LOOP_HEAD"
+  printf 'HELD_WHY=%s\n' "$HELD_WHY"
+  printf 'BLOCKED_GLOSS=%s\n' "$BLOCKED_GLOSS"
   printf 'GOAL_SRC=%s\n' "$GOAL_SRC"
   printf 'GOAL_EVALS=%s\n' "$GOAL_EVALS"
   printf 'GOAL_LAST=%s\n' "$GOAL_LAST"
@@ -3064,6 +3264,16 @@ emit_full() {
            else                            blocked_disp="none — no decision of mine is open"; fi ;;
   esac
   printf 'Blocked on you: %s\n' "$blocked_disp"
+  # § LOOP — this session's own recorded contract: is it a loop, is it stopped, does ⛔ gate it.
+  local loop_disp; case "$LOOP_SRC" in
+    own)   loop_disp="OPEN — your frozen scope is a loop with no recorded stop (\"${LOOP_HEAD:0:60}…\")" ;;
+    off)   loop_disp="not read (WRAP_LOOP_SCOPE=off or loop-scope.off)" ;;
+    nosid|nolib|error) loop_disp="unknown — ${LOOP_SRC} (not counted)" ;;
+    n-a|none) loop_disp="none — no own loop scope" ;;
+    *)     loop_disp="stopped (${LOOP_SRC})" ;;
+  esac
+  loop_disp="${loop_disp} · held: ${HELD_SRC} · ungated: ${SCOPE_UNGATED}"
+  printf 'Loop scope:     %s\n' "$loop_disp"
   # ◎ The goal row. Reported for EVERY state, unlike the ◎ line — the row is the oracle itself
   # (zero-eval vs healthy-deferral, § GOAL), and a row that vanished on the cleared/absent cases
   # would answer "is this session's goal being judged?" with silence in exactly the cases where
@@ -3097,10 +3307,14 @@ rung_next() {
   case "$RUNG" in
     "⛔") if [ "$BLOCKED" -eq 0 ] && [ "$BLOCKED_RECHECKED" -gt 0 ]; then
             printf 'STOP-ASK — research done, implementation pending: put the sign-off(s) in line 1 and hand them back (cc-decide list --open)'
+          elif [ "${SCOPE_UNGATED:-0}" -gt 0 ]; then
+            printf 'continue → drive the in-scope work the open decision(s) do not gate (%s); the decision(s) stay in line 1' \
+              "$( [ "$LOOP_OPEN" -eq 1 ] && printf 'loop scope: run the next round as scoped' || printf '%s DoD item(s)' "$OWN_REMAINDER")"
           else
             printf 'STOP-ASK — put the decision in line 1 and hand it back; nothing below it closes (cc-decide list --open --class C)'
           fi ;;
-    "🔧") printf 'continue → finish · run-gate · commit (explicit paths)' ;;
+    "🔧") if [ "$LOOP_RUNG" -eq 1 ]; then printf 'continue → run the next round as scoped'
+          else printf 'continue → finish · run-gate · commit (explicit paths)'; fi ;;
     "📦") if [ "$LANDING" -eq 1 ]; then
             printf 'AWAIT the land already in flight (pid %s) — a second /ship on this worktree only queues behind it' "$LANDING_PID"
           else
