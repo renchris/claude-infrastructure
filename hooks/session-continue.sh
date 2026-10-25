@@ -1340,7 +1340,7 @@ Then re-read the ledger with \`/wrap\`. If the converger refuses, file it (\`cc-
 OPHOLD_RE='(^|[^[:alnum:]])(hold off|hold on|wait (for|on|until|till) (me|my|i)|pause|park (this|it|the)|no more rounds|stop the loop|until i (say|reply|answer|decide|review|look|get back|am back|.m back)|don.?t (start|run|continue|do anything)|not yet)([^[:alnum:]]|$)'
 SF_MACHINE_RE='^(Stop hook feedback|<task-notification|\[handoff |<teammate-message|<local-command-stdout>|Another Claude session sent a message|⏯ )|HANDOFF-ENGAGE-'
 _sf_num() { case "${1:-}" in ''|*[!0-9]*) printf '%s' "${2:-0}" ;; *) printf '%s' "$1" ;; esac; }
-sf_sid_key() { printf '%s' "${cur_sid:-}" | tr -c 'A-Za-z0-9-' _; }
+sf_sid_key() { local k="${cur_sid:-}"; printf '%s' "${k//[!A-Za-z0-9-]/_}"; }   # pure bash: no fork per Stop
 sf_state_file() { printf '%s/scope-floor/%s%s' "$(continue_state_dir)" "$(sf_sid_key)" "${1:-}"; }
 sf_is_assignee() { # → 0 = an Agent-Teams assignee (rc 0 confirmed or rc 2 cannot tell, as ship_floor :1189-1197)
   local _a _c
@@ -1540,8 +1540,6 @@ scope_floor() { # → JSON on stdout + rc 1 to BLOCK; rc 0 otherwise. Never fail
   custody="$(_sf_num "$(led_field "$led" CUSTODY_OPEN)" 0)"; landing="$(led_field "$led" LANDING)"
   resident="$(_sf_num "$(led_field "$led" RESIDENT_MINE)" 0)"
   head="$(led_field "$led" LOOP_HEAD)"; gloss="$(led_field "$led" BLOCKED_GLOSS)"
-  ids="$(printf '%s %s' "$(led_field "$led" BLOCKED_IDS)" "$(led_field "$led" RECHECKED_IDS)" \
-         | tr ' ,' '\n' | grep -E '^[0-9A-Za-z_-]+$' | sort -u | paste -sd, - 2>/dev/null)"
   sf_max="$(_sf_num "${CC_SCOPE_FLOOR_MAX:-}" 3)"; sf_day_max="$(_sf_num "${CC_SCOPE_FLOOR_DAY_MAX:-}" 6)"
   # C1 intake: an own loop scope reaches the store from the human prompt that stated it, at the first
   # idle Stop; it takes effect from the next Stop's ledger.
@@ -1551,6 +1549,9 @@ scope_floor() { # → JSON on stdout + rc 1 to BLOCK; rc 0 otherwise. Never fail
     "🔧") [ "$lrung" = 1 ] || { sf_clear_if_active; return 0; }; kind=loop ;;   # only the loop arm's 🔧
     *)    sf_clear_if_active; return 0 ;;
   esac
+  # Only a relevant rung pays for the id set and the key (an idle ✅ Stop forks nothing more here).
+  ids="$(printf '%s %s' "$(led_field "$led" BLOCKED_IDS)" "$(led_field "$led" RECHECKED_IDS)" \
+         | tr ' ,' '\n' | grep -E '^[0-9A-Za-z_-]+$' | sort -u | paste -sd, - 2>/dev/null)"
   key="$(printf '%s|%s|%s' "$kind" "$ids" "$head" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-12)"
   [ -n "$key" ] || key="$(printf '%s|%s|%s' "$kind" "$ids" "$head" | sha1sum 2>/dev/null | cut -c1-12)"
   sf_counts "$(sf_state_file)"
