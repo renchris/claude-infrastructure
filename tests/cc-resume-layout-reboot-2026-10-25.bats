@@ -26,7 +26,7 @@
 #
 # RED-proof: against the pre-change script (`git show origin/main:bin/cc-resume-layout.sh`, the
 # parent of this change) case 1 fails at the bias check (bias=66.6667 on window 8, 75.0000 on 17 and
-# 18) and at the shell check (11 shell lines); case 2 fails (shells but voiceink in its own window);
+# 18) and at the shell check (11 shell lines); case 2 fails (11 shells, with or without --keep-shells);
 # case 3's negative control passes there vacuously, its positive half fails (voiceink has no pane).
 
 bats_require_minimum_version 1.5.0
@@ -71,10 +71,13 @@ win_of() { # <sid prefix> → the recorded window its pane is planned into (k<pi
   [ "$(win_of 568f7c83)" = ktreew27 ]
 }
 
-@test "reboot 2026-10-25: --keep-shells brings the session-less panes back as shells, but never a teammate" {
+@test "reboot 2026-10-25: the 11 shells were Claude panes with no row — even --keep-shells reopens none, nor a teammate" {
+  # Every pane of the 03:45 tree but one ran Claude (the other belongs to aaf6ccd5 in the roster).
+  # The old planner knew a Claude pane only by the roster, so each Claude pane the roster missed came
+  # back as a shell. --keep-shells is for panes that held no Claude process at all.
   plan --keep-shells
   [ "$status" -eq 0 ]
-  [ "$(launch_lines | grep -c ' shell ')" -ge 10 ]
+  [ "$(launch_lines | grep -c ' shell ')" -eq 0 ]
   # window 26 held 3f1c1301 (297), its teammate lkw-ledger (298) and ba56f290 (327, not restored)
   printf '%s\n' "$output" | grep -q 'src=ktreew26 .* panes=1 claude=1 shells=0 '
 }
