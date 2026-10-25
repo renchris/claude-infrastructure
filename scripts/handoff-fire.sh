@@ -1213,7 +1213,7 @@ hf_tdev_name() { # $1=tdev ("16/20") → ttys020 · ?? for anything that is not 
 hf_ps_tty_of() { # $1=pid, or a comma list → one short tty name per process, as `ps -o tty= -p` printed
   local out d
   out="$(ps -x -o tdev= -p "$1" 2>/dev/null)" || true
-  if [ -n "$out" ] && ! printf '%s\n' "$out" | grep -qvE '^[[:space:]]*([0-9]+/[0-9]+|\?\?)[[:space:]]*$'; then
+  if [ -n "$out" ] && ! printf '%s\n' "$out" | grep -vE '^[[:space:]]*([0-9]+/[0-9]+|\?\?)[[:space:]]*$' >/dev/null; then
     printf '%s\n' "$out" | while read -r d; do hf_tdev_name "$d"; printf '\n'; done
     return 0
   fi
@@ -1225,7 +1225,7 @@ hf_ps_on_tty() { # $1=tty (ttys020 or /dev/ttys020) $2=ps -o list ("pid=", "pid=
   case "$t" in ttys[0-9]*) n="${t#ttys}" ;; *) n="" ;; esac
   case "$n" in ''|*[!0-9]*) ps -t "$t" -o "$2" 2>/dev/null || true; return 0 ;; esac
   out="$(ps -axo "tdev=,$2" 2>/dev/null)" || true
-  if printf '%s\n' "$out" | grep -qE '^[[:space:]]*([0-9]+/[0-9]+|\?\?)[[:space:]]'; then
+  if printf '%s\n' "$out" | grep -E '^[[:space:]]*([0-9]+/[0-9]+|\?\?)[[:space:]]' >/dev/null; then
     printf '%s\n' "$out" | awk -v want="16/$((10#$n))" '$1 == want { sub(/^[ \t]*[^ \t]+[ \t]?/, ""); print }'
     return 0
   fi
