@@ -16,7 +16,7 @@ Design (the SSOT for every file, line anchor, bound and test): `docs/research/le
 | Wave | Locus | Tracks (design §8.1 steps) | Why this locus |
 |---|---|---|---|
 | 1 | **S** (default) | A scope floor (1, 2, 3) · B subject nudge (4) · C decide + grant code (5, 7) | disjoint file sets; each track leads its own Agent Team in its own worktree |
-| 2 | **S** | D rule and machine text (6) | fired after A and C land, so no loaded sentence names a verb that is not yet on trunk |
+| 2 | ~~**S**~~ → **Workflow** (2026-10-25) | D rule and machine text (6) | planned as S, fired after A and C land, so no loaded sentence names a verb that is not yet on trunk. **Changed:** kitty's remote-control socket answered "broken pipe" (pid 1881 alive), so no pane could open for a dispatched session or a named teammate, and the fire's capacity term hung 40 min on a wedged `ps -o lstart`. D ran as Workflow `wf_f309b42b-d65` (in-process slots, no pane): implementer → fresh-context reviewer → fixer, in worktree `lkw-rule-text`, committing only; the lead lands it after A |
 | 3 | **L** | integration: B13 replay suites, red/green receipts, converge check, deployed-copy content check, class-A records, pings | one line of why: it is synthesis of the tracks' receipts, small output, and the goal's proof must surface in the lead's transcript |
 | 4 | **S** | E held-out instruction re-gate (9) | operator ruled 2026-10-04 to run it at the next slim edit (`docs/plans/INSTRUCTION_BUDGET.md:127`); it measures the converged slim text |
 
