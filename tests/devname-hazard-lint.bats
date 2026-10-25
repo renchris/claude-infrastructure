@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2016  # the single-quoted strings are shell FIXTURES, written verbatim to files
 # scripts/devname-hazard-lint.sh — the watchdog-path ban on forms that walk /dev (incident 2026-10-25,
 # DESIGN.md I4 and C8). One poisoned devfs node hung 23 `ps`, 17 `login` and every new zsh in
 # ttyname → devname → lstat; the lint keeps those forms out of hooks/ and the lockwatch dirs.

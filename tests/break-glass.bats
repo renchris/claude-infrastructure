@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031,SC2016
+#   SC2030/2031: structurally false under bats (setup, the test body and teardown share one shell,
+#   so TREES reaches teardown); SC2016: the single-quoted programs are run by a child shell.
 # scripts/break-glass/rescue.sh + rescue.bashrc — the no-tty break-glass kit (incident 2026-10-25,
 # DESIGN.md C5). Hermetic: BG_ROOT and CC_LOCKWATCH_DIR are fixtures; the only processes signalled are
 # throwaway setsid trees this file starts, and teardown reaps them BY GROUP (never a leader by pid).
@@ -85,7 +88,7 @@ ptymap() { printf '{"leaders":[{"pid":%s,"lstart":"x","pgid":%s,"tdev":"16/63","
   sleep 0.5
   [ "$(alive_in_group "$L")" -eq 0 ]
   [ "$(alive_in_group "$O")" -eq 0 ]
-  prog="$(ls -d "$BG_ROOT"/kits/*-unpoison-* | tail -1)/progress"
+  for k in "$BG_ROOT"/kits/*-unpoison-*; do prog="$k/progress"; done   # names sort by time: the last is newest
   [ "$(grep -n "KILL -$O" "$prog" | cut -d: -f1)" -lt "$(grep -n "KILL -$L\$" "$prog" | cut -d: -f1)" ]
   grep -q '"result":"cured"' "$CC_LOCKWATCH_DIR/actions.jsonl"
 }
@@ -104,7 +107,7 @@ ptymap() { printf '{"leaders":[{"pid":%s,"lstart":"x","pgid":%s,"tdev":"16/63","
 }
 
 @test "(d) rescue.bashrc: no \\l prompt escape, pager off, and the /dev-walking commands refused" {
-  ! grep -nE '^[^#]*PS1=.*\\l' "$REPO/scripts/break-glass/rescue.bashrc"
+  if grep -nE "^[^#]*PS1='[^']*\\\\l" "$REPO/scripts/break-glass/rescue.bashrc"; then false; fi   # the quoted VALUE only
   H="$BATS_TEST_TMPDIR/home"; mkdir -p "$H"
   run env -i HOME="$H" PATH=/usr/bin:/bin /bin/bash --noprofile --norc -c '
     . "$0" >/dev/null 2>&1
