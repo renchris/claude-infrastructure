@@ -1584,6 +1584,18 @@ expect -c '
   # mounted a composer. One look at 8 s lost 15 of 78 prompted relaunches since 10-01 to boots of
   # 12-112 s under load. Wall clock and bounded, so a recovery is still attempted whatever the load.
   set readywait [expr {[info exists env(LR_READY_WAIT_S)] ? $env(LR_READY_WAIT_S) : 180}]
+  # THE PROGRAM EXITS WITH THE STATUS OF CLAUDE, on every path that ends the session (FIX-DESIGN D13):
+  # a cc-pane-runner above this file closes on 0 and keeps on anything else, so a bare 0 from expect
+  # would turn a crash into a close. Drain to the eof of the spawn FIRST: `interact` also returns on
+  # the USER side eof (a non-tty stdin) while claude still writes, and a child that cannot flush its pty never
+  # finishes exiting, so a bare `wait` deadlocks (measured 2026-10-25: the child sat in state E, the
+  # wait in wait4, for 50 min). A signal death (CHILDKILLED <sig>) or a failed wait is 1.
+  proc lr_exit_with_claude {} {
+    catch {expect -timeout -1 eof}
+    if {[catch {wait} w]} { exit 1 }
+    if {[llength $w] > 4} { exit 1 }
+    exit [lindex $w 3]
+  }
   # ── THE THREE QUESTIONS THIS PROGRAM ASKS THE WORLD ───────────────────────────────────────────
   # Each is one `exec` of a whole shell program handed over in the environment (see the LR_*_SH
   # block in the bash above). Every one of them may fail, and each failure has its own WORD —
@@ -1979,7 +1991,7 @@ expect -c '
         }
       }
     }
-    eof { exit }
+    eof { lr_exit_with_claude }
   }
   if {$injected || $argvp} {
     # ══ SUBMISSION IS A RECORD IN THE TRANSCRIPT, NEVER A PHRASE ON THE SCREEN ══════════════════
@@ -2233,12 +2245,8 @@ expect -c '
   set lr_keep [lr_drain_user]
   if {$lr_keep ne ""} { send -- [lr_b_utf8 $lr_keep] }
   interact
-  # THE EXIT STATUS OF CLAUDE, not of expect (the same reap as bin/reso-resume-one). A script that ends
-  # at `interact` exits 0 however the session ended, so a cc-pane-runner above this file would read a
-  # crash as a clean exit and close the pane. A signal death (CHILDKILLED <sig>) or a failed wait is 1.
-  if {[catch {wait} lr_w]} { exit 1 }
-  if {[llength $lr_w] > 4} { exit 1 }
-  exit [lindex $lr_w 3]
+  # A script that ends at `interact` exits 0 however the session ended (see lr_exit_with_claude).
+  lr_exit_with_claude
 ' || lr_rc=$?
 [ -z "$lr_tty_saved" ] || stty "$lr_tty_saved" 2>/dev/null || true
 # ── FALL THROUGH TO A SHELL, so the pane outlives the session (see the block above the expect) ────

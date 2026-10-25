@@ -71,7 +71,7 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
 @test "a resumed session is spawned THROUGH cc-close-attrib and leaves a close-record" {
   export LR_WRAP="$WRAP"
   run expect -f "$EXP"
-  [ "$status" -eq 0 ]                                  # the program exits on eof, not on the stub's rc
+  [ "$status" -eq 7 ]                                  # the program exits with the stub's rc (FIX-DESIGN D13)
   # the stub really ran, and received the resume argv the subject builds
   grep -qx -- "--resume" "$LR_TEST_ARGV"
   grep -qx -- "00000000-0000-0000-0000-000000000000" "$LR_TEST_ARGV"
@@ -90,7 +90,7 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
   # return is strictly worse than one that returns unattributed.
   export LR_WRAP=""
   run expect -f "$EXP"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 7 ]
   grep -qx -- "--resume" "$LR_TEST_ARGV"               # the recovery still happened
   # shellcheck disable=SC2012
   [ -z "$(ls -1 "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null || true)" ]
@@ -102,34 +102,44 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
   # pattern in this program is matched against what reaches the pty.
   export LR_WRAP="$WRAP"
   run expect -f "$EXP"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 7 ]
   [[ "$output" == *STUB-STDOUT-MARKER* ]] || false
   [[ "$output" == *STUB-STDERR-MARKER* ]]
 }
 
-# ── AFTER interact: THE STATUS IS CLAUDE'S, NOT EXPECT'S (FIX-DESIGN D13). A program that ends at
-#    `interact` exits 0 however the session ended, so a cc-pane-runner above lr-fire-resume read a
-#    crash as a clean exit and would close the pane. The lines after `interact` are extracted from
-#    the subject and run after a spawn whose child really dies, so the reap under test is the real one.
-post_interact() { # $1 = the child's sh program → $PI, an expect program: spawn it, read to eof, then the subject's tail
-  PI="$BATS_TEST_TMPDIR/post-interact.exp"
-  { printf 'spawn -noecho /bin/sh -c {%s}\nexpect eof\n' "$1"
-    sed -n "/^expect -c '\$/,/^' ||/p" "$FIRE" | sed -n '/^  interact$/,$p' | sed '1d;$d'
+# ── THE STATUS IS CLAUDE'S, NOT EXPECT'S (FIX-DESIGN D13). A program that ends at `interact` or at an
+#    `eof { exit }` exits 0 however the session ended, so a cc-pane-runner above lr-fire-resume read a
+#    crash as a clean exit and would close the pane. The subject's own lr_exit_with_claude proc is
+#    extracted and run after a spawn whose child really dies, so the reap under test is the real one.
+#    The interact arm is the deadlock regression: with a non-tty stdin interact returns on the USER
+#    side's eof while the child still writes; a bare `wait` then hung forever (child stuck in state E).
+reap_prog() { # $1 = the child's sh program, $2 = 1 to pass through `interact` first → $PI
+  PI="$BATS_TEST_TMPDIR/reap.exp"
+  { sed -n "/^expect -c '\$/,/^' ||/p" "$FIRE" | sed -n '/^  proc lr_exit_with_claude {} {$/,/^  }$/p'
+    printf 'spawn -noecho /bin/sh -c {%s}\n' "$1"
+    [ "${2:-0}" = 1 ] && printf 'interact\n'
+    printf 'lr_exit_with_claude\n'
   } > "$PI"
-  grep -q 'catch {wait}' "$PI"     # extraction sanity: the reap is in the extracted span
+  grep -q 'catch {wait}' "$PI"     # extraction sanity: the reap is in the extracted proc
 }
 
-@test "after interact: a SIGTERM'd session makes the program exit non-zero (lr_rc ≠ 0)" {
-  post_interact 'kill -TERM $$'
+@test "reap: a SIGTERM'd session makes the program exit non-zero (lr_rc ≠ 0)" {
+  reap_prog 'kill -TERM $$'
   run expect -f "$PI"
   [ "$status" -ne 0 ]
 }
 
-@test "after interact: the session's own exit status is the program's (5 → 5, 0 → 0)" {
-  post_interact 'exit 5'
+@test "reap: the session's own exit status is the program's (5 → 5, 0 → 0)" {
+  reap_prog 'exit 5'
   run expect -f "$PI"
   [ "$status" -eq 5 ]
-  post_interact 'exit 0'
+  reap_prog 'exit 0'
   run expect -f "$PI"
   [ "$status" -eq 0 ]
+}
+
+@test "reap after interact returns on the USER eof: drains the still-writing child, never deadlocks" {
+  reap_prog 'sleep 1; i=0; while [ $i -lt 2000 ]; do echo line-$i-padding-padding-padding; i=$((i+1)); done; exit 5' 1
+  run timeout 120 expect -f "$PI" </dev/null
+  [ "$status" -eq 5 ]
 }
