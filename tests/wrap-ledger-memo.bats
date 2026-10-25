@@ -618,3 +618,30 @@ _wl_live_fixture() {
   [ "$(field "$output" CUSTODY_MINE)" = "1" ]
   [ "$(field "$output" RUNG)" = "🔧" ]
 }
+
+# ══ § LOOP — both kill switches are inputs that change the answer (design §3.1 (ix), §7.1 L14) ═══
+# WRAP_LOOP_SCOPE=off and ~/.claude/state/loop-scope.off each turn the loop 🔧 back into today's ✅
+# while every other component of the key stays byte-identical, so a key blind to either would serve
+# the switched-on ledger to a switched-off caller in the same event (and the reverse).
+@test "§ LOOP: loop scope on and off in ONE event never share a memo body" {
+  printf -- '- [x] done\n' > "$D/dod-ok.md"; export WRAP_DOD_FILE="$D/dod-ok.md"
+  printf '## 2099-01-01T00:00:00Z (manual-set) · toplevel=%s · session=%s\n%s\n\n' \
+    "$(git rev-parse --show-toplevel)" "$SID" "Scope (frozen): Loop until dry; each round is one workflow." \
+    >> "$WRAP_DOD_FILE"
+  run bash "$LEDGER" --machine --transcript "$TP" --session "$SID"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "own" ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
+  run env WRAP_LOOP_SCOPE=off bash "$LEDGER" --machine --transcript "$TP" --session "$SID"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "off" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  mkdir -p "$HOME/.claude/state"; : > "$HOME/.claude/state/loop-scope.off"
+  run bash "$LEDGER" --machine --transcript "$TP" --session "$SID"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "off" ]
+  rm -f "$HOME/.claude/state/loop-scope.off"
+  run bash "$LEDGER" --machine --transcript "$TP" --session "$SID"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "own" ]
+}

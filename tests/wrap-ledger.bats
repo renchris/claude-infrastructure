@@ -2957,3 +2957,425 @@ off_path_timeout() { # → echoes an off-PATH bounder, or nothing
   printf '%s' "$output" | grep -q '^Next: *complete — nothing this session filed is open$'
   ! printf '%s' "$output" | grep -q 'nothing to do' || false
 }
+
+# ── LOOP SCOPE — § LOOP (ruling d610f8473106; docs/research/lead-keeps-working-2026-10-24.md §7.1) ──
+# THE INCIDENT (B13): a lead whose frozen scope was "loop until dry" filed two class-C decisions,
+# read ⛔ "need your call" at every close, and idled for hours although no decision gated the next
+# round. These cases pin the producer side of the fix: the ledger reads THIS session's own recorded
+# contract, says on the ⛔ line what the decisions do NOT gate, and ranks an unstopped loop as 🔧
+# just above ✅ — never above 🚀, the re-check ⛔ or 👤. Every case runs under a fixtured $HOME, so
+# the operator's own ~/.claude/state/loop-scope.off can never decide a verdict here.
+LP_B13="Scope (frozen): Loop until dry. Each round = one Dynamic Workflow; repeat until a round confirms nothing new, or the operator answers decision b4780d7bb60e 'stop'."
+# the same loop with no packet id in it: no cc-decide fork, so cases without a real store stay exact
+LP_LOOP="Scope (frozen): Loop until dry. Each round = one Dynamic Workflow; repeat until a round confirms nothing new."
+LP_N=0
+
+lp_setup() {
+  ok_state
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export WRAP_SESSION_ID="$SID"
+  # the cc-decide bound (default 5 s) is a production latency budget; under a loaded runner it fires
+  # and reads BLOCKED_SRC=error, which is a non-verdict here, not the state under test
+  export WRAP_DECIDE_TIMEOUT_S=120
+  # the identity persist_dod stamps (hooks/lib/dod-path.sh dod_toplevel), so the lineage filter keeps it
+  LP_TOP="$(git rev-parse --show-toplevel)"
+}
+
+# lp_block <label> <session> <line>… — one capture, shaped exactly as hooks/dod-persist.sh persist_dod
+# appends it: `## <ts> (<label>) · toplevel=<top> · session=<sid>`, the lines, a blank line.
+lp_block() {
+  local lab="$1" s="$2"; shift 2
+  LP_N=$((LP_N + 1))
+  { printf '## 2099-01-01T00:%02d:00Z (%s) · toplevel=%s · session=%s\n' "$LP_N" "$lab" "$LP_TOP" "$s"
+    printf '%s\n' "$@"; printf '\n'; } >> "$WRAP_DOD_FILE"
+}
+
+# lp_packet <id|-> <status> <class> <sid> <what> — a hand-written packet (fields cc-decide cannot set:
+# a status, a missing id). producer + a 2099 created make it count as a decision, not an unconvicted ask.
+lp_packet() {
+  local f="$1"; [ "$1" = "-" ] && f="noid$RANDOM"
+  mkdir -p "$CC_DECISIONS_DIR"
+  jq -n --arg id "$1" --arg st "$2" --arg cl "$3" --arg sid "$4" --arg w "$5" \
+    '{created:"2099-01-01T00:00:00Z", class:$cl, session_sid:$sid, what_plain:$w, options:[],
+      status:$st, veto_deadline:"", producer:"lkw-test"} + (if $id == "-" then {} else {id:$id} end)' \
+    > "$CC_DECISIONS_DIR/$f.json"
+}
+
+lp_l1() {
+  lp_setup; use_real_decide
+  lp_block stop-capture "$SID" "$LP_B13"
+  LP_A="$(open_blocking "$SID" "first fork")"; LP_B="$(open_blocking "$SID" "second fork")"
+}
+lp_l2() { lp_l1; lp_block manual-hold "$SID" "Scope (held): $LP_A — every round needs it"; }
+
+@test "LOOP L1: own loop + two open class-C ⇒ ⛔ that names the loop scope it does not gate" {
+  lp_l1
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  [ "$(field "$output" LOOP_SCOPE)" = "1" ]
+  [ "$(field "$output" LOOP_OPEN)" = "1" ]
+  [ "$(field "$output" LOOP_SRC)" = "own" ]
+  [ "$(field "$output" SCOPE_UNGATED)" = "1" ]
+  [ "$(field "$output" BLOCKED_IDS)" = "$(printf '%s\n' "$LP_A" "$LP_B" | LC_ALL=C sort | paste -sd, -)" ]
+  r="$(field "$output" READOUT)"
+  [[ "$r" == "⛔ Blocked — 2 decision(s) need your call"* ]] || false
+  [[ "$r" == *"Not gated by it: your loop scope (\"Loop until dry."* ]] || false
+  g="$(field "$output" BLOCKED_GLOSS)"
+  [[ "$g" == *"$LP_A (\"first fork\")"* ]] || false
+  [[ "$g" == *"$LP_B (\"second fork\")"* ]]
+}
+
+@test "LOOP L2: a hold naming an own open class-C ⇒ HELD, and the readout says held, not ungated" {
+  lp_l2
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  [ "$(field "$output" HELD)" = "1" ]
+  [ "$(field "$output" HELD_SRC)" = "own" ]
+  [ "$(field "$output" SCOPE_UNGATED)" = "0" ]
+  r="$(field "$output" READOUT)"
+  [[ "$r" == *"Held by this session: $LP_A — every round needs it."* ]] || false
+  [[ "$r" != *"Not gated"* ]]
+}
+
+@test "LOOP L3: the held packet answered ⇒ the hold is stale and the loop is ungated again" {
+  lp_l2
+  bash "$REPO/bin/cc-decide" action "$LP_A" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BLOCKED_SRC)" = "WRAP_SESSION_ID" ]   # the store was read (not error)
+  [ "$(field "$output" RUNG)" = "⛔" ]                 # LP_B is still open
+  [ "$(field "$output" HELD)" = "0" ]
+  [ "$(field "$output" HELD_SRC)" = "stale" ]
+  [ "$(field "$output" SCOPE_UNGATED)" = "1" ]
+}
+
+@test "LOOP L4: 'hold none' releases the hold" {
+  lp_l2
+  lp_block manual-hold "$SID" "Scope (held): none — the operator answered in chat"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" HELD_SRC)" = "released" ]
+  [ "$(field "$output" SCOPE_UNGATED)" = "1" ]
+}
+
+@test "LOOP L5: another session's loop is not mine" {
+  lp_setup
+  lp_block manual-set "sess-OTHER" "$LP_LOOP"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_OPEN)" = "0" ]
+  [ "$(field "$output" LOOP_SRC)" = "none" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+@test "LOOP L6: a recorded done ends the loop" {
+  lp_setup
+  lp_block manual-set "$SID" "$LP_LOOP"
+  lp_block manual-done "$SID" "Scope (done): round 7 confirmed nothing new"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "done" ]
+  [ "$(field "$output" LOOP_OPEN)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+@test "LOOP L7: a predecessor's done is inherited by the successor holding the same loop" {
+  lp_setup
+  lp_block manual-set "sess-OTHER" "$LP_LOOP"
+  lp_block manual-done "sess-OTHER" "Scope (done): round 7 confirmed nothing new"
+  lp_block manual-set "$SID" "$LP_LOOP"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "done" ]
+  [ "$(field "$output" LOOP_OPEN)" = "0" ]
+}
+
+@test "LOOP L8: a successor's capture of the same loop supersedes the predecessor" {
+  lp_setup
+  lp_block manual-set "$SID" "$LP_LOOP"
+  lp_block manual-set "sess-OTHER" "$LP_LOOP"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "superseded" ]
+  [ "$(field "$output" LOOP_OPEN)" = "0" ]
+  run env WRAP_SESSION_ID="sess-OTHER" bash "$LEDGER" --machine     # the successor drives it
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "own" ]
+  [ "$(field "$output" LOOP_OPEN)" = "1" ]
+}
+
+@test "LOOP L9: a PreCompact block neither opens nor closes a loop" {
+  lp_setup
+  lp_block PreCompact:auto "$SID" "$LP_LOOP"              # a scraped quote of a loop line
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "none" ]
+  [ "$(field "$output" LOOP_OPEN)" = "0" ]
+  lp_block manual-set "$SID" "$LP_LOOP"
+  lp_block PreCompact:auto "$SID" "Scope (frozen): fix the typo in the README"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "own" ]
+  [ "$(field "$output" LOOP_OPEN)" = "1" ]
+}
+
+@test "LOOP L10: a class-B packet only + own loop, clean and landed ⇒ 🔧, never ✅" {
+  lp_setup; use_real_decide
+  lp_block stop-capture "$SID" "$LP_B13"
+  bash "$REPO/bin/cc-decide" open --class B --session-sid "$SID" --what "keep running rounds?" --conviction 60 --receipt "x => y" \
+    --default "keep running rounds" --deadline "2099-01-01T00:00:00Z" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BLOCKED)" = "0" ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
+  [ "$(field "$output" LOOP_RUNG)" = "1" ]
+  r="$(field "$output" READOUT)"
+  [[ "$r" == *"your frozen scope is a loop with no recorded stop (\"Loop until dry."* ]] || false
+  [[ "$r" == *"dod-persist.sh done"* ]]
+}
+
+@test "LOOP L11a: the loop never masks 🚀" {
+  lp_setup
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  advance_trunk_adding 1
+  lp_block manual-set "$SID" "$LP_LOOP"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_OPEN)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+}
+
+@test "LOOP L11b: the loop never masks the re-check ⛔" {
+  lp_setup; use_real_decide; mk_own_transcript
+  lp_block manual-set "$SID" "$LP_LOOP"
+  mkdir -p "$CC_DECISIONS_DIR"
+  jq -n --arg sid "$SID" '{id:"0123456789ab", created:"2099-01-01T00:00:00Z", class:"C",
+      session_sid:"sess-OTHER", what_plain:"a foreign fork", options:[], status:"open", veto_deadline:"",
+      producer:"lkw-test", rechecks:[{sid:$sid, ts:"2099-01-01T00:00:00Z", conviction:60,
+      receipt:"r => s", tier:"signoff"}]}' > "$CC_DECISIONS_DIR/0123456789ab.json"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BLOCKED_RECHECKED)" = "1" ]
+  [ "$(field "$output" LOOP_OPEN)" = "1" ]
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  [[ "$(field "$output" READOUT)" == *"Not gated by it: your loop scope"* ]]
+}
+
+@test "LOOP L11c: the loop never masks 👤" {
+  lp_setup
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(blocked_json "$SID")")"; export CC_BACKLOG_BIN
+  lp_block manual-set "$SID" "$LP_LOOP"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_OPEN)" = "1" ]
+  [ "$(field "$output" RUNG)" = "👤" ]
+}
+
+@test "LOOP L12: the verb-first pattern — loops open a scope, look-alikes do not" {
+  lp_setup
+  local p
+  for p in "Loop until dry. Each round = one Dynamic Workflow" "repeat until a round confirms nothing new" \
+           "keep going until the backlog is empty" "**loop until** green"; do
+    : > "$WRAP_DOD_FILE"; lp_block manual-set "$SID" "Scope (frozen): $p"
+    run bash "$LEDGER" --machine
+    [ "$(field "$output" LOOP_SCOPE)" = "1" ] || { echo "positive read as not a loop: $p"; false; }
+  done
+  for p in "add the loop until dry floor to session-continue" "review why a loop until dry lead idled 11 h" \
+           "PHASE 1 — research … a loop scope (\"loop until …\")" "dry-run the migration until it passes" \
+           "Fix gate-runaway-loop until landed"; do
+    : > "$WRAP_DOD_FILE"; lp_block manual-set "$SID" "Scope (frozen): $p"
+    run bash "$LEDGER" --machine
+    [ "$(field "$output" LOOP_SCOPE)" = "0" ] || { echo "look-alike read as a loop: $p"; false; }
+  done
+}
+
+@test "LOOP L13a: inside a research program the loop is not open work" {
+  lp_l1
+  mkdir -p "$BATS_TEST_TMPDIR/registry"
+  export CC_RESEARCH_REGISTRY="$BATS_TEST_TMPDIR/registry/programs.json" CC_RESEARCH_BIN=/usr/bin/false
+  printf '{"programs":[{"slug":"alpha","aliases":[],"cwd_roots":["%s"],"state":"certifying"}]}\n' \
+    "$WORK" > "$CC_RESEARCH_REGISTRY"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "program" ]
+  [ "$(field "$output" SCOPE_UNGATED)" = "0" ]
+  [[ "$(field "$output" READOUT)" != *"Not gated"* ]] || false
+  run bash "$LEDGER"                                   # the default readout reads the same program
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Not gated"* ]]
+}
+
+@test "LOOP L13b: a program loop reads the SAME rung in the default and --machine modes" {
+  lp_setup
+  lp_block manual-set "$SID" "$LP_LOOP"
+  mkdir -p "$BATS_TEST_TMPDIR/registry"
+  export CC_RESEARCH_REGISTRY="$BATS_TEST_TMPDIR/registry/programs.json" CC_RESEARCH_BIN=/usr/bin/false
+  printf '{"programs":[{"slug":"alpha","aliases":[],"cwd_roots":["%s"],"state":"certifying"}]}\n' \
+    "$WORK" > "$CC_RESEARCH_REGISTRY"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "program" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  run bash "$LEDGER"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "✅"* ]]
+}
+
+@test "LOOP L14: both kill switches give today's readout, byte for byte" {
+  lp_l1
+  local today="⛔ Blocked — 2 decision(s) need your call: cc-decide list --open"
+  run env WRAP_LOOP_SCOPE=off bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "off" ]
+  [ "$(field "$output" SCOPE_UNGATED)" = "0" ]
+  [ "$(field "$output" READOUT)" = "$today" ]
+  mkdir -p "$HOME/.claude/state"; : > "$HOME/.claude/state/loop-scope.off"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "off" ]
+  [ "$(field "$output" READOUT)" = "$today" ]
+}
+
+@test "LOOP L15: rung_next — ungated ⛔ says drive; a held ⛔ keeps STOP-ASK" {
+  lp_l1
+  run bash "$LEDGER" --full
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^Next: *continue → drive the in-scope work the open decision(s) do not gate (loop scope: run the next round as scoped)'
+  printf '%s' "$output" | grep -q '^Loop scope: *OPEN'
+  lp_block manual-hold "$SID" "Scope (held): $LP_A — every round needs it"
+  run bash "$LEDGER" --full
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^Next: *STOP-ASK — put the decision in line 1'
+}
+
+@test "LOOP L16: custody is counted under ⛔ only when ungated own scope exists" {
+  lp_l1
+  CC_CUSTODY_BIN="$(_cust_json lp '[{"slug":"a-wave"}]')"; export CC_CUSTODY_BIN
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  [ "$(field "$output" CUSTODY_OPEN)" = "1" ]
+  [ "$(field "$output" CUSTODY_SRC)" != "skip" ] || false
+  lp_block manual-hold "$SID" "Scope (held): $LP_A — every round needs it"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" CUSTODY_SRC)" = "skip" ]
+}
+
+@test "LOOP L17: the new fields leave LIVE= on line 18 (the BUSY splice's anchor)" {
+  lp_l1
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [[ "$(printf '%s\n' "$output" | sed -n 18p)" == LIVE=* ]] || false
+  # every § LOOP field sits after RECHECKED_SRC, never inside the splice window
+  [ "$(printf '%s\n' "$output" | grep -n '^RECHECKED_SRC=' | cut -d: -f1)" -lt \
+    "$(printf '%s\n' "$output" | grep -n '^BLOCKED_IDS=' | cut -d: -f1)" ]
+}
+
+@test "LOOP L18: the id cell cannot shift the decision prose" {
+  lp_setup; use_real_decide
+  lp_packet 0123456789ab open C "$SID" "$(printf 'line one\tcol two\nline two')"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BLOCKED)" = "1" ]
+  [ "$(field "$output" BLOCKED_IDS)" = "0123456789ab" ]
+  # BLOCKED_WHAT is not an emitted field; the one-decision READOUT is where it lands, verbatim
+  [ "$(field "$output" READOUT)" = "⛔ Blocked — need your call: line one col two line two." ]
+  # a hand-written packet with NO id: its cell is padded, so the prose stays the prose
+  rm -f "$CC_DECISIONS_DIR/0123456789ab.json"
+  lp_packet - open C "$SID" "the id-less fork"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BLOCKED)" = "1" ]
+  [ "$(field "$output" READOUT)" = "⛔ Blocked — need your call: the id-less fork." ]
+  [ "$(field "$output" BLOCKED_IDS)" = "?" ]
+  rm -f "$CC_DECISIONS_DIR"/noid*.json
+  run bash "$LEDGER" --machine                          # zero open: the `-` pad never leaks out
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BLOCKED)" = "0" ]
+  printf '%s\n' "$output" | grep -qx 'BLOCKED_IDS='
+}
+
+@test "LOOP L19: no store file at all ⇒ capture-eligible (none), every field 0, today's rung" {
+  lp_setup
+  export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/no-such-dod.md"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" DOD)" = "absent" ]
+  [ "$(field "$output" LOOP_SRC)" = "none" ]
+  local k; for k in LOOP_SCOPE LOOP_OPEN LOOP_RUNG OWN_REMAINDER HELD SCOPE_UNGATED; do
+    [ "$(field "$output" "$k")" = "0" ] || { echo "$k not 0"; false; }
+  done
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+@test "LOOP L20: an answered named packet ends the drive; a fired default does not" {
+  lp_setup; use_real_decide
+  lp_block manual-set "$SID" "Scope (frozen): Loop until dry; stop when the operator answers decision 0123456789ab."
+  local st want
+  for st in actioned:answered vetoed:answered expired-actioned:own open:own; do
+    want="${st#*:}"; lp_packet 0123456789ab "${st%%:*}" C "sess-OTHER" "stop the loop?"
+    run bash "$LEDGER" --machine
+    [ "$status" -eq 0 ]
+    [ "$(field "$output" LOOP_SRC)" = "$want" ] || { echo "status ${st%%:*}: LOOP_SRC=$(field "$output" LOOP_SRC)"; false; }
+  done
+  [ "$(field "$output" LOOP_OPEN)" = "1" ]                # the last case: still open
+  export CC_DECIDE_BIN=/usr/bin/false                    # an unreadable store
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SRC)" = "error" ]
+  [ "$(field "$output" LOOP_OPEN)" = "0" ]
+  [ "$(field "$output" SCOPE_UNGATED)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+@test "LOOP L21: a lapsing hold holds until its epoch, then lapses back to ungated" {
+  lp_l1
+  local soon late; soon=$(( $(date +%s) + 3600 )); late=$(( $(date +%s) - 1 ))
+  lp_block manual-hold "$SID" "Scope (held): $LP_A until=$soon — waiting on one answer"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" HELD)" = "1" ]
+  [ "$(field "$output" HELD_SRC)" = "lapsing" ]
+  [ "$(field "$output" HELD_UNTIL)" = "$soon" ]
+  lp_block manual-hold "$SID" "Scope (held): $LP_A until=$late — waiting on one answer"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" HELD)" = "0" ]
+  [ "$(field "$output" HELD_SRC)" = "lapsed" ]
+  [ "$(field "$output" SCOPE_UNGATED)" = "1" ]
+  [[ "$(field "$output" READOUT)" == *"Not gated by it"* ]]
+}
+
+@test "LOOP L22: a non-loop scope pointing at a plan with open boxes is NOT ungated work (pinned)" {
+  lp_setup
+  mkdir -p docs/plans; printf -- '- [ ] step one\n- [ ] step two\n' > docs/plans/x.md
+  git add docs/plans/x.md; git commit -q -m plan; git push -q origin main
+  lp_block manual-set "$SID" "Scope (frozen): finish every open step in docs/plans/x.md"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LOOP_SCOPE)" = "0" ]
+  [ "$(field "$output" LOOP_SRC)" = "n-a" ]
+  [ "$(field "$output" SCOPE_UNGATED)" = "0" ]
+}
+
+@test "LOOP L23: a stop-capture never moves a sibling's DRAIN_SCOPE; a manual set still does" {
+  lp_setup
+  lp_block stop-capture "sess-A" "Scope (frozen): loop until the backlog is empty"
+  run env WRAP_SESSION_ID="sess-B" bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" DRAIN_SCOPE)" = "0" ]
+  lp_block manual-set "sess-A" "Scope (frozen): loop until the backlog is empty"
+  run env WRAP_SESSION_ID="sess-B" bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" DRAIN_SCOPE)" = "1" ]
+}
+
+@test "LOOP L24: the TSV exemption still discharges the changed ledger" {
+  run env CC_TSVPAD_OWN=scripts/wrap-ledger.sh bash "$REPO/scripts/tsv-pad-lint.sh"
+  [ "$status" -eq 0 ]
+  run bash "$REPO/scripts/tsv-pad-lint.sh"
+  [ "$status" -eq 0 ]
+}
