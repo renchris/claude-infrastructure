@@ -66,13 +66,18 @@ if ! _PAYLOAD=$(printf '%s' "$INPUT" | jq -r '
       ((.session_id | cell("-")) + "\t"
         + (.tool_input.run_in_background | cell("false")) + "\t"
         + (.agent_id | cell("-")) + "\t"
-        + (now | todateiso8601)),
+        + (now | todateiso8601) + "\t"
+        + (now | floor | tostring) + "\t"
+        + ((.tool_input.command // "") as $c
+           | "\($c | length)-\(($c[0:2048] + $c[-2048:]) | reduce explode[] as $x (7; (. * 31 + $x) % 2147483647))")),
       (.tool_input.command // empty)' 2>/dev/null); then
   abstain_unclear "unparseable PreToolUse payload on stdin"
 fi
 _META=${_PAYLOAD%%$'\n'*}
 if [[ "$_PAYLOAD" == *$'\n'* ]]; then CMD=${_PAYLOAD#*$'\n'}; else CMD=""; fi
-IFS=$'\t' read -r _P_SID _P_BG _P_AID _P_TS <<<"$_META"
+# _P_NOW (epoch) and _P_CKEY (length + a polynomial hash of the command's first and last 2 KiB) feed
+# the LOCKWATCH goal-loop guard below without a fork: bash 3.2 has no `%(%s)T` and no hash builtin.
+IFS=$'\t' read -r _P_SID _P_BG _P_AID _P_TS _P_NOW _P_CKEY <<<"$_META"
 [ -n "${_P_SID:-}" ] || _P_SID="-"
 [ -n "${_P_BG:-}" ] || _P_BG="false"
 # `agent_id` is present only when the call comes from a SUBAGENT (Agent tool); the main thread and a
@@ -862,6 +867,180 @@ vb_rule_text_init() {
   [[ "$VB_RAW" == "0" ]] && VB_RULE_TEXT=$(vb_blank_literals "$CMD_NOHD")
   return 0
 }
+
+# ── LOCKWATCH guards BEGIN (incident 2026-10-25, ~/incident-2026-10-25/solution/DESIGN.md C5) ──────
+# Three checks that read files only. The modal Bash call pays two glob tests and, for the goal-loop
+# counter, one builtin read and one builtin write of a small per-session file: no fork, no exec.
+#   (a) RC refusal. `kitten @` / `kitty @`, by any path, is refused while lockprobe says kitty RC is
+#       dead (state.json kitty_rc=dead) AND its hb is fresh (written within 10 s). On 10-25 a /goal
+#       loop ran ~640 Bash calls of 8 x `/Applications/kitty.app/Contents/MacOS/kitten @ ls` against a
+#       deaf kitty (transcripts-fleet.md:257-262); the it2-kitty breaker never saw them, because they
+#       did not go through it. Kill switch: CC_KITTY_RC_BREAKER=off.
+#   (b) Kill guard. A `kill -9|-KILL <pid…>` or `pkill -9` that reaches a pid lockprobe lists as a pty
+#       session leader (pty.json) is logged to kill-guard.jsonl, with the cure to use instead. It is
+#       REFUSED only once shadow-audit.json carries pass_killguard AND pass_band (7 days of observe,
+#       DESIGN.md §7 phase 2) and hb is fresh. SIGKILL of session leader 68298 by pid at 03:48:58 is
+#       the incident's likely trigger (RCA.md §3.1). Kill switch: CC_KILLGUARD=off; CC_KILLGUARD=observe
+#       keeps it logging even when armed.
+#   (c) Goal-loop guard. The 6th identical command from one session within 10 min, when the 5 before
+#       it all FAILED (real exit codes, from log-bash.sh's bash-execution.log), is refused with a stop
+#       message. Kill switch: CC_GOAL_LOOP_GUARD=off.
+LW_DIR="${CC_LOCKWATCH_DIR:-$HOME/.claude/autonomy/lockwatch}"
+lw_now() { [ -n "${_P_NOW:-}" ] && printf '%s' "$_P_NOW" || date +%s; }
+lw_hb_fresh() { # → 0 iff lockprobe's hb was written within CC_LOCKWATCH_HB_FRESH_S (10) seconds
+  local m
+  [ -f "$LW_DIR/hb" ] || return 1
+  m=$(stat -f %m "$LW_DIR/hb" 2>/dev/null) || return 1
+  [ $(( $(lw_now) - m )) -le "${CC_LOCKWATCH_HB_FRESH_S:-10}" ]
+}
+lw_jsonl() { # <file> <json object> — append, fail-open
+  [ -d "$LW_DIR" ] || mkdir -p "$LW_DIR" 2>/dev/null || return 0
+  printf '%s\n' "$2" >> "$LW_DIR/$1" 2>/dev/null || true
+}
+
+# (a) RC refusal
+if [ "${CC_KITTY_RC_BREAKER:-on}" != off ] && [[ "$CMD" == *kitt* && "$CMD" == *@* ]] && [ -f "$LW_DIR/state.json" ]; then
+  vb_rule_text_init
+  if [[ "$VB_RULE_TEXT" =~ (^|[^[:alnum:]_.-])kitt(en|y)[[:space:]]+@ ]]; then
+    _lw_state="$(cat "$LW_DIR/state.json" 2>/dev/null)"
+    if [[ "$_lw_state" =~ \"kitty_rc\"[[:space:]]*:[[:space:]]*\"dead\" ]] && lw_hb_fresh; then
+      deny "kitty remote control is DEAD (lockwatch state.json kitty_rc=dead, hb fresh): \`kitten @\` / \`kitty @\` is refused by the kitty_rc breaker. Every call adds a held peer to kitty's RC table (PEER_LIMIT 256; 8,738 drops on 2026-10-25) and cannot be answered. Do not retry or poll: stop the loop, and report that kitty RC is down. The breaker clears itself when lockprobe reads kitty_rc=ok."
+    fi
+  fi
+fi
+
+# (b) Kill guard — prefilter first: a kill word and a KILL/9 signal must both appear in the text
+if [ "${CC_KILLGUARD:-auto}" != off ] && [[ "$CMD" == *kill* ]] && [[ "$CMD" == *-9* || "$CMD" == *KILL* ]] && [ -s "$LW_DIR/pty.json" ]; then
+  # leaders: "<pid> <pgid> <lstart>" per pty session leader lockprobe recorded
+  _kg_leaders="$(jq -r '(.leaders // .pty_leaders // .session_leaders // [])[]? | objects
+                        | "\(.pid) \(.pgid // .pid) \(.lstart // "-")"' "$LW_DIR/pty.json" 2>/dev/null)"
+  _kg_pids=""
+  if [ -n "$_kg_leaders" ]; then
+    # one kill per segment; words split without globbing; quotes on a word are dropped
+    _kg_text="${CMD_NOHD//&&/$'\n'}"; _kg_text="${_kg_text//||/$'\n'}"
+    _kg_text="${_kg_text//[;|&]/$'\n'}"
+    while IFS= read -r _kg_seg; do
+      set -f; read -r -a _kg_w <<<"$_kg_seg"; set +f
+      _kg_i=0; _kg_n=${#_kg_w[@]}; _kg_cmd=""
+      while [ "$_kg_i" -lt "$_kg_n" ]; do
+        _kg_t="${_kg_w[$_kg_i]//[\"\']/}"
+        case "$_kg_t" in sudo|command|builtin|exec|nohup|env|*=*) _kg_i=$((_kg_i + 1)); continue ;; esac
+        case "${_kg_t##*/}" in kill|pkill) _kg_cmd="${_kg_t##*/}" ;; esac
+        break
+      done
+      [ -n "$_kg_cmd" ] || continue
+      _kg_sig=0; _kg_args=(); _kg_i=$((_kg_i + 1)); _kg_end=0
+      while [ "$_kg_i" -lt "$_kg_n" ]; do
+        _kg_t="${_kg_w[$_kg_i]//[\"\']/}"; _kg_i=$((_kg_i + 1))
+        if [ "$_kg_end" = 1 ]; then _kg_args+=("$_kg_t"); continue; fi
+        case "$_kg_t" in
+          --) _kg_end=1 ;;
+          -9|-KILL|-SIGKILL|-kill) _kg_sig=1 ;;
+          -s|-n) case "${_kg_w[$_kg_i]//[\"\']/}" in 9|KILL|SIGKILL) _kg_sig=1 ;; esac; _kg_i=$((_kg_i + 1)) ;;
+          -*) [ "$_kg_cmd" = pkill ] && _kg_args+=("$_kg_t") ;;
+          *) _kg_args+=("$_kg_t") ;;
+        esac
+      done
+      [ "$_kg_sig" = 1 ] || continue
+      if [ "$_kg_cmd" = kill ]; then
+        for _kg_t in "${_kg_args[@]+"${_kg_args[@]}"}"; do
+          case "$_kg_t" in ''|*[!0-9]*) ;; *) _kg_pids="$_kg_pids $_kg_t" ;; esac   # -<pgid> and %jobs pass
+        done
+      elif [ "${#_kg_args[@]}" -gt 0 ]; then
+        # pkill: resolve its pattern with pgrep in a detached child, abandoned after 2 s (pgrep reads
+        # KERN_PROC_ALL, which can stall under the very failure this guards); output goes to a file
+        _kg_f="$(mktemp "${TMPDIR:-/tmp}/kg-pgrep.XXXXXX" 2>/dev/null)" || _kg_f=""
+        if [ -n "$_kg_f" ]; then
+          ( /usr/bin/pgrep "${_kg_args[@]}" > "$_kg_f" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+          /usr/bin/perl -MTime::HiRes=time,sleep -e 'my ($p) = @ARGV; my $t = time + 2;
+            while (kill 0, $p) { exit 1 if time > $t; sleep 0.05 } exit 0' "$!" 2>/dev/null \
+            && _kg_pids="$_kg_pids $(tr '\n' ' ' < "$_kg_f")"
+          rm -f "$_kg_f"
+        fi
+      fi
+    done <<<"$_kg_text"
+  fi
+  if [ -n "${_kg_pids// /}" ]; then
+    _kg_armed=0
+    if [ "${CC_KILLGUARD:-auto}" != observe ] && [ -f "$LW_DIR/shadow-audit.json" ] \
+       && jq -e '.pass_killguard == true and .pass_band == true' "$LW_DIR/shadow-audit.json" >/dev/null 2>&1; then
+      _kg_armed=1
+    fi
+    _kg_fresh=0; lw_hb_fresh && _kg_fresh=1
+    _kg_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    _kg_boot="$(sysctl -n kern.bootsessionuuid 2>/dev/null)"
+    _kg_hit=""
+    while read -r _kg_lp _kg_lg _kg_ll; do
+      case " $_kg_pids " in *" $_kg_lp "*) ;; *) continue ;; esac
+      _kg_cure="/bin/bash ~/.claude/scripts/break-glass/rescue.sh unpoison $_kg_lg '$_kg_ll'"
+      _kg_dec=observe; [ "$_kg_armed$_kg_fresh" = 11 ] && _kg_dec=refuse
+      lw_jsonl kill-guard.jsonl "$(jq -nc --arg ts "$_kg_ts" --arg boot "$_kg_boot" --arg sid "$_P_SID" \
+        --arg cmd "${CMD:0:300}" --argjson pid "$_kg_lp" --arg pgid "$_kg_lg" --arg lstart "$_kg_ll" \
+        --arg decision "$_kg_dec" --argjson armed "$_kg_armed" --argjson fresh "$_kg_fresh" --arg cure "$_kg_cure" \
+        '{ts:$ts, boot:$boot, sid:$sid, pid:$pid, pgid:$pgid, lstart:$lstart, decision:$decision,
+          armed:($armed == 1), hb_fresh:($fresh == 1), cmd:$cmd, suggest:$cure}' 2>/dev/null)"
+      _kg_hit="${_kg_hit:+$_kg_hit; }pid $_kg_lp → $_kg_cure"
+      [ "$_kg_dec" = refuse ] && _kg_refuse=1
+    done <<<"$_kg_leaders"
+    if [ "${_kg_refuse:-0}" = 1 ]; then
+      deny "kill guard: this SIGKILLs a pty SESSION LEADER by pid ($_kg_hit). Killing a pty session leader while its members live is the 2026-10-25 trigger: its exit revokes the tty and every /dev lookup of that node sleeps (RCA.md §3.1). Use the unpoison verb instead — it re-verifies the leader and kills its whole session tree, openers first, leader last (RCA.md R3): $_kg_cure"
+    fi
+  fi
+fi
+
+# (c) Goal-loop guard — counter on the modal path is builtin-only; the log scan runs only at count 6+
+if [ "${CC_GOAL_LOOP_GUARD:-on}" != off ] && [ -n "$CMD" ] && [ "$_P_SID" != "-" ] && [ -n "${_P_CKEY:-}" ] && [ -n "${_P_NOW:-}" ]; then
+  case "$_P_SID" in *[!A-Za-z0-9._-]*) _gl_ok=0 ;; *) _gl_ok=1 ;; esac
+  if [ "$_gl_ok" = 1 ]; then
+    _gl_dir="${CC_GOAL_LOOP_DIR:-$HOME/.claude/state/goal-loop}"
+    _gl_f="$_gl_dir/$_P_SID"
+    if [ ! -d "$_gl_dir" ]; then mkdir -p "$_gl_dir" 2>/dev/null || _gl_ok=0; fi
+    if [ "$_gl_ok" = 1 ] && [ ! -f "$_gl_f" ]; then   # once per session: prune files of dead sessions
+      ( find "$_gl_dir" -type f -mtime +2 -delete ) </dev/null >/dev/null 2>&1 &
+    fi
+  fi
+  if [ "$_gl_ok" = 1 ]; then
+    # file: up to 16 lines "<key> <first_epoch> <count>", newest first
+    _gl_out="$_P_CKEY"; _gl_cnt=1; _gl_first="$_P_NOW"; _gl_rest=""; _gl_k=0
+    if [ -f "$_gl_f" ]; then
+      while read -r _gl_key _gl_t0 _gl_c; do
+        [ -n "$_gl_key" ] || continue
+        if [ "$_gl_key" = "$_P_CKEY" ]; then
+          if [ $(( _P_NOW - _gl_t0 )) -le 600 ]; then _gl_cnt=$(( _gl_c + 1 )); _gl_first="$_gl_t0"; fi
+          continue
+        fi
+        _gl_k=$(( _gl_k + 1 )); [ "$_gl_k" -lt 16 ] && _gl_rest="$_gl_rest$_gl_key $_gl_t0 $_gl_c"$'\n'
+      done < "$_gl_f"
+    fi
+    printf '%s %s %s\n%s' "$_gl_out" "$_gl_first" "$_gl_cnt" "$_gl_rest" > "$_gl_f" 2>/dev/null || true
+    if [ "$_gl_cnt" -ge 6 ]; then
+      _gl_log="${CC_BASH_EXEC_LOG:-$HOME/.claude/logs/bash-execution.log}"
+      _gl_since="$(date -u -r $(( _P_NOW - 600 )) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+      # entries start "[ts] [sid] "; the command may span lines; the LAST line ends " | Exit: <code>"
+      _gl_fails="$(tail -c 4000000 "$_gl_log" 2>/dev/null | GL_CMD="$CMD" GL_SID="$_P_SID" GL_SINCE="$_gl_since" awk '
+        BEGIN { H = "^\\[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9:]+Z\\] \\[[^]]*\\] " }
+        {
+          if ($0 ~ H) {
+            on = 0; ts = substr($1, 2, length($1) - 2); sid = substr($2, 2, length($2) - 2)
+            if (sid != ENVIRON["GL_SID"] || ts < ENVIRON["GL_SINCE"]) next
+            on = 1; body = $0; sub(H, "", body)
+          } else if (on) body = body "\n" $0
+          else next
+          if (match(body, / \| Exit: [^ \n]+$/)) {
+            if (substr(body, 1, RSTART - 1) == ENVIRON["GL_CMD"]) codes[++n] = substr(body, RSTART + 9)
+            on = 0
+          }
+        }
+        END { f = 0; for (i = n; i > n - 5 && i > 0; i--) if (codes[i] != "0" && codes[i] != "Interrupted") f++
+              printf "%d %d", f, (n < 5 ? n : 5) }')"
+      _gl_nf="${_gl_fails%% *}"
+      if [ "${_gl_nf:-0}" -ge 5 ] 2>/dev/null; then
+        deny "goal-loop guard: this is identical command #$_gl_cnt from this session in 10 minutes, and the last 5 runs of it all FAILED (bash-execution.log). Repeating it cannot succeed. Stop the loop: read the last error, change the approach or fix the cause, or report the blocker. On 2026-10-25 a /goal loop re-ran one failing command ~640 times."
+      fi
+    fi
+  fi
+fi
+# ── LOCKWATCH guards END ─────────────────────────────────────────────────────────────────────────
 
 # System damage, part 1 — the two shapes that are NOT an rm argv question. A fork bomb is syntax,
 # not a command with flags; `sudo rm` is a two-token shape whose breadth (any rm at all under
