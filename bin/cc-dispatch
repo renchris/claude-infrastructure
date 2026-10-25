@@ -3596,7 +3596,12 @@ EOF
           idl undeclared "$id: $cdv — the session is LIVE and spending ${acct}'s quota, but nothing on this box can see, name or reap it"
         fi
       fi
-    elif [ "$venue" != cloud ] && { [ "$frc" -eq 76 ] || [ "$frc" -eq 75 ]; }; then
+    else
+      # THE HIGH-VOLUME ONE. rc 9 here is the fire CAPACITY GATE, whose refusal text is literally
+      # "Shed load first … then re-fire" — a retryable machine state, measured at 36 refusals against
+      # 5 fires in one 2 h window. Unflagged it wrote the same ledger shape as a worker bouncing off
+      # the item, and reap's rule B blocked 228 items on it. See SELF-RELEASE in bin/cc-backlog.
+      #
       # THE SURFACE IS DOWN, OR THE BOX IS IN BROWNOUT — a PASS-WIDE fact, not this item's (lockup
       # incident 2026-10-25, DESIGN C4 R2). 76 = handoff-fire's anchor probe could not see the
       # terminal; 75 = brownout or the kitty RC breaker refused. Every later item in this pass would
@@ -3604,26 +3609,25 @@ EOF
       # the claim is released, the rest of the wave is deferred, and the pass abstains. 76 also backs
       # the dispatcher off 5 → 10 → 20 → 40 min (reset by the first success) and writes the
       # brownout latch every other spawner reads (V4), so nothing else probes the dead terminal.
-      local fsr fwhy; fsr="$(self_release "$id" spawn-fail)"
+      local fsr fwhy="" passwide=0
+      [ "$venue" != cloud ] && { [ "$frc" -eq 76 ] || [ "$frc" -eq 75 ]; } && passwide=1
+      fsr="$(self_release "$id" spawn-fail)"
       fexc="$(fire_excerpt "$ferrf")"
-      if [ "$frc" -eq 76 ]; then fwhy="$(surface_down)"; else fwhy="refused by brownout or the kitty RC breaker (rc 75) — clears with its votes, no backoff"; fi
-      ABSTAINED=1
-      idl skipped "$id: spawn rc=$frc — $fwhy (claim released${fsr})${fexc:+ — $fexc}"
-      idl abstained "surface-unavailable rc=$frc: $fwhy"
+      if [ "$passwide" = 1 ]; then
+        if [ "$frc" -eq 76 ]; then fwhy="$(surface_down)"; else fwhy="refused by brownout or the kitty RC breaker (rc 75) — clears with its votes, no backoff"; fi
+        ABSTAINED=1
+        idl skipped "$id: spawn rc=$frc — $fwhy (claim released${fsr})${fexc:+ — $fexc}"
+        idl abstained "surface-unavailable rc=$frc: $fwhy"
+      else
+        FAILED=$((FAILED + 1)); idl failed "$id: spawn rc=$frc (reopened${fsr})${fexc:+ — $fexc}"
+      fi
       [ -n "$ferrf" ] && fire_log_keep "$id" "$acct" "$frc" "$ferrf"
-      [ -n "$ferrf" ] && rm -f "$ferrf" 2>/dev/null || true
-      note_unplaced_wave surface-unavailable "the pass abstained at rc $frc ($fwhy) — re-admitted next pass" "$plan" "$i"
-      echo "cc-dispatch: ⛔ fire rc $frc — $fwhy. Pass abstains; nothing else fired." >&2
-      break
-    else
-      # THE HIGH-VOLUME ONE. rc 9 here is the fire CAPACITY GATE, whose refusal text is literally
-      # "Shed load first … then re-fire" — a retryable machine state, measured at 36 refusals against
-      # 5 fires in one 2 h window. Unflagged it wrote the same ledger shape as a worker bouncing off
-      # the item, and reap's rule B blocked 228 items on it. See SELF-RELEASE in bin/cc-backlog.
-      local fsr; fsr="$(self_release "$id" spawn-fail)"
-      fexc="$(fire_excerpt "$ferrf")"
-      FAILED=$((FAILED + 1)); idl failed "$id: spawn rc=$frc (reopened${fsr})${fexc:+ — $fexc}"
-      [ -n "$ferrf" ] && fire_log_keep "$id" "$acct" "$frc" "$ferrf"
+      if [ "$passwide" = 1 ]; then
+        [ -n "$ferrf" ] && rm -f "$ferrf" 2>/dev/null
+        note_unplaced_wave surface-unavailable "the pass abstained at rc $frc ($fwhy) — re-admitted next pass" "$plan" "$i"
+        echo "cc-dispatch: ⛔ fire rc $frc — $fwhy. Pass abstains; nothing else fired." >&2
+        break
+      fi
     fi
     [ -n "$ferrf" ] && rm -f "$ferrf" 2>/dev/null || true
   done

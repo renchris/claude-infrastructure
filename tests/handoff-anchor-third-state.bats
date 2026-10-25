@@ -78,9 +78,10 @@ setup() {
   [ "$elif_line" -lt "$refuse_line" ]
   [ "$refuse_line" -lt "$window_line" ]
 
-  # and it returns non-zero rather than falling through into the fallback
+  # and it returns non-zero rather than falling through into the fallback (76 = surface
+  # unavailable since the lockup incident 2026-10-25, DESIGN C4 R2; 1 before it)
   run bash -c "sed -n '${refuse_line},$((refuse_line+5))p' '$FIRE'"
-  echo "$output" | grep -q 'return 1'
+  echo "$output" | grep -qE 'return (1|76)$'
 }
 
 # ── RED controls: each guard must be able to FAIL ─────────────────────────────────────
