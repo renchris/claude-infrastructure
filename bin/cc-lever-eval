@@ -11,6 +11,10 @@ usage:
   cc-lever-eval build <flow> [--days 28] [--start EPOCH] [--end EPOCH] [--from CASES]
   cc-lever-eval split <flow>
   cc-lever-eval run <flow> [--policy P ...] [--params JSON] [--cases train|all|PATH]
+  cc-lever-eval run d1_successor [--params JSON] [--cases ...] [--reps 2] [--workers N]
+                                 model runs, refused until approve-harness
+  cc-lever-eval run d1_successor --smoke N                     N <= 5 cases, 1 rep, before approval;
+                                                               writes smoke/, never read by score/round
   cc-lever-eval score <flow> --candidate JSON [--split train|test --unseal]
   cc-lever-eval failures <flow> [--params JSON]                 train rows only
   cc-lever-eval check <flow> [all|repro|oracle|null|aa|served-model|truncation] [--ref CASES]
@@ -26,7 +30,7 @@ model-run flows (d2_lean):
   cc-lever-eval gate d2_lean [--tag T] [--smoke] [--write]       reported, never decided
   Every model run but --smoke (at most 2 cases, R=1) needs the approved harness.
 
-flows: d3_keepalive (S7a), d1_recycle and d4_pollloop (S7b), d2_lean (S10) built; d1_successor (S9).
+flows: d3_keepalive (S7a), d1_recycle and d4_pollloop (S7b), d1_successor (S9), d2_lean (S10) built.
 exit: 0 ok / a verdict was computed · 1 a check failed · 2 usage · 3 flow not built yet ·
       4 refused (harness not approved, sealed split, leak, more than one change)
 """
@@ -135,8 +139,14 @@ def cmd_split(a, F):
 
 
 def cmd_run(a, F):
+    if hasattr(F, "cmd_run"):
+        # a model-runs flow owns its runner: it refuses an unapproved harness itself, except the
+        # bounded --smoke that proves the harness before the operator approves it
+        return F.cmd_run(a, hc)
     if hasattr(F, "run_model"):
         return F.run_model(a)
+    if a.smoke:
+        raise Refused("--smoke is for model-runs flows; %s replays offline" % a.flow)
     if hc.FLOWS[a.flow]["model_runs"]:
         hc.require_approved(a.flow)
     if a.cases == "train":
@@ -341,10 +351,13 @@ def parser():
     p.add_argument("--policy", action="append")
     p.add_argument("--params")
     p.add_argument("--cases", default="train")
-    p.add_argument("--smoke", action="store_true")
+    # bare --smoke (d2_lean picks its own smoke cases) or --smoke N (d1_successor, N <= 5)
+    p.add_argument("--smoke", type=int, nargs="?", const=1, default=0)
     p.add_argument("--tag")
     p.add_argument("--acct")
     p.add_argument("--reps", type=int, choices=(1, 2), default=2)
+    p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--seed", type=int, default=0)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--timeout", type=float, default=4 * 3600)
     p = sub("keys", flow_cmd("keys"))

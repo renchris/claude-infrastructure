@@ -69,8 +69,20 @@ FLOWS = {
         wave="S7b",
         extra=("hooks/subagent-long-bash-shadow.sh",),
     ),
+    # the brief builder is the tuned surface (a round changes its params, never its bytes), and the
+    # judge and rubric grade every run: all are harness
     "d1_successor": dict(
-        kind="points", min_act=10.0, model_runs=True, built=False, wave="S9"
+        kind="points",
+        min_act=10.0,
+        model_runs=True,
+        built=True,
+        wave="S9",
+        extra=(
+            "scripts/lib/idle_recycle_brief.py",
+            "bin/cc-lever-judge",
+            "config/lever-rubrics.json",
+            "tools/lever-evals/d1_recycle/scan.py",
+        ),
     ),
     # the grader's judge and rubric are part of the harness; agents/workflow-lean.md is not (it is
     # the surface a round tunes, injected per run), nor is the shadow hook build_cases reads
@@ -471,12 +483,23 @@ def _append_rounds_line(line):
 def record_offline(flow, pp_wk, lo, verdict, split, params, harness=None):
     """Append the incumbent's offline savings as a kind=offline row of lever-rounds.jsonl: the row
     cc-lever-score's ADVANCE reads for "the offline replay agrees in sign" (pp/wk flows only)."""
-    row = dict(kind="offline", flow=flow, ts=utc(), pp_wk=round(pp_wk, 4), lo=round(lo, 4),
-               verdict=verdict, split=split, params=params, harness=harness)
+    row = dict(
+        kind="offline",
+        flow=flow,
+        ts=utc(),
+        pp_wk=round(pp_wk, 4),
+        lo=round(lo, 4),
+        verdict=verdict,
+        split=split,
+        params=params,
+        harness=harness,
+    )
     line = json.dumps(row, separators=(",", ":"), sort_keys=True)
     if len(line) > 2048:
         row.pop("params")
-        line = json.dumps(dict(row, truncated=True), separators=(",", ":"), sort_keys=True)
+        line = json.dumps(
+            dict(row, truncated=True), separators=(",", ":"), sort_keys=True
+        )
     _append_rounds_line(line)
     return row
 
