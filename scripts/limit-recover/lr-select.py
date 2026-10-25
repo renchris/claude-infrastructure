@@ -120,6 +120,7 @@ def read_transcript(path: Path) -> dict:
     branch = ""
     is_teammate = False
     last_ts = ""
+    last_real = ""
     turns = 0
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -136,18 +137,26 @@ def read_transcript(path: Path) -> dict:
                         if isinstance(obj, dict):
                             cwd = cwd or (obj.get("cwd") or "")
                             branch = branch or (obj.get("gitBranch") or "")
-                if '"type":"user"' in line or '"type":"assistant"' in line:
+                real = '"type":"user"' in line or '"type":"assistant"' in line
+                if real:
                     turns += 1
                 m = TS_RE.search(line)
                 if m and m.group(1) > last_ts:
                     last_ts = m.group(1)  # ISO-8601 UTC compares lexicographically
+                if real and m and m.group(1) > last_real:
+                    last_real = m.group(1)
     except OSError:
         return {}
     return {
         "cwd": cwd,
         "branch": branch,
         "is_teammate": is_teammate,
-        "last_activity": last_ts,
+        # The ranking key is the last USER or ASSISTANT record. Any record moved it before 2026-10-25,
+        # and at that reboot 11 transcripts got one at 13:15:0x from the shutdown itself, so the key
+        # ranked by when a session was killed, not by when it last worked: lr-select missed all 3
+        # sessions interrupted mid-task (rca/session-inventory.md §2). A transcript with no real
+        # record keeps the newest record of any type.
+        "last_activity": last_real or last_ts,
         "turns": turns,
     }
 

@@ -125,6 +125,21 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   [[ "$output" != *"stale-but-deep"* ]]
 }
 
+@test "winner = latest REAL turn: a record the shutdown wrote later does not rank a session (2026-10-25)" {
+  # At the 2026-10-25 reboot 11 transcripts got a record at 13:15:0x from the shutdown itself, so a
+  # session that had done nothing since 07:00 outranked one interrupted mid-task at 12:50.
+  # RED-proof: against origin/main's lr-select.py the shutdown-touched session wins.
+  local wt="$BATS_TEST_TMPDIR/wt/a"
+  mk .claude-next interrupted "$wt" "2026-10-25T17:50:00Z" 5
+  mk .claude-next idle-since-dawn "$wt" "2026-10-25T12:00:00Z" 5
+  f="$(ls "$LR_SELECT_HOME"/.claude-next/projects/*/idle-since-dawn.jsonl)"
+  printf '{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-10-25T18:15:03Z"}\n{"type":"attachment","timestamp":"2026-10-25T18:15:04Z"}\n' >> "$f"
+  run_sel --scan --recency-min 0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"interrupted"* ]] || false
+  [[ "$output" != *"idle-since-dawn"* ]]
+}
+
 @test "turn count breaks a last-activity tie" {
   local wt="$BATS_TEST_TMPDIR/wt/a"
   mk .claude-next thin "$wt" "2026-07-21T09:00:00Z" 3
