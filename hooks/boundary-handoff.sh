@@ -347,7 +347,8 @@ if [ "${CC_RECYCLE_RETRY:-on}" != off ] && [ -f "$rt" ]; then
     *)
       # Record the ask BEFORE making it: a ticket that could not be marked would ask at every Stop.
       if jq --argjson a "$rt_n" '.advised = $a' "$rt" > "$rt.tmp.$$" 2>/dev/null && mv -f "$rt.tmp.$$" "$rt" 2>/dev/null; then
-        rt_cmd="\$HOME/.claude/scripts/handoff-fire.sh --recycle"
+        # shellcheck disable=SC2088 # display text the agent runs; the ~ spelling is the one allow rules match
+        rt_cmd="~/.claude/scripts/handoff-fire.sh --recycle"
         [ -n "$rt_pf" ] && [ -f "$rt_pf" ] && rt_cmd="$rt_cmd --prompt-file $rt_pf"
         # Chosen OUTSIDE the string: this hook runs under /bin/bash 3.2 (its shebang), where a case
         # pattern's `)` inside `$( )` ends the substitution, so the message rendered the raw

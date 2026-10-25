@@ -73,7 +73,7 @@ sentence, not a follow-up they should have to type. Answer, then act:
 
 | This pane is | On `yes`, do this |
 |---|---|
-| a **fired peer** (a handoff-engagement marker in its prompt) whose work is landed and collected | Announce (`cc-notify <originator> "…"`), then **self-close yourself**: `$HOME/.claude/scripts/handoff-fire.sh self-close --terminal`. No `▶ Run this:` line — there is nothing for them to run. |
+| a **fired peer** (a handoff-engagement marker in its prompt) whose work is landed and collected | Announce (`cc-notify <originator> "…"`), then **self-close yourself**: `~/.claude/scripts/handoff-fire.sh self-close --terminal`. No `▶ Run this:` line — there is nothing for them to run. |
 | the **operator's own pane** (no engagement marker) | Say plainly that it is exhaustively done and safe to close, and stop. Retiring their pane is theirs; do NOT self-close, and do not leave a command they did not ask for. |
 
 Either way say the word **exhaustively** only when it is literally true — landed by content, gates
