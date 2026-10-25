@@ -97,7 +97,9 @@ u6() { /usr/bin/python3 -I "$REPO/hooks/lib/lever_flags.py" hash "$1" "$2" | cut
 
 @test "(2) pct 0 changes nothing the keepalive does: rc, output and the v2 wake row equal the base hook's" {
   base="$BATS_TEST_TMPDIR/base"; mkdir -p "$base/lib"
-  cp "$REPO"/hooks/lib/session_jobs.py "$REPO"/hooks/lib/mailbox-pending.sh "$base/lib/"
+  cp "$REPO"/hooks/lib/mailbox-pending.sh "$base/lib/"
+  # the base's idle_gap.py calls its own session_jobs API (S6b renamed state_at(jobs) to running_at)
+  git -C "$REPO" show c43f39d2b:hooks/lib/session_jobs.py > "$base/lib/session_jobs.py"
   git -C "$REPO" show c43f39d2b:hooks/idle-keepalive.sh > "$base/idle-keepalive.sh"
   git -C "$REPO" show c43f39d2b:hooks/lib/idle_gap.py > "$base/lib/idle_gap.py"
   asst_at "$(date +%s)" 500 150000

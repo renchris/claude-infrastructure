@@ -410,7 +410,7 @@ def jobs_at_wake(transcript, t, gap_start):
         return {}
     try:
         sj = _session_jobs()
-        return sj.state_at(
+        return sj.running_at(
             sj.jobs(sj.records(transcript, TAIL_BYTES)), t, ttl_end=gap_start + TTL_S
         )
     except Exception:

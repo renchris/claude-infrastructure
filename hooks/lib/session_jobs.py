@@ -22,17 +22,31 @@ PENDING QUESTION (G4): the session's final assistant text before the gap ends wi
 last 1500 characters say "your call" / "still yours", or its last assistant record asks through
 AskUserQuestion.
 
+STATE AT (wave S6b; plan § W7+ §2 lever invariants): state_at(sid, ts) finds the session's transcript
+under the four account roots and says what it was doing at ts — busy, idle, headless, pending
+question — and when its next turn completed. bin/cc-lever-guard judges D1/D3 by it; S12 reuses it.
+
 CLI (boundary-handoff.sh): session_jobs.py gap <transcript> <idle_start> <check_at> [tail_bytes]
-prints one JSON object. Fail-open: any error prints {}. Python 3.9-safe, stdlib only.
+prints one JSON object; session_jobs.py state <sid> <ts> [transcript] prints state_at's.
+Fail-open: any error prints {}. Python 3.9-safe, stdlib only.
 """
 
 import json
 import os
 import re
+import stat
 import sys
 from datetime import datetime
 
 TAIL_BYTES = 4000000
+ACCOUNT_DIRS = (
+    ".claude",
+    ".claude-secondary",
+    ".claude-tertiary",
+    ".claude-quaternary",
+)
+HEADLESS_ENTRYPOINT = "sdk-cli"
+TURN_END_SUBTYPES = ("turn_duration", "stop_hook_summary")
 MONITOR_DEFAULT_MS, MONITOR_CAP_MS = 300000, 1800000
 TUID = re.compile(r"<tool-use-id>([^<]+)</tool-use-id>")
 TID = re.compile(r"<task-id>([^<]+)</task-id>")
@@ -186,9 +200,9 @@ def jobs(recs):
     return out
 
 
-def state_at(js, t, ttl_end=None):
-    """→ what was running at t: busy, its kinds and oldest age, and the watchers. With ttl_end,
-    watcher_fires_before_ttl says whether a running watcher fires on its own before ttl_end."""
+def running_at(js, t, ttl_end=None):
+    """→ what of jobs(recs) was running at t: busy, its kinds and oldest age, and the watchers. With
+    ttl_end, watcher_fires_before_ttl says whether a running watcher fires on its own before ttl_end."""
     run = [j for j in js if j["launch"] <= t and (j["end"] is None or j["end"] > t)]
     busy = [j for j in run if j["kind"] != "watcher"]
     watch = [j for j in run if j["kind"] == "watcher"]
@@ -235,9 +249,112 @@ def pending_question(recs, before):
     return False, None
 
 
+def find_transcript(sid, home=None):
+    """→ the main transcript <root>/<project>/<sid>.jsonl under the four account roots, or None. A
+    cross-account copy resolves to the most recently written one (the live session); only a regular
+    file counts, so a FIFO or a directory never blocks a reader."""
+    if not sid or "/" in sid or sid in (".", ".."):
+        return None
+    home = home or os.environ.get("HOME") or os.path.expanduser("~")
+    best = None
+    for d in ACCOUNT_DIRS:
+        root = os.path.join(home, d, "projects")
+        try:
+            projects = os.listdir(root)
+        except OSError:
+            continue
+        for p in projects:
+            f = os.path.join(root, p, sid + ".jsonl")
+            try:
+                st = os.stat(f)
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode) and (best is None or st.st_mtime > best[0]):
+                best = (st.st_mtime, f)
+    return best[1] if best else None
+
+
+def _is_prompt(r):
+    """A main-thread user record that starts a turn: text, not only tool results."""
+    if r.get("type") != "user" or r.get("isMeta"):
+        return False
+    c = _content(r)
+    if isinstance(c, str):
+        return bool(c.strip())
+    return isinstance(c, list) and any(
+        isinstance(b, dict) and b.get("type") == "text" for b in c
+    )
+
+
+def state_at(sid, ts, transcript=None, tail_bytes=TAIL_BYTES, home=None):
+    """→ what session `sid` was doing at epoch `ts`, read from the tail of its transcript:
+      found                 a transcript was read (every other field is None when it was not)
+      headless              a `-p` session (entrypoint sdk-cli)
+      busy, busy_kinds, watcher_running   the background jobs running at ts (running_at above)
+      idle                  no turn in flight at ts: the last turn start at or before ts has a turn
+                            end at or before ts
+      pending_question, pq_why            G4 for the final assistant message at or before ts
+      turn_completed_after  epoch of the first turn end strictly after ts, or None
+    A turn ends at a system turn_duration or stop_hook_summary record (the harness writes one at
+    every Stop). The guard's lever invariants (bin/cc-lever-guard) read this; so does wave S12.
+    Never raises: an unreadable or absent transcript is found=False."""
+    out = dict(
+        sid=sid,
+        found=False,
+        transcript=None,
+        headless=None,
+        busy=None,
+        busy_kinds=None,
+        watcher_running=None,
+        idle=None,
+        pending_question=None,
+        pq_why=None,
+        turn_completed_after=None,
+    )
+    try:
+        path = transcript or find_transcript(sid, home)
+        if not path or not stat.S_ISREG(os.stat(path).st_mode):
+            return out
+        recs = records(path, tail_bytes)
+    except (OSError, ValueError):
+        return out
+    if not recs:
+        return out
+    out.update(found=True, transcript=path)
+    eps = [r.get("entrypoint") for r in recs if isinstance(r.get("entrypoint"), str)]
+    out["headless"] = (HEADLESS_ENTRYPOINT in eps) if eps else None
+    run = running_at(jobs(recs), ts)
+    out.update(
+        busy=run["busy"],
+        busy_kinds=run["busy_kinds"],
+        watcher_running=run["watcher_running"],
+    )
+    last_start = last_end = after = None
+    for r in recs:
+        t = _ts(r)
+        if t is None:
+            continue
+        end = r.get("type") == "system" and r.get("subtype") in TURN_END_SUBTYPES
+        if t <= ts:
+            if end:
+                last_end = t
+            elif _is_prompt(r):
+                last_start = t
+        elif end and after is None:
+            after = t
+    out["idle"] = (
+        None
+        if last_start is None and last_end is None
+        else last_end is not None and (last_start is None or last_end >= last_start)
+    )
+    out["turn_completed_after"] = after
+    out["pending_question"], out["pq_why"] = pending_question(recs, ts)
+    return out
+
+
 def gap(path, idle_start, check_at, tail_bytes=TAIL_BYTES):
     recs = records(path, tail_bytes)
-    st = state_at(jobs(recs), check_at)
+    st = running_at(jobs(recs), check_at)
     pq, why = pending_question(recs, idle_start)
     return dict(
         busy_tool=st["busy"],
@@ -254,6 +371,8 @@ def main(argv):
         if argv[:1] == ["gap"] and len(argv) in (4, 5):
             tb = int(argv[4]) if len(argv) == 5 else TAIL_BYTES
             row = gap(argv[1], float(argv[2]), float(argv[3]), tb)
+        elif argv[:1] == ["state"] and len(argv) in (3, 4):
+            row = state_at(argv[1], float(argv[2]), argv[3] if len(argv) == 4 else None)
         else:
             row = {}
     except Exception:  # fail-open: a log-only caller must never fail on this

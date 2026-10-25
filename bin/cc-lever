@@ -11,7 +11,7 @@ precedence in hooks/lib/lever_flags.py. Only the operator raises a stage; the gu
   cc-lever promote <Dn> --confirm                the candidate's params become the incumbent's
   cc-lever ack <trip_id> --reason R --confirm    releases a latched trip; raises nothing
   cc-lever history [--lever Dn] [-n N] [--json]  the audit rows (~/.claude/logs/lever-flags.jsonl)
-  cc-lever trip <Dn> --cause breach|blind|revert --reason R [--detail JSON]
+  cc-lever trip <Dn> --cause breach|blind|revert|invariant --reason R [--detail JSON]
                                                  the guard's verb (bin/cc-lever-guard): pct 0, mode
                                                  shadow, latch a trip; lowers only, needs no gate
 
@@ -362,7 +362,7 @@ def cmd_ack(args):
 
 
 GUARD_BY = "guard:cc-lever-guard"
-TRIP_CAUSES = ("breach", "blind", "revert")
+TRIP_CAUSES = ("breach", "blind", "revert", "invariant")
 
 
 def guard_trip(lever, cause, reason, detail=None):

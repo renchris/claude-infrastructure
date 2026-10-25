@@ -4,6 +4,8 @@
 
   cc-lever-guard [tick] [--json]     one guard pass; prints one line (or the JSON tick row)
   cc-lever-guard status [--json]     the last tick, the NO-DATA counters and the heartbeat age
+  cc-lever-guard invariants [--all] [--json]   read-only invariant pass (exit 3 on any occurrence)
+  cc-lever-guard selftest [--json]   planted-occurrence check of every invariant site (wave S6b)
 
 WHAT A TICK READS — small stores only, never a transcript: the guard verdicts of
 `cc-lever-score guards` (scripts/lib/lever_guards.py over the ledger rows the hourly
@@ -12,13 +14,17 @@ roots), computed in-process so one python start serves the whole tick, plus the 
 lever-score.jsonl verdict row per lever.
 
 WHAT IT DOES, per lever:
+  an INVARIANT occurrence (wave S6b:  trip, cause invariant — one treated occurrence is enough; see
+    the section below; plus any       "single-occurrence lever invariants". An occurrence whose trip
+    owed from a failed write)         cannot be written is kept owed and retried next tick.
   BREACH (a guard)                    trip, cause breach — at ANY stage, S0 included: at pct 0 there
                                       is nothing to demote, but the trip still latches and pages.
   REVERT / NOT-MERGED (lever-score,   trip, cause revert — only while the lever is live (pct > 0 or
     a verdict row since the stage     mode live): the plan sends both back to pct 0.
     began, at the current stage)
-  NO-DATA / PLUMBING, or a tick that  counted; the second CONSECUTIVE one trips, cause blind — only
-    could not evaluate at all         while the lever is live. At pct 0 a blind guard protects
+  NO-DATA / PLUMBING, a tick that     counted; the second CONSECUTIVE one trips, cause blind — only
+    could not evaluate at all, or a   while the lever is live. At pct 0 a blind guard protects
+    blind invariant pass
                                       nothing, and a blind latch there would only be load noise
                                       that blocks the next raise.
   OK / IDLE                           the NO-DATA count resets.
@@ -34,10 +40,13 @@ therefore goes silent, and the dead-man in lever_flags drops every lever to pct 
 CC_LEVER_DEADMAN_S (1800 s). cc-lever refuses a raise without a fresh heartbeat.
 
 BOUND. ≤ 60 s: the evaluation runs under SIGALRM at CC_LEVER_GUARD_EVAL_S (40 s); a timeout is a
-NO-DATA tick for every lever, never a crash. The lock wait inside guard_trip is 10 s. Standard QoS.
+NO-DATA tick for every lever, never a crash; the invariant pass has its own CC_LEVER_GUARD_INV_S (10 s)
+and a timeout there is a blind pass. The lock wait inside guard_trip is 10 s. Standard QoS.
 Rows: one kind=tick row per tick (no `lever` field, so cc-lever-score report keeps reading the
 hourly kind=guard rows) and one kind=trip row per trip attempt, both in lever-guard.jsonl, ≤ 2 KB.
-State: ~/.claude/state/levers/guard-state.json (the NO-DATA counters), written tmp+rename.
+State: ~/.claude/state/levers/guard-state.json (the NO-DATA counters) and guard-invariants.json (the
+per-log byte cursor, pending 10-min judgements, the memory behind second-of-a-kind and 24-h counts,
+owed trips), both written tmp+rename; the cursor advances only with the owed trips saved beside it.
 Exit: 0 tick done (trips included) · 1 a trip could not be written (no heartbeat) · 2 usage.
 Env (tests): CC_NOW, CC_LEVER_STATE_DIR, CC_LEVER_FLAGS, CC_LEVER_HEARTBEAT, CC_LEVER_LOG_DIR,
 CC_LEVER_PAGES_DIR, CC_LEVER_GUARD_EVAL_S, plus scripts/lib/lever_events.py's seams.
@@ -168,6 +177,348 @@ def is_live(e):
     return isinstance(e, dict) and ((e.get("pct") or 0) > 0 or e.get("mode") == "live")
 
 
+# ── single-occurrence lever invariants (wave S6b; plan § W7+ §2 S1 trip lists, §6) ──────────────
+# Rate, median and Wilson trips stay with the hourly scorer; these trip on ONE treated occurrence.
+# Read from the rows appended since the last tick (a byte cursor per log, INV_STATE_NAME), never by
+# a transcript scan: a transcript is opened only to judge a TREATED D1/D3 event (state_at), so at
+# pct 0 the pass opens none. A row counts only if its arm is treat (pct > 0) and it was written
+# since its lever's stage began. An occurrence takes the same guard_trip path as a breach.
+#   D3 idle-keepalive.jsonl  kind=wake, fired=true: a second wake in one gap (also: n >= 2); busy
+#        false; a headless session; no completed turn within TURN_WINDOW_S (judged once it passed)
+#   D4 subagent-long-bash.jsonl  kind=subagent_bash treat_verdict=deny, kind=d4_follow
+#        follows_verdict=deny: the follow-up backgrounded (what trips the /goal gate; the follow row
+#        is written before validate-bash's goal guard runs); STREAK_MAX consecutive denies to one
+#        agent (each the direct follow of the last); NONWAIT_MAX denies in 24 h whose follow-up is
+#        not the sliced wait (echo_rc false)
+#   D2 workflow-lean-shadow.jsonl  main rows (no kind; kind=slots continuations are skipped): a deny
+#        on a resume; a deny with no would-deny slot (it hit a needs-default or keep-default one); a
+#        second deny of one (session, script_sha); any treated row past the 5 s hook timeout or
+#        self-bounded (parse, arm or treatment)
+#   D1 idle-keepalive.jsonl  kind=d1_recycle fired=true, kind=d1_engage — the S12 row contract in
+#        plan § W7+ §3 row "Auto-rollback": a G1 kill (g1_kill, busy, or state_at busy) or G4
+#        violation (g4_violation, pending_question, or state_at's); no d1_engage within
+#        TURN_WINDOW_S; any double wake — a second D1 recycle or D3 wake in the same (sid, gap_start)
+INV_STATE_NAME = "guard-invariants.json"
+INV_LOGS = ("idle-keepalive.jsonl", "subagent-long-bash.jsonl", "workflow-lean-shadow.jsonl")
+TURN_WINDOW_S = 600
+STREAK_MAX = 3
+NONWAIT_MAX, NONWAIT_WINDOW_S = 3, 86400
+D2_HOOK_TIMEOUT_MS = 5000
+KEEP_S = 7 * 86400            # how long a seen (sid, gap) or (session, script_sha) is remembered
+READ_CAP = 16 * 1024 * 1024   # bytes per log per tick; a larger backlog is finished on later ticks
+OWED_CAP = 20
+
+sj = _load("session_jobs", os.path.join(HERE, "..", "hooks", "lib", "session_jobs.py"))
+
+
+def inv_budget():
+    return max(1, lf._int_env("CC_LEVER_GUARD_INV_S", 10))
+
+
+def inv_state_path():
+    return os.path.join(lf.state_dir(), INV_STATE_NAME)
+
+
+def read_inv_state():
+    try:
+        with open(inv_state_path(), "rb") as f:
+            st = json.loads(f.read().decode("utf-8"))
+        if isinstance(st, dict) and st.get("v") == 1:
+            return st
+    except (OSError, ValueError):
+        pass
+    return {"v": 1}
+
+
+def _rows_of(data):
+    out, bad = [], 0
+    for ln in data.split(b"\n"):
+        if not ln.strip():
+            continue
+        try:
+            r = json.loads(ln)
+        except ValueError:
+            bad += 1
+            continue
+        if isinstance(r, dict):
+            out.append(r)
+        else:
+            bad += 1
+    return out, bad
+
+
+def read_appended(path, cur, t_now, cap=READ_CAP):
+    """→ (rows appended since cursor `cur`, new cursor, note). Only whole lines are consumed. After
+    a rotation (a new inode) the rest of the file the cursor was in is read from the oldest rotation
+    stamped at or after the last read (lever_events.rotations), then the new file from 0."""
+    import gzip
+    import stat as _stat
+    cur = cur if isinstance(cur, dict) else None
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return [], {"ino": None, "off": 0, "at": t_now}, "missing"
+    if not _stat.S_ISREG(st.st_mode):
+        raise OSError("%s is not a regular file" % path)
+    data, note, off = b"", None, 0
+    if cur is not None and cur.get("ino") == st.st_ino:
+        off = int(cur.get("off") or 0)
+        if st.st_size < off:
+            off, note = 0, "truncated"
+    elif cur is not None and cur.get("ino") is not None:
+        note = "rotated"
+        rots = le.rotations(path, since=cur.get("at"))
+        if rots:
+            opener = gzip.open if rots[0].endswith(".gz") else open
+            with opener(rots[0], "rb") as f:
+                f.seek(int(cur.get("off") or 0))
+                tail = f.read(cap)
+            data = tail[: tail.rfind(b"\n") + 1]
+    with open(path, "rb") as f:
+        f.seek(off)
+        chunk = f.read(cap)
+    whole = chunk[: chunk.rfind(b"\n") + 1]
+    if len(whole) < len(chunk) and len(chunk) == cap:
+        note = "backlog"
+    rows, bad = _rows_of(data + whole)
+    return rows, {"ino": st.st_ino, "off": off + len(whole), "at": t_now, "bad": bad}, note
+
+
+def _arm(r):
+    a = r.get("arm")
+    if isinstance(a, dict):
+        return a.get("arm"), a.get("pct_eff")
+    pe = r.get("pct_eff")
+    if pe is None and isinstance(r.get("d1"), dict):
+        pe = r["d1"].get("pct_eff")
+    return a, pe
+
+
+def treated(r, L=None, doc=None, src=None):
+    """A TREATED event: its logged arm is treat at pct > 0 (lever_flags only hashes a unit into treat
+    when pct_eff > 0, so a row that omits pct_eff, like a D3 wake, is judged by its arm). A row whose
+    arm was never computed (a self-bounded D2 hook) is recomputed against the current flag file."""
+    arm, pe = _arm(r)
+    if arm is None and L is not None and r.get("arm") is None:
+        unit = r.get("lineage") or r.get("session_id") or r.get("sid")
+        if unit:
+            a = lf.arm(L, unit, doc, src)
+            arm, pe = a.get("arm"), a.get("pct_eff")
+    return arm == "treat" and (pe is None or (isinstance(pe, (int, float)) and pe > 0))
+
+
+class Pass:
+    """One invariant pass over appended rows; collects occurrences per lever into self.occ."""
+
+    def __init__(self, st, doc, src, t_now):
+        self.st, self.doc, self.src, self.now = st, doc, src, t_now
+        self.occ = {}
+        self.treated = 0
+        self._sa = {}
+        for k in ("wakes", "d2_denied", "d4_agents", "engaged"):
+            if not isinstance(st.get(k), dict):
+                st[k] = {}
+        for k in ("pending", "d4_nonwait"):
+            if not isinstance(st.get(k), list):
+                st[k] = []
+
+    def stage_start(self, L):
+        e = ((self.doc or {}).get("levers") or {}).get(L) if self.src == "file" else None
+        return le.parse_ts((e or {}).get("stage_started_at")) or 0.0
+
+    def state_at(self, sid, t):
+        k = (sid, t)
+        if k not in self._sa:
+            self._sa[k] = sj.state_at(sid, t, home=lf.home())
+        return self._sa[k]
+
+    def hit(self, L, inv, t, sid, why):
+        self.occ.setdefault(L, []).append(
+            {"lever": L, "inv": inv, "ts": le.iso(t), "sid": (sid or "")[:64], "why": why[:160]})
+
+    def row(self, r):
+        t = le.parse_ts(r.get("ts"))
+        if t is None:
+            return
+        kind = r.get("kind")
+        if kind == "d1_engage":
+            if r.get("recycle_id"):
+                self.st["engaged"][str(r["recycle_id"])[:128]] = t
+            return
+        L = {"wake": "D3", "d1_recycle": "D1", "subagent_bash": "D4", "d4_follow": "D4"}.get(kind)
+        if L is None and kind is None and r.get("hook") == "workflow-lean-shadow":
+            L = "D2"
+        if L is None or t < self.stage_start(L) or not treated(r, L, self.doc, self.src):
+            return
+        if kind in ("wake", "d1_recycle") and r.get("fired") is not True:
+            return                      # a would-wake or would-recycle row: nothing happened yet
+        self.treated += 1
+        getattr(self, "row_" + L)(r, t)
+
+    def wake(self, L, r, t, sid):
+        """One wake per gap across D1 and D3: a second in the same (sid, gap_start) is a double wake,
+        D1's if a D1 recycle is either of them, else D3's second wake."""
+        key = "%s|%s" % (sid, r.get("gap_start"))
+        prior = self.st["wakes"].get(key) or []
+        if prior or (L == "D3" and int(r.get("n") or 1) >= 2):
+            if L == "D1" or "D1" in prior:
+                self.hit("D1", "d1_double_wake", t, sid, "a second wake in gap %s (%s after %s)" % (
+                    r.get("gap_start"), L, ",".join(prior) or "n=%s" % r.get("n")))
+            else:
+                self.hit("D3", "d3_second_wake", t, sid,
+                         "a second D3 wake in gap %s (n=%s)" % (r.get("gap_start"), r.get("n")))
+        self.st["wakes"][key] = prior + [L]
+        self.st.setdefault("wakes_t", {})[key] = t
+
+    def row_D3(self, r, t):
+        sid = r.get("sid")
+        self.wake("D3", r, t, sid)
+        busy = r.get("busy") if isinstance(r.get("busy"), bool) else self.state_at(sid, t)["busy"]
+        if busy is False:
+            self.hit("D3", "d3_idle_wake", t, sid, "a wake with busy=false")
+        hl = r.get("headless") if isinstance(r.get("headless"), bool) else self.state_at(sid, t)["headless"]
+        if hl is True:
+            self.hit("D3", "d3_headless_wake", t, sid, "a wake in a headless session")
+        self.st["pending"].append({"lever": "D3", "inv": "d3_no_turn", "sid": sid, "t": t})
+
+    def row_D1(self, r, t):
+        sid = r.get("sid")
+        self.wake("D1", r, t, sid)
+        sa = self.state_at(sid, t)
+        if r.get("g1_kill") is True or r.get("busy") is True or sa["busy"] is True:
+            self.hit("D1", "d1_g1_kill", t, sid,
+                     "a recycle over a running job (G1): row g1_kill=%s busy=%s, transcript busy=%s" % (
+                         r.get("g1_kill"), r.get("busy"), sa["busy"]))
+        if r.get("g4_violation") is True or r.get("pending_question") is True or sa["pending_question"] is True:
+            self.hit("D1", "d1_g4", t, sid,
+                     "a recycle over a pending question (G4): row g4_violation=%s, transcript %s" % (
+                         r.get("g4_violation"), sa["pq_why"]))
+        self.st["pending"].append({"lever": "D1", "inv": "d1_no_engage", "sid": sid, "t": t,
+                                   "recycle_id": str(r.get("recycle_id") or "")[:128]})
+
+    def row_D4(self, r, t):
+        aid = str(r.get("agent_id") or "")[:128]
+        sid = r.get("sid")
+        a = self.st["d4_agents"].get(aid) or {}
+        if r.get("kind") == "d4_follow":
+            if r.get("follows_verdict") != "deny":
+                return
+            a["follow"] = [r.get("tool_use_id"), r.get("follows_tool_use_id")]
+            if r.get("run_in_background") is True:
+                self.hit("D4", "d4_goal_gate", t, sid,
+                         "agent %s backgrounded its follow-up to a deny (the /goal gate shape)" % aid)
+            elif r.get("echo_rc") is not True:
+                nw = [x for x in self.st["d4_nonwait"] if x > t - NONWAIT_WINDOW_S] + [t]
+                self.st["d4_nonwait"] = nw
+                if len(nw) >= NONWAIT_MAX:
+                    self.hit("D4", "d4_nonwait", t, sid,
+                             "%d non-wait denies in 24 h (follow-up of a deny without echo rc)" % len(nw))
+        elif r.get("treat_verdict") == "deny":
+            tuid = r.get("tool_use_id")
+            direct = a.get("last_deny") is not None and a.get("follow") == [tuid, a.get("last_deny")]
+            a["streak"] = int(a.get("streak") or 0) + 1 if direct else 1
+            a["last_deny"] = tuid
+            if a["streak"] >= STREAK_MAX:
+                self.hit("D4", "d4_streak", t, sid, "%d consecutive denies to agent %s" % (a["streak"], aid))
+        a["t"] = t
+        self.st["d4_agents"][aid] = a
+
+    def row_D2(self, r, t):
+        sid = r.get("session_id")
+        lat = r.get("latency_ms") if isinstance(r.get("latency_ms"), dict) else {}
+        bounded = [k for k in ("parse", "arm_error", "treat_error") if r.get(k) == "self-bounded"]
+        wall = lat.get("wall")
+        if bounded or (isinstance(wall, (int, float)) and wall >= D2_HOOK_TIMEOUT_MS):
+            self.hit("D2", "d2_bound", t, sid,
+                     "hook %s (wall %s ms)" % (
+                         "self-bounded at " + ",".join(bounded) if bounded else "past its 5 s timeout", wall))
+        if r.get("denied") is not True:
+            return
+        if r.get("resume_from_run_id"):
+            self.hit("D2", "d2_resume", t, sid, "a deny on a resume (%s)" % str(r["resume_from_run_id"])[:40])
+        v = r.get("verdicts")
+        n_deny = v.get("would-deny", 0) if isinstance(v, dict) else sum(
+            1 for s in (r.get("slots") or []) if isinstance(s, dict) and s.get("verdict") == "would-deny")
+        if not n_deny:
+            self.hit("D2", "d2_default_slot", t, sid,
+                     "a deny with no would-deny slot (verdicts %s)" % json.dumps(v)[:80])
+        key = "%s|%s" % (sid, r.get("script_sha"))
+        if key in self.st["d2_denied"]:
+            self.hit("D2", "d2_second_deny", t, sid,
+                     "a second deny of script %s in one session" % str(r.get("script_sha"))[:12])
+        self.st["d2_denied"][key] = t
+
+    def resolve(self):
+        """Judge every pending D1/D3 event whose TURN_WINDOW_S has passed; younger ones wait."""
+        keep = []
+        for p in self.st["pending"]:
+            t = p.get("t") or 0
+            if self.now < t + TURN_WINDOW_S:
+                keep.append(p)
+                continue
+            if p.get("inv") == "d3_no_turn":
+                sa = self.state_at(p.get("sid"), t)
+                after = sa["turn_completed_after"]
+                seen = "transcript not found" if not sa["found"] else "next turn end %s" % (
+                    le.iso(after) if after else "none")
+                if after is None or after > t + TURN_WINDOW_S:
+                    self.hit("D3", "d3_no_turn", t, p.get("sid"),
+                             "no completed turn within %d s of the wake (%s)" % (TURN_WINDOW_S, seen))
+            elif p.get("inv") == "d1_no_engage":
+                e = self.st["engaged"].get(p.get("recycle_id") or "")
+                if e is None or e > t + TURN_WINDOW_S:
+                    self.hit("D1", "d1_no_engage", t, p.get("sid"),
+                             "recycle %s did not engage within %d s" % (p.get("recycle_id") or "?", TURN_WINDOW_S))
+        self.st["pending"] = keep
+
+    def prune(self):
+        lo = self.now - KEEP_S
+        wt = self.st.get("wakes_t") or {}
+        self.st["wakes"] = {k: v for k, v in self.st["wakes"].items() if (wt.get(k) or 0) >= lo}
+        self.st["wakes_t"] = {k: v for k, v in wt.items() if k in self.st["wakes"]}
+        self.st["d2_denied"] = {k: v for k, v in self.st["d2_denied"].items() if v >= lo}
+        day = self.now - NONWAIT_WINDOW_S
+        self.st["d4_agents"] = {k: v for k, v in self.st["d4_agents"].items() if (v.get("t") or 0) >= day}
+        self.st["engaged"] = {k: v for k, v in self.st["engaged"].items() if v >= self.now - 3600}
+        self.st["d4_nonwait"] = [x for x in self.st["d4_nonwait"] if x > self.now - NONWAIT_WINDOW_S]
+
+
+def invariants_pass(doc, src, st=None, from_start=False):
+    """→ (Pass, state to save) over every row appended since the cursor (from_start: the whole of
+    each log, uncapped). Bounded by SIGALRM at CC_LEVER_GUARD_INV_S; raises EvalTimeout past it."""
+    st = read_inv_state() if st is None else st
+    t_now = score.now()
+    cap = 1 << 40 if from_start else READ_CAP
+    old = signal.signal(signal.SIGALRM, _alarm)
+    signal.alarm(inv_budget())
+    try:
+        p = Pass(st, doc, src, t_now)
+        cursors = st.get("cursor") if isinstance(st.get("cursor"), dict) and not from_start else {}
+        new, notes, rows_n = {}, {}, 0
+        for name in INV_LOGS:
+            rows, new[name], note = read_appended(le.log_path(name), cursors.get(name), t_now, cap)
+            rows_n += len(rows)
+            if note:
+                notes[name] = note
+            for r in rows:
+                p.row(r)
+        p.resolve()
+        p.prune()
+        st["cursor"] = new
+        p.rows, p.notes = rows_n, notes
+        return p, st
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
+def owed_merge(st, occ):
+    """Occurrences whose trip could not be written stay owed in the state and are retried."""
+    owed = st.get("owed") if isinstance(st.get("owed"), dict) else {}
+    out = {L: list(owed.get(L) or []) + list(occ.get(L) or []) for L in set(owed) | set(occ)}
+    return {L: v for L, v in out.items() if v}
+
+
 def tick(args):
     t0 = time.time()
     doc, src = lf.read_flags()
@@ -177,19 +528,37 @@ def tick(args):
         scores = latest_scores(doc) if src == "file" else {}
     except Exception:
         scores = {}
+    ist, inv_err = None, None
+    try:
+        ip, ist = invariants_pass(doc, src)
+        occ = owed_merge(ist, ip.occ)
+        inv = {"eval": "ok", "rows": ip.rows, "treated": ip.treated, "pending": len(ist["pending"]),
+               "notes": ip.notes or None}
+    except EvalTimeout:
+        occ, inv_err = owed_merge(read_inv_state(), {}), "invariant pass exceeded %d s" % inv_budget()
+    except Exception as x:              # a broken store is a blind pass; the cursor stays put
+        occ, inv_err = owed_merge(read_inv_state(), {}), "invariant pass failed: %s: %s" % (type(x).__name__, str(x)[:160])
+    if inv_err is not None:
+        inv = {"eval": "blind", "error": inv_err}
+    inv["occurrences"] = {L: [o["inv"] for o in v][:8] for L, v in occ.items()}
     out = {"kind": "tick", "flag_src": src, "eval": "ok" if err is None else "blind", "error": err,
-           "levers": {}, "trips": [], "failed": []}
+           "inv": inv, "levers": {}, "trips": [], "failed": []}
+    owed = {}
     for L in lf.LEVERS:
         e = ((doc or {}).get("levers") or {}).get(L)
         g = (res or {}).get(L) or {}
         verdict = g.get("verdict") if res is not None else "NO-DATA"
         live = is_live(e)
         cause, why = None, None
-        if verdict in ("NO-DATA", "PLUMBING"):
+        if verdict in ("NO-DATA", "PLUMBING") or inv_err is not None:
             st["nodata"][L] = int(st["nodata"].get(L) or 0) + 1
         else:
             st["nodata"][L] = 0
-        if verdict == "BREACH":
+        if occ.get(L):
+            o = occ[L]
+            cause, why = "invariant", "%d invariant occurrence(s), first %s at %s: %s" % (
+                len(o), o[0]["inv"], o[0]["ts"], o[0]["why"])
+        elif verdict == "BREACH":
             bad = sorted(k for k, v in (g.get("guards") or {}).items() if isinstance(v, dict) and v.get("status") == "breach")
             cause, why = "breach", "guard breach %s at %s (treat %s / ctrl %s sessions)" % (
                 ",".join(bad) or "?", g.get("stage"), (g.get("sessions") or {}).get("treat"),
@@ -203,10 +572,15 @@ def tick(args):
         out["levers"][L] = {"verdict": verdict, "live": live, "nodata": st["nodata"][L]}
         if cause is None:
             continue
+        detail = {"verdict": verdict, "tick_eval": out["eval"]}
+        if cause == "invariant":
+            detail["occurrences"] = [{k: o[k] for k in ("inv", "ts", "sid")} for o in occ[L][:5]]
         try:
-            r = lever.guard_trip(L, cause, why, {"verdict": verdict, "tick_eval": out["eval"]})
+            r = lever.guard_trip(L, cause, why, detail)
         except Exception as x:          # Refused (lock held, unreadable flags) or an I/O fault
             out["failed"].append(L)
+            if cause == "invariant":
+                owed[L] = occ[L][-OWED_CAP:]
             append_row({"kind": "trip", "lever": L, "cause": cause, "ok": False, "reason": why,
                         "error": "%s: %s" % (type(x).__name__, str(x)[:300])})
             continue
@@ -222,6 +596,12 @@ def tick(args):
         lf._write_atomic(state_path(), json.dumps(st, sort_keys=True) + "\n")
     except OSError:
         pass
+    if ist is not None:                 # the cursor advances only with the owed trips kept beside it
+        ist["owed"] = owed
+        try:
+            lf._write_atomic(inv_state_path(), json.dumps(ist, sort_keys=True) + "\n")
+        except OSError:
+            out["failed"].append("inv-state")
     out["elapsed_s"] = round(time.time() - t0, 2)
     out["heartbeat"] = not out["failed"]
     append_row(out)
@@ -232,12 +612,158 @@ def tick(args):
     if args.json:
         print(json.dumps(out, sort_keys=True))
     else:
-        print("lever-guard: eval %s · %s · trips %s · heartbeat %s · %.1f s%s" % (
-            out["eval"], " ".join("%s:%s" % (L, v["verdict"]) for L, v in out["levers"].items()),
+        print("lever-guard: eval %s · invariants %s (%s rows, %s treated) · %s · trips %s · heartbeat %s · %.1f s%s" % (
+            out["eval"], inv["eval"], inv.get("rows", "-"), inv.get("treated", "-"),
+            " ".join("%s:%s" % (L, v["verdict"]) for L, v in out["levers"].items()),
             ",".join("%s(%s)" % (t["lever"], t["cause"]) for t in out["trips"]) or "none",
             "written" if out["heartbeat"] else "WITHHELD (a trip could not be written)", out["elapsed_s"],
-            "" if err is None else " · " + err))
+            "" if err is None else " · " + err) + ("" if inv_err is None else " · " + inv_err))
     return 0 if out["heartbeat"] else 1
+
+
+def invariants(args):
+    """Read-only: the invariant pass over the rows since the cursor (--all: every row of every log,
+    from fresh state). Saves nothing, trips nothing. Exit 0 with no occurrence, 3 with any."""
+    doc, src = lf.read_flags()
+    st = {"v": 1} if args.all else read_inv_state()
+    try:
+        p, _ = invariants_pass(doc, src, st=st, from_start=args.all)
+    except EvalTimeout:
+        print("lever-guard invariants: exceeded %d s (CC_LEVER_GUARD_INV_S)" % inv_budget(), file=sys.stderr)
+        return 1
+    out = {"flag_src": src, "rows": p.rows, "treated": p.treated, "pending": len(p.st["pending"]),
+           "notes": p.notes or None, "occurrences": {L: v for L, v in sorted(p.occ.items())}}
+    if args.json:
+        print(json.dumps(out, sort_keys=True))
+    else:
+        n = sum(len(v) for v in p.occ.values())
+        print("lever-guard invariants: %d rows read (%s), %d treated, %d pending, %d occurrence(s)%s" % (
+            p.rows, "all" if args.all else "since the cursor", p.treated, out["pending"], n,
+            "".join("\n  %s %s %s %s" % (o["lever"], o["inv"], o["ts"], o["why"]) for v in p.occ.values() for o in v)))
+    return 3 if p.occ else 0
+
+
+# ── selftest: one planted treated occurrence per invariant site, each beside a control twin ──────
+ALL_INVARIANTS = ("d3_second_wake", "d3_idle_wake", "d3_headless_wake", "d3_no_turn",
+                  "d4_goal_gate", "d4_streak", "d4_nonwait",
+                  "d2_resume", "d2_default_slot", "d2_second_deny", "d2_bound",
+                  "d1_g1_kill", "d1_g4", "d1_no_engage", "d1_double_wake")
+
+
+def selftest_corpus(base, arm):
+    """→ {log name: [rows]}, {sid: transcript records}: every invariant planted once at `arm`
+    (treat), or the same events at ctrl, which must trip nothing. Ids carry the arm so twins differ."""
+    x = "" if arm == "treat" else "-ctrl"
+    ad = {"arm": arm, "pct_eff": 50 if arm == "treat" else 0}
+    iso = le.iso
+
+    def wake(sid, t, n, gap, **kw):
+        return dict({"kind": "wake", "v": 3, "ts": iso(t), "sid": sid + x, "n": n, "gap_start": gap,
+                     "fired": True, "arm": arm, "busy": True, "headless": False}, **kw)
+
+    def recycle(sid, t, gap, **kw):
+        return dict({"kind": "d1_recycle", "v": 1, "ts": iso(t), "sid": sid + x, "gap_start": gap,
+                     "recycle_id": sid + x + ":r", "fired": True, "arm": ad, "busy": False,
+                     "pending_question": False, "g1_kill": False, "g4_violation": False}, **kw)
+
+    def engage(sid, t):
+        return {"kind": "d1_engage", "v": 1, "ts": iso(t), "recycle_id": sid + x + ":r", "sid": sid + x}
+
+    def deny(aid, tu, t):
+        return {"kind": "subagent_bash", "v": 3, "ts": iso(t), "sid": "s-d4" + x, "agent_id": aid + x,
+                "tool_use_id": tu + x, "treat_verdict": "deny", "arm": ad}
+
+    def follow(aid, tu, of, t, rc=True, bg=False):
+        return {"kind": "d4_follow", "v": 3, "ts": iso(t), "sid": "s-d4" + x, "agent_id": aid + x,
+                "tool_use_id": tu + x, "follows_tool_use_id": of + x, "follows_verdict": "deny",
+                "echo_rc": rc, "run_in_background": bg, "arm": ad}
+
+    def wf(sid, tu, t, **kw):
+        return dict({"hook": "workflow-lean-shadow", "v": 3, "ts": iso(t), "session_id": sid + x,
+                     "tool_use_id": tu + x, "script_sha": "sha-" + sid, "resume_from_run_id": None,
+                     "denied": True, "verdicts": {"would-deny": 1}, "arm": ad,
+                     "latency_ms": {"wall": 40.0, "timeout_s": 5}}, **kw)
+
+    b, g = base, iso(base - 3300)
+    keep = [wake("s-d3a", b, 1, g), wake("s-d3a", b + 60, 2, g),            # d3_second_wake
+            wake("s-d3b", b, 1, g, busy=False),                             # d3_idle_wake
+            wake("s-d3c", b, 1, g, headless=True),                          # d3_headless_wake
+            wake("s-d3d", b, 1, g),                                         # d3_no_turn
+            recycle("s-d1a", b, g, g1_kill=True), engage("s-d1a", b + 60),  # d1_g1_kill
+            recycle("s-d1b", b, g, g4_violation=True), engage("s-d1b", b + 60),  # d1_g4
+            recycle("s-d1c", b, g),                                         # d1_no_engage
+            wake("s-d1d", b - 30, 1, g), recycle("s-d1d", b, g), engage("s-d1d", b + 60)]  # d1_double_wake
+    d4 = [deny("a1", "T1", b), follow("a1", "T2", "T1", b + 5, bg=True),     # d4_goal_gate
+          deny("a2", "U1", b), follow("a2", "U2", "U1", b + 5), deny("a2", "U2", b + 6),
+          follow("a2", "U3", "U2", b + 10), deny("a2", "U3", b + 11)]       # d4_streak
+    for i in (3, 4, 5):                                                     # d4_nonwait
+        d4 += [deny("a%d" % i, "V%d" % i, b + i), follow("a%d" % i, "W%d" % i, "V%d" % i, b + i + 1, rc=False)]
+    d2 = [wf("S-a", "R1", b, resume_from_run_id="wf_1"),                    # d2_resume
+          wf("S-b", "R2", b, verdicts={"keep-default": 1}),                 # d2_default_slot
+          wf("S-c", "R3", b), wf("S-c", "R4", b + 60),                      # d2_second_deny
+          wf("S-d", "R5", b, denied=False, treat_error="self-bounded")]     # d2_bound
+    logs = {"idle-keepalive.jsonl": keep, "subagent-long-bash.jsonl": d4, "workflow-lean-shadow.jsonl": d2}
+
+    def tx(t_end_after):
+        recs = [{"type": "user", "timestamp": iso(b - 600), "entrypoint": "cli", "message": {"content": "go"}},
+                {"type": "assistant", "timestamp": iso(b - 590), "entrypoint": "cli",
+                 "message": {"content": [{"type": "text", "text": "Done."}]}},
+                {"type": "system", "subtype": "turn_duration", "timestamp": iso(b - 580), "entrypoint": "cli"}]
+        if t_end_after is not None:
+            recs.append({"type": "system", "subtype": "turn_duration", "timestamp": iso(t_end_after),
+                         "entrypoint": "cli"})
+        return recs
+
+    txs = {s + x: tx(None if s == "s-d3d" else b + 120) for s in ("s-d3a", "s-d3b", "s-d3c", "s-d3d", "s-d1d")}
+    return logs, txs
+
+
+def selftest(args):
+    """Plant the corpus in a scratch HOME and lever store, run the pass, and check: each invariant
+    exactly once from the treated arm, nothing from its control twin, nothing again from the cursor."""
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="lever-guard-selftest.")
+    base = 1800000000
+    fails = []
+    try:
+        os.environ.update(HOME=os.path.join(tmp, "home"), CC_LEVER_LOG_DIR=os.path.join(tmp, "log"),
+                          CC_LEVER_STATE_DIR=os.path.join(tmp, "st"), CC_NOW=str(base + 3600))
+        for d in (os.environ["CC_LEVER_LOG_DIR"], os.environ["CC_LEVER_STATE_DIR"]):
+            os.makedirs(d)
+        proj = os.path.join(os.environ["HOME"], ".claude", "projects", "p")
+        os.makedirs(proj)
+        for arm in ("treat", "ctrl"):
+            logs, txs = selftest_corpus(base, arm)
+            for name, rows in logs.items():
+                with open(le.log_path(name), "a") as f:
+                    f.write("".join(json.dumps(r) + "\n" for r in rows))
+            for sid, recs in txs.items():
+                with open(os.path.join(proj, sid + ".jsonl"), "w") as f:
+                    f.write("".join(json.dumps(r) + "\n" for r in recs))
+        doc = {"v": 1, "levers": {L: {"stage": "S1", "pct": 50, "mode": "live",
+                                      "stage_started_at": le.iso(base - 86400)} for L in lf.LEVERS}}
+        p, st = invariants_pass(doc, "file", st={"v": 1})
+        got = sorted(o["inv"] for v in p.occ.values() for o in v)
+        if got != sorted(ALL_INVARIANTS):
+            fails.append("occurrences %s, want each of the %d once" % (got, len(ALL_INVARIANTS)))
+        ctrl = ["%s(%s)" % (o["inv"], o["sid"]) for v in p.occ.values() for o in v if o["sid"].endswith("-ctrl")]
+        if ctrl:
+            fails.append("control-arm rows tripped: %s" % ", ".join(ctrl))
+        wrong = [o["inv"] for L, v in p.occ.items() for o in v if not o["inv"].startswith(L.lower())]
+        if wrong:
+            fails.append("occurrences filed under the wrong lever: %s" % wrong)
+        p2, _ = invariants_pass(doc, "file", st=st)
+        if p2.rows or p2.occ:
+            fails.append("the cursor re-read %d rows (%d occurrences)" % (p2.rows, len(p2.occ)))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if args.json:
+        print(json.dumps({"ok": not fails, "invariants": len(ALL_INVARIANTS), "fails": fails}, sort_keys=True))
+    else:
+        print("lever-guard selftest: %s (%d invariants, control twins, cursor)%s" % (
+            "PASS" if not fails else "FAIL", len(ALL_INVARIANTS), "".join("\n  " + f for f in fails)))
+    return 0 if not fails else 1
 
 
 def status(args):
@@ -257,13 +783,14 @@ def status(args):
 
 def main(argv):
     p = argparse.ArgumentParser(prog="cc-lever-guard", description=__doc__.split("\n\n")[0])
-    p.add_argument("verb", nargs="?", default="tick", choices=("tick", "status"))
+    p.add_argument("verb", nargs="?", default="tick", choices=("tick", "status", "invariants", "selftest"))
     p.add_argument("--json", action="store_true")
+    p.add_argument("--all", action="store_true", help="invariants: every row of every log, from fresh state")
     try:
         args = p.parse_args(argv)
     except SystemExit as e:
         return 2 if e.code else 0
-    return tick(args) if args.verb == "tick" else status(args)
+    return {"tick": tick, "status": status, "invariants": invariants, "selftest": selftest}[args.verb](args)
 
 
 if __name__ == "__main__":
