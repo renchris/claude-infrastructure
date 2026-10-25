@@ -395,24 +395,25 @@ the zero-restart path inert behind its switches. Total ≈12.4–13.4K LOC (esti
 
 ## 13. Operator decisions
 
-Filed with `cc-decide` (ids below once filed). The synthesis listed nine questions (SYNTHESIS §11); the pointer
+Filed with `cc-decide` on 2026-10-25 (`cc-decide list --open` shows them). The synthesis listed nine questions (SYNTHESIS §11); the pointer
 amendment makes two of them moot (refreshing accounts that only lanes bill to; copying MCP sign-ins), and the
 policy and automatic-rebalance questions are one decision here.
 
-1. **Switch a running session's paying account without restarting it?** (class C, conviction 55%) — (a) build it,
+1. **Switch a running session's paying account without restarting it?** — `69c31338d082` (class C, conviction 55%) — (a) build it,
    keep it off, ask Anthropic support in writing first and switch on after a yes or your explicit go; (b) on now
    for your orders and limit walls, automatic quota-spending rebalance only after a 2026-11-11 re-review;
    (c) never — restart-based moves only. Recommended: (a).
-2. **How a lane holds the account, given your 2026-09-08 ruling that no token files are ever created** (class C,
-   conviction 70%) — (a) pointer lanes: no token copies anywhere, sessions use the target account's own stored
+2. **How a lane holds the account, given your 2026-09-08 ruling that no token files are ever created** —
+   `be5c5e83800f` (class C, conviction 70%) — (a) pointer lanes: no token copies anywhere, sessions use the target account's own stored
    login (needs W0 probe P-P1 on a real account store); (b) copy lanes: a private access-only copy per session in
    the keychain plus a 0600 file; (c) neither. Recommended: (a).
-3. **Restart a session that never finishes a turn, to move it?** (class B, conviction 70%) — default: wait for its
+3. **Restart a session that never finishes a turn, to move it?** — `c7156c87c1b6` (class B, conviction 70%, default fires 2026-11-08) — default: wait for its
    first turn end or next natural restart; an explicit per-session `--restart-now` order restarts it at once, losing
    its in-flight turn and background jobs.
-4. **Re-home moved sessions under their new account's folder** (class B, conviction 75%) — default: automatically
+4. **Re-home moved sessions under their new account's folder** — `3e362e7d3be1` (class B, conviction 75%, default fires 2026-11-08) — default: automatically
    at every natural restart including a manual `--resume` (one-line notice), and also after 30 idle minutes.
-5. The open packet `745e0fdc78e6` ("should all credential work wait for the next real weekly wall") is rechecked:
+5. The open packet `745e0fdc78e6` ("should all credential work wait for the next real weekly wall") was rechecked
+   (conviction 80%):
    its premise — a sacrificial account and monthly logins — no longer holds, since lanes need neither and tonight's
    wall showed the relaunch path moving 1 of 9 busy sessions; recommendation: close it as superseded once W0
    passes. Related open packets `4ab193daae88`, `76a584cc935b` and `c9a05672e692` concern restart-based moves of
