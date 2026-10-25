@@ -1,0 +1,83 @@
+{
+ "v": 1,
+ "ts": "2026-10-25T08:51:00Z",
+ "ts_epoch": 1792918260,
+ "boot": "DBDBC472-FIXTURE",
+ "elapsed_ms": 40,
+ "totals": {
+  "procs": 11
+ },
+ "kitty": [
+  1881
+ ],
+ "procs": [
+  {
+   "pid": 1,
+   "ppid": 0,
+   "pgid": 1,
+   "uid": 0,
+   "stat": "S",
+   "exiting": false,
+   "sleader": false,
+   "tdev": 4294967295,
+   "tpgid": 0,
+   "lstart": 1792843200,
+   "comm": "launchd",
+   "tty": null,
+   "sid": 1
+  },
+  {
+   "pid": 1881,
+   "ppid": 1,
+   "pgid": 1881,
+   "uid": 501,
+   "stat": "S",
+   "exiting": false,
+   "sleader": false,
+   "tdev": 4294967295,
+   "tpgid": 0,
+   "lstart": 1792843200,
+   "comm": "kitty",
+   "tty": null,
+   "sockets": 3,
+   "fds": 200,
+   "t0_cpu_ns": 5000000000,
+   "t0_state": "S",
+   "threads": 40,
+   "cpu_s": 10.0,
+   "sid": 1881
+  },
+  {
+   "pid": 50362,
+   "ppid": 1881,
+   "pgid": 50362,
+   "uid": 501,
+   "stat": "S",
+   "exiting": false,
+   "sleader": true,
+   "tdev": 268435497,
+   "tpgid": 0,
+   "lstart": 1792908000,
+   "comm": "zsh",
+   "tty": "ttys041",
+   "cpu_s": 1.0,
+   "sid": 50362
+  },
+  {
+   "pid": 50400,
+   "ppid": 50362,
+   "pgid": 50400,
+   "uid": 501,
+   "stat": "S",
+   "exiting": false,
+   "sleader": false,
+   "tdev": 268435497,
+   "tpgid": 0,
+   "lstart": 1792908005,
+   "comm": "claude",
+   "tty": "ttys041",
+   "cpu_s": 300.0,
+   "sid": 50362
+  }
+ ]
+}

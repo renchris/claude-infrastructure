@@ -1,0 +1,1152 @@
+Date/Time:        2026-10-21 14:01:55.279 -0500
+End time:         2026-10-21 14:01:56.280 -0500
+OS Version:       macOS 15.7.9 (Build 24G830)
+Architecture:     arm64e
+Report Version:   60
+
+Data Source:      Stackshots
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Shared Cache:     601F5D00-6C3B-3E09-B481-2C43B896E9C6 slid base address 0x7ff8160e4000, slide 0x160e4000 (Rosetta)
+Shared Cache:     4E9C034A-081A-3DA4-9B74-77B8AB271E6B slid base address 0x18a414000, slide 0xa414000 (DriverKit)
+
+Event:            shutdown stall
+Duration:         1.00s (sampling started after 2 seconds)
+Steps:            101 (10ms sampling interval)
+
+Hardware model:   MacBookPro18,2
+Active cpus:      10
+Memory size:      64 GB
+HW page size:     16384
+VM page size:     16384
+Shared cache residency: 25.70% (1204.55 MB / 4687.66 MB)
+
+Time Since Boot:  250083s
+Time Awake Since Boot: 240639s
+Time Since Wake:  239359s
+
+Fan speed:        2773 rpm
+Total CPU Time:   4.080s (10.5G cycles, 30.8G instructions, 0.34c/i)
+Vnodes Available: 81.16% (213589/263168)
+Models:           none
+
+Deadlock:         AppleSpell [3038] thread 0x1d78c68 DispatchQueue 85 -> AppleSpell [3038] thread 0x1d78c68 DispatchQueue 85
+Blocked by Deadlock: 1 task - AppleSpell [3038]
+
+Preferred User Language: en-001
+Country Code:     001
+OS Cryptex File Extents: 1
+
+------------------------------------------------------------
+Heavy format: stacks are sorted by count
+Use -i and -timeline to re-report with chronological sorting
+------------------------------------------------------------
+
+Process:          akd [22027] [unique pid 18781119]
+UUID:             9A5B418B-EBA9-3A82-96A2-897118EC3161
+Path:             /System/Library/PrivateFrameworks/AuthKit.framework/Versions/A/Support/akd
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Parent:           launchd [1]
+UID:              501
+Sudden Term:      Tracked (allows idle exit)
+Footprint:        9441 KB
+Time Since Fork:  215834s
+Num samples:      101 (1-101)
+CPU Time:         <0.001s (400.0K cycles, 126.2K instructions, 3.17c/i)
+Num threads:      6
+Note:             4 idle work queue threads omitted
+
+  Thread 0x240da37    DispatchQueue "com.apple.main-thread"(1)    101 samples (1-101)    priority 31 (base 31)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  ??? (akd + 481972) [0x102129ab4]
+      101  ??? (Foundation + 858012) [0x18adc079c]
+        101  ??? (Foundation + 367736) [0x18ad48c78]
+          101  ??? (CoreFoundation + 501848) [0x189778858]
+            101  ??? (CoreFoundation + 504728) [0x189779398]
+              101  ??? (CoreFoundation + 510588) [0x18977aa7c]
+                101  ??? (libsystem_kernel.dylib + 4008) [0x18964dfa8]
+                  101  ??? (libsystem_kernel.dylib + 38756) [0x189656764]
+                    101  ??? (libsystem_kernel.dylib + 3124) [0x18964dc34]
+                     *101  ??? (kernel.release.t6000 + 247168) [0xfffffe00087e8580]
+
+  Thread 0x349a398    Thread name "com.apple.NSURLConnectionLoader"    101 samples (1-101)    priority 31 (base 31)
+  101  ??? (libsystem_pthread.dylib + 7040) [0x18968ab80]
+    101  ??? (libsystem_pthread.dylib + 27592) [0x18968fbc8]
+      101  ??? (Foundation + 342952) [0x18ad42ba8]
+        101  ??? (CFNetwork + 2441972) [0x18f4802f4]
+          101  ??? (CoreFoundation + 501848) [0x189778858]
+            101  ??? (CoreFoundation + 504728) [0x189779398]
+              101  ??? (CoreFoundation + 510588) [0x18977aa7c]
+                101  ??? (libsystem_kernel.dylib + 4008) [0x18964dfa8]
+                  101  ??? (libsystem_kernel.dylib + 38756) [0x189656764]
+                    101  ??? (libsystem_kernel.dylib + 3124) [0x18964dc34]
+                     *101  ??? (kernel.release.t6000 + 247168) [0xfffffe00087e8580]
+
+  Binary Images:
+           0x1020b4000 -                ???  akd                           <9A5B418B-EBA9-3A82-96A2-897118EC3161>             /System/Library/PrivateFrameworks/AuthKit.framework/Versions/A/Support/akd
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+           0x189689000 -        0x189695a77  libsystem_pthread.dylib       <2886F4F3-500B-36C8-A20C-C457EB754E3D>             /usr/lib/system/libsystem_pthread.dylib
+           0x1896fe000 -        0x189c3cfff  CoreFoundation                <BDC82415-A029-3463-AC49-1A792208CE00>             /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+           0x18acef000 -        0x18bad85bf  Foundation                    <39BE75AC-350F-3B8C-9C10-8B2B5321CE8E>             /System/Library/Frameworks/Foundation.framework/Versions/C/Foundation
+           0x18f22c000 -        0x18f5f5a5f  CFNetwork                     <2F4B24E0-6706-3C7E-8E83-F3B9260BE473>             /System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          AppleSpell [3038]
+UUID:             02596313-4DB0-30AA-81E5-E2CD15A3963D
+Path:             /System/Library/Services/AppleSpell.service/Contents/MacOS/AppleSpell
+Identifier:       com.apple.AppleSpell
+Version:          2.4 (595)
+Build Version:    1
+Project Name:     ProofReader
+Source Version:   666003001000000
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Parent:           launchd [1]
+UID:              501
+Sudden Term:      Tracked (allows idle exit)
+Footprint:        19.42 MB
+Time Since Fork:  238826s
+Num samples:      101 (1-101)
+CPU Time:         <0.001s (137.3K cycles, 100.0K instructions, 1.37c/i)
+Num threads:      9
+Note:             7 idle work queue threads omitted
+Deadlocked:       1 thread - Thread 0x1d78c68 DispatchQueue 85
+
+  Thread 0x4c26    DispatchQueue "com.apple.main-thread"(1)    101 samples (1-101)    priority 31 (base 31)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  ??? (AppleSpell + 6308) [0x104ccd8a4]
+      101  ??? (Foundation + 9524496) [0x18b604510]
+        101  ??? (CoreFoundation + 1000212) [0x1897f2314]
+          101  ??? (CoreFoundation + 501848) [0x189778858]
+            101  ??? (CoreFoundation + 504728) [0x189779398]
+              101  ??? (CoreFoundation + 510588) [0x18977aa7c]
+                101  ??? (libsystem_kernel.dylib + 4008) [0x18964dfa8]
+                  101  ??? (libsystem_kernel.dylib + 38756) [0x189656764]
+                    101  ??? (libsystem_kernel.dylib + 3124) [0x18964dc34]
+                     *101  ??? (kernel.release.t6000 + 247168) [0xfffffe00087e8580]
+
+  Thread 0x1d78c68    DispatchQueue 85    101 samples (1-101)    priority 31 (base 31)
+  101  ??? (libsystem_pthread.dylib + 7028) [0x18968ab74]
+    101  ??? (libsystem_pthread.dylib + 11808) [0x18968be20]
+      101  ??? (libdispatch.dylib + 84712) [0x1894eaae8]
+        101  ??? (libdispatch.dylib + 86628) [0x1894eb264]
+          101  ??? (libdispatch.dylib + 44640) [0x1894e0e60]
+            101  ??? (libdispatch.dylib + 41808) [0x1894e0350]
+              101  ??? (libdispatch.dylib + 112732) [0x1894f185c]
+                101  ??? (libdispatch.dylib + 6956) [0x1894d7b2c]
+                  101  ??? (PersonalizationPortrait + 205556) [0x1b215f2f4]
+                    101  ??? (PersonalizationPortrait + 189680) [0x1b215b4f0]
+                      101  ??? (PersonalizationPortrait + 203836) [0x1b215ec3c]
+                        101  ??? (PersonalizationPortrait + 202940) [0x1b215e8bc]
+                          101  ??? (ProactiveSupport + 148912) [0x1a4a855b0]
+                            101  ??? (ProactiveSupport + 149320) [0x1a4a85748]
+                              101  ??? (PersonalizationPortrait + 203160) [0x1b215e998]
+                                101  ??? (InputContext + 39748) [0x1c32eeb44]
+                                  101  ??? (InputContext + 51992) [0x1c32f1b18]
+                                    101  ??? (libsystem_pthread.dylib + 6208) [0x18968a840]
+                                      101  ??? (libsystem_kernel.dylib + 14492) [0x18965089c]
+                                       *101  ??? (pthread + 9968) [0xfffffe000bd11b00] (blocked by turnstile with priority 4 waiting for this thread - part of a deadlock)
+
+  Binary Images:
+           0x104ccc000 -                ???  com.apple.AppleSpell 2.4 (595) <02596313-4DB0-30AA-81E5-E2CD15A3963D>             /System/Library/Services/AppleSpell.service/Contents/MacOS/AppleSpell
+           0x1892e8000 -        0x18938357b  dyld                           <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x1894d6000 -        0x18951c75f  libdispatch.dylib              <63A54CE1-2AB6-3673-82E4-D8489D811475>             /usr/lib/system/libdispatch.dylib
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib         <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+           0x189689000 -        0x189695a77  libsystem_pthread.dylib        <2886F4F3-500B-36C8-A20C-C457EB754E3D>             /usr/lib/system/libsystem_pthread.dylib
+           0x1896fe000 -        0x189c3cfff  CoreFoundation                 <BDC82415-A029-3463-AC49-1A792208CE00>             /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+           0x18acef000 -        0x18bad85bf  Foundation                     <39BE75AC-350F-3B8C-9C10-8B2B5321CE8E>             /System/Library/Frameworks/Foundation.framework/Versions/C/Foundation
+           0x1a4a61000 -        0x1a4af063f  ProactiveSupport               <12180969-559A-30D1-ACF1-3A39A3EBF1F0>             /System/Library/PrivateFrameworks/ProactiveSupport.framework/Versions/A/ProactiveSupport
+           0x1b212d000 -        0x1b21be37f  PersonalizationPortrait        <03782417-B53F-312A-9495-BA7A1720100F>             /System/Library/PrivateFrameworks/PersonalizationPortrait.framework/Versions/A/PersonalizationPortrait
+           0x1c32e5000 -        0x1c3303f5f  InputContext                   <1ED83014-F060-32C3-B5B0-260E431AB1F4>             /System/Library/PrivateFrameworks/InputContext.framework/InputContext
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0)  <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+   *0xfffffe000bd0f410 -                ???  com.apple.kec.pthread (1)      <82FC373F-3C0C-330C-9C62-4C07C68D9013>__TEXT_EXEC  /System/Library/Extensions/pthread.kext/Contents/MacOS/pthread
+
+Process:          basename [3494] [unique pid 195684552]
+UUID:             17D2638F-107B-3687-B97B-422EFA835188
+Path:             /usr/bin/basename
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Footprint:        304 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:55.341 -0500
+End time:         2026-10-21 14:01:55.351 -0500
+Num samples:      1 (7)
+CPU Time:         0.001s (2.1M cycles, 2.3M instructions, 0.94c/i)
+Num threads:      1
+
+  Thread 0x16783db5    1 sample (7)    priority 4 (base 4)    cpu time 0.001s (2.1M cycles, 2.3M instructions, 0.94c/i)
+  1  ??? (dyld + 24212) [0x1892ede94]
+    1  ??? (dyld + 310568) [0x189333d28]
+      1  ??? (dyld + 225472) [0x18931f0c0]
+        1  ??? (dyld + 225568) [0x18931f120]
+          1  ??? (dyld + 225812) [0x18931f214]
+            1  ??? (dyld + 208188) [0x18931ad3c]
+              1  ??? (dyld + 208768) [0x18931af80]
+                1  ??? (dyld + 210196) [0x18931b514]
+                 *1  ??? (kernel.release.t6000 + 31624) [0xfffffe00087b3b88]
+                   *1  ??? (kernel.release.t6000 + 1839564) [0xfffffe000896d1cc]
+                     *1  ??? (kernel.release.t6000 + 1842152) [0xfffffe000896dbe8]
+                       *1  ??? (kernel.release.t6000 + 1160976) [0xfffffe00088c7710]
+                         *1  ??? (kernel.release.t6000 + 1504940) [0xfffffe000891b6ac]
+                           *1  ??? (kernel.release.t6000 + 1505556) [0xfffffe000891b914] (running)
+
+  Binary Images:
+           0x102db8000 -                ???  basename                      <17D2638F-107B-3687-B97B-422EFA835188>             /usr/bin/basename
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          basename [3546] [unique pid 195684604]
+UUID:             17D2638F-107B-3687-B97B-422EFA835188
+Path:             /usr/bin/basename
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Execed from:      bash [3546] [unique pid 195684604]
+Footprint:        256 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:55.451 -0500
+End time:         2026-10-21 14:01:55.501 -0500
+Num samples:      5 (18-22)
+CPU Time:         0.003s (5.5M cycles, 6.9M instructions, 0.79c/i)
+Num threads:      1
+
+  Thread 0x16783df9    5 samples (18-22)    priority 4 (base 4)    cpu time 0.003s (5.5M cycles, 6.9M instructions, 0.79c/i)
+  5  ??? (dyld + 27296) [0x1892eeaa0]
+    5  ??? (dyld + 29144) [0x1892ef1d8]
+      5  ??? (dyld + 32140) [0x1892efd8c]
+        5  ??? (dyld + 90064) [0x1892fdfd0]
+          5  ??? (dyld + 313372) [0x18933481c]
+            5  ??? (dyld + 313980) [0x189334a7c]
+              5  ??? (dyld + 111424) [0x189303340]
+                5  ??? (dyld + 208248) [0x18931ad78]
+                  5  ??? (dyld + 209892) [0x18931b3e4]
+                    5  ??? (dyld + 210004) [0x18931b454]
+                     *5  ??? (kernel.release.t6000 + 346676) [0xfffffe0008800a34] (runnable)
+
+  Binary Images:
+           0x104c64000 -                ???  basename                      <17D2638F-107B-3687-B97B-422EFA835188>             /usr/bin/basename
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          basename [3613] [unique pid 195684671]
+UUID:             17D2638F-107B-3687-B97B-422EFA835188
+Path:             /usr/bin/basename
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Footprint:        160 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:55.601 -0500
+End time:         2026-10-21 14:01:55.611 -0500
+Num samples:      1 (33)
+CPU Time:         <0.001s (1604.1K cycles, 1196.0K instructions, 1.34c/i)
+Num threads:      1
+
+  Thread 0x16783e55    1 sample (33)    priority 4 (base 4)    cpu time <0.001s (1604.1K cycles, 1196.0K instructions, 1.34c/i)
+  1  ??? (basename + 809616) [0x104375a90]
+    1  ??? (basename + 1273300) [0x1043e6dd4]
+     *1  ??? (kernel.release.t6000 + 31624) [0xfffffe00087b3b88]
+       *1  ??? (kernel.release.t6000 + 1839100) [0xfffffe000896cffc]
+         *1  ??? (kernel.release.t6000 + 7413252) [0xfffffe0008ebde04]
+           *1  ??? (kernel.release.t6000 + 6801224) [0xfffffe0008e28748]
+             *1  ??? (kernel.release.t6000 + 1553140) [0xfffffe00089272f4]
+               *1  ??? (kernel.release.t6000 + 1260708) [0xfffffe00088dfca4]
+                 *1  ??? (kernel.release.t6000 + 1243288) [0xfffffe00088db898]
+                   *1  ??? (kernel.release.t6000 + 1248004) [0xfffffe00088dcb04]
+                     *1  ??? (kernel.release.t6000 + 1225008) [0xfffffe00088d7130]
+                       *1  ??? (kernel.release.t6000 + 1230140) [0xfffffe00088d853c]
+                         *1  ??? (kernel.release.t6000 + 1772200) [0xfffffe000895caa8]
+                           *1  ??? (kernel.release.t6000 + 1790192) [0xfffffe00089610f0]
+                             *1  ??? (kernel.release.t6000 + 1790192) [0xfffffe00089610f0] (running)
+
+  Binary Images:
+           0x1042b0000 -                ???  basename                      <17D2638F-107B-3687-B97B-422EFA835188>             /usr/bin/basename
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          basename [3665] [unique pid 195684723]
+UUID:             17D2638F-107B-3687-B97B-422EFA835188
+Path:             /usr/bin/basename
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Footprint:        272 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:55.710 -0500
+End time:         2026-10-21 14:01:55.721 -0500
+Num samples:      1 (44)
+CPU Time:         0.002s (5.0M cycles, 7.0M instructions, 0.71c/i)
+Num threads:      1
+
+  Thread 0x16783e9b    1 sample (44)    priority 4 (base 4)    cpu time 0.002s (5.0M cycles, 7.0M instructions, 0.71c/i)
+  1  ??? (dyld + 27296) [0x1892eeaa0]
+    1  ??? (dyld + 29144) [0x1892ef1d8]
+      1  ??? (dyld + 32140) [0x1892efd8c]
+        1  ??? (dyld + 90064) [0x1892fdfd0]
+          1  ??? (dyld + 313572) [0x1893348e4]
+            1  ??? (dyld + 307500) [0x18933312c]
+              1  ??? (dyld + 225436) [0x18931f09c]
+                1  ??? (dyld + 410556) [0x18934c3bc]
+                 *1  ??? (kernel.release.t6000 + 346676) [0xfffffe0008800a34] (runnable)
+
+  Binary Images:
+           0x1004b4000 -                ???  basename                      <17D2638F-107B-3687-B97B-422EFA835188>             /usr/bin/basename
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          basename [3717] [unique pid 195684775]
+UUID:             17D2638F-107B-3687-B97B-422EFA835188
+Path:             /usr/bin/basename
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Execed from:      bash [3717] [unique pid 195684775]
+Parent:           bash [3714] [unique pid 195684772]
+UID:              501
+Footprint:        224 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:55.821 -0500
+End time:         2026-10-21 14:01:55.831 -0500
+Num samples:      1 (55)
+CPU Time:         0.003s (5.2M cycles, 5.5M instructions, 0.95c/i)
+Num threads:      1
+
+  Thread 0x16783ee2    1 sample (55)    priority 4 (base 4)    cpu time 0.003s (5.2M cycles, 5.5M instructions, 0.95c/i)
+  1  ??? (dyld + 27296) [0x1892eeaa0]
+    1  ??? (dyld + 29144) [0x1892ef1d8]
+      1  ??? (dyld + 31620) [0x1892efb84]
+        1  ??? (dyld + 70028) [0x1892f918c]
+         *1  ??? (kernel.release.t6000 + 346676) [0xfffffe0008800a34] (runnable)
+
+  Binary Images:
+           0x100590000 -                ???  basename                      <17D2638F-107B-3687-B97B-422EFA835188>             /usr/bin/basename
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          basename [3854] [unique pid 195684912]
+UUID:             17D2638F-107B-3687-B97B-422EFA835188
+Path:             /usr/bin/basename
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Parent:           bash [3850] [unique pid 195684908]
+UID:              501
+Footprint:        80 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:56.101 -0500
+End time:         2026-10-21 14:01:56.161 -0500
+Num samples:      6 (83-88)
+Num threads:      1
+
+  No threads sampled
+
+  Binary Images:
+           0x1041c8000 -                ???  basename <17D2638F-107B-3687-B97B-422EFA835188>  /usr/bin/basename
+
+Process:          bash [5780] [unique pid 31157642]
+UUID:             E2E8C783-0303-308E-8B38-E48E4A227D2D
+Path:             /bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Parent:           launchd [1]
+UID:              501
+Footprint:        19.55 MB
+Time Since Fork:  197368s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x3a82b8b    DispatchQueue 8445580344    101 samples (1-101)    priority 31 (base 31)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  ??? (bash + 7144) [0x102359be8]
+      101  ??? (bash + 122624) [0x102375f00]
+        101  ??? (bash + 123852) [0x1023763cc]
+          101  ??? (bash + 125628) [0x102376abc]
+            101  ??? (bash + 142692) [0x10237ad64]
+              101  ??? (bash + 123852) [0x1023763cc]
+                101  ??? (bash + 125560) [0x102376a78]
+                  101  ??? (bash + 126032) [0x102376c50]
+                    101  ??? (bash + 166968) [0x102380c38]
+                      101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+                       *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x102358000 -        0x1023effff  bash                          <E2E8C783-0303-308E-8B38-E48E4A227D2D>             /bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [45861] [unique pid 193072013]
+UUID:             E2E8C783-0303-308E-8B38-E48E4A227D2D
+Path:             /bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Parent:           launchd [1]
+UID:              501
+Footprint:        2208 KB
+Time Since Fork:  5342s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x1621c935    101 samples (1-101)    priority 20 (base 20)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  ??? (bash + 7144) [0x1049d9be8]
+      101  ??? (bash + 122624) [0x1049f5f00]
+        101  ??? (bash + 123852) [0x1049f63cc]
+          101  ??? (bash + 125420) [0x1049f69ec]
+            101  ??? (bash + 123852) [0x1049f63cc]
+              101  ??? (bash + 125560) [0x1049f6a78]
+                101  ??? (bash + 136832) [0x1049f9680]
+                  101  ??? (bash + 123852) [0x1049f63cc]
+                    101  ??? (bash + 125560) [0x1049f6a78]
+                      101  ??? (bash + 136832) [0x1049f9680]
+                        101  ??? (bash + 123852) [0x1049f63cc]
+                          101  ??? (bash + 125560) [0x1049f6a78]
+                            101  ??? (bash + 136832) [0x1049f9680]
+                              101  ??? (bash + 123852) [0x1049f63cc]
+                                101  ??? (bash + 125560) [0x1049f6a78]
+                                  101  ??? (bash + 136832) [0x1049f9680]
+                                    101  ??? (bash + 123852) [0x1049f63cc]
+                                      101  ??? (bash + 125560) [0x1049f6a78]
+                                        101  ??? (bash + 125420) [0x1049f69ec]
+                                          101  ??? (bash + 123852) [0x1049f63cc]
+                                            101  ??? (bash + 126032) [0x1049f6c50]
+                                              101  ??? (bash + 166968) [0x104a00c38]
+                                                101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+                                                 *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x1049d8000 -        0x104a6ffff  bash                          <E2E8C783-0303-308E-8B38-E48E4A227D2D>             /bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [53027] [unique pid 193079104]
+UUID:             927587DD-50C6-381B-9558-0E254CC2AEA9
+Path:             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Parent:           bash [53024] [unique pid 193079101]
+UID:              501
+Footprint:        4769 KB
+Time Since Fork:  5331s
+Num samples:      101 (1-101)
+Num threads:      2
+Note:             1 idle work queue thread omitted
+
+  Thread 0x1621f9ac    DispatchQueue "com.apple.main-thread"(1)    101 samples (1-101)    priority 20 (base 20)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  main + 4776 (bash + 13992) [0x10094b6a8]
+      101  reader_loop + 788 (bash + 19660) [0x10094cccc]
+        101  execute_command + 124 (bash + 88028) [0x10095d7dc]
+          101  execute_command_internal + 2700 (bash + 90844) [0x10095e2dc]
+            101  execute_command + 124 (bash + 88028) [0x10095d7dc]
+              101  execute_command_internal + 2452 (bash + 90596) [0x10095e1e4]
+                101  execute_connection + 256 (bash + 105448) [0x100961be8]
+                  101  execute_command + 124 (bash + 88028) [0x10095d7dc]
+                    101  execute_command_internal + 2452 (bash + 90596) [0x10095e1e4]
+                      101  execute_connection + 256 (bash + 105448) [0x100961be8]
+                        101  execute_command + 124 (bash + 88028) [0x10095d7dc]
+                          101  execute_command_internal + 2452 (bash + 90596) [0x10095e1e4]
+                            101  execute_connection + 256 (bash + 105448) [0x100961be8]
+                              101  execute_command + 124 (bash + 88028) [0x10095d7dc]
+                                101  execute_command_internal + 2452 (bash + 90596) [0x10095e1e4]
+                                  101  execute_connection + 392 (bash + 105584) [0x100961c70]
+                                    101  execute_command_internal + 2452 (bash + 90596) [0x10095e1e4]
+                                      101  execute_connection + 2228 (bash + 107420) [0x10096239c]
+                                        101  execute_command + 124 (bash + 88028) [0x10095d7dc]
+                                          101  execute_command_internal + 3388 (bash + 91532) [0x10095e58c]
+                                            101  execute_simple_command + 3720 (bash + 99704) [0x100960578]
+                                              101  execute_builtin_or_function + 340 (bash + 119552) [0x100965300]
+                                                101  execute_function + 1716 (bash + 113112) [0x1009639d8]
+                                                  101  execute_command_internal + 3576 (bash + 91720) [0x10095e648]
+                                                    101  execute_command_internal + 2452 (bash + 90596) [0x10095e1e4]
+                                                      101  execute_connection + 256 (bash + 105448) [0x100961be8]
+                                                        101  execute_command + 124 (bash + 88028) [0x10095d7dc]
+                                                          101  execute_command_internal + 2452 (bash + 90596) [0x10095e1e4]
+                                                            101  execute_connection + 392 (bash + 105584) [0x100961c70]
+                                                              101  execute_command_internal + 2452 (bash + 90596) [0x10095e1e4]
+                                                                101  execute_connection + 2228 (bash + 107420) [0x10096239c]
+                                                                  101  execute_command + 124 (bash + 88028) [0x10095d7dc]
+                                                                    101  execute_command_internal + 3808 (bash + 91952) [0x10095e730]
+                                                                      101  wait_for + 644 (bash + 172452) [0x1009721a4]
+                                                                        101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+                                                                         *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x100948000 -        0x1009fffff  bash (0)                      <927587DD-50C6-381B-9558-0E254CC2AEA9>             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [56533] [unique pid 193082583]
+UUID:             927587DD-50C6-381B-9558-0E254CC2AEA9
+Path:             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Parent:           bash [53027] [unique pid 193079104]
+UID:              501
+Footprint:        3697 KB
+Time Since Fork:  5327s
+Num samples:      101 (1-101)
+Num threads:      2
+Note:             1 idle work queue thread omitted
+
+  Thread 0x16220fc1    DispatchQueue "com.apple.main-thread"(1)    101 samples (1-101)    priority 20 (base 20)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  main + 4776 (bash + 13992) [0x1007ff6a8]
+      101  reader_loop + 788 (bash + 19660) [0x100800ccc]
+        101  execute_command + 124 (bash + 88028) [0x1008117dc]
+          101  execute_command_internal + 1448 (bash + 89592) [0x100811df8]
+            101  wait_for + 644 (bash + 172452) [0x1008261a4]
+              101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+               *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x1007fc000 -        0x1008b3fff  bash (0)                      <927587DD-50C6-381B-9558-0E254CC2AEA9>             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [61835] [unique pid 194758345]
+UUID:             E2E8C783-0303-308E-8B38-E48E4A227D2D
+Path:             /bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Parent:           bash [61833] [unique pid 194758343]
+Responsible:      bash [39694] [unique pid 4172132]
+UID:              501
+Footprint:        2512 KB
+Time Since Fork:  2674s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x1653f6d1    101 samples (1-101)    priority 4 (base 4)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  ??? (bash + 7144) [0x104721be8]
+      101  ??? (bash + 122624) [0x10473df00]
+        101  ??? (bash + 123852) [0x10473e3cc]
+          101  ??? (bash + 125468) [0x10473ea1c]
+            101  ??? (bash + 135720) [0x104741228]
+              101  ??? (bash + 123852) [0x10473e3cc]
+                101  ??? (bash + 125560) [0x10473ea78]
+                  101  ??? (bash + 125716) [0x10473eb14]
+                    101  ??? (bash + 130808) [0x10473fef8]
+                      101  ??? (bash + 139744) [0x1047421e0]
+                        101  ??? (bash + 125888) [0x10473ebc0]
+                          101  ??? (bash + 125560) [0x10473ea78]
+                            101  ??? (bash + 136832) [0x104741680]
+                              101  ??? (bash + 123852) [0x10473e3cc]
+                                101  ??? (bash + 125560) [0x10473ea78]
+                                  101  ??? (bash + 125420) [0x10473e9ec]
+                                    101  ??? (bash + 123852) [0x10473e3cc]
+                                      101  ??? (bash + 125560) [0x10473ea78]
+                                        101  ??? (bash + 136832) [0x104741680]
+                                          101  ??? (bash + 123852) [0x10473e3cc]
+                                            101  ??? (bash + 125560) [0x10473ea78]
+                                              101  ??? (bash + 137028) [0x104741744]
+                                                101  ??? (bash + 126032) [0x10473ec50]
+                                                  101  ??? (bash + 166968) [0x104748c38]
+                                                    101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+                                                     *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x104720000 -        0x1047b7fff  bash                          <E2E8C783-0303-308E-8B38-E48E4A227D2D>             /bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [62175] [unique pid 194758676]
+UUID:             E2E8C783-0303-308E-8B38-E48E4A227D2D
+Path:             /bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Parent:           bash [61835] [unique pid 194758345]
+Responsible:      bash [39694] [unique pid 4172132]
+UID:              501
+Footprint:        1280 KB
+Time Since Fork:  2673s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x1653f929    101 samples (1-101)    priority 4 (base 4)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  ??? (bash + 7144) [0x104721be8]
+      101  ??? (bash + 122624) [0x10473df00]
+        101  ??? (bash + 123852) [0x10473e3cc]
+          101  ??? (bash + 125468) [0x10473ea1c]
+            101  ??? (bash + 135720) [0x104741228]
+              101  ??? (bash + 123852) [0x10473e3cc]
+                101  ??? (bash + 125560) [0x10473ea78]
+                  101  ??? (bash + 125716) [0x10473eb14]
+                    101  ??? (bash + 130808) [0x10473fef8]
+                      101  ??? (bash + 139744) [0x1047421e0]
+                        101  ??? (bash + 125888) [0x10473ebc0]
+                          101  ??? (bash + 125560) [0x10473ea78]
+                            101  ??? (bash + 136832) [0x104741680]
+                              101  ??? (bash + 123852) [0x10473e3cc]
+                                101  ??? (bash + 125560) [0x10473ea78]
+                                  101  ??? (bash + 125420) [0x10473e9ec]
+                                    101  ??? (bash + 123852) [0x10473e3cc]
+                                      101  ??? (bash + 125560) [0x10473ea78]
+                                        101  ??? (bash + 136832) [0x104741680]
+                                          101  ??? (bash + 123852) [0x10473e3cc]
+                                            101  ??? (bash + 125560) [0x10473ea78]
+                                              101  ??? (bash + 136464) [0x104741510]
+                                                101  ??? (bash + 125716) [0x10473eb14]
+                                                  101  ??? (bash + 131768) [0x1047402b8]
+                                                    101  ??? (bash + 143788) [0x1047431ac]
+                                                      101  ??? (bash + 139744) [0x1047421e0]
+                                                        101  ??? (bash + 125888) [0x10473ebc0]
+                                                          101  ??? (bash + 125560) [0x10473ea78]
+                                                            101  ??? (bash + 125560) [0x10473ea78]
+                                                              101  ??? (bash + 137028) [0x104741744]
+                                                                101  ??? (bash + 126032) [0x10473ec50]
+                                                                  101  ??? (bash + 166968) [0x104748c38]
+                                                                    101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+                                                                     *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x104720000 -        0x1047b7fff  bash                          <E2E8C783-0303-308E-8B38-E48E4A227D2D>             /bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [92917] [unique pid 194985455]
+UUID:             927587DD-50C6-381B-9558-0E254CC2AEA9
+Path:             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Parent:           launchd [1]
+UID:              501
+Footprint:        3040 KB
+Time Since Fork:  1952s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x165eff38    101 samples (1-101)    priority 31 (base 31)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  main + 4776 (bash + 13992) [0x100b0b6a8]
+      101  reader_loop + 788 (bash + 19660) [0x100b0cccc]
+        101  execute_command + 124 (bash + 88028) [0x100b1d7dc]
+          101  execute_command_internal + 3808 (bash + 91952) [0x100b1e730]
+            101  wait_for + 644 (bash + 172452) [0x100b321a4]
+              101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+               *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x100b08000 -        0x100bbffff  bash (0)                      <927587DD-50C6-381B-9558-0E254CC2AEA9>             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [11061] [unique pid 195494275]
+UUID:             E2E8C783-0303-308E-8B38-E48E4A227D2D
+Path:             /bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Parent:           gtimeout [6985] [unique pid 195490244]
+Responsible:      bash [67192] [unique pid 194861889]
+UID:              501
+Footprint:        1904 KB
+Time Since Fork:  343s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x16723f0a    DispatchQueue 8445580344    101 samples (1-101)    priority 4 (base 4)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  ??? (bash + 7144) [0x102465be8]
+      101  ??? (bash + 122624) [0x102481f00]
+        101  ??? (bash + 123852) [0x1024823cc]
+          101  ??? (bash + 125468) [0x102482a1c]
+            101  ??? (bash + 135720) [0x102485228]
+              101  ??? (bash + 123852) [0x1024823cc]
+                101  ??? (bash + 125716) [0x102482b14]
+                  101  ??? (bash + 130808) [0x102483ef8]
+                    101  ??? (bash + 139744) [0x1024861e0]
+                      101  ??? (bash + 125888) [0x102482bc0]
+                        101  ??? (bash + 125560) [0x102482a78]
+                          101  ??? (bash + 136832) [0x102485680]
+                            101  ??? (bash + 123852) [0x1024823cc]
+                              101  ??? (bash + 125560) [0x102482a78]
+                                101  ??? (bash + 136832) [0x102485680]
+                                  101  ??? (bash + 123852) [0x1024823cc]
+                                    101  ??? (bash + 125560) [0x102482a78]
+                                      101  ??? (bash + 136832) [0x102485680]
+                                        101  ??? (bash + 123852) [0x1024823cc]
+                                          101  ??? (bash + 125560) [0x102482a78]
+                                            101  ??? (bash + 136832) [0x102485680]
+                                              101  ??? (bash + 123852) [0x1024823cc]
+                                                101  ??? (bash + 125560) [0x102482a78]
+                                                  101  ??? (bash + 136832) [0x102485680]
+                                                    101  ??? (bash + 123852) [0x1024823cc]
+                                                      101  ??? (bash + 125560) [0x102482a78]
+                                                        101  ??? (bash + 125716) [0x102482b14]
+                                                          101  ??? (bash + 129496) [0x1024839d8]
+                                                            101  ??? (bash + 242956) [0x10249f50c]
+                                                              101  ??? (bash + 226060) [0x10249b30c]
+                                                                101  ??? (bash + 228168) [0x10249bb48]
+                                                                  101  ??? (bash + 227672) [0x10249b958]
+                                                                    101  ??? (bash + 228556) [0x10249bccc]
+                                                                      101  ??? (bash + 231528) [0x10249c868]
+                                                                        101  ??? (bash + 230828) [0x10249c5ac]
+                                                                          101  ??? (bash + 246628) [0x1024a0364]
+                                                                            101  ??? (bash + 236744) [0x10249dcc8]
+                                                                              101  ??? (libsystem_kernel.dylib + 6108) [0x18964e7dc]
+                                                                               *101  ??? (kernel.release.t6000 + 31624) [0xfffffe00087b3b88]
+                                                                                 *101  ??? (kernel.release.t6000 + 1839100) [0xfffffe000896cffc]
+                                                                                   *101  ??? (kernel.release.t6000 + 7413252) [0xfffffe0008ebde04]
+                                                                                     *101  ??? (kernel.release.t6000 + 6312752) [0xfffffe0008db1330]
+                                                                                       *101  ??? (kernel.release.t6000 + 6312244) [0xfffffe0008db1134]
+                                                                                         *101  ??? (kernel.release.t6000 + 6342740) [0xfffffe0008db8854]
+                                                                                           *101  ??? (kernel.release.t6000 + 6161308) [0xfffffe0008d8c39c]
+                                                                                             *101  ??? (kernel.release.t6000 + 517872) [0xfffffe000882a6f0]
+                                                                                               *101  ??? (kernel.release.t6000 + 614076) [0xfffffe0008841ebc]
+                                                                                                 *101  ??? (kernel.release.t6000 + 619592) [0xfffffe0008843448]
+
+  Binary Images:
+           0x102464000 -        0x1024fbfff  bash                          <E2E8C783-0303-308E-8B38-E48E4A227D2D>             /bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [7013] [unique pid 195588779]
+UUID:             927587DD-50C6-381B-9558-0E254CC2AEA9
+Path:             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Parent:           python3.12 [97564] [unique pid 195579681]
+UID:              501
+Footprint:        3440 KB
+Time Since Fork:  115s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x1675b881    DispatchQueue 8445580344    101 samples (1-101)    priority 31 (base 31)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  main + 4776 (bash + 13992) [0x104a1f6a8]
+      101  reader_loop + 788 (bash + 19660) [0x104a20ccc]
+        101  execute_command + 124 (bash + 88028) [0x104a317dc]
+          101  execute_command_internal + 3808 (bash + 91952) [0x104a32730]
+            101  wait_for + 644 (bash + 172452) [0x104a461a4]
+              101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+               *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x104a1c000 -        0x104ad3fff  bash (0)                      <927587DD-50C6-381B-9558-0E254CC2AEA9>             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [76433] [unique pid 195657911]
+UUID:             E2E8C783-0303-308E-8B38-E48E4A227D2D
+Path:             /bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Parent:           bash [11061] [unique pid 195494275]
+Responsible:      bash [67192] [unique pid 194861889]
+UID:              501
+Footprint:        1072 KB
+Time Since Fork:  64s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x1677915b    DispatchQueue 8445580344    101 samples (1-101)    priority 4 (base 4)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  ??? (bash + 7144) [0x102465be8]
+      101  ??? (bash + 122624) [0x102481f00]
+        101  ??? (bash + 123852) [0x1024823cc]
+          101  ??? (bash + 125468) [0x102482a1c]
+            101  ??? (bash + 135720) [0x102485228]
+              101  ??? (bash + 123852) [0x1024823cc]
+                101  ??? (bash + 125716) [0x102482b14]
+                  101  ??? (bash + 130808) [0x102483ef8]
+                    101  ??? (bash + 139744) [0x1024861e0]
+                      101  ??? (bash + 125888) [0x102482bc0]
+                        101  ??? (bash + 125560) [0x102482a78]
+                          101  ??? (bash + 136832) [0x102485680]
+                            101  ??? (bash + 123852) [0x1024823cc]
+                              101  ??? (bash + 125560) [0x102482a78]
+                                101  ??? (bash + 136832) [0x102485680]
+                                  101  ??? (bash + 123852) [0x1024823cc]
+                                    101  ??? (bash + 125560) [0x102482a78]
+                                      101  ??? (bash + 136832) [0x102485680]
+                                        101  ??? (bash + 123852) [0x1024823cc]
+                                          101  ??? (bash + 125560) [0x102482a78]
+                                            101  ??? (bash + 136832) [0x102485680]
+                                              101  ??? (bash + 123852) [0x1024823cc]
+                                                101  ??? (bash + 125560) [0x102482a78]
+                                                  101  ??? (bash + 136832) [0x102485680]
+                                                    101  ??? (bash + 123852) [0x1024823cc]
+                                                      101  ??? (bash + 125560) [0x102482a78]
+                                                        101  ??? (bash + 125716) [0x102482b14]
+                                                          101  ??? (bash + 129496) [0x1024839d8]
+                                                            101  ??? (bash + 242956) [0x10249f50c]
+                                                              101  ??? (bash + 226060) [0x10249b30c]
+                                                                101  ??? (bash + 228168) [0x10249bb48]
+                                                                  101  ??? (bash + 227672) [0x10249b958]
+                                                                    101  ??? (bash + 228556) [0x10249bccc]
+                                                                      101  ??? (bash + 231528) [0x10249c868]
+                                                                        101  ??? (bash + 230828) [0x10249c5ac]
+                                                                          101  ??? (bash + 246628) [0x1024a0364]
+                                                                            101  ??? (bash + 237908) [0x10249e154]
+                                                                              101  ??? (bash + 75212) [0x1024765cc]
+                                                                                101  ??? (bash + 125560) [0x102482a78]
+                                                                                  101  ??? (bash + 137028) [0x102485744]
+                                                                                    101  ??? (bash + 126032) [0x102482c50]
+                                                                                      101  ??? (bash + 166968) [0x10248cc38]
+                                                                                        101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+                                                                                         *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x102464000 -        0x1024fbfff  bash                          <E2E8C783-0303-308E-8B38-E48E4A227D2D>             /bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [98070] [unique pid 195679436]
+UUID:             927587DD-50C6-381B-9558-0E254CC2AEA9
+Path:             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Parent:           gtimeout [98067] [unique pid 195679433]
+UID:              501
+Footprint:        6849 KB
+Time Since Fork:  13s
+Num samples:      101 (1-101)
+Num threads:      2
+Note:             1 idle work queue thread omitted
+
+  Thread 0x16781b97    DispatchQueue "com.apple.main-thread"(1)    101 samples (1-101)    priority 20 (base 20)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  main + 4776 (bash + 13992) [0x1002576a8]
+      101  reader_loop + 788 (bash + 19660) [0x100258ccc]
+        101  execute_command + 124 (bash + 88028) [0x1002697dc]
+          101  execute_command_internal + 3388 (bash + 91532) [0x10026a58c]
+            101  execute_simple_command + 3720 (bash + 99704) [0x10026c578]
+              101  execute_builtin_or_function + 340 (bash + 119552) [0x100271300]
+                101  execute_function + 1716 (bash + 113112) [0x10026f9d8]
+                  101  execute_command_internal + 3576 (bash + 91720) [0x10026a648]
+                    101  execute_command_internal + 2832 (bash + 90976) [0x10026a360]
+                      101  execute_case_command + 684 (bash + 104896) [0x10026d9c0]
+                        101  execute_command + 124 (bash + 88028) [0x1002697dc]
+                          101  execute_command_internal + 2452 (bash + 90596) [0x10026a1e4]
+                            101  execute_connection + 256 (bash + 105448) [0x10026dbe8]
+                              101  execute_command + 124 (bash + 88028) [0x1002697dc]
+                                101  execute_command_internal + 2452 (bash + 90596) [0x10026a1e4]
+                                  101  execute_connection + 392 (bash + 105584) [0x10026dc70]
+                                    101  execute_command_internal + 2452 (bash + 90596) [0x10026a1e4]
+                                      101  execute_connection + 2228 (bash + 107420) [0x10026e39c]
+                                        101  execute_command + 124 (bash + 88028) [0x1002697dc]
+                                          101  execute_command_internal + 3808 (bash + 91952) [0x10026a730]
+                                            101  wait_for + 644 (bash + 172452) [0x10027e1a4]
+                                              101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+                                               *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x100254000 -        0x10030bfff  bash (0)                      <927587DD-50C6-381B-9558-0E254CC2AEA9>             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [3039] [unique pid 195684098]
+UUID:             E2E8C783-0303-308E-8B38-E48E4A227D2D
+Path:             /bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Parent:           git [33116] [unique pid 195516071]
+Responsible:      bash [89749] [unique pid 174238231]
+UID:              501
+Footprint:        1536 KB
+Time Since Fork:  3s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x167835e1    DispatchQueue 8445580344    101 samples (1-101)    priority 20 (base 20)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  ??? (bash + 7144) [0x1027c1be8]
+      101  ??? (bash + 122624) [0x1027ddf00]
+        101  ??? (bash + 123852) [0x1027de3cc]
+          101  ??? (bash + 126032) [0x1027dec50]
+            101  ??? (bash + 166968) [0x1027e8c38]
+              101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+               *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x1027c0000 -        0x102857fff  bash                          <E2E8C783-0303-308E-8B38-E48E4A227D2D>             /bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [3100] [unique pid 195684158]
+UUID:             927587DD-50C6-381B-9558-0E254CC2AEA9
+Path:             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Parent:           bash [3039] [unique pid 195684098]
+Responsible:      bash [89749] [unique pid 174238231]
+UID:              501
+Footprint:        3377 KB
+Time Since Fork:  2s
+Num samples:      101 (1-101)
+Num threads:      3
+Note:             2 idle work queue threads omitted
+
+  Thread 0x16783b6f    DispatchQueue "com.apple.main-thread"(1)    101 samples (1-101)    priority 20 (base 20)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  main + 4776 (bash + 13992) [0x1006436a8]
+      101  reader_loop + 788 (bash + 19660) [0x100644ccc]
+        101  execute_command + 124 (bash + 88028) [0x1006557dc]
+          101  execute_command_internal + 2700 (bash + 90844) [0x1006562dc]
+            101  execute_command + 124 (bash + 88028) [0x1006557dc]
+              101  execute_command_internal + 2452 (bash + 90596) [0x1006561e4]
+                101  execute_connection + 1664 (bash + 106856) [0x10065a168]
+                  101  execute_command_internal + 3808 (bash + 91952) [0x100656730]
+                    101  wait_for + 644 (bash + 172452) [0x10066a1a4]
+                      101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+                       *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x100640000 -        0x1006f7fff  bash (0)                      <927587DD-50C6-381B-9558-0E254CC2AEA9>             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [3149] [unique pid 195684207]
+UUID:             927587DD-50C6-381B-9558-0E254CC2AEA9
+Path:             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Parent:           bash [3100] [unique pid 195684158]
+Responsible:      bash [89749] [unique pid 174238231]
+UID:              501
+Footprint:        3969 KB
+Time Since Fork:  1s
+Num samples:      101 (1-101)
+Num threads:      3
+Note:             2 idle work queue threads omitted
+
+  Thread 0x16783b87    DispatchQueue "com.apple.main-thread"(1)    101 samples (1-101)    priority 20 (base 20)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  main + 4776 (bash + 13992) [0x10255f6a8]
+      101  reader_loop + 788 (bash + 19660) [0x102560ccc]
+        101  execute_command + 124 (bash + 88028) [0x1025717dc]
+          101  execute_command_internal + 2700 (bash + 90844) [0x1025722dc]
+            101  execute_command + 124 (bash + 88028) [0x1025717dc]
+              101  execute_command_internal + 2452 (bash + 90596) [0x1025721e4]
+                101  execute_connection + 392 (bash + 105584) [0x102575c70]
+                  101  execute_command_internal + 2788 (bash + 90932) [0x102572334]
+                    101  execute_for_command + 576 (bash + 100864) [0x102574a00]
+                      101  execute_command + 124 (bash + 88028) [0x1025717dc]
+                        101  execute_command_internal + 2452 (bash + 90596) [0x1025721e4]
+                          101  execute_connection + 256 (bash + 105448) [0x102575be8]
+                            101  execute_command + 124 (bash + 88028) [0x1025717dc]
+                              101  execute_command_internal + 2452 (bash + 90596) [0x1025721e4]
+                                101  execute_connection + 392 (bash + 105584) [0x102575c70]
+                                  101  execute_command_internal + 2452 (bash + 90596) [0x1025721e4]
+                                    101  execute_connection + 2228 (bash + 107420) [0x10257639c]
+                                      101  execute_command + 124 (bash + 88028) [0x1025717dc]
+                                        101  execute_command_internal + 3808 (bash + 91952) [0x102572730]
+                                          101  wait_for + 644 (bash + 172452) [0x1025861a4]
+                                            101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+                                             *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x10255c000 -        0x102613fff  bash (0)                      <927587DD-50C6-381B-9558-0E254CC2AEA9>             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [3150] [unique pid 195684208]
+UUID:             927587DD-50C6-381B-9558-0E254CC2AEA9
+Path:             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Parent:           bash [3100] [unique pid 195684158]
+Responsible:      bash [89749] [unique pid 174238231]
+UID:              501
+Footprint:        1536 KB
+Time Since Fork:  1s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x16783b7d    DispatchQueue "com.apple.main-thread"(1)    101 samples (1-101)    priority 20 (base 20)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  main + 4776 (bash + 13992) [0x1006436a8]
+      101  reader_loop + 788 (bash + 19660) [0x100644ccc]
+        101  execute_command + 124 (bash + 88028) [0x1006557dc]
+          101  execute_command_internal + 2700 (bash + 90844) [0x1006562dc]
+            101  execute_command + 124 (bash + 88028) [0x1006557dc]
+              101  execute_command_internal + 2452 (bash + 90596) [0x1006561e4]
+                101  execute_connection + 1264 (bash + 106456) [0x100659fd8]
+                  101  execute_command_internal + 3388 (bash + 91532) [0x10065658c]
+                    101  execute_simple_command + 4304 (bash + 100288) [0x1006587c0]
+                      101  execute_subshell_builtin_or_function + 436 (bash + 118860) [0x10065d04c]
+                        101  execute_function + 1716 (bash + 113112) [0x10065b9d8]
+                          101  execute_command_internal + 3576 (bash + 91720) [0x100656648]
+                            101  execute_command_internal + 2452 (bash + 90596) [0x1006561e4]
+                              101  execute_connection + 392 (bash + 105584) [0x100659c70]
+                                101  execute_command_internal + 2700 (bash + 90844) [0x1006562dc]
+                                  101  execute_command + 124 (bash + 88028) [0x1006557dc]
+                                    101  execute_command_internal + 2452 (bash + 90596) [0x1006561e4]
+                                      101  execute_connection + 256 (bash + 105448) [0x100659be8]
+                                        101  execute_command + 124 (bash + 88028) [0x1006557dc]
+                                          101  execute_command_internal + 2452 (bash + 90596) [0x1006561e4]
+                                            101  execute_connection + 392 (bash + 105584) [0x100659c70]
+                                              101  execute_command_internal + 2880 (bash + 91024) [0x100656390]
+                                                101  execute_while_or_until + 116 (bash + 116404) [0x10065c6b4]
+                                                  101  execute_command + 124 (bash + 88028) [0x1006557dc]
+                                                    101  execute_command_internal + 3388 (bash + 91532) [0x10065658c]
+                                                      101  execute_simple_command + 3268 (bash + 99252) [0x1006583b4]
+                                                        101  execute_builtin_or_function + 308 (bash + 119520) [0x10065d2e0]
+                                                          101  execute_builtin + 644 (bash + 121352) [0x10065da08]
+                                                            101  read_builtin + 4388 (bash + 462188) [0x1006b0d6c]
+                                                              101  ??? (libsystem_kernel.dylib + 6108) [0x18964e7dc]
+                                                               *101  ??? (kernel.release.t6000 + 31624) [0xfffffe00087b3b88]
+                                                                 *101  ??? (kernel.release.t6000 + 1839100) [0xfffffe000896cffc]
+                                                                   *101  ??? (kernel.release.t6000 + 7413252) [0xfffffe0008ebde04]
+                                                                     *101  ??? (kernel.release.t6000 + 6312752) [0xfffffe0008db1330]
+                                                                       *101  ??? (kernel.release.t6000 + 6312244) [0xfffffe0008db1134]
+                                                                         *101  ??? (kernel.release.t6000 + 6342740) [0xfffffe0008db8854]
+                                                                           *101  ??? (kernel.release.t6000 + 6161308) [0xfffffe0008d8c39c]
+                                                                             *101  ??? (kernel.release.t6000 + 517872) [0xfffffe000882a6f0]
+                                                                               *101  ??? (kernel.release.t6000 + 614076) [0xfffffe0008841ebc]
+                                                                                 *101  ??? (kernel.release.t6000 + 619592) [0xfffffe0008843448]
+
+  Binary Images:
+           0x100640000 -        0x1006f7fff  bash (0)                      <927587DD-50C6-381B-9558-0E254CC2AEA9>             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [3151] [unique pid 195684209]
+UUID:             927587DD-50C6-381B-9558-0E254CC2AEA9
+Path:             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Parent:           bash [3100] [unique pid 195684158]
+Responsible:      bash [89749] [unique pid 174238231]
+UID:              501
+Footprint:        3072 KB
+Time Since Fork:  1s
+Num samples:      101 (1-101)
+Num threads:      3
+Note:             2 idle work queue threads omitted
+
+  Thread 0x16783b89    DispatchQueue "com.apple.main-thread"(1)    101 samples (1-101)    priority 20 (base 20)
+  101  ??? (dyld + 27544) [0x1892eeb98]
+    101  main + 4776 (bash + 13992) [0x1001cf6a8]
+      101  reader_loop + 788 (bash + 19660) [0x1001d0ccc]
+        101  execute_command + 124 (bash + 88028) [0x1001e17dc]
+          101  execute_command_internal + 3808 (bash + 91952) [0x1001e2730]
+            101  wait_for + 644 (bash + 172452) [0x1001f61a4]
+              101  ??? (libsystem_kernel.dylib + 33284) [0x189655204]
+               *101  ??? (kernel.release.t6000 + 6162016) [0xfffffe0008d8c660] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x1001cc000 -        0x100283fff  bash (0)                      <927587DD-50C6-381B-9558-0E254CC2AEA9>             /opt/homebrew/Cellar/bash/5.3.15/bin/bash
+           0x1892e8000 -        0x18938357b  dyld                          <AA296324-126C-32DD-9026-5B744F8EB283>             /usr/lib/dyld
+           0x18964d000 -        0x1896885f3  libsystem_kernel.dylib        <4D7A9E23-5B73-3C87-80E2-3B5E13F74F58>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [3478] [unique pid 195684536]
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Footprint:        224 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:55.311 -0500
+End time:         2026-10-21 14:01:55.320 -0500
+Num samples:      1 (4)
+CPU Time:         <0.001s (141.5K cycles, 96.8K instructions, 1.46c/i)
+Num threads:      1
+
+  Thread 0x16783d9b    1 sample (4)    priority 20 (base 20)    cpu time <0.001s (141.5K cycles, 96.8K instructions, 1.46c/i)
+  1  <truncated backtrace>
+    1  ??? [0x1007ac0dc]
+      1  ??? [0x1007ac008]
+        1  ??? [0x1007b2e38]
+          1  ??? [0x1007af808]
+            1  ??? [0x1007a01a4]
+              1  ??? (libsystem_c.dylib + 142476) [0x189542c8c]
+                1  ??? (libSystem.B.dylib + 5520) [0x1978f7590]
+                  1  ??? (libsystem_pthread.dylib + 43160) [0x189693898]
+                    1  ??? (libsystem_pthread.dylib + 4212) [0x18968a074]
+                     *1  ??? (kernel.release.t6000 + 31624) [0xfffffe00087b3b88]
+                       *1  ??? (kernel.release.t6000 + 1839164) [0xfffffe000896d03c]
+                         *1  ??? (kernel.release.t6000 + 1842152) [0xfffffe000896dbe8]
+                           *1  ??? (kernel.release.t6000 + 1159896) [0xfffffe00088c72d8]
+                             *1  ??? (kernel.release.t6000 + 1169620) [0xfffffe00088c98d4]
+                               *1  ??? (kernel.release.t6000 + 1175504) [0xfffffe00088cafd0]
+                                 *1  ??? (kernel.release.t6000 + 1774576) [0xfffffe000895d3f0]
+                                   *1  ??? (kernel.release.t6000 + 33784) [0xfffffe00087b43f8]
+                                     *1  ??? (kernel.release.t6000 + 9706224) [0xfffffe00090edaf0]
+                                       *1  ??? (kernel.release.t6000 + 9724244) [0xfffffe00090f2154]
+                                         *1  ??? (kernel.release.t6000 + 9722864) [0xfffffe00090f1bf0] (running)
+
+  Binary Images:
+           0x189520000 -        0x1895a134b  libsystem_c.dylib             <2F87F7E4-6D67-339D-9DB1-756A5618CFC7>             /usr/lib/system/libsystem_c.dylib
+           0x189689000 -        0x189695a77  libsystem_pthread.dylib       <2886F4F3-500B-36C8-A20C-C457EB754E3D>             /usr/lib/system/libsystem_pthread.dylib
+           0x1978f6000 -        0x1978f7ca3  libSystem.B.dylib             <9500400E-A2EC-33F9-B76B-9830E022777A>             /usr/lib/libSystem.B.dylib
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [3514] [unique pid 195684572]
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Footprint:        32 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:55.400 -0500
+End time:         2026-10-21 14:01:55.410 -0500
+Num samples:      1 (13)
+Num threads:      1
+
+Process:          bash [3530] [unique pid 195684588]
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Execed to:        stat [3530] [unique pid 195684588]
+Footprint:        32 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:55.421 -0500
+End time:         2026-10-21 14:01:55.431 -0500
+Num samples:      1 (15)
+Num threads:      1
+
+Process:          bash [3557] [unique pid 195684615]
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Footprint:        32 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:55.470 -0500
+End time:         2026-10-21 14:01:55.481 -0500
+Num samples:      1 (20)
+Num threads:      1
+
+Process:          bash [3614] [unique pid 195684672] (suspended) (zombie)
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64
+Footprint:        1440 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:55.601 -0500
+End time:         2026-10-21 14:01:55.611 -0500
+Num samples:      1 (33)
+CPU Time:         0.001s (4.1M cycles, 8.8M instructions, 0.47c/i)
+Note:             Suspended for 1 sample
+Note:             Terminated (zombie) for 1 sample
+Num threads:      1
+
+  Thread 0x16783e52    1 sample (33)    priority 31 (base 31)    cpu time 0.001s (4.1M cycles, 8.8M instructions, 0.47c/i)
+  1  <truncated backtrace>
+   *1  ??? (kernel.release.t6000 + 31624) [0xfffffe00087b3b88]
+     *1  ??? (kernel.release.t6000 + 1839100) [0xfffffe000896cffc]
+       *1  ??? (kernel.release.t6000 + 7413252) [0xfffffe0008ebde04]
+         *1  ??? (kernel.release.t6000 + 5985848) [0xfffffe0008d61638]
+           *1  ??? (kernel.release.t6000 + 5986368) [0xfffffe0008d61840]
+             *1  ??? (kernel.release.t6000 + 700776) [0xfffffe0008857168]
+               *1  ??? (kernel.release.t6000 + 1280128) [0xfffffe00088e4880]
+                 *1  ??? (kernel.release.t6000 + 1224944) [0xfffffe00088d70f0] (suspended, running)
+
+  Binary Images:
+   *0xfffffe00087ac000 -                ???  kernel.release.t6000 (24.6.0) <56F2769A-BD62-310D-8B62-428EA2318244>__TEXT_EXEC  /System/Library/Kernels/kernel.release.t6000
+
+Process:          bash [3624] [unique pid 195684682]
+Shared Cache:     0517AE48-31DC-3086-8D85-545FEF4D70B7 slid base address 0x18921c000, slide 0x921c000 (System Primary)
+Architecture:     arm64e
+Footprint:        32 KB
+Time Since Fork:  0s
+Start time:       2026-10-21 14:01:55.611 -0500
+End time:         2026-10-21 14:01:55.621 -0500
+Num samples:      1 (34)
+Num threads:      1

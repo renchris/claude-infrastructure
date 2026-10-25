@@ -1,0 +1,570 @@
+Date/Time:        2026-10-25 13:15:20.774 -0500
+End time:         2026-10-25 13:15:21.779 -0500
+OS Version:       macOS 15.8.1 (Build 24H32)
+Architecture:     arm64e
+Report Version:   60
+
+Data Source:      Stackshots
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Shared Cache:     F142D18D-BC2E-3B71-80A0-F6D7AD64236D slid base address 0x1899a0000, slide 0x99a0000 (DriverKit)
+Shared Cache:     40262AEC-8BD6-3D1B-B791-DAD8E4224BD5 slid base address 0x7ff819148000, slide 0x19148000 (Rosetta)
+
+Event:            shutdown stall
+Duration:         1.00s (sampling started after 2 seconds)
+Steps:            101 (10ms sampling interval)
+
+Hardware model:   MacBookPro18,2
+Active cpus:      10
+Memory size:      64 GB
+HW page size:     16384
+VM page size:     16384
+Shared cache residency: 24.04% (1126.97 MB / 4687.77 MB)
+
+Time Since Boot:  342534s
+Time Awake Since Boot: 342460s
+Time Since Wake:  168612s
+
+Fan speed:        2572 rpm
+Total CPU Time:   8.944s (25.3G cycles, 51.5G instructions, 0.49c/i)
+Vnodes Available: 88.62% (233214/263168)
+Models:           none
+
+Deadlock:         AppleSpell [88703] [unique pid 15170110] thread 0x66774a8 DispatchQueue 85 -> AppleSpell [88703] [unique pid 15170110] thread 0x66774a8 DispatchQueue 85
+Blocked by Deadlock: 1 task - AppleSpell [88703] [unique pid 15170110]
+
+Preferred User Language: en-001
+Country Code:     001
+OS Cryptex File Extents: 1
+
+------------------------------------------------------------
+Heavy format: stacks are sorted by count
+Use -i and -timeline to re-report with chronological sorting
+------------------------------------------------------------
+
+Process:          awk [96310] [unique pid 296734893]
+UUID:             D2D8763D-1DD3-3456-8F76-173092A5768D
+Path:             /usr/bin/awk
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Architecture:     arm64e
+Parent:           bash [95771] [unique pid 296734363]
+UID:              501
+Footprint:        1392 KB
+Time Since Fork:  36683s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x2250c28e    101 samples (1-101)    priority 20 (base 20)
+  101  start + 6076 (dyld + 27544) [0x18c77ab98]
+    101  ??? (awk + 34764) [0x102c5c7cc]
+      101  ??? (awk + 38068) [0x102c5d4b4]
+        101  ??? (awk + 38320) [0x102c5d5b0]
+          101  ??? (awk + 39140) [0x102c5d8e4]
+            101  ??? (awk + 22180) [0x102c596a4]
+              101  ??? (awk + 22992) [0x102c599d0]
+                101  getc + 72 (libsystem_c.dylib + 205696) [0x18c9de380]
+                  101  __srget + 24 (libsystem_c.dylib + 148572) [0x18c9d045c]
+                    101  __srefill1 + 36 (libsystem_c.dylib + 47892) [0x18c9b7b14]
+                      101  _sread + 32 (libsystem_c.dylib + 48000) [0x18c9b7b80]
+                        101  __read_nocancel + 8 (libsystem_kernel.dylib + 11116) [0x18cadbb6c]
+                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 31624) [0xfffffe00087b7b88]
+                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 1841124) [0xfffffe00089717e4]
+                             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 7426132) [0xfffffe0008ec5054]
+                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6323000) [0xfffffe0008db7b38]
+                                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6323648) [0xfffffe0008db7dc0]
+                                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6354144) [0xfffffe0008dbf4e0]
+                                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc]
+
+  Binary Images:
+           0x102c54000 -        0x102c73fff  awk (40)                                     <D2D8763D-1DD3-3456-8F76-173092A5768D>             /usr/bin/awk
+           0x18c774000 -        0x18c80f577  dyld (1286.10)                               <E0A6EB9F-57DC-344C-B22F-5C8176284B0A>             /usr/lib/dyld
+           0x18c9ac000 -        0x18ca2d34b  libsystem_c.dylib (1698.140.3.705.1)         <06B987DD-B857-3BE0-BC83-A5C72AA292B2>             /usr/lib/system/libsystem_c.dylib
+           0x18cad9000 -        0x18cb145f3  libsystem_kernel.dylib (11417.140.69.712.69) <3E3A27A5-F53C-3C0A-A583-FC0CC0E78BDB>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)                                 <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          bash [68298] [unique pid 296707384] (zombie)
+UUID:             A9B499BF-01CC-31AD-B13C-887497E6AD4C
+Path:             /bin/bash
+Shared Cache:     None
+Architecture:     arm64
+Parent:           launchd [1]
+UID:              501
+Num samples:      101 (1-101)
+Note:             Terminated (zombie) for 101 samples
+Num threads:      1
+
+  Thread 0x22501412    101 samples (1-101)    priority 20 (base 20)
+  101  <truncated backtrace>
+   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 69388) [0xfffffe00087c0f0c]
+     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6173344) [0xfffffe0008d932a0]
+       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 7427252) [0xfffffe0008ec54b4]
+         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 1840208) [0xfffffe0008971450]
+           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 33164) [0xfffffe00087b818c]
+             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 346464) [0xfffffe0008804960]
+               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 804068) [0xfffffe00088744e4]
+                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 785404) [0xfffffe000886fbfc]
+                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6000844) [0xfffffe0008d690cc]
+                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2539216) [0xfffffe0008a1bed0]
+                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2499088) [0xfffffe0008a12210]
+                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2502508) [0xfffffe0008a12f6c]
+                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc] (suspended)
+
+  Binary Images:
+           0x104458000 -        0x1044effff  bash (140.0.0.700.1) <A9B499BF-01CC-31AD-B13C-887497E6AD4C>             /bin/bash
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)         <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          bash [94459] [unique pid 296733083] (zombie)
+UUID:             A9B499BF-01CC-31AD-B13C-887497E6AD4C
+Path:             /bin/bash
+Shared Cache:     None
+Architecture:     arm64
+Parent:           bash [68298] [unique pid 296707384]
+UID:              501
+Num samples:      101 (1-101)
+Note:             Terminated (zombie) for 101 samples
+Num threads:      1
+
+  Thread 0x2250b4bf    101 samples (1-101)    priority 20 (base 20)
+  101  <truncated backtrace>
+   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 31624) [0xfffffe00087b7b88]
+     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 33164) [0xfffffe00087b818c]
+       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 346464) [0xfffffe0008804960]
+         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 804068) [0xfffffe00088744e4]
+           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 785404) [0xfffffe000886fbfc]
+             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6001104) [0xfffffe0008d691d0]
+               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6073240) [0xfffffe0008d7ab98]
+                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6060516) [0xfffffe0008d779e4]
+                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc] (suspended)
+
+  Binary Images:
+           0x102200000 -        0x102297fff  bash (140.0.0.700.1) <A9B499BF-01CC-31AD-B13C-887497E6AD4C>             /bin/bash
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)         <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          bash [95771] [unique pid 296734363]
+UUID:             A9B499BF-01CC-31AD-B13C-887497E6AD4C
+Path:             /bin/bash
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Architecture:     arm64e
+Parent:           bash [94459] [unique pid 296733083]
+UID:              501
+Footprint:        1168 KB
+Time Since Fork:  36683s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x2250ba56    101 samples (1-101)    priority 20 (base 20)
+  101  start + 6076 (dyld + 27544) [0x18c77ab98]
+    101  ??? (bash + 7144) [0x102201be8]
+      101  ??? (bash + 122624) [0x10221df00]
+        101  ??? (bash + 123852) [0x10221e3cc]
+          101  ??? (bash + 125420) [0x10221e9ec]
+            101  ??? (bash + 123852) [0x10221e3cc]
+              101  ??? (bash + 125716) [0x10221eb14]
+                101  ??? (bash + 129496) [0x10221f9d8]
+                  101  ??? (bash + 242956) [0x10223b50c]
+                    101  ??? (bash + 226060) [0x10223730c]
+                      101  ??? (bash + 228168) [0x102237b48]
+                        101  ??? (bash + 227672) [0x102237958]
+                          101  ??? (bash + 228556) [0x102237ccc]
+                            101  ??? (bash + 231528) [0x102238868]
+                              101  ??? (bash + 230828) [0x1022385ac]
+                                101  ??? (bash + 246628) [0x10223c364]
+                                  101  ??? (bash + 237908) [0x10223a154]
+                                    101  ??? (bash + 75212) [0x1022125cc]
+                                      101  ??? (bash + 125560) [0x10221ea78]
+                                        101  ??? (bash + 137028) [0x102221744]
+                                          101  ??? (bash + 126032) [0x10221ec50]
+                                            101  ??? (bash + 166968) [0x102228c38]
+                                              101  __wait4 + 8 (libsystem_kernel.dylib + 33284) [0x18cae1204]
+                                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6173096) [0xfffffe0008d931a8] (blocked by wait4 on any child process)
+
+  Binary Images:
+           0x102200000 -        0x102297fff  bash (140.0.0.700.1)                         <A9B499BF-01CC-31AD-B13C-887497E6AD4C>             /bin/bash
+           0x18c774000 -        0x18c80f577  dyld (1286.10)                               <E0A6EB9F-57DC-344C-B22F-5C8176284B0A>             /usr/lib/dyld
+           0x18cad9000 -        0x18cb145f3  libsystem_kernel.dylib (11417.140.69.712.69) <3E3A27A5-F53C-3C0A-A583-FC0CC0E78BDB>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)                                 <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          bash [96296] [unique pid 296734880]
+UUID:             A9B499BF-01CC-31AD-B13C-887497E6AD4C
+Path:             /bin/bash
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Architecture:     arm64e
+Parent:           bash [95771] [unique pid 296734363]
+UID:              501
+Footprint:        1104 KB
+Time Since Fork:  36683s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x2250bd6c    101 samples (1-101)    priority 20 (base 20)
+  101  start + 6076 (dyld + 27544) [0x18c77ab98]
+    101  ??? (bash + 7144) [0x102201be8]
+      101  ??? (bash + 122624) [0x10221df00]
+        101  ??? (bash + 123852) [0x10221e3cc]
+          101  ??? (bash + 125420) [0x10221e9ec]
+            101  ??? (bash + 123852) [0x10221e3cc]
+              101  ??? (bash + 125716) [0x10221eb14]
+                101  ??? (bash + 129496) [0x10221f9d8]
+                  101  ??? (bash + 242956) [0x10223b50c]
+                    101  ??? (bash + 226060) [0x10223730c]
+                      101  ??? (bash + 228168) [0x102237b48]
+                        101  ??? (bash + 227672) [0x102237958]
+                          101  ??? (bash + 228556) [0x102237ccc]
+                            101  ??? (bash + 231528) [0x102238868]
+                              101  ??? (bash + 230828) [0x1022385ac]
+                                101  ??? (bash + 246628) [0x10223c364]
+                                  101  ??? (bash + 237908) [0x10223a154]
+                                    101  ??? (bash + 75212) [0x1022125cc]
+                                      101  ??? (bash + 125560) [0x10221ea78]
+                                        101  ??? (bash + 136464) [0x102221510]
+                                          101  ??? (bash + 125716) [0x10221eb14]
+                                            101  ??? (bash + 131624) [0x102220228]
+                                              101  ??? (bash + 206884) [0x102232824]
+                                                101  ??? (bash + 208264) [0x102232d88]
+                                                  101  __open + 8 (libsystem_kernel.dylib + 5752) [0x18cada678]
+                                                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 31624) [0xfffffe00087b7b88]
+                                                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 1841124) [0xfffffe00089717e4]
+                                                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 7426132) [0xfffffe0008ec5054]
+                                                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2627256) [0xfffffe0008a316b8]
+                                                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2623196) [0xfffffe0008a306dc]
+                                                             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2723068) [0xfffffe0008a48cfc]
+                                                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2843692) [0xfffffe0008a6642c]
+                                                                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6400352) [0xfffffe0008dca960]
+                                                                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                                                                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                                                                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                                                                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc]
+
+  Binary Images:
+           0x102200000 -        0x102297fff  bash (140.0.0.700.1)                         <A9B499BF-01CC-31AD-B13C-887497E6AD4C>             /bin/bash
+           0x18c774000 -        0x18c80f577  dyld (1286.10)                               <E0A6EB9F-57DC-344C-B22F-5C8176284B0A>             /usr/lib/dyld
+           0x18cad9000 -        0x18cb145f3  libsystem_kernel.dylib (11417.140.69.712.69) <3E3A27A5-F53C-3C0A-A583-FC0CC0E78BDB>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)                                 <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          login [25190] [unique pid 323341006]
+UUID:             9B994C7B-E8AC-33B2-8C6D-46F8F2107035
+Path:             /usr/bin/login
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Architecture:     arm64e
+Parent:           launchd [1]
+UID:              0
+Footprint:        2144 KB
+Time Since Fork:  3208s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x254b66d4    101 samples (1-101)    priority 31 (base 31)
+  101  start + 6076 (dyld + 27544) [0x18c77ab98]
+    101  ??? (login + 2776) [0x104024ad8]
+      101  ttyname + 180 (libsystem_c.dylib + 180492) [0x18c9d810c]
+        101  ttyname_r + 164 (libsystem_c.dylib + 180776) [0x18c9d8228]
+          101  lstat + 8 (libsystem_kernel.dylib + 50708) [0x18cae5614]
+           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 31624) [0xfffffe00087b7b88]
+             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 1841124) [0xfffffe00089717e4]
+               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 7426132) [0xfffffe0008ec5054]
+                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2643268) [0xfffffe0008a35544]
+                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2619372) [0xfffffe0008a2f7ec]
+                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2469720) [0xfffffe0008a0af58]
+                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2473508) [0xfffffe0008a0be24]
+                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2875700) [0xfffffe0008a6e134]
+                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2862500) [0xfffffe0008a6ada4]
+                             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2552784) [0xfffffe0008a1f3d0]
+                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2496556) [0xfffffe0008a1182c]
+                                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc]
+
+  Binary Images:
+           0x104024000 -        0x10402ffff  login (1026.140.2)                           <9B994C7B-E8AC-33B2-8C6D-46F8F2107035>             /usr/bin/login
+           0x18c774000 -        0x18c80f577  dyld (1286.10)                               <E0A6EB9F-57DC-344C-B22F-5C8176284B0A>             /usr/lib/dyld
+           0x18c9ac000 -        0x18ca2d34b  libsystem_c.dylib (1698.140.3.705.1)         <06B987DD-B857-3BE0-BC83-A5C72AA292B2>             /usr/lib/system/libsystem_c.dylib
+           0x18cad9000 -        0x18cb145f3  libsystem_kernel.dylib (11417.140.69.712.69) <3E3A27A5-F53C-3C0A-A583-FC0CC0E78BDB>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)                                 <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          login [25196] [unique pid 323341012]
+UUID:             9B994C7B-E8AC-33B2-8C6D-46F8F2107035
+Path:             /usr/bin/login
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Architecture:     arm64e
+Parent:           launchd [1]
+UID:              0
+Footprint:        2000 KB
+Time Since Fork:  3208s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x254b66ee    101 samples (1-101)    priority 31 (base 31)
+  101  start + 6076 (dyld + 27544) [0x18c77ab98]
+    101  ??? (login + 2776) [0x102a68ad8]
+      101  ttyname + 180 (libsystem_c.dylib + 180492) [0x18c9d810c]
+        101  ttyname_r + 164 (libsystem_c.dylib + 180776) [0x18c9d8228]
+          101  lstat + 8 (libsystem_kernel.dylib + 50708) [0x18cae5614]
+           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 31624) [0xfffffe00087b7b88]
+             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 1841124) [0xfffffe00089717e4]
+               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 7426132) [0xfffffe0008ec5054]
+                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2643268) [0xfffffe0008a35544]
+                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2619372) [0xfffffe0008a2f7ec]
+                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2469720) [0xfffffe0008a0af58]
+                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2473508) [0xfffffe0008a0be24]
+                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2875700) [0xfffffe0008a6e134]
+                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2862500) [0xfffffe0008a6ada4]
+                             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2552784) [0xfffffe0008a1f3d0]
+                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2496556) [0xfffffe0008a1182c]
+                                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc]
+
+  Binary Images:
+           0x102a68000 -        0x102a73fff  login (1026.140.2)                           <9B994C7B-E8AC-33B2-8C6D-46F8F2107035>             /usr/bin/login
+           0x18c774000 -        0x18c80f577  dyld (1286.10)                               <E0A6EB9F-57DC-344C-B22F-5C8176284B0A>             /usr/lib/dyld
+           0x18c9ac000 -        0x18ca2d34b  libsystem_c.dylib (1698.140.3.705.1)         <06B987DD-B857-3BE0-BC83-A5C72AA292B2>             /usr/lib/system/libsystem_c.dylib
+           0x18cad9000 -        0x18cb145f3  libsystem_kernel.dylib (11417.140.69.712.69) <3E3A27A5-F53C-3C0A-A583-FC0CC0E78BDB>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)                                 <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          login [25197] [unique pid 323341013]
+UUID:             9B994C7B-E8AC-33B2-8C6D-46F8F2107035
+Path:             /usr/bin/login
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Architecture:     arm64e
+Parent:           launchd [1]
+UID:              0
+Footprint:        1888 KB
+Time Since Fork:  3208s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x254b6700    101 samples (1-101)    priority 31 (base 31)
+  101  start + 6076 (dyld + 27544) [0x18c77ab98]
+    101  ??? (login + 2776) [0x1023e4ad8]
+      101  ttyname + 180 (libsystem_c.dylib + 180492) [0x18c9d810c]
+        101  ttyname_r + 164 (libsystem_c.dylib + 180776) [0x18c9d8228]
+          101  lstat + 8 (libsystem_kernel.dylib + 50708) [0x18cae5614]
+           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 31624) [0xfffffe00087b7b88]
+             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 1841124) [0xfffffe00089717e4]
+               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 7426132) [0xfffffe0008ec5054]
+                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2643268) [0xfffffe0008a35544]
+                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2619372) [0xfffffe0008a2f7ec]
+                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2469720) [0xfffffe0008a0af58]
+                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2473508) [0xfffffe0008a0be24]
+                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2875700) [0xfffffe0008a6e134]
+                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2862500) [0xfffffe0008a6ada4]
+                             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2552784) [0xfffffe0008a1f3d0]
+                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2496556) [0xfffffe0008a1182c]
+                                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc]
+
+  Binary Images:
+           0x1023e4000 -        0x1023effff  login (1026.140.2)                           <9B994C7B-E8AC-33B2-8C6D-46F8F2107035>             /usr/bin/login
+           0x18c774000 -        0x18c80f577  dyld (1286.10)                               <E0A6EB9F-57DC-344C-B22F-5C8176284B0A>             /usr/lib/dyld
+           0x18c9ac000 -        0x18ca2d34b  libsystem_c.dylib (1698.140.3.705.1)         <06B987DD-B857-3BE0-BC83-A5C72AA292B2>             /usr/lib/system/libsystem_c.dylib
+           0x18cad9000 -        0x18cb145f3  libsystem_kernel.dylib (11417.140.69.712.69) <3E3A27A5-F53C-3C0A-A583-FC0CC0E78BDB>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)                                 <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          login [25200] [unique pid 323341016]
+UUID:             9B994C7B-E8AC-33B2-8C6D-46F8F2107035
+Path:             /usr/bin/login
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Architecture:     arm64e
+Parent:           launchd [1]
+UID:              0
+Footprint:        1856 KB
+Time Since Fork:  3207s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x254b670c    101 samples (1-101)    priority 31 (base 31)
+  101  start + 6076 (dyld + 27544) [0x18c77ab98]
+    101  ??? (login + 2776) [0x1008e0ad8]
+      101  ttyname + 180 (libsystem_c.dylib + 180492) [0x18c9d810c]
+        101  ttyname_r + 164 (libsystem_c.dylib + 180776) [0x18c9d8228]
+          101  lstat + 8 (libsystem_kernel.dylib + 50708) [0x18cae5614]
+           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 31624) [0xfffffe00087b7b88]
+             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 1841124) [0xfffffe00089717e4]
+               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 7426132) [0xfffffe0008ec5054]
+                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2643268) [0xfffffe0008a35544]
+                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2619372) [0xfffffe0008a2f7ec]
+                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2469720) [0xfffffe0008a0af58]
+                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2473508) [0xfffffe0008a0be24]
+                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2875700) [0xfffffe0008a6e134]
+                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2862500) [0xfffffe0008a6ada4]
+                             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2552784) [0xfffffe0008a1f3d0]
+                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2496556) [0xfffffe0008a1182c]
+                                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc]
+
+  Binary Images:
+           0x1008e0000 -        0x1008ebfff  login (1026.140.2)                           <9B994C7B-E8AC-33B2-8C6D-46F8F2107035>             /usr/bin/login
+           0x18c774000 -        0x18c80f577  dyld (1286.10)                               <E0A6EB9F-57DC-344C-B22F-5C8176284B0A>             /usr/lib/dyld
+           0x18c9ac000 -        0x18ca2d34b  libsystem_c.dylib (1698.140.3.705.1)         <06B987DD-B857-3BE0-BC83-A5C72AA292B2>             /usr/lib/system/libsystem_c.dylib
+           0x18cad9000 -        0x18cb145f3  libsystem_kernel.dylib (11417.140.69.712.69) <3E3A27A5-F53C-3C0A-A583-FC0CC0E78BDB>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)                                 <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          ps [88107] [unique pid 298975530]
+UUID:             F0B2E25E-C01E-3B8A-89C6-A0EF94AC2091
+Path:             /bin/ps
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Architecture:     arm64e
+Parent:           bash [88106] [unique pid 298975529]
+UID:              0
+Footprint:        1600 KB
+Time Since Fork:  33901s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x228b1a98    101 samples (1-101)    priority 31 (base 31)
+  101  start + 6076 (dyld + 27544) [0x18c77ab98]
+    101  ??? (ps + 13660) [0x100eab55c]
+      101  ??? (ps + 6020) [0x100ea9784]
+        101  lstat + 8 (libsystem_kernel.dylib + 50708) [0x18cae5614]
+         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 31624) [0xfffffe00087b7b88]
+           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 1841124) [0xfffffe00089717e4]
+             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 7426132) [0xfffffe0008ec5054]
+               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2643268) [0xfffffe0008a35544]
+                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2619372) [0xfffffe0008a2f7ec]
+                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2469720) [0xfffffe0008a0af58]
+                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2473508) [0xfffffe0008a0be24]
+                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2875700) [0xfffffe0008a6e134]
+                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2862500) [0xfffffe0008a6ada4]
+                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2552784) [0xfffffe0008a1f3d0]
+                             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2496556) [0xfffffe0008a1182c]
+                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc]
+
+  Binary Images:
+           0x100ea8000 -        0x100eb7fff  ps (235)                                     <F0B2E25E-C01E-3B8A-89C6-A0EF94AC2091>             /bin/ps
+           0x18c774000 -        0x18c80f577  dyld (1286.10)                               <E0A6EB9F-57DC-344C-B22F-5C8176284B0A>             /usr/lib/dyld
+           0x18cad9000 -        0x18cb145f3  libsystem_kernel.dylib (11417.140.69.712.69) <3E3A27A5-F53C-3C0A-A583-FC0CC0E78BDB>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)                                 <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          ps [8222] [unique pid 299190543]
+UUID:             F0B2E25E-C01E-3B8A-89C6-A0EF94AC2091
+Path:             /bin/ps
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Architecture:     arm64e
+Parent:           bash [8221] [unique pid 299190542]
+UID:              0
+Footprint:        1600 KB
+Time Since Fork:  33513s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x229171ad    101 samples (1-101)    priority 31 (base 31)
+  101  start + 6076 (dyld + 27544) [0x18c77ab98]
+    101  ??? (ps + 13660) [0x102b0355c]
+      101  ??? (ps + 6020) [0x102b01784]
+        101  lstat + 8 (libsystem_kernel.dylib + 50708) [0x18cae5614]
+         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 31624) [0xfffffe00087b7b88]
+           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 1841124) [0xfffffe00089717e4]
+             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 7426132) [0xfffffe0008ec5054]
+               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2643268) [0xfffffe0008a35544]
+                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2619372) [0xfffffe0008a2f7ec]
+                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2469720) [0xfffffe0008a0af58]
+                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2473508) [0xfffffe0008a0be24]
+                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2875700) [0xfffffe0008a6e134]
+                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2862500) [0xfffffe0008a6ada4]
+                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2552784) [0xfffffe0008a1f3d0]
+                             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2496556) [0xfffffe0008a1182c]
+                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc]
+
+  Binary Images:
+           0x102b00000 -        0x102b0ffff  ps (235)                                     <F0B2E25E-C01E-3B8A-89C6-A0EF94AC2091>             /bin/ps
+           0x18c774000 -        0x18c80f577  dyld (1286.10)                               <E0A6EB9F-57DC-344C-B22F-5C8176284B0A>             /usr/lib/dyld
+           0x18cad9000 -        0x18cb145f3  libsystem_kernel.dylib (11417.140.69.712.69) <3E3A27A5-F53C-3C0A-A583-FC0CC0E78BDB>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)                                 <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          ps [17487] [unique pid 299199646]
+UUID:             F0B2E25E-C01E-3B8A-89C6-A0EF94AC2091
+Path:             /bin/ps
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Architecture:     arm64e
+Parent:           bash [17486] [unique pid 299199645]
+UID:              0
+Footprint:        1616 KB
+Time Since Fork:  33490s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x2291bf82    101 samples (1-101)    priority 31 (base 31)
+  101  start + 6076 (dyld + 27544) [0x18c77ab98]
+    101  ??? (ps + 13660) [0x100c1f55c]
+      101  ??? (ps + 6020) [0x100c1d784]
+        101  lstat + 8 (libsystem_kernel.dylib + 50708) [0x18cae5614]
+         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 31624) [0xfffffe00087b7b88]
+           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 1841124) [0xfffffe00089717e4]
+             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 7426132) [0xfffffe0008ec5054]
+               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2643268) [0xfffffe0008a35544]
+                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2619372) [0xfffffe0008a2f7ec]
+                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2469720) [0xfffffe0008a0af58]
+                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2473508) [0xfffffe0008a0be24]
+                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2875700) [0xfffffe0008a6e134]
+                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2862500) [0xfffffe0008a6ada4]
+                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2552784) [0xfffffe0008a1f3d0]
+                             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2496556) [0xfffffe0008a1182c]
+                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc]
+
+  Binary Images:
+           0x100c1c000 -        0x100c2bfff  ps (235)                                     <F0B2E25E-C01E-3B8A-89C6-A0EF94AC2091>             /bin/ps
+           0x18c774000 -        0x18c80f577  dyld (1286.10)                               <E0A6EB9F-57DC-344C-B22F-5C8176284B0A>             /usr/lib/dyld
+           0x18cad9000 -        0x18cb145f3  libsystem_kernel.dylib (11417.140.69.712.69) <3E3A27A5-F53C-3C0A-A583-FC0CC0E78BDB>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)                                 <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC
+
+Process:          ps [27273] [unique pid 299209256]
+UUID:             F0B2E25E-C01E-3B8A-89C6-A0EF94AC2091
+Path:             /bin/ps
+Shared Cache:     3594BB8F-2069-301B-B43A-BA8BF72EB108 slid base address 0x18c6a8000, slide 0xc6a8000 (System Primary)
+Architecture:     arm64e
+Parent:           bash [27270] [unique pid 299209253]
+UID:              0
+Footprint:        1776 KB
+Time Since Fork:  33469s
+Num samples:      101 (1-101)
+Num threads:      1
+
+  Thread 0x229210af    101 samples (1-101)    priority 31 (base 31)
+  101  start + 6076 (dyld + 27544) [0x18c77ab98]
+    101  ??? (ps + 13660) [0x100c3755c]
+      101  ??? (ps + 6020) [0x100c35784]
+        101  lstat + 8 (libsystem_kernel.dylib + 50708) [0x18cae5614]
+         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 31624) [0xfffffe00087b7b88]
+           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 1841124) [0xfffffe00089717e4]
+             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 7426132) [0xfffffe0008ec5054]
+               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2643268) [0xfffffe0008a35544]
+                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2619372) [0xfffffe0008a2f7ec]
+                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2469720) [0xfffffe0008a0af58]
+                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2473508) [0xfffffe0008a0be24]
+                       *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2875700) [0xfffffe0008a6e134]
+                         *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2862500) [0xfffffe0008a6ada4]
+                           *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2552784) [0xfffffe0008a1f3d0]
+                             *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 2496556) [0xfffffe0008a1182c]
+                               *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 6172388) [0xfffffe0008d92ee4]
+                                 *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 518260) [0xfffffe000882e874]
+                                   *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 614464) [0xfffffe0008846040]
+                                     *101  ??? (<64EFC396-2196-3FA3-861C-23B38E8DADDD> + 619980) [0xfffffe00088475cc]
+
+  Binary Images:
+           0x100c34000 -        0x100c43fff  ps (235)                                     <F0B2E25E-C01E-3B8A-89C6-A0EF94AC2091>             /bin/ps
+           0x18c774000 -        0x18c80f577  dyld (1286.10)                               <E0A6EB9F-57DC-344C-B22F-5C8176284B0A>             /usr/lib/dyld
+           0x18cad9000 -        0x18cb145f3  libsystem_kernel.dylib (11417.140.69.712.69) <3E3A27A5-F53C-3C0A-A583-FC0CC0E78BDB>             /usr/lib/system/libsystem_kernel.dylib
+   *0xfffffe00087b0000 -                ???  ??? (24.6.0)                                 <64EFC396-2196-3FA3-861C-23B38E8DADDD>__TEXT_EXEC

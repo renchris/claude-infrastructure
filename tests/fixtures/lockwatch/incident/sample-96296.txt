@@ -1,0 +1,25 @@
+Analysis of sampling bash (pid 96296) every 1 millisecond
+Process:         bash [96296]
+Path:            /bin/bash
+Parent Process:  bash [95771]
+Date/Time:       2026-10-25 03:51:10.000 -0500
+OS Version:      macOS 15.8.1 (24H32)
+Analysis Tool:   /usr/bin/sample
+----
+
+Call graph:
+    2000 Thread_1   DispatchQueue_1: com.apple.main-thread  (serial)
+      2000 start  (in dyld) + 6076  [0x18c77ab98]
+        2000 main  (in bash) + 8  [0x1]
+          2000 reader_loop  (in bash) + 8  [0x1]
+            2000 execute_command  (in bash) + 8  [0x1]
+              2000 execute_command_internal  (in bash) + 8  [0x1]
+                2000 do_redirections  (in bash) + 8  [0x1]
+                  2000 open  (in bash) + 8  [0x1]
+                    2000 __open  (in bash) + 8  [0x1]
+Total number in stack (recursive counted multiple, when >=5):
+
+Sort by top of stack, same collapsed (when >= 5):
+        __open  (in libsystem_kernel.dylib)        2000
+
+Binary Images:

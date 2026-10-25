@@ -1,0 +1,29 @@
+{
+ "68298:1792915396": {
+  "pid": 68298,
+  "lstart": 1792915396,
+  "first_seen": 1792915410,
+  "tdev": 268435519,
+  "tty": "ttys063",
+  "pgid": 68298,
+  "ppid": 1,
+  "sleader": true,
+  "comm": "bash",
+  "last_seen": 1792918260,
+  "exiting": true,
+  "exiting_since": 1792918138
+ },
+ "50362:1792908000": {
+  "pid": 50362,
+  "lstart": 1792908000,
+  "first_seen": 1792908010,
+  "tdev": 268435497,
+  "tty": "ttys041",
+  "pgid": 50362,
+  "ppid": 1881,
+  "sleader": true,
+  "comm": "zsh",
+  "last_seen": 1792918260,
+  "exiting": false
+ }
+}

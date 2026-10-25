@@ -1,0 +1,1 @@
+{"type": "assistant", "sessionId": "aaaa1111-fixture", "cwd": "/tmp/x", "timestamp": "2026-10-25T08:40:00.000Z", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {"command": "kill -0 12345 && echo alive"}}]}}
