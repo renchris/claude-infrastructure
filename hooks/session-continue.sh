@@ -10,8 +10,10 @@
 # loop cap so a stuck gate can never run away.
 #
 # Agent interface (run from the session's worktree):
-#   session-continue.sh set "<the ONE next step>"   # arm — ONLY on the 🔧 state
-#   session-continue.sh clear                        # disarm — on ✅/📦/⛔/📤, read-only, or "...and stop"
+#   session-continue.sh set "<the ONE next step>"   # arm — on 🔧, or on a ⛔ whose readout says `Not gated by it`;
+#                                                    #   the mechanical arm also arms once on any ⛔ with own
+#                                                    #   uncommitted edits (commit only, never land)
+#   session-continue.sh clear                        # disarm — on ✅/📦/held ⛔/📤, read-only, or "...and stop"
 #   session-continue.sh clear --if-mine              # same, but REFUSE a sentinel this sid did not arm
 #   session-continue.sh status                       # inspect
 #
@@ -261,6 +263,8 @@ case "${1:-}" in
     # would fire), not of whether an agent-set sentinel happened to be armed here.
     SC_SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-?}}"
     printf '%s %s' "$SC_SID" "${CC_MECH_MAX:-3}" > "${f}.mech" 2>/dev/null || true
+    # …and the ⛔ arm's separate budget (C5), for the same reason: clear is an off switch for both.
+    printf '%s %s' "$SC_SID" "${CC_MECH_BLK_MAX:-1}" > "${f}.mech.blk" 2>/dev/null || true
     if [ "$was_armed" = 1 ]; then
       echo "cleared → $f"
     else
@@ -1100,7 +1104,21 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   [ -n "$led" ] || return 1
   SC_LED_CACHE="$led"
   rung="$(led_field "$led" RUNG)"
-  [ "$rung" = "🔧" ] || return 1
+  # ── ⛔ WITH OWN DIRT (C5, ruling d610f8473106; design §3.4 (ii)) ────────────────────────────────
+  # Committing to a branch is never the gated act; LANDING may be. So a ⛔ close over this session's
+  # own uncommitted edits arms too — with a text that forbids the land while the decisions are open,
+  # and its OWN budget (`.mech.blk`, CC_MECH_BLK_MAX, default 1), so a ⛔ arm can never spend the 🔧
+  # one. It deliberately does NOT read SCOPE_UNGATED: a genuine all-gating gate with own dirt costs
+  # one commit turn, which the close protocol already asks for ("commit in-progress work first").
+  # Kill switches: CC_MECH_BLOCKED=0 · ~/.claude/state/mech-blocked.off.
+  local _ma_blk=0
+  case "$rung" in
+    "🔧") ;;
+    "⛔") case "${CC_MECH_BLOCKED:-1}" in 0|off) return 1 ;; esac
+         [ -e "$HOME/.claude/state/mech-blocked.off" ] && return 1
+         _ma_blk=1 ;;
+    *) return 1 ;;
+  esac
 
   # Attribution. rc 2 (cannot tell) must NOT arm: a Stop hook may never block a turn on its own
   # inability to read something.
@@ -1135,8 +1153,9 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   # At the old default of 3 that was 24 consecutive blocks — bounded, but far past the point where
   # a session that cannot commit is being helped rather than harassed. 2 keeps the escape hatch
   # meaningful (`clear` spends the budget outright) while still catching the second lapse.
-  local mfile mline msid mcnt mmax
-  mfile="${f}.mech"; mmax="${CC_MECH_MAX:-2}"
+  local mfile mline msid mcnt mmax _ma_land
+  if [ "$_ma_blk" = 1 ]; then mfile="${f}.mech.blk"; mmax="${CC_MECH_BLK_MAX:-1}"
+  else mfile="${f}.mech"; mmax="${CC_MECH_MAX:-2}"; fi
   mcnt=0
   if [ -f "$mfile" ]; then
     mline="$(cat "$mfile" 2>/dev/null || true)"
@@ -1153,7 +1172,10 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   fi
   printf '%s %s' "${cur_sid:-?}" "$(( mcnt + 1 ))" > "$mfile" 2>/dev/null || true
 
-  printf '%s' "Commit the ${n_files} file(s) you edited this turn that are still uncommitted: ${shown}. Run the repo's gate, commit with explicit paths, then land per the repo's ship policy. Deliberately parked, or not yours? Run \`~/.claude/hooks/session-continue.sh clear\` and say so in your close." > "$f" 2>/dev/null || return 1
+  if [ "$_ma_blk" = 1 ]; then
+    _ma_land="Run the repo's gate and commit with explicit paths on your branch. Do NOT /ship while decision(s) $(led_field "$led" BLOCKED_IDS) are open unless the land is outside what they gate."
+  else _ma_land="Run the repo's gate, commit with explicit paths, then land per the repo's ship policy."; fi
+  printf '%s' "Commit the ${n_files} file(s) you edited this turn that are still uncommitted: ${shown}. ${_ma_land} Deliberately parked, or not yours? Run \`~/.claude/hooks/session-continue.sh clear\` and say so in your close." > "$f" 2>/dev/null || return 1
   [ -n "$cur_sid" ] && printf '%s' "$cur_sid" > "${f}.sid" 2>/dev/null
   # Provenance for the identical-re-block skip (rank 17), which applies to agent-armed steps only.
   printf 'mech' > "${f}.src" 2>/dev/null || true
@@ -1161,8 +1183,8 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   # cleared from the wrong directory — the model never chose where it was armed — so it needs the
   # sidecar that lets `clear` name the cwd at least as much as an agent-set one does.
   printf '%s' "$cwd" > "${f}.cwd" 2>/dev/null || true
-  log_idl armed "mechanical-dirty" "$(jq -cn --arg c "$cwd" --argjson n "${n_files:-0}" \
-    '{cwd:$c,files:$n,source:"session-writes"}' 2>/dev/null)"
+  log_idl armed "mechanical-dirty" "$(jq -cn --arg c "$cwd" --argjson n "${n_files:-0}" --arg r "$rung" \
+    '{cwd:$c,files:$n,source:"session-writes",rung:$r}' 2>/dev/null)"
   return 0
 }
 
@@ -1183,6 +1205,19 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
 #   · assignee / terminating abstain (the lead owns an assignee's merge; a teardown is not an idle)
 #   · kill-switch honoured; budget exhaustion is silent (operator-readout still renders 📦/🚀)
 # Seams: CC_SHIP_FLOOR (0 disables) · CC_SHIP_FLOOR_MAX · WRAP_LEDGER_BIN · SESSION_WRITES_LIB
+# sc_read_ledger → the --machine ledger on stdout, "" when no ledger resolves. Factored out of the
+# ship floor so the scope floor resolves the SAME binary the same way (one place to drift, not two).
+sc_read_ledger() {
+  local wrap
+  wrap="${WRAP_LEDGER_BIN:-}"
+  if [ -z "$wrap" ]; then
+    for wrap in "$_scd/../scripts/wrap-ledger.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
+      [ -f "$wrap" ] && break
+    done
+  fi
+  [ -n "$wrap" ] && [ -f "$wrap" ] || return 0
+  ( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine 2>/dev/null || true )   # no BUSY probe: see mechanical_arm
+}
 ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on rc 0). Never fails.
   [ "${CC_SHIP_FLOOR:-1}" = 1 ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
@@ -1197,20 +1232,11 @@ ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on
   fi
   wf_teardown_marked && { log_idl abstained "ship-floor-teardown"; return 0; }
 
-  local wrap led rung ahead shas trunk
+  local led rung ahead shas trunk
   # Reuse the mechanical arm's ledger read when it got that far (review #7 — the two floors run in
   # ONE Stop invocation, so a shared sample is the same read, not a stale one).
   led="${SC_LED_CACHE:-}"
-  if [ -z "$led" ]; then
-    wrap="${WRAP_LEDGER_BIN:-}"
-    if [ -z "$wrap" ]; then
-      for wrap in "$_scd/../scripts/wrap-ledger.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
-        [ -f "$wrap" ] && break
-      done
-    fi
-    [ -n "$wrap" ] && [ -f "$wrap" ] || return 0
-    led="$( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine 2>/dev/null || true )"   # no BUSY probe: see mechanical_arm
-  fi
+  [ -n "$led" ] || led="$(sc_read_ledger)"
   [ -n "$led" ] || return 0
   rung="$(led_field "$led" RUNG)"
   case "$rung" in "📦"|"🚀") : ;; *) return 0 ;; esac
@@ -1286,10 +1312,298 @@ Then re-read the ledger with \`/wrap\`. If the converger refuses, file it (\`cc-
   return 1
 }
 
+# ── SCOPE FLOOR (ruling d610f8473106; the B13 idle, 2026-10-24; design §3.4 (i)) ─────────────────────
+# The B13 lead idled 11 h on ⛔ with a loop scope ("loop until dry …") that its open decisions did not
+# gate: every Stop hook accepted the idle because ⛔ ranks first and nothing asked whether in-scope work
+# remained that the decisions do not hold. This floor reads ONLY ledger facts about THIS session's
+# recorded contract (SCOPE_UNGATED: an own loop line or own boxes, minus a recorded hold) — never close
+# prose, never packet class. It is not the banned scope-blind hook (header :4-10): the scope it reads is
+# the contract line the session itself recorded, not a judgment of the tree.
+# BOUNDS, all per session id (never per cwd) and never reset by a key change:
+#   · no fire on a Stop whose turn THIS floor's block opened, directly or through a chain of other
+#     Stop hooks' feedback turns since it                                  → scope-floor-reclose
+#   · ≥ CC_SCOPE_FLOOR_GAP_S (600) between two fires to one session         → scope-floor-gap
+#   · ≤ CC_SCOPE_FLOOR_MAX (3) fires per key per CC_SCOPE_FLOOR_WINDOW_S (21600) → scope-floor-key-cap
+#   · ≤ CC_SCOPE_FLOOR_DAY_MAX (6) fires per session per rolling 86400 s   → scope-floor-day-cap
+#   · state unwritable ⇒ no block (fail closed)                            → scope-floor-unwritable
+# The state is a MAP of fires (`F <epoch> <key>` lines), not a single slot, so A→B→A cannot re-arm A,
+# and a per-session file, so two sessions in one cwd cannot reset each other. No HEAD or trunk in the
+# key, so a sibling's land cannot re-arm it.
+# LOGGED (B-3, :64-79): every evaluation on a relevant rung, and one scope-floor-clear when a session
+# this floor fired on reaches an irrelevant rung (the supervisor's oracle must never read a stale row).
+# The IDL row shape is a CONTRACT scripts/lead-supervisor.sh reads (design §3.4 sf_log): do not change it.
+# SILENT: switches off, no jq, no ledger, an old ledger without the fields, irrelevant rung with no state.
+# Seams: CC_SCOPE_FLOOR (1|0|shadow) · ~/.claude/state/scope-floor.off · CC_SCOPE_FLOOR_MAX ·
+#   CC_SCOPE_FLOOR_WINDOW_S · CC_SCOPE_FLOOR_DAY_MAX · CC_SCOPE_FLOOR_GAP_S · CC_SCOPE_CAPTURE · WRAP_LEDGER_BIN ·
+#   INFLIGHT_LIB · TURN_SCAN_LIB · DOD_PERSIST_BIN · CC_TELEMETRY_DIR · CONTEXT_ECON_LIB · CC_BOUNDARY_T ·
+#   CC_BOUNDARY_T_MIN · CC_BOUNDARY_LEAD_MIN · CC_BOUNDARY_SIZE_MB · CC_BOUNDARY_RSS_MB · CC_BOUNDARY_TOK_K
+OPHOLD_RE='(^|[^[:alnum:]])(hold off|hold on|wait (for|on|until|till) (me|my|i)|pause|park (this|it|the)|no more rounds|stop the loop|until i (say|reply|answer|decide|review|look|get back|am back|.m back)|don.?t (start|run|continue|do anything)|not yet)([^[:alnum:]]|$)'
+SF_MACHINE_RE='^(Stop hook feedback|<task-notification|\[handoff |<teammate-message|<local-command-stdout>|Another Claude session sent a message|⏯ )|HANDOFF-ENGAGE-'
+_sf_num() { case "${1:-}" in ''|*[!0-9]*) printf '%s' "${2:-0}" ;; *) printf '%s' "$1" ;; esac; }
+sf_sid_key() { printf '%s' "${cur_sid:-}" | tr -c 'A-Za-z0-9-' _; }
+sf_state_file() { printf '%s/scope-floor/%s%s' "$(continue_state_dir)" "$(sf_sid_key)" "${1:-}"; }
+sf_is_assignee() { # → 0 = an Agent-Teams assignee (rc 0 confirmed or rc 2 cannot tell, as ship_floor :1189-1197)
+  local _a _c
+  _a="$(agent_assignee_argv)" && [ -n "$_a" ] || return 1
+  agent_team_member_confirms "$_a"; _c=$?
+  [ "$_c" -eq 0 ] || [ "$_c" -eq 2 ]
+}
+sf_headless() { # wake_floor's own predicate (:734, a resident stream-json agent), or no pane address at all
+  { [ -n "${CC_PANE_ID:-}" ] && [ -z "${ITERM_SESSION_ID:-}" ]; } || [ -z "$_ouid" ]
+}
+sf_operator_hold() { # OPHOLD_RE on the last genuine user message (memoized with the kill-switch read)
+  local m; m="$(last_user_msg)" || return 1
+  [ -n "$m" ] || return 1
+  printf '%s' "$m" | grep -iqE "$OPHOLD_RE"
+}
+_sf_lib() { # $1=explicit seam value  $2=lib basename → the lib path on stdout, rc 1 when none resolves
+  local l t
+  if [ -n "$1" ]; then [ -f "$1" ] && { printf '%s' "$1"; return 0; }; return 1; fi   # an explicit seam never falls back
+  l="$_scd/lib/$2"
+  [ -f "$l" ] || { t="$0"; [ -L "$t" ] && t="$(readlink "$t")"; l="$(cd "$(dirname "$t")" 2>/dev/null && pwd)/lib/$2"; }
+  [ -f "$l" ] || l="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/$2"
+  [ -f "$l" ] || l="$HOME/.claude/hooks/lib/$2"
+  [ -f "$l" ] && printf '%s' "$l"
+}
+sf_inflight() { # rc 0 = nothing in flight · rc 1 = SF_INFLIGHT_WHY=inflight|unknown (+ SF_INFLIGHT_WHAT/_N)
+  local l n bg
+  SF_INFLIGHT_WHY=""; SF_INFLIGHT_WHAT=""; SF_INFLIGHT_N=""
+  [ "$custody" -gt 0 ]  && { SF_INFLIGHT_WHY=inflight; SF_INFLIGHT_WHAT=custody;  SF_INFLIGHT_N="$custody";  return 1; }
+  [ "$landing" = 1 ]    && { SF_INFLIGHT_WHY=inflight; SF_INFLIGHT_WHAT=land;     SF_INFLIGHT_N=1;           return 1; }
+  [ "$resident" -gt 0 ] && { SF_INFLIGHT_WHY=inflight; SF_INFLIGHT_WHAT=teammate; SF_INFLIGHT_N="$resident"; return 1; }
+  # An armed watcher alone is NOT in flight (it wakes the session only on mail); inflight_bg_tasks
+  # already excludes cc-await-ping by basename (hooks/lib/inflight.sh).
+  l="$(_sf_lib "${INFLIGHT_LIB:-}" inflight.sh)" || { SF_INFLIGHT_WHY=unknown; return 1; }
+  # shellcheck source=lib/inflight.sh
+  # shellcheck disable=SC1090,SC1091
+  . "$l" 2>/dev/null || { SF_INFLIGHT_WHY=unknown; return 1; }
+  { command -v inflight_waves >/dev/null 2>&1 && command -v inflight_bg_tasks >/dev/null 2>&1; } \
+    || { SF_INFLIGHT_WHY=unknown; return 1; }
+  { [ -n "$_sc_tp" ] && [ -f "$_sc_tp" ]; } || { SF_INFLIGHT_WHY=unknown; return 1; }
+  n="$(inflight_waves "$_sc_tp" 2>/dev/null)"
+  case "$n" in ''|*[!0-9]*) SF_INFLIGHT_WHY=unknown; return 1 ;; esac
+  [ "$n" -gt 0 ] && { SF_INFLIGHT_WHY=inflight; SF_INFLIGHT_WHAT=wave; SF_INFLIGHT_N="$n"; return 1; }
+  bg="$(inflight_bg_tasks "$_sc_tp" 2>/dev/null)"; n="${bg%% *}"
+  case "$n" in ''|*[!0-9]*) SF_INFLIGHT_WHY=unknown; return 1 ;; esac
+  if [ "$n" -gt 0 ]; then
+    SF_INFLIGHT_WHY=inflight; SF_INFLIGHT_N="$n"
+    case "$bg" in *" "*) SF_INFLIGHT_WHAT="${bg#* }" ;; *) SF_INFLIGHT_WHAT="bg" ;; esac
+    return 1
+  fi
+  return 0
+}
+sf_context_high() { # → 0 = boundary-handoff can fire on THIS Stop (any of its five axes, its defaults)
+  local tel used tok l bf fc sz txb rssk t tmin lead smb rmb tk
+  t="$(_sf_num "${CC_BOUNDARY_T:-}" 73)"; tmin="$(_sf_num "${CC_BOUNDARY_T_MIN:-}" 55)"
+  lead="$(_sf_num "${CC_BOUNDARY_LEAD_MIN:-}" 20)"; smb="$(_sf_num "${CC_BOUNDARY_SIZE_MB:-}" 25)"
+  rmb="$(_sf_num "${CC_BOUNDARY_RSS_MB:-}" 1500)"; tk="$(_sf_num "${CC_BOUNDARY_TOK_K:-}" 700)"
+  tel="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}/${cur_sid:-none}.json"
+  used=0; tok=0
+  if [ -f "$tel" ]; then
+    used="$(jq -r '.used_pct // 0' "$tel" 2>/dev/null)"; used="$(_sf_num "${used%.*}" 0)"
+    tok="$(jq -r '.input_tokens // 0' "$tel" 2>/dev/null)"; tok="$(_sf_num "${tok%.*}" 0)"
+  fi
+  SF_CTX_AXIS=""
+  # A 0 reading is "unknown" on that axis and can never clear a positive threshold (boundary-handoff :450-452).
+  [ "$used" -gt 0 ] && [ "$used" -ge "$t" ] && { SF_CTX_AXIS=fill; return 0; }
+  [ "$tk" -gt 0 ] && [ "$tok" -gt 0 ] && [ "$tok" -ge $(( tk * 1000 )) ] && { SF_CTX_AXIS=tokens; return 0; }
+  l="$(_sf_lib "${CONTEXT_ECON_LIB:-}" context-econ.sh)" || return 1
+  # shellcheck source=lib/context-econ.sh
+  # shellcheck disable=SC1090,SC1091
+  . "$l" 2>/dev/null || return 1
+  if command -v ce_burn >/dev/null 2>&1 && [ -f "$tel" ] && [ "$used" -ge "$tmin" ]; then   # read-only; never ce_sample
+    bf="$(ce_burn "$tel" 2>/dev/null)"; fc="${bf##* }"
+    case "$fc" in ''|*[!0-9]*) fc=-1 ;; esac      # -1 (no forecast) fails the digit test too
+    [ "$fc" -ge 0 ] && [ "$fc" -le "$lead" ] && { SF_CTX_AXIS=forecast; return 0; }
+  fi
+  if command -v ce_size >/dev/null 2>&1; then
+    sz="$(ce_size "$_sc_tp" "$tel" 2>/dev/null)"; txb="$(_sf_num "${sz%% *}" 0)"; rssk="$(_sf_num "${sz##* }" 0)"
+    [ "$smb" -gt 0 ] && [ "$txb" -gt 0 ] && [ $(( txb / 1048576 )) -ge "$smb" ] && { SF_CTX_AXIS=size; return 0; }
+    [ "$rmb" -gt 0 ] && [ "$rssk" -gt 0 ] && [ $(( rssk / 1024 )) -ge "$rmb" ] && { SF_CTX_AXIS=rss; return 0; }
+  fi
+  return 1
+}
+sf_counts() { # $1=state file → SF_COUNT (fires with $key in the window) and SF_DAY (fires in 24 h); SF_NEWEST
+  local now win
+  now="$(date +%s)"; win="$(_sf_num "${CC_SCOPE_FLOOR_WINDOW_S:-}" 21600)"
+  SF_COUNT=0; SF_DAY=0; SF_NEWEST=0
+  [ -f "$1" ] || return 0
+  read -r SF_COUNT SF_DAY SF_NEWEST <<EOF
+$(awk -v k="$key" -v now="$now" -v win="$win" '$1=="F" && $2 ~ /^[0-9]+$/ {
+    if ($2 >= now - 86400) d++
+    if ($3 == k && $2 >= now - win) c++
+    if ($2 > n) n = $2 }
+  END { printf "%d %d %d\n", c, d, n }' "$1" 2>/dev/null)
+EOF
+  SF_COUNT="$(_sf_num "$SF_COUNT" 0)"; SF_DAY="$(_sf_num "$SF_DAY" 0)"; SF_NEWEST="$(_sf_num "$SF_NEWEST" 0)"
+}
+sf_budget_take() { # [--shadow] → rc 0 = a fire is recorded (state written FIRST); rc 1 = SF_BUDGET_WHY
+  local sfx="" sf dir now gap tmp
+  [ "${1:-}" = --shadow ] && sfx=".shadow"        # shadow keeps its own map: it never spends the real windows
+  SF_BUDGET_WHY=""
+  [ -n "$(sf_sid_key)" ] || { SF_BUDGET_WHY=unknown; return 1; }
+  sf="$(sf_state_file "$sfx")"; dir="${sf%/*}"
+  mkdir -p "$dir" 2>/dev/null || { SF_BUDGET_WHY=unwritable; return 1; }
+  now="$(date +%s)"; gap="$(_sf_num "${CC_SCOPE_FLOOR_GAP_S:-}" 600)"
+  sf_counts "$sf"
+  [ "$SF_NEWEST" -gt 0 ] && [ $(( now - SF_NEWEST )) -lt "$gap" ] && { SF_BUDGET_WHY=gap; return 1; }
+  [ "$SF_COUNT" -ge "$sf_max" ] && { SF_BUDGET_WHY="key-cap"; return 1; }
+  [ "$SF_DAY" -ge "$sf_day_max" ] && { SF_BUDGET_WHY="day-cap"; return 1; }
+  # prune lines older than 24 h, append this fire, and VERIFY the append: an unwritable state ⇒ no block
+  tmp="${sf}.tmp.$$"
+  { [ -f "$sf" ] && awk -v now="$now" '$2 ~ /^[0-9]+$/ && $2 >= now - 86400' "$sf" 2>/dev/null
+    printf 'F %s %s\n' "$now" "$key"; } > "$tmp" 2>/dev/null && mv -f "$tmp" "$sf" 2>/dev/null \
+    || { rm -f "$tmp" 2>/dev/null; SF_BUDGET_WHY=unwritable; return 1; }
+  [ "$(tail -1 "$sf" 2>/dev/null)" = "F $now $key" ] || { SF_BUDGET_WHY=unwritable; return 1; }
+  SF_COUNT=$(( SF_COUNT + 1 )); SF_DAY=$(( SF_DAY + 1 ))
+  return 0
+}
+sf_clear_if_active() { # an irrelevant rung after a fire: one `C <epoch>` line and one clear row, then silent
+  local sf; sf="$(sf_state_file)"
+  [ -f "$sf" ] || return 0
+  case "$(tail -1 "$sf" 2>/dev/null)" in C\ *|"") return 0 ;; esac
+  printf 'C %s\n' "$(date +%s)" >> "$sf" 2>/dev/null || return 0
+  log_idl abstained "scope-floor-clear" "$(jq -cn --arg r "${rung:-}" '{rung:$r,ungated:0}' 2>/dev/null)"
+}
+sf_log() { # $1=disposition $2=why ("" ⇒ the bare `scope-floor` reason). Literal '{}' fallback (bash 3.2 trap).
+  local x
+  x="$(jq -cn --arg kind "$kind" --argjson ung "$ung" --arg held "$held" --arg hid "$held_id" --arg hu "$held_until" \
+        --arg ids "$ids" --arg head "${head:0:80}" --arg key "$key" --argjson count "${SF_COUNT:-0}" \
+        --argjson day "${SF_DAY:-0}" --argjson max "$sf_max" --arg rung "$rung" \
+        --arg what "${SF_INFLIGHT_WHAT:-}" --arg n "${SF_INFLIGHT_N:-}" --arg ax "${SF_CTX_AXIS:-}" \
+    '{kind:$kind,ungated:$ung,held:($held=="1"),held_id:(if $hid=="" then null else $hid end),
+      held_until:(if $hu=="" then null else ($hu|tonumber? // null) end),ids:$ids,head:$head,key:$key,
+      count:$count,day:$day,max:$max,rung:$rung}
+     + (if $what=="" then {} else {what:$what,n:($n|tonumber? // 0)} end)
+     + (if $ax=="" then {} else {axis:$ax} end)' 2>/dev/null)"
+  [ -n "$x" ] || x='{}'
+  log_idl "$1" "scope-floor${2:+-$2}" "$x"
+}
+sc_capture_loop() { # C1: record a loop scope the operator stated, at the first idle Stop (design §3.4, §3.2)
+  case "${CC_SCOPE_CAPTURE:-1}" in 0|off) return 0 ;; esac
+  { [ -n "${cur_sid:-}" ] && [ -n "$_sc_tp" ] && [ -f "$_sc_tp" ]; } || return 0
+  local n m bin out t
+  n="$(grep -c 'Scope (frozen):' "$_sc_tp" 2>/dev/null)"; n="$(_sf_num "$n" 0)"
+  [ "$n" -gt 0 ] || return 0                       # no line, no marker, no fork beyond this grep
+  m="$(sf_state_file .cap)"
+  [ "$(cat "$m" 2>/dev/null)" = "$n" ] && return 0  # an unchanged count never re-runs the capture
+  mkdir -p "${m%/*}" 2>/dev/null && printf '%s' "$n" > "$m" 2>/dev/null || return 0   # marker BEFORE the call
+  bin="${DOD_PERSIST_BIN:-$_scd/dod-persist.sh}"
+  [ -f "$bin" ] || { t="$0"; [ -L "$t" ] && t="$(readlink "$t")"; bin="$(cd "$(dirname "$t")" 2>/dev/null && pwd)/dod-persist.sh"; }
+  [ -f "$bin" ] || return 0
+  out="$( cd "$cwd" 2>/dev/null && CLAUDE_CODE_SESSION_ID="$cur_sid" bash "$bin" capture-loop "$_sc_tp" 2>/dev/null )"
+  case "$out" in captured*) log_idl captured "scope-capture" "$(jq -cn --arg o "$out" '{result:$o}' 2>/dev/null)" ;; esac
+  return 0
+}
+sf_reason() { # the block text: fixed template, never the literal frozen-scope prefix (PreCompact scrapes it)
+  local what open land=""
+  if [ "$lopen" = 1 ]; then what="your loop scope (\"${head:0:80}…\")"
+  else what="${ownrem} unchecked item(s) of your frozen DoD"; fi
+  if [ "$kind" = loop ]; then
+    printf '%s' "⟳ SCOPE FLOOR — your frozen scope is a loop with no recorded stop (\"${head:0:80}…\") and you are going idle with nothing in flight. Run the next round as scoped. If its stop condition holds or the operator ruled it stopped: \`~/.claude/hooks/dod-persist.sh done \"<evidence>\"\`. If every remaining round needs an operator-only act, file that act (\`cc-backlog needs \"<step>\" --class needs-human\`): the ledger then reads 👤 and you may close. (scope floor ${SF_COUNT}/${sf_max} · ${SF_DAY}/${sf_day_max} today)"
+    return 0
+  fi
+  open="$gloss"; [ -n "$open" ] || open="$ids"
+  [ "$(_sf_num "$(led_field "$led" UNLANDED)" 0)" -gt 0 ] && land="
+If you hold unlanded commits the decisions do not gate, land them first (ship policy)."
+  printf '%s' "⟳ SCOPE FLOOR — you are going idle on ⛔ while in-scope work your open decision(s) do not gate remains:
+${what}. Nothing is in flight (no open custody, land, teammate, workflow, background task or background agent); an armed watcher wakes you only on mail, so this work does not move until you run it.
+An open decision holds only the act it names; until it is answered the frozen scope is the course (operator ruling d610f8473106). Open: ${open}.
+Do the next ungated step now (a loop scope: run the next round as scoped). Never build the gated act itself.${land}
+Only if EVERY remaining in-scope item truly waits on one of these decisions, and it is a money, self-modification, permission, credential or G2 gate (a question about when a loop stops never gates the loop): ~/.claude/hooks/dod-persist.sh hold <id> \"<what it gates and why>\" — it refuses a packet that declares no such ceiling and does not route C, and your close then shows the hold to the operator.
+If the loop's stop condition holds, or the operator ruled it stopped: ~/.claude/hooks/dod-persist.sh done \"<evidence>\".
+(scope floor ${SF_COUNT}/${sf_max} for this state · ${SF_DAY}/${sf_day_max} today)"
+}
+scope_floor() { # → JSON on stdout + rc 1 to BLOCK; rc 0 otherwise. Never fails.
+  case "${CC_SCOPE_FLOOR:-1}" in 0|off) return 0 ;; esac
+  [ -e "$HOME/.claude/state/scope-floor.off" ] && return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  local led="${SC_LED_CACHE:-}"
+  if [ -z "$led" ]; then                     # mechanical_arm returned before its read: never fork the
+    sf_is_assignee && return 0               # ledger for an assignee or a torn-down session
+    wf_teardown_marked && return 0
+    led="$(sc_read_ledger)"
+  fi
+  [ -n "$led" ] || return 0
+  case "$led" in *"SCOPE_UNGATED="*) ;; *) return 0 ;; esac   # an old ledger is silent (fail open)
+  local rung blocked rechk lrung lsrc lopen ung held held_id held_until ownrem bsrc csrc research goal
+  local custody landing resident head gloss ids kind key why b w scan sf_max sf_day_max
+  rung="$(led_field "$led" RUNG)"
+  blocked="$(_sf_num "$(led_field "$led" BLOCKED)" 0)"; rechk="$(_sf_num "$(led_field "$led" BLOCKED_RECHECKED)" 0)"
+  lrung="$(led_field "$led" LOOP_RUNG)"; lsrc="$(led_field "$led" LOOP_SRC)"; lopen="$(led_field "$led" LOOP_OPEN)"
+  ung="$(_sf_num "$(led_field "$led" SCOPE_UNGATED)" 0)"; held="$(led_field "$led" HELD)"
+  held_until="$(led_field "$led" HELD_UNTIL)"; ownrem="$(_sf_num "$(led_field "$led" OWN_REMAINDER)" 0)"
+  why="$(led_field "$led" HELD_WHY)"; held_id=""
+  case "$why" in "Scope (held): "*) held_id="${why#Scope (held): }"; held_id="${held_id%% *}" ;; esac
+  bsrc="$(led_field "$led" BLOCKED_SRC)"; csrc="$(led_field "$led" CUSTODY_SRC)"
+  research="$(led_field "$led" RESEARCH_PROGRAM)"; goal="$(led_field "$led" GOAL_SRC)"
+  custody="$(_sf_num "$(led_field "$led" CUSTODY_OPEN)" 0)"; landing="$(led_field "$led" LANDING)"
+  resident="$(_sf_num "$(led_field "$led" RESIDENT_MINE)" 0)"
+  head="$(led_field "$led" LOOP_HEAD)"; gloss="$(led_field "$led" BLOCKED_GLOSS)"
+  ids="$(printf '%s %s' "$(led_field "$led" BLOCKED_IDS)" "$(led_field "$led" RECHECKED_IDS)" \
+         | tr ' ,' '\n' | grep -E '^[0-9A-Za-z_-]+$' | sort -u | paste -sd, - 2>/dev/null)"
+  sf_max="$(_sf_num "${CC_SCOPE_FLOOR_MAX:-}" 3)"; sf_day_max="$(_sf_num "${CC_SCOPE_FLOOR_DAY_MAX:-}" 6)"
+  # C1 intake: an own loop scope reaches the store from the human prompt that stated it, at the first
+  # idle Stop; it takes effect from the next Stop's ledger.
+  [ "$lsrc" = none ] && case "$rung" in "⛔"|"✅"|"👤") sc_capture_loop ;; esac
+  case "$rung" in
+    "⛔") { [ "$blocked" -gt 0 ] || [ "$rechk" -gt 0 ]; } || { sf_clear_if_active; return 0; }; kind=blocked ;;
+    "🔧") [ "$lrung" = 1 ] || { sf_clear_if_active; return 0; }; kind=loop ;;   # only the loop arm's 🔧
+    *)    sf_clear_if_active; return 0 ;;
+  esac
+  key="$(printf '%s|%s|%s' "$kind" "$ids" "$head" | "${CC_SHA1:-/sbin/sha1sum}" 2>/dev/null | cut -c1-12)"
+  [ -n "$key" ] || key="$(printf '%s|%s|%s' "$kind" "$ids" "$head" | sha1sum 2>/dev/null | cut -c1-12)"
+  sf_counts "$(sf_state_file)"
+  # ── decision-bearing from here: every exit is logged with the row contract ──
+  { [ -z "$key" ] || [ "$bsrc" = error ] || [ "$lsrc" = error ] || [ "$csrc" = error ] \
+    || { [ "$kind" = blocked ] && [ "$csrc" = skip ] && [ "$ung" -gt 0 ]; }; } && { sf_log abstained unknown; return 0; }
+  [ "$ung" -gt 0 ]                   || { sf_log abstained nothing-ungated; return 0; }  # held, or nothing left
+  kill_switch_active                 && { sf_log abstained kill-switch;   return 0; }
+  sf_operator_hold                   && { sf_log abstained operator-hold; return 0; }
+  sf_is_assignee                     && { sf_log abstained assignee;      return 0; }
+  sf_headless                        && { sf_log abstained headless;      return 0; }   # no terminal to continue in
+  wf_teardown_marked                 && { sf_log abstained teardown;      return 0; }
+  [ "${research:-none}" = none ]     || { sf_log abstained research;      return 0; }
+  [ "$goal" = live ]                 && { sf_log abstained goal;          return 0; }   # the /goal evaluator owns it
+  sf_context_high                    && { sf_log abstained context-high;  return 0; }   # boundary-handoff recycles
+  sf_inflight                        || { sf_log abstained "$SF_INFLIGHT_WHY"; return 0; }   # inflight | unknown
+  # The turn now ending: who opened it, and did it write? Six turns, newest first: walk back over turns
+  # that other Stop hooks' feedback opened; a floor block anywhere in that chain makes this a re-close.
+  # (_sc_turn_lib is defined further down, past the floors, so the floor resolves the same lib itself)
+  if ! command -v turn_scan >/dev/null 2>&1; then
+    scan="$(_sf_lib "${TURN_SCAN_LIB:-}" turn-scan.sh)" || { sf_log abstained unknown; return 0; }
+    # shellcheck source=lib/turn-scan.sh
+    # shellcheck disable=SC1090,SC1091
+    . "$scan" 2>/dev/null && command -v turn_scan >/dev/null 2>&1 || { sf_log abstained unknown; return 0; }
+  fi
+  scan="$(turn_scan "$_sc_tp" 6)" || { sf_log abstained unknown; return 0; }
+  [ -n "$scan" ] || { sf_log abstained unknown; return 0; }
+  printf '%s\n' "$scan" | jq -sre 'reverse | until(length == 0 or ((.[0].b // "") | startswith("Stop hook feedback") | not)
+       or ((.[0].b // "") | contains("⟳ SCOPE FLOOR")); .[1:]) | (length > 0 and ((.[0].b // "") | contains("⟳ SCOPE FLOOR")))' \
+       >/dev/null 2>&1 && { sf_log abstained reclose; return 0; }
+  b="$(printf '%s\n' "$scan" | tail -1 | jq -r '.b // ""' 2>/dev/null)"
+  w="$(printf '%s\n' "$scan" | tail -1 | jq -r '.w' 2>/dev/null)"
+  if [ "$w" = false ] && ! printf '%s\n' "$b" | head -1 | grep -qE "$SF_MACHINE_RE" \
+     && case "$b" in *HANDOFF-ENGAGE-*) false ;; *) true ;; esac; then
+    sf_log abstained conversation; return 0        # a read-only answer to the operator is not an idle
+  fi
+  case "${CC_SCOPE_FLOOR:-1}" in shadow)
+    # BEFORE the budget: shadow must not spend the real windows, or switching shadow → on would start
+    # with them spent; the same accounting on a separate <sid>.shadow map records where a cap would bite.
+    sf_budget_take --shadow || { sf_log abstained "shadow-$SF_BUDGET_WHY"; return 0; }
+    sf_log abstained shadow; return 0 ;;
+  esac
+  sf_budget_take || { sf_log abstained "$SF_BUDGET_WHY"; return 0; }   # gap | key-cap | day-cap | unwritable
+  sf_log fired ""
+  jq -nc --arg r "$(sf_reason)" '{decision:"block",reason:$r}'
+  return 1
+}
+
 # No sentinel → the agent did NOT request continuation → the session is going IDLE. This is the one
 # transition the floors guard; a sentinel-blocked stop is not idle, so it needs no floor.
-# Floor order: mechanical 🔧 (uncommitted own writes) → ship floor (📦/🚀 own work) → wake floor
-# (reachability). At most ONE floor emits per Stop — the hook prints a single JSON object.
+# Floor order: mechanical 🔧 (uncommitted own writes) → ship floor (📦/🚀 own work) → scope floor
+# (⛔/loop-🔧 idle over own ungated scope) → wake floor (reachability). At most ONE floor emits per
+# Stop — the hook prints a single JSON object.
 if [ ! -f "$f" ]; then
   rm -f "${f}.count" "${f}.sid" "${f}.cwd" "${f}.src" 2>/dev/null
   # ONE ancestry walk for all three floors (2026-09-24, fix/stop-hook-latency). Each floor asks
@@ -1309,6 +1623,11 @@ if [ ! -f "$f" ]; then
   # the 5 s timeout. The last operator message cannot change during one Stop, so it is read once.
   # CC_SC_KILL_MEMO=0 restores a live read per call.
   if [ "${CC_SC_KILL_MEMO:-1}" != "0" ]; then
+    # The message itself is memoized FIRST, so the kill-switch read below and the scope floor's
+    # operator-hold read (sf_operator_hold) share one transcript pass instead of paying two.
+    # shellcheck disable=SC2218  # defined at the top of this file; the redefinition below is the memo
+    _sc_lum="$(last_user_msg)"; _sc_lum_rc=$?
+    last_user_msg() { [ "$_sc_lum_rc" -eq 0 ] && printf '%s' "$_sc_lum"; return "$_sc_lum_rc"; }
     # shellcheck disable=SC2218  # defined at the top of this file; the redefinition below is the memo
     if kill_switch_active; then _sc_ks_rc=0; else _sc_ks_rc=1; fi
     kill_switch_active() { return "$_sc_ks_rc"; }
@@ -1318,6 +1637,11 @@ if [ ! -f "$f" ]; then
       mark_blocked ship-floor
       printf '%s' "$_sf_json"
       exit 0      # decision:block travels in the JSON; the hook itself always exits 0
+    fi
+    if ! _scf_json="$(scope_floor)"; then
+      mark_blocked scope-floor          # completion-assert yields its ledger arm (double-block marker)
+      printf '%s' "$_scf_json"
+      exit 0
     fi
     if ! _wf_json="$(wake_floor)"; then
       mark_blocked wake-floor
@@ -1365,7 +1689,7 @@ fi
 continue_reason() {
   printf '%s' "🔧 Loose ends remain — do NOT stop yet. Next: ${1}
 
-Re-arm each 🔧 turn: run \`~/.claude/hooks/session-continue.sh set \"<next step>\"\` to refresh the step AND reset the continuation counter (a fresh set zeroes .count — this is how a long grind stays under the ${3}-cap). When done (✅/📦), blocked on the user (⛔), or out of context (📤), run \`~/.claude/hooks/session-continue.sh clear\` so the session can close. (continuation ${2}/${3})"
+Re-arm each 🔧 turn: run \`~/.claude/hooks/session-continue.sh set \"<next step>\"\` to refresh the step AND reset the continuation counter (a fresh set zeroes .count — this is how a long grind stays under the ${3}-cap). When done (✅/📦), held on the user for everything that remains (a held ⛔), or out of context (📤), run \`~/.claude/hooks/session-continue.sh clear\` so the session can close. (continuation ${2}/${3})"
 }
 
 # ── (b2) IDENTICAL RE-BLOCK AFTER AN IDLE FORCED TURN — skip it (token-efficiency rank 17) ────────

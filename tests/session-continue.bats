@@ -821,3 +821,86 @@ completion-assert: you claimed done" "$(bash_tu 'git status')")"
   run actuate sidA "$tx"
   fired "$output"
 }
+
+# ── C5: the mechanical arm also arms on ⛔ for OWN dirt (commit, never land) ─────────────────────────
+# Ruling d610f8473106, design docs/research/lead-keeps-working-2026-10-24.md §3.4 (ii), tests §7.4 M1-M5.
+# Committing to a branch is never the gated act; landing may be. Separate budget (.mech.blk), its own
+# kill switches, and a text that forbids /ship while the decisions are open.
+ma_blk_fixture() { # $1 = SCOPE_UNGATED (default 1)
+  ma_fixture
+  export CC_SCOPE_FLOOR=0          # isolate the arm: the scope floor has its own suite
+  local wrap="$BATS_TEST_TMPDIR/ma-blk-wrap"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf 'RUNG=%s\nBLOCKED=1\nBLOCKED_IDS=e869fac7eb34\nSCOPE_UNGATED=${1:-1}\nDIRTY=1\nUNLANDED=0\nREMAINDER=0\nTRUNK=origin/main\nAHEAD=0\n' \"\${STUB_RUNG:-⛔}\"" > "$wrap"
+  chmod +x "$wrap"; export WRAP_LEDGER_BIN="$wrap"
+}
+ma_unarm() { # the chain ended (cap or clear of the sentinel only): drop the sentinel, keep every budget file
+  find "$CLAUDE_CONFIG_DIR/state" -name 'continue-*' ! -name '*.*' -exec rm -f {} \;
+}
+
+@test "C5 M1: ⛔ + own uncommitted edits arms — commit only, names the open ids, logs rung ⛔, spends .mech.blk" {
+  ma_blk_fixture; ma_ai_stub 1; unset AI_ID
+  run ma_actuate sid-blk-1 ""
+  [ "$status" -eq 0 ]; fired "$output"
+  r="$(printf '%s' "$output" | jq -r .reason)"
+  [[ "$r" == *'Do NOT /ship while decision(s) e869fac7eb34 are open'* ]] || false
+  [[ "$r" != *'then land per the repo'* ]] || false
+  [ "$(ma_row mechanical-dirty | jq -r .rung)" = "⛔" ]
+  [ -n "$(find "$CLAUDE_CONFIG_DIR/state" -name '*.mech.blk')" ]
+  [ -z "$(find "$CLAUDE_CONFIG_DIR/state" -name '*.mech')" ]
+}
+
+@test "C5 M1b: a genuine all-gating gate (SCOPE_UNGATED=0) + own dirt arms ONCE, then its budget of 1 is spent" {
+  ma_blk_fixture 0; ma_ai_stub 1; unset AI_ID
+  run ma_actuate sid-blk-1b ""
+  fired "$output"
+  ma_unarm
+  run ma_actuate sid-blk-1b ""
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  [ -n "$(ma_row mechanical-budget)" ]
+}
+
+@test "C5 M2: the ⛔ and 🔧 budgets are separate — a spent ⛔ budget leaves a later 🔧 lapse armed" {
+  ma_blk_fixture; ma_ai_stub 1; unset AI_ID
+  run ma_actuate sid-blk-2 ""; fired "$output"
+  ma_unarm
+  run ma_actuate sid-blk-2 ""; [ -z "$output" ]
+  STUB_RUNG=🔧 run ma_actuate sid-blk-2 ""
+  fired "$output"
+  [[ "$(printf '%s' "$output" | jq -r .reason)" == *'then land per the repo'* ]] || false
+}
+
+@test "C5 M3: CC_MECH_BLOCKED=0 and ~/.claude/state/mech-blocked.off each keep the ⛔ arm off" {
+  ma_blk_fixture; ma_ai_stub 1; unset AI_ID
+  CC_MECH_BLOCKED=0 run ma_actuate sid-blk-3 ""
+  [ -z "$output" ]
+  mkdir -p "$HOME/.claude/state"; touch "$HOME/.claude/state/mech-blocked.off"
+  run ma_actuate sid-blk-3 ""
+  [ -z "$output" ]
+  [ -z "$(find "$CLAUDE_CONFIG_DIR/state" -name '*.mech.blk')" ]
+}
+
+@test "C5 M3b: clear spends the ⛔ budget too (an off switch, not a snooze)" {
+  ma_blk_fixture; ma_ai_stub 1; unset AI_ID
+  ( cd "$CWD" && CLAUDE_CODE_SESSION_ID=sid-blk-3b bash "$HOOK" clear >/dev/null )
+  run ma_actuate sid-blk-3b ""
+  [ -z "$output" ]
+  [ -n "$(ma_row mechanical-budget)" ]
+}
+
+@test "C5 M4: continue_reason names a held ⛔ as a disarm state, and the re-block skip still matches its text" {
+  arm "run round 27" sidA
+  run actuate sidA ""
+  fired "$output"
+  [[ "$(printf '%s' "$output" | jq -r .reason)" == *'held on the user for everything that remains (a held ⛔)'* ]] || false
+  [[ "$(printf '%s' "$output" | jq -r .reason)" != *'blocked on the user (⛔)'* ]] || false
+}
+
+@test "C5 M5: CONTROL — the armed path is rung-blind: an armed step under a ⛔ ledger still blocks" {
+  ma_blk_fixture; ma_ai_stub 1; unset AI_ID
+  export CC_MECH_CONTINUE=0
+  arm "run round 27" sid-blk-5
+  run ma_actuate sid-blk-5 ""
+  fired "$output"
+  [[ "$(printf '%s' "$output" | jq -r .reason)" == *'run round 27'* ]] || false
+}
