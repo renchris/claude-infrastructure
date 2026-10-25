@@ -873,12 +873,18 @@ ma_unarm() { # the chain ended (cap or clear of the sentinel only): drop the sen
 
 @test "C5 M3: CC_MECH_BLOCKED=0 and ~/.claude/state/mech-blocked.off each keep the ⛔ arm off" {
   ma_blk_fixture; ma_ai_stub 1; unset AI_ID
+  # positive half first, on its own session: with no switch set the ⛔ arm DOES arm here, so the two
+  # silences below are the switches' doing and not a fixture that never reaches the arm
+  run ma_actuate sid-blk-3-ctl ""
+  fired "$output"
+  ma_unarm
   CC_MECH_BLOCKED=0 run ma_actuate sid-blk-3 ""
   [ -z "$output" ]
   mkdir -p "$HOME/.claude/state"; touch "$HOME/.claude/state/mech-blocked.off"
   run ma_actuate sid-blk-3 ""
   [ -z "$output" ]
-  [ -z "$(find "$CLAUDE_CONFIG_DIR/state" -name '*.mech.blk')" ]
+  # the ⛔ budget file still names only the control session: neither switched Stop spent it
+  [ "$(cut -d' ' -f1 "$(find "$CLAUDE_CONFIG_DIR/state" -name '*.mech.blk' | head -1)")" = sid-blk-3-ctl ]
 }
 
 @test "C5 M3b: clear spends the ⛔ budget too (an off switch, not a snooze)" {

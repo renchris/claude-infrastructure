@@ -3374,6 +3374,12 @@ lp_l2() { lp_l1; lp_block manual-hold "$SID" "Scope (held): $LP_A — every roun
 }
 
 @test "LOOP L24: the TSV exemption still discharges the changed ledger" {
+  # The lint reads no exemption ARGUMENT, so the discharge alone cannot tell a stale argument from a
+  # true one: pin that the wrap-ledger entry describes the row it now discharges (design §3.1 (iii):
+  # cell 3 is the sorted id list or `-`, and the GL gloss rows follow line 1).
+  grep -E '^scripts/wrap-ledger\.sh\|' "$REPO/scripts/tsv-pad-lint.sh" > "$BATS_TEST_TMPDIR/exempt"
+  grep -qF 'cell 3 is the comma-joined sorted id list' "$BATS_TEST_TMPDIR/exempt"
+  grep -qF 'The `GL` gloss rows after line 1' "$BATS_TEST_TMPDIR/exempt"
   run env CC_TSVPAD_OWN=scripts/wrap-ledger.sh bash "$REPO/scripts/tsv-pad-lint.sh"
   [ "$status" -eq 0 ]
   run bash "$REPO/scripts/tsv-pad-lint.sh"
