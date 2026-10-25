@@ -18,6 +18,10 @@ setup() {
   # here because dispatchability is not this suite's subject; tests/cc-backlog-project-dispatch.bats
   # owns it, unfixtured, in both directions.
   export CC_BACKLOG_PROJECT_WARN=off
+  # A tool-call shell exports its session id, and `cc-decide open --class C` from a session now needs
+  # --ceiling (ruling d610f8473106), so this suite's real class-C fixture opens would be refused when
+  # run from an agent. Cases that need a session id set one themselves.
+  unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   # CC_TEST_OPREADOUT_HOOK: run the suite against another build (the red-on-trunk proof, Wave H).
   HOOK="${CC_TEST_OPREADOUT_HOOK:-$REPO/hooks/operator-readout.sh}"
