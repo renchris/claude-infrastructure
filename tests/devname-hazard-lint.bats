@@ -12,6 +12,7 @@ BASE=660d21989
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   FX="$BATS_TEST_TMPDIR/repo"
   mkdir -p "$FX/scripts/lockwatch" "$FX/hooks/lib"
   cp "$REPO/scripts/devname-hazard-lint.sh" "$FX/scripts/"

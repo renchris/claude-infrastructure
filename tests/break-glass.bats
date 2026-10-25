@@ -9,6 +9,7 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   RS="$REPO/scripts/break-glass/rescue.sh"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export BG_ROOT="$BATS_TEST_TMPDIR/bg" CC_LOCKWATCH_DIR="$BATS_TEST_TMPDIR/lw"
   # a scan abandoned under fleet load is a correct refusal, but not the path these cases test
   export RESCUE_SCAN_DL=60
