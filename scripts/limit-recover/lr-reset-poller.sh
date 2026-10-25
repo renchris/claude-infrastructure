@@ -2712,10 +2712,21 @@ reroute_parked() { # $1=sid $2=acct $3=cfg $4=reset epoch → dispatches or does
 # is tried again next tick rather than latched unsent. The state clears when the session recovers by
 # any path: a RECOVERED run, its parked record retiring (RESUMED, TRANSPLANTED, …), REQUEST-RETIRED,
 # or a reconciler close. Kill switch LR_REROUTE_CAP=off.
-# State: $REROUTE_DIR/<sid>.tries = "<count>\t<last counted run>\t<reason>"; <sid>.paged = the reason paged.
+# A RECONCILER CLOSE IS A CHANGE OF ITS TERMINAL, NEVER A NEWER FILE (2026-10-24). The clear used to
+# fire whenever recon/sessions/<sid>.json was newer than .tries and terminal, but the reconciler
+# rewrites every record each pass, closed ones included: 3e929a81, closed 2026-10-21, was dispatched
+# 15 times in 8 h, each "FAILED rc=2", with REROUTE-CAP-CLEAR logged every cycle and the cap never
+# reached. .tries now carries the record's terminal stamp (.terminal.at) as of its last count, and
+# only a terminal that differs from it — a close that happened since — clears the cap.
+# State: $REROUTE_DIR/<sid>.tries = "<count>\t<last counted run>\t<reason>\t<terminal stamp>";
+# <sid>.paged = the reason paged. A 3-field file from before the stamp reads as stamp "".
 REROUTE_MAX_SAME="${LR_REROUTE_MAX_SAME:-3}"; [[ "$REROUTE_MAX_SAME" =~ ^[1-9][0-9]*$ ]] || REROUTE_MAX_SAME=3
 RECON_SESS="${LR_RECON_ROOT:-$STATE/recon}/sessions"
 reroute_cap_clear() { rm -f "$REROUTE_DIR/$1.tries" "$REROUTE_DIR/$1.paged" 2>/dev/null || true; }
+reroute_term_stamp() { # $1=sid → the reconciler record's terminal stamp (.terminal.at, else the terminal itself); "" while open or absent
+  [[ -f "$RECON_SESS/$1.json" ]] || return 0
+  jq -r '(.terminal // empty) | (.at // .) | tostring' "$RECON_SESS/$1.json" 2>/dev/null | head -1
+}
 reroute_reason() { # stdin = verdict.txt → "<VERDICT> <mech> <first cause token>"
   awk 'NR == 1 {
     v = $0; sub(/.*verdict=/, "", v); sub(/ .*/, "", v)
@@ -2725,13 +2736,14 @@ reroute_reason() { # stdin = verdict.txt → "<VERDICT> <mech> <first cause toke
     printf "%s %s %s\n", v, m, substr(n, 1, 60) }'
 }
 reroute_cap() { # $1=sid $2=acct → 0 may dispatch · 1 gave up (paged, or the page is retried next tick)
-  local sid="$1" acct="$2" f="$REROUTE_DIR/$1.tries" run v reason n=0 lrun="" lreason="" msg pv prc
+  local sid="$1" acct="$2" f="$REROUTE_DIR/$1.tries" run v reason n=0 lrun="" lreason="" lterm="" term msg pv prc
   [[ "${LR_REROUTE_CAP:-on}" != off ]] || return 0
-  if [[ -f "$f" && -f "$RECON_SESS/$sid.json" && "$RECON_SESS/$sid.json" -nt "$f" ]] \
-     && [[ "$(jq -r '.terminal != null' "$RECON_SESS/$sid.json" 2>/dev/null)" == true ]]; then
+  term="$(reroute_term_stamp "$sid")"
+  [[ -f "$f" ]] && IFS=$'\t' read -r n lrun lreason lterm < "$f"
+  if [[ -f "$f" && -n "$term" && "$term" != "$lterm" ]]; then
     log "REROUTE-CAP-CLEAR $sid — the reconciler closed its record"; reroute_cap_clear "$sid"
+    n=0; lrun=""; lreason=""
   fi
-  [[ -f "$f" ]] && IFS=$'\t' read -r n lrun lreason < "$f"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
   run="$(sed -n 's/^run=\([^ ]*\) .*/\1/p' "$RESULTS/$sid.log" 2>/dev/null | tail -1)"
   if [[ -n "$run" && "$run" != "$lrun" && -f "$run/verdict.txt" ]]; then
@@ -2743,7 +2755,7 @@ reroute_cap() { # $1=sid $2=acct → 0 may dispatch · 1 gave up (paged, or the 
         if [[ -n "$reason" && "$reason" == "$lreason" ]]; then n=$(( n + 1 )); else n=1; fi
         lreason="$reason"; lrun="$run"
         mkdir -p "$REROUTE_DIR" 2>/dev/null
-        printf '%s\t%s\t%s\n' "$n" "$lrun" "$lreason" > "$f" 2>/dev/null || true ;;
+        printf '%s\t%s\t%s\t%s\n' "$n" "$lrun" "$lreason" "$term" > "$f" 2>/dev/null || true ;;
     esac
   fi
   (( n >= REROUTE_MAX_SAME )) || return 0

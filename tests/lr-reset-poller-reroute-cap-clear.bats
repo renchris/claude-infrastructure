@@ -16,7 +16,8 @@ setup_file() {
   export ORPHAN=1dc45a05-0000-4000-8000-000000000005   # cap state whose parked record retired
   export RECON=1dc45a06-0000-4000-8000-000000000006    # gave up, then the reconciler closed it
   export RETIRED=1dc45a08-0000-4000-8000-000000000008  # gave up, and its hook request retires
-  for s in "$RECOVD" "$RECON" "$RETIRED"; do park_rec "$s"; done
+  export REWRIT=1dc45a09-0000-4000-8000-000000000009   # closed long ago; the reconciler rewrites it every pass
+  for s in "$RECOVD" "$RECON" "$RETIRED" "$REWRIT"; do park_rec "$s"; done
   for s in "$RECOVD" "$ORPHAN" "$RECON" "$RETIRED"; do
     seed "$s" 3 "$R_FAIL"; printf '%s\n' "$R_FAIL" > "$STATE/reroute/$s.paged"
   done
@@ -27,6 +28,13 @@ setup_file() {
   # RETIRED is parked too, so the sweep cannot be what clears it: without rq_retire's clear, § 2a
   # reads n=3 with its .paged marker and neither reroutes nor pages it.
   printf '{"sid":"%s","requested_by":"stop-failure-marker","account":"next4"}\n' "$RETIRED" > "$STATE/requests/$RETIRED.json"
+  # REWRIT (2026-10-24, 3e929a81): two tries counted while its record was ALREADY closed, so .tries
+  # holds that terminal's stamp; the record file is then rewritten (newer mtime, same terminal) and a
+  # third try ends the same reason. Only a changed terminal may clear the cap.
+  printf '2\t%s\t%s\t%s\n' "$RUNS/prev-$REWRIT" "$R_FAIL" "1792635428.17" > "$STATE/reroute/$REWRIT.tries"
+  touch -t 202601010000 "$STATE/reroute/$REWRIT.tries"
+  echo '{"phase":"ENGAGED","terminal":{"outcome":"CLOSED","proof":"answered in place","at":1792635428.17}}' > "$STATE/recon/sessions/$REWRIT.json"
+  last_run "$REWRIT" "$V_FAIL"
   run_tick
 }
 setup() { export HOME="$BATS_FILE_TMPDIR/home"; }
@@ -57,4 +65,11 @@ teardown_file() { cap_teardown; }
   grep -q "REQUEST-RETIRED $RETIRED" "$STATE/poller.log" || { plog; false; }
   [ ! -e "$STATE/reroute/$RETIRED.paged" ] || { ls "$STATE/reroute"; plog; false; }
   [ "$(dispatched "$RETIRED")" -eq 1 ] || { cat "$FLEET_LOG"; plog; false; }
+}
+
+@test "[RED] 2026-10-24: a rewritten record whose terminal did not change does not clear the cap" {
+  ! grep -q "REROUTE-CAP-CLEAR $REWRIT" "$STATE/poller.log" || { plog; false; }
+  grep -q "REROUTE-GAVE-UP $REWRIT (next4) — 3 tries in a row ended: $R_FAIL" "$STATE/poller.log" || { plog; false; }
+  [ "$(dispatched "$REWRIT")" -eq 0 ] || { cat "$FLEET_LOG"; plog; false; }
+  [ "$(cut -f4 "$STATE/reroute/$REWRIT.tries")" = 1792635428.17 ] || { cat "$STATE/reroute/$REWRIT.tries"; false; }
 }
