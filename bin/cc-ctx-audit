@@ -66,12 +66,18 @@ WINDOWS="${CC_CTX_WINDOWS:-$HOME/.claude/autonomy/session-window.jsonl
 $HOME/.claude-tertiary/autonomy/session-window.jsonl
 $HOME/.claude-quaternary/autonomy/session-window.jsonl}"
 
-# The three REAL transcript roots. ~/.claude-next/projects is a SYMLINK to ~/.claude/projects, so
-# a naive glob double-counts every session in it (memory token-usage-from-transcripts). The list is
-# deduped by realpath below regardless, but naming only real roots keeps the scan cheap.
+# The four REAL transcript roots, one per account (accounts.json: next → ~/.claude-next, whose
+# projects/ is a SYMLINK to ~/.claude/projects; next2-4 → -secondary/-tertiary/-quaternary). A naive
+# glob double-counts every session behind the symlink (memory token-usage-from-transcripts), and the
+# list once named only three, silently dropping ~/.claude-secondary's quarter of the fleet
+# (docs/plans/USAGE_LEVERS.md § W7+ §4 row S4). ~/.claude-next4/projects is a real dir but no
+# account (a probe's stray config dir), so it is not named. Roots are deduped by realpath below.
 DEFAULT_ROOTS="$HOME/.claude/projects
+$HOME/.claude-secondary/projects
 $HOME/.claude-tertiary/projects
 $HOME/.claude-quaternary/projects"
+# A root list longer than this is a seam mistake (a file list passed as roots), not a fleet.
+ROOTS_MAX=16
 
 usage() {
   cat >&2 <<EOF
@@ -139,18 +145,27 @@ trap 'rm -rf "$TMP" 2>/dev/null || true' EXIT HUP INT TERM
 
 # ── the transcript population, deduped by realpath ────────────────────────────────────────────
 ROOTS="${CC_CTX_ROOTS:-$DEFAULT_ROOTS}"
-: > "$TMP/tx.raw"
-printf '%s\n' "$ROOTS" | while IFS= read -r d; do
+# realpath-dedupe at the ROOT, a loop bounded by ROOTS_MAX: a symlinked root (~/.claude-next/
+# projects) resolves to its target and is read once. Per-file resolution is unnecessary: find
+# without -L neither descends a symlinked subdirectory nor matches a symlinked file under -type f,
+# so every path it emits under a real root is already real. The old per-FILE loop forked three
+# subshells for each of ~74K transcripts.
+: > "$TMP/roots"
+n_roots=0
+while IFS= read -r d; do
   [ -n "$d" ] || continue
+  n_roots=$((n_roots + 1))
+  [ "$n_roots" -le "$ROOTS_MAX" ] || { printf '%s: more than %s transcript roots; reading the first %s\n' "$PROG" "$ROOTS_MAX" "$ROOTS_MAX" >&2; break; }
   [ -d "$d" ] || continue
+  (cd "$d" 2>/dev/null && pwd -P) >> "$TMP/roots"
+done <<EOF
+$ROOTS
+EOF
+sort -u "$TMP/roots" -o "$TMP/roots"
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
   find "$d" -name '*.jsonl' -type f 2>/dev/null
-done >> "$TMP/tx.raw"
-# realpath-dedupe: a symlinked root would otherwise contribute every file twice
-while IFS= read -r f; do
-  [ -n "$f" ] || continue
-  rp="$(cd "$(dirname "$f")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$(basename "$f")")" || rp="$f"
-  printf '%s\n' "$rp"
-done < "$TMP/tx.raw" | sort -u > "$TMP/tx"
+done < "$TMP/roots" | sort -u > "$TMP/tx"
 TX_N="$(wc -l < "$TMP/tx" | tr -d ' ')"
 
 # grep -l over a large list must go through xargs (ARG_MAX), and -l must not abort on a binary or

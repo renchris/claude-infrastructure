@@ -218,6 +218,20 @@ EOF
   [[ "$output" == *"1 session(s)"* ]] || false
 }
 
+# RED-proof: before wave S4 the default list named three roots, so the -secondary hit read 1 session.
+@test "default roots: all four account roots are read, ~/.claude-next's symlink only once" {
+  unset CC_CTX_ROOTS
+  for d in .claude .claude-secondary .claude-tertiary .claude-quaternary; do mkdir -p "$HOME/$d/projects/p"; done
+  mkdir -p "$HOME/.claude-next"
+  ln -s "$HOME/.claude/projects" "$HOME/.claude-next/projects"
+  cp "$TMP/projects/proj/s1.jsonl" "$HOME/.claude-secondary/projects/p/s1.jsonl"
+  sed 's/"s1"/"s9"/' "$TMP/projects/proj/s1.jsonl" > "$HOME/.claude/projects/p/s9.jsonl"
+  run /bin/bash "$AUDIT" --wall-hits --since all
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"2 session(s)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"2 event(s)"* ]] || { echo "$output"; false; }
+}
+
 @test "--since excludes events outside the window (positive control: 'all' includes them)" {
   run /bin/bash "$AUDIT" --wall-hits --since all
   [ "$status" -eq 0 ] || false
