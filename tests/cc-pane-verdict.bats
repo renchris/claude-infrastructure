@@ -82,7 +82,7 @@ SID=570d3917-79ac-4aa4-93d1-896b843b8b9f
   # pane 289: a shared cwd's sibling dirt in HEAD's whole-cwd refusal is not "unsaved files"
   [ "$("$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — /x holds 4 uncommitted change(s)' --dry-run | sed -n 1p)" = state=CANTTELL ]
   run "$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — /x holds 4 uncommitted change(s)' --dry-run
-  [[ "$output" != *"unsaved"* && "$output" != *"stopped mid-task"* ]]
+  [[ "$output" != *"unsaved"* && "$output" != *"stopped mid-task"* ]] || false
   mkdir -p "$CC_PANE_EXIT_DIR"; printf '{"rc":124,"claude_started":false,"launch_sha":"","ts":1}\n' > "$CC_PANE_EXIT_DIR/101.json"
   [ "$("$PV" --pane 101 --recompute --closer-out 'pane 101: REFUSED — anything' --dry-run | sed -n 1p)" = state=NOTHING ]
 }
