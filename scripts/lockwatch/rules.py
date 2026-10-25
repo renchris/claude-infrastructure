@@ -288,7 +288,8 @@ def evaluate(obs, th=THRESHOLDS):
         det = "outstanding %.1fs" % pty.get("age_s", 0)
     elif pty.get("state") == "done" and pty.get("ms") is not None:
         x = float(pty["ms"]) / (th["P1_ceiling_ms"] * k)
-        if not starv.get("ok", True) and x >= th["l1_frac"]:
+        # a timing that would breach unscaled, taken while starved, is `unknown` (lesson 3)
+        if not starv.get("ok", True) and float(pty["ms"]) / th["P1_ceiling_ms"] >= th["l1_frac"]:
             unknown = True
         det = "zsh_ms=%s" % pty["ms"]
     r["P1"] = {
@@ -304,10 +305,9 @@ def evaluate(obs, th=THRESHOLDS):
     x, definitive, unknown, det = 0.0, False, False, ""
     if w.get("verdict") in ("WEDGED", "WEDGED_PREVIOUS"):
         stuck = float(w.get("stuck_s") or w.get("after_s") or 0)
-        steady = (
-            bool(w.get("last_steady_s", 0) >= th["P3_wedged_s"])
-            or w.get("verdict") == "WEDGED_PREVIOUS"
-        )
+        # steady = the SAME abandoned child reported the SAME entry across observations: a
+        # starved walk advances its last= node, a wedged one cannot
+        steady = float(w.get("last_steady_s") or 0) >= th["P3_wedged_s"]
         x = max(th["l2_frac"], stuck / th["P3_wedged_s"])
         if stuck >= th["P3_wedged_s"] * k and steady:
             definitive = True
@@ -316,7 +316,8 @@ def evaluate(obs, th=THRESHOLDS):
         det = "%s stuck_s=%d last=%s" % (w.get("verdict"), stuck, w.get("last"))
     elif w.get("verdict") == "OK" and w.get("scan_ms") is not None:
         x = float(w["scan_ms"]) / (th["P3_ceiling_ms"] * k)
-        if not starv.get("ok", True) and x >= th["l1_frac"]:
+        # a timing that would breach unscaled, taken while starved, is `unknown` (lesson 3)
+        if not starv.get("ok", True) and float(w["scan_ms"]) / th["P3_ceiling_ms"] >= th["l1_frac"]:
             unknown = True
         det = "scan_ms=%s" % w["scan_ms"]
     r["P3"] = {
@@ -420,7 +421,7 @@ def evaluate(obs, th=THRESHOLDS):
         "x": (th["l1_frac"] if stuck else min(worst, 0.99) * th["exit_frac"]) if started else 0.0,
         "definitive": bool(stuck and started and age_w >= th["P11_wedge_s"] * k),
         "unknown": bool(stuck and not started),
-        "seq": "%s:%d" % (which, int(age_w // 10)),
+        "seq": "%s:%d" % (which, int(worst)),  # one probe per stuck-limit multiple
         "detail": ("stuck:%s phase=%s age=%ds" % (which, phases.get(which), age_w)) if stuck else "",
         "stuck_type": which if stuck else None,
     }

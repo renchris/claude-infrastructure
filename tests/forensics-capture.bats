@@ -146,7 +146,7 @@ EOF
 
 @test "e: the stall seam -> WEDGED, then WEDGED_PREVIOUS last=\"lstat <name>\" from the SAME child; no second child" {
   dev="$BATS_TEST_TMPDIR/fakedev"; mkdir -p "$dev"; touch "$dev/a" "$dev/ttys063" "$dev/z"
-  export CC_FX_DEV_DIR="$dev" CC_FX_CANARY_STALL_AT=ttys063 CC_FX_CANARY_STALL_S=40
+  export CC_FX_DEV_DIR="$dev" CC_FX_CANARY_STALL_AT=ttys063 CC_FX_CANARY_STALL_S=300
   run cap snapshot stall1
   [ "$status" -eq 0 ]
   c1="$(cat "$(bundle)/03-devfs-canary.out")"
