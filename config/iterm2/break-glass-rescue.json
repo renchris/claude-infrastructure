@@ -1,0 +1,18 @@
+{
+  "Profiles": [
+    {
+      "Name": "Rescue",
+      "Guid": "cc-break-glass-rescue-0001",
+      "Tags": ["break-glass"],
+      "Badge Text": "RESCUE",
+      "Custom Command": "Yes",
+      "Command": "/bin/bash --noprofile --rcfile __HOME__/.claude/scripts/break-glass/rescue.bashrc -i",
+      "Custom Directory": "Yes",
+      "Working Directory": "__HOME__",
+      "Close Sessions On End": true,
+      "Prompt Before Closing 2": 0,
+      "Unlimited Scrollback": true,
+      "Terminal Type": "xterm-256color"
+    }
+  ]
+}
