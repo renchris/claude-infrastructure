@@ -58,7 +58,9 @@ setup() {
 # ── GOAL: the self-close watcher stands down for a runner-owned pane ──────────────────────────────
 # HEAD: `it2 session close` refused rc 70, a husk-fs alarm and a husk row.
 @test "A2 watcher: a runner-owned pane whose record says hold:fs is left to its runner" {
-  fx_watcher_home; fx_exit 0 289 $(( $(date +%s) + 1 )) hold:fs
+  # The record must postdate the watcher's start (ts ≥ _sc_t0): in life the runner writes it after
+  # claude exits. Written first here, so it is dated ahead — +1 s lost the race at load ~450.
+  fx_watcher_home; fx_exit 0 289 $(( $(date +%s) + 3600 )) hold:fs
   fx_watcher
   [ "$(fx_alarms)" -eq 0 ] || { echo "$output"; false; }
   [ "$(fx_rows)" -eq 0 ] || { echo "$output"; false; }
