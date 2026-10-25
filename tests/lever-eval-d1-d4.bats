@@ -85,7 +85,8 @@ o.writelines(l for l in L[1:] if json.loads(l)["acct"]!="next2")' "$FX1" "$BATS_
 @test "D4 negative control: a hook whose loop pattern misses until-loops FAILs the reproduction; a silent hook is no verdict" {
 	sed 's/(while|until|for)\[\[:space:\]\]/(while|for)[[:space:]]/' "$REPO/hooks/subagent-long-bash-shadow.sh" >"$BATS_TEST_TMPDIR/narrow.sh"
 	if cmp -s "$REPO/hooks/subagent-long-bash-shadow.sh" "$BATS_TEST_TMPDIR/narrow.sh"; then false; fi
-	printf '#!/bin/bash\nexit 0\n' >"$BATS_TEST_TMPDIR/silent.sh"
+	# predicate.py runs a hook as `/bin/bash <file>`, never by path, so the stand-in needs no #! line
+	printf 'exit 0\n' >"$BATS_TEST_TMPDIR/silent.sh"
 	run python3 - "$D4" "$FX4" "$BATS_TEST_TMPDIR" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
