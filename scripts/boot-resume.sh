@@ -147,7 +147,7 @@ usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 
 # ── event mode arguments, parsed before BOOT is read (see EVENT MODE in the header). ──
-EVENT=""; EVENT_KIND=""; EVENT_KPID=""; EVENT_ROSTER_DIR=""; PLAN_ONLY=0
+EVENT=""; EVENT_KIND=""; EVENT_KPID=""; EVENT_ROSTER_DIR=""; PLAN_ONLY=0; EVENT_PREV_BOOT=0
 if [ "${1:-}" != --print-boottime ]; then
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -624,6 +624,19 @@ if [ -n "$EVENT" ] && [ -z "$EVENT_ROSTER_DIR" ]; then
     # The uuid the heartbeat itself keys on, so the path is the one hb_tick wrote.
     hb_uuid="$(command -v _hb_bootuuid >/dev/null 2>&1 && _hb_bootuuid)"
     hb_base="$HB_ROOT/${hb_uuid:-nouuid}/$EVENT_KPID"
+    # A kitty of an EARLIER boot (2026-10-25: `cc-restore --after-crash --kitty-pid 1881` after the
+    # reboot found "no heartbeat" under the new boot's uuid and planned nothing). Its newest heartbeat
+    # under any boot, recorded before the event, is the record; it is a reboot's snapshot, so the
+    # stale-snapshot check below runs on it, keyed to that kitty's own tombstones.
+    if [ ! -d "$hb_base" ]; then
+      pb=""; pbs=0
+      for d in "$HB_ROOT"/*/"$EVENT_KPID"; do
+        [ -d "$d" ] || continue
+        st="$(head -n 1 "$d/hb.start" 2>/dev/null | awk '{ print $1 }')"; case "$st" in ''|*[!0-9]*) continue ;; esac
+        [ "$st" -le "$BOOT" ] && [ "$st" -gt "$pbs" ] && { pb="$d"; pbs="$st"; }
+      done
+      [ -n "$pb" ] && { hb_base="$pb"; EVENT_PREV_BOOT=1; echo "boot-resume: kitty $EVENT_KPID has no heartbeat this boot — using its last one, ${pb#"$HB_ROOT"/}" >&2; }
+    fi
   elif [ "$EVENT_KIND" = crash ]; then
     hb_flag=--dead-kitty
   fi
@@ -726,15 +739,16 @@ fi
 #    empty or not ("listing nobody is an answer" still holds). Reboots only: an event is restored
 #    from its own kitty's heartbeat, and inside a running boot a tombstone is a closed pane.
 TOMB_JOINED=0
-if [ -n "$SOURCE" ] && [ -z "$EVENT" ] && [ -d "$TOMB_DIR" ]; then
+if [ -n "$SOURCE" ] && { [ -z "$EVENT" ] || [ "$EVENT_PREV_BOOT" = 1 ]; } && [ -d "$TOMB_DIR" ]; then
   have_sids="$(printf '%s' "$GHOSTS" | cut -f3 | jq -Rsc 'split("\n") | map(select(. != ""))' 2>/dev/null)"
   [ -n "$have_sids" ] || have_sids='[]'
   late_rows="$(for t in "$TOMB_DIR"/*.json; do
                  [ -f "$t" ] && jq -c 'select(type == "object")' "$t" 2>/dev/null
                done | jq -rs --arg pad "$TSV_PAD" --argjson lo "$ANCHOR" --argjson hi "$BOOT" \
-                     --argjson burst "$TOMB_BURST" --argjson have "$have_sids" "$JQ_CELL"'
+                     --argjson burst "$TOMB_BURST" --argjson have "$have_sids" --arg k "$EVENT_KPID" "$JQ_CELL"'
         [ .[] | select((.session_id // "") != "" and ((.endedAt // 0) | type) == "number")
-              | select(.endedAt > $lo and .endedAt <= $hi) ]
+              | select(.endedAt > $lo and .endedAt <= $hi)
+              | select($k == "" or ((.kitty_pid // "") | tostring) == $k) ]
         | (if any(.[]; .hostShutdown == true) then map(select(.hostShutdown == true)) else . end)
         | if length == 0 then empty else
             (map(.endedAt) | max) as $last
@@ -762,7 +776,8 @@ fi
 REG_JOINED=0; TREE_JOINED=0
 join_witnesses() { # the registry ghosts and the tree's resumed or leading sessions, once each
   have="$(printf '%s' "$GHOSTS" | cut -f3)"
-  if [ -d "$REGISTRY_DIR" ]; then
+  # Not for an event: inside a running boot the registry lists the live sessions as well.
+  if [ -z "$EVENT" ] && [ -d "$REGISTRY_DIR" ]; then
     for f in "$REGISTRY_DIR"/*.json; do
       [ -e "$f" ] || continue
       row="$(jq -r --arg pad "$TSV_PAD" "$JQ_CELL"'

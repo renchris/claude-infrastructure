@@ -1658,3 +1658,18 @@ inc_label() { grep -o 'source: [^"]*' "$CC_NOTIFY_BIN.log" | head -1; }
   grep -q 'HB-ONE' "$CC_NOTIFY_BIN.log"; grep -q 'T-t2' "$CC_NOTIFY_BIN.log"
   ! grep -q 'T-h1' "$CC_NOTIFY_BIN.log" || false                  # h1 kept its heartbeat row
 }
+
+@test "event --kitty-pid for a kitty of an earlier boot: its last heartbeat answers, and its own newer tombstones join (2026-10-25)" {
+  # `cc-restore --after-crash --kitty-pid 1881` after the reboot looked only under the new boot's
+  # uuid and failed "no heartbeat". RED-proof: against origin/main's boot-resume.sh it exits 3.
+  export CC_BOOTUUID_OVERRIDE=UUID-NOW
+  kp="$(dead_pid)"
+  hbeat UUID-PREV "$kp" 1784804000 '[]'
+  jq -n --arg s e1 --argjson k "$kp" '{session_id:$s,account:"claude-next",cwd:"/x/e1",name:"T-e1",endedAt:1784804300,kitty_pid:$k}' > "$CC_SHUTDOWN_TOMB_DIR/e1.json"
+  jq -n --arg s other '{session_id:$s,account:"claude-next",cwd:"/x/o",name:"T-other",endedAt:1784804400,kitty_pid:1}' > "$CC_SHUTDOWN_TOMB_DIR/other.json"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash --kitty-pid "$kp" --plan-only
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"T-e1"* ]] || [[ "$output" == *"e1"* ]] || false
+  [[ "$output" != *"T-other"* ]] && [[ "$output" != *"/x/o"* ]] || false   # another kitty's tombstone is not this kitty's fleet
+  grep -q '"tomb_joined":1' "$CC_IDL"
+}
