@@ -229,8 +229,10 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   # fixture used to elide by letting both rows default to `$$`. One pid under two pane rows is the
   # pane-keyed-overwrite artifact (§ 11 #2): ONE holder, and the census says so. The parity diff
   # is what surfaced it, and `lr_holder_count` (lr-lib.sh:474) still counts ROWS there — reported.
-  /bin/sh -c 'sleep 30; :' --holder-a & local h1=$!
-  /bin/sh -c 'sleep 30; :' --holder-b & local h2=$!
+  # 300 s, not 30 s: at load 600+ (2026-10-25) one --locate outlived a 30 s holder, so a holder was
+  # dead before the census read it and DUPLICATE read RECOVERABLE. Every holder here is killed below.
+  /bin/sh -c 'sleep 300; :' --holder-a & local h1=$!
+  /bin/sh -c 'sleep 300; :' --holder-b & local h2=$!
   blocked_tx "$SEC" "$SID"; row 616 "$SID" "$h1"; row 647 "$SID" "$h2"
   mark "$SEC" "$SID" 616
   run bash "$FLEET" --locate
@@ -249,7 +251,7 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   mark "$SEC" "$SID" 616
   # A process whose ARGV carries the marker, standing in for the resumed session itself. `; :`
   # defeats the shell's last-command exec optimisation, which would replace this argv with sleep's.
-  /bin/sh -c 'sleep 30; :' --resume "$SID" &
+  /bin/sh -c 'sleep 300; :' --resume "$SID" &
   local holder=$!
   row 616 "$SID" "$holder"
   run bash "$FLEET" --locate
@@ -263,7 +265,7 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   # The CONTROL for the case above, and the divergence itself: --locate and --duplicates must
   # return the same verdict over one population. Before the shared predicate they did not.
   blocked_tx "$SEC" "$SID"
-  /bin/sh -c 'sleep 30; :' --resume "$SID" &
+  /bin/sh -c 'sleep 300; :' --resume "$SID" &
   local holder=$!
   row 616 "$SID" "$holder"
   run bash "$FLEET" --duplicates
@@ -320,8 +322,8 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   # rows — so it asserted "more than one live process" over a world containing one, and passed only
   # because lr_holder_count counted ROWS. It is the pane-keyed-overwrite shape, which now has its
   # own case below and must NOT be what proves this one.
-  /bin/sh -c 'sleep 30; :' --holder-a & local h1=$!
-  /bin/sh -c 'sleep 30; :' --holder-b & local h2=$!
+  /bin/sh -c 'sleep 300; :' --holder-a & local h1=$!
+  /bin/sh -c 'sleep 300; :' --holder-b & local h2=$!
   blocked_tx "$SEC" "$SID"; row 616 "$SID" "$h1"; row 647 "$SID" "$h2"
   run bash "$FLEET" --recover
   [ "$status" -eq 1 ]
@@ -338,7 +340,7 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   # is the outcome the overlap fix was written to end, reached the other way. `bin/cc-limited` took
   # a pid SET and got it right, which is why `parity` is the assertion that surfaces it.
   # RED-PROOF: against pristine lr-lib.sh this prints DUPLICATE and the assertion below fails.
-  /bin/sh -c 'sleep 30; :' --one-process & local h=$!
+  /bin/sh -c 'sleep 300; :' --one-process & local h=$!
   blocked_tx "$SEC" "$SID"; row 616 "$SID" "$h"; row 647 "$SID" "$h"
   mark "$SEC" "$SID" 616
   run bash "$FLEET" --locate
@@ -378,8 +380,8 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   # two rows over row()'s default pid — was ONE holder dressed as two and listed only because the
   # predicate counted rows. `--mark --live` must also name a pid that HOLDS a row, since the
   # tombstone records the live successor and lr-fleet.sh:911 finds its pane by matching that pid.
-  /bin/sh -c 'sleep 30; :' --holder-a & local h1=$!
-  /bin/sh -c 'sleep 30; :' --holder-b & local h2=$!
+  /bin/sh -c 'sleep 300; :' --holder-a & local h1=$!
+  /bin/sh -c 'sleep 300; :' --holder-b & local h2=$!
   blocked_tx "$SEC" "$SID"; row 616 "$SID" "$h1"; row 647 "$SID" "$h2"
   run bash "$FLEET" --duplicates
   [[ "$output" == *"DUPLICATE 52e35019: 2 registry pane(s)"* ]] || { echo "$output"; false; }
@@ -622,8 +624,8 @@ assert r["pid"]=="-", r
   # The gap this control needs is a DUPLICATE park, and DUPLICATE now means what it says: TWO
   # PROCESSES. The old fixture made it with two rows over row()'s default pid, which is one process
   # and no longer a duplicate — so the gap has to be built honestly or this control proves nothing.
-  /bin/sh -c 'sleep 30; :' --holder-a & local h1=$!
-  /bin/sh -c 'sleep 30; :' --holder-b & local h2=$!
+  /bin/sh -c 'sleep 300; :' --holder-a & local h1=$!
+  /bin/sh -c 'sleep 300; :' --holder-b & local h2=$!
   blocked_tx "$SEC" "$SID"; row 616 "$SID" "$h1"; row 617 "$SID" "$h2"
   run bash "$FLEET" --recover
   [ "$status" -eq 1 ] || { echo "$output"; false; }
@@ -715,7 +717,7 @@ SH
   printf '%s' "$r" | grep -q 'PARTIAL' || { echo "$r"; false; }
 }
 
-@test "W1(a): --detach returns in ≤3s while the driver is still running, and prints its log path" {
+@test "W1(a): --detach returns before its slow actuator could finish, and prints its log path" {
   export CC_ADMIT_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/cc-notify"
   cc_stub "${CC_NOTIFY_BIN%/*}" "${CC_NOTIFY_BIN##*/}" - <<SH
@@ -736,7 +738,10 @@ SH
   run bash "$FLEET" --one "$SID" --target next3 --source-pane 616 --detach
   t1=$(date +%s)
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ $((t1 - t0)) -le 3 ] || { echo "took $((t1 - t0))s — the caller was BLOCKED: $output"; false; }
+  # The bound is the actuator's own 10 s sleep: a blocking --one cannot return before it ends, so
+  # anything under it is detached. A fixed 3 s measured the machine instead (2026-10-25: 4 s at load
+  # 600, the caller still back while the actuator slept).
+  [ $((t1 - t0)) -lt 10 ] || { echo "took $((t1 - t0))s — the caller was BLOCKED: $output"; false; }
   [[ "$output" == *"log="* ]] || { echo "no log path printed: $output"; false; }
   logp="$(printf '%s' "$output" | tr ' ' '\n' | sed -n 's/^log=//p' | tail -1)"
   [ -n "$logp" ] || { echo "$output"; false; }
@@ -1842,7 +1847,9 @@ overlapped() { # <log> <start-token> — 0 when the log DOES overlap (the pool a
 @test "W6b: the ACTUATOR half is a POOL — two recoveries overlap, they are not queued" {
   acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
   s2="66660000-0000-4000-8000-00000000b002"; blocked_tx "$SEC" "$s2"; row 632 "$s2"
-  LR_RECOVER_MAX_CONCURRENT=2 LRH_SLEEP=1 run bash "$FLEET" --recover
+  # 10 s, not 1 s: overlap needs the second worker to START inside the first one's window, and at
+  # load 600+ (2026-10-25) a fork + pool claim alone outlasts 1 s, so the two ran back to back.
+  LR_RECOVER_MAX_CONCURRENT=2 LRH_SLEEP=10 run bash "$FLEET" --recover
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   run overlapped "$LRH_SEQ" HF
   [ "$status" -eq 0 ] || { echo "$output"; cat "$LRH_SEQ"; false; }
