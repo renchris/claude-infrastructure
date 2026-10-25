@@ -131,6 +131,9 @@ class Ctx:
             None  # the last ps reading's claude count (W7a)
         )
         self.abstain_streak = 0
+        self.abstain_paged = (
+            False  # this streak has paged (ABSTAIN_PAGE_AT); cleared on recovery
+        )
         self.last_summary: Dict[str, Any] = {}
         self.rig_refused: set = set()
         self.actions: Dict[
@@ -2527,15 +2530,66 @@ def _invariant(ctx: Ctx, snap: T.Snapshot, now: Optional[float] = None) -> int:
     return bad
 
 
+# A streak of abstained passes this long pages once (2026-10-24: 15 passes in a row abstained on
+# "/bin/ps timed out at 40s" at load 300-900, and nothing said so). The event and readout line alone
+# are visible only to someone already looking, and lr-recon-watchdog.sh keys on `progress`, which an
+# abstaining pass still advances, so an hours-long ps outage would halt every recovery in silence.
+# 20 passes is minutes at the daemon's cadence, well past the one-off stall a single slow ps makes.
+# Override LR_RECON_ABSTAIN_PAGE_AT (a positive integer; 0 turns the page off).
+ABSTAIN_PAGE_AT = 20
+
+
+def _abstain_page_at() -> int:
+    raw = os.environ.get("LR_RECON_ABSTAIN_PAGE_AT", "")
+    return int(raw) if raw.isdigit() else ABSTAIN_PAGE_AT
+
+
+def _abstain_page(ctx: Ctx, mode: str, why: str) -> None:
+    """One page per streak, queued through the reporter (the outbox when it is on) before this
+    pass's flush, so it goes out on the same abstained pass. ``abstain_paged`` latches it until a
+    trusted pass resets the streak (_run_pass), so a streak that recovers and recurs pages again."""
+    at = _abstain_page_at()
+    if not at or ctx.abstain_paged or ctx.abstain_streak < at:
+        return
+    ctx.abstain_paged = True
+    text = (
+        "reconciler abstained %d passes in a row, deciding nothing (no move, wake or close): %s"
+        % (
+            ctx.abstain_streak,
+            why,
+        )
+    )
+    _event(ctx.paths, "abstain-paged", detail=text[:200])
+    try:
+        rep = ctx.reporter or report.Reporter(ctx.paths, mode)
+        rep.daemon_page("ABSTAIN", text[:200])
+    except Exception as e:
+        _event(ctx.paths, "report-error", detail=repr(e)[:200])
+
+
+def _abstain_clear(ctx: Ctx) -> None:
+    """A trusted pass ends the streak and re-arms its page; a streak that paged says it is over."""
+    if ctx.abstain_paged:
+        _event(
+            ctx.paths,
+            "abstain-recovered",
+            detail="after %d passes" % ctx.abstain_streak,
+        )
+    ctx.abstain_streak = 0
+    ctx.abstain_paged = False
+
+
 def _abstain(
     ctx: Ctx, snap: T.Snapshot, mode: str, now: float, why: str
 ) -> Dict[str, Any]:
     """W7a: a census this pass cannot trust decides nothing — no move, close, dead verdict, HOLD
     release or wake. Records, requests and ctl files are left as they are for the next pass, which
     decides; this one leaves one ``abstain`` event and says so on the readout line and in the
-    shadow's last-pass.json, so a persistent outage is visible rather than a quiet empty world."""
+    shadow's last-pass.json, so a persistent outage is visible rather than a quiet empty world.
+    A streak of ABSTAIN_PAGE_AT passes also pages, once (_abstain_page)."""
     ctx.abstain_streak += 1
     _event(ctx.paths, "abstain", detail="%s (%d in a row)" % (why, ctx.abstain_streak))
+    _abstain_page(ctx, mode, why)
     try:
         store.atomic_write_text(
             ctx.paths.p("readout.line"),
@@ -2711,7 +2765,7 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
         ctx.last_nclaude = observe.claude_count(snap)
     if why:
         return _abstain(ctx, snap, mode, now, why)
-    ctx.abstain_streak = 0
+    _abstain_clear(ctx)
     _unowned_zombies(ctx, snap)
     if ctx.keeper:
         _keep_claims(ctx, snap)

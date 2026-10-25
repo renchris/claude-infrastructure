@@ -800,6 +800,47 @@ class Outbox(Hermetic):
         M._abstain(ctx, snap, "act", self.now[0], "ps degraded")
         self.assertEqual(self.sent, ["page esc", "page open"])
 
+    def test_an_abstain_streak_pages_once_and_recovery_rearms_it(self) -> None:
+        # 2026-10-24: 15 passes in a row abstained on a ps timeout and nothing paged
+        ctx = M.Ctx(self.paths, None, self.home)
+        ctx.reporter = self.reporter()
+        snap = T.Snapshot(wall=0.0, uptime_raw=0.0, degraded=["ps"])
+        why = "ps degraded: /bin/ps timed out at 40s"
+        for _ in range(M.ABSTAIN_PAGE_AT - 1):
+            M._abstain(ctx, snap, "act", self.now[0], why)
+        self.assertEqual(self.sent, [], "below the threshold nothing pages")
+        for _ in range(M.ABSTAIN_PAGE_AT + 5):
+            M._abstain(ctx, snap, "act", self.now[0], why)
+        pages = [t for t in self.sent if t.startswith("page ")]
+        self.assertEqual(len(pages), 1, "exactly one page for the streak")
+        self.assertIn("abstained %d passes in a row" % M.ABSTAIN_PAGE_AT, pages[0])
+        self.assertIn(why, pages[0])
+        self.assertEqual(len(self.events("abstain-paged")), 1)
+        M._abstain_clear(ctx)
+        self.assertEqual((ctx.abstain_streak, ctx.abstain_paged), (0, False))
+        self.assertEqual(len(self.events("abstain-recovered")), 1)
+        for _ in range(M.ABSTAIN_PAGE_AT):
+            M._abstain(ctx, snap, "act", self.now[0], why)
+        self.assertEqual(
+            len([t for t in self.sent if t.startswith("page ")]),
+            2,
+            "a new streak pages again",
+        )
+
+    def test_the_abstain_page_threshold_override(self) -> None:
+        ctx = M.Ctx(self.paths, None, self.home)
+        ctx.reporter = self.reporter()
+        snap = T.Snapshot(wall=0.0, uptime_raw=0.0, degraded=["ps"])
+        with mock.patch.dict(os.environ, {"LR_RECON_ABSTAIN_PAGE_AT": "0"}):
+            for _ in range(M.ABSTAIN_PAGE_AT * 2):
+                M._abstain(ctx, snap, "act", self.now[0], "ps degraded")
+        self.assertEqual(self.sent, [], "0 turns the page off")
+        with mock.patch.dict(os.environ, {"LR_RECON_ABSTAIN_PAGE_AT": "3"}):
+            M._abstain_clear(ctx)
+            for _ in range(3):
+                M._abstain(ctx, snap, "act", self.now[0], "ps degraded")
+        self.assertEqual(len(self.sent), 1)
+
     def test_report_orders_immediate_then_mails_then_the_rest(self) -> None:
         ctx = M.Ctx(self.paths, None, self.home)
         rep = ctx.reporter = self.reporter()
