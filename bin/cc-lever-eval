@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""cc-lever-eval — offline evals and the hillclimb loop for the usage levers
+(docs/plans/USAGE_LEVERS.md § W7+ §3 rows "Evals" and "Hillclimb loop").
+
+Every subcommand runs as an EVAL: it sets CC_LEVER_EXCLUDE=1 and moves to /tmp/lev-eval before
+doing anything, so nothing it starts can be scored as a production arm. State lives in
+~/.claude/hillclimb/<flow>/ (tools/lever-evals/lib/hc.py owns its layout, the split, the seal and
+the decision). Nothing here wakes, denies or recycles a session, and nothing raises a lever stage.
+
+usage:
+  cc-lever-eval build <flow> [--days 28] [--start EPOCH] [--end EPOCH] [--from CASES]
+  cc-lever-eval split <flow>
+  cc-lever-eval run <flow> [--policy P ...] [--params JSON] [--cases train|all|PATH]
+  cc-lever-eval score <flow> --candidate JSON [--split train|test --unseal]
+  cc-lever-eval failures <flow> [--params JSON]                 train rows only
+  cc-lever-eval check <flow> [all|repro|oracle|null|aa|served-model|truncation] [--ref CASES]
+  cc-lever-eval round <flow> --candidate JSON [--text FILE]
+  cc-lever-eval report <flow>
+  cc-lever-eval approve-harness <flow> --confirm <sha12>        the operator's act
+  cc-lever-eval harness-sha <flow>
+
+flows: d3_keepalive (built); d1_recycle, d4_pollloop (S7b), d1_successor (S9), d2_lean (S10).
+exit: 0 ok / a verdict was computed · 1 a check failed · 2 usage · 3 flow not built yet ·
+      4 refused (harness not approved, sealed split, leak, more than one change)
+"""
+
+import argparse
+import importlib.util
+import json
+import os
+import sys
+
+REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
+EVALS = os.path.join(REPO, "tools", "lever-evals")
+sys.path.insert(0, os.path.join(EVALS, "lib"))
+import hc  # noqa: E402
+
+CHECKS = ("repro", "oracle", "null", "aa", "served-model", "truncation")
+
+
+class Refused(Exception):
+    pass
+
+
+def load_flow(name):
+    if name not in hc.FLOWS:
+        raise SystemExit("cc-lever-eval: unknown flow %r (known: %s)" % (name, ", ".join(sorted(hc.FLOWS))))
+    if not hc.FLOWS[name]["built"]:
+        sys.stderr.write("cc-lever-eval: flow %s is not built yet (wave %s)\n" % (name, hc.FLOWS[name]["wave"]))
+        raise SystemExit(3)
+    p = os.path.join(EVALS, name, "flow.py")
+    spec = importlib.util.spec_from_file_location("flow_" + name, p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def build_meta(flow):
+    with open(os.path.join(hc.flow_dir(flow), "build.json")) as fh:
+        return json.load(fh)
+
+
+def params_arg(s):
+    try:
+        p = json.loads(s) if s else {}
+    except ValueError as e:
+        raise SystemExit("cc-lever-eval: --params/--candidate is not JSON: %s" % e)
+    if not isinstance(p, dict):
+        raise SystemExit("cc-lever-eval: --params/--candidate must be a JSON object")
+    return p
+
+
+def half_stats(F, cases, cand, base, share, wkf, reps=2000):
+    """Paired candidate - baseline over one half, at both read ends; the WORSE end is returned."""
+    worst = None
+    for _rn, r in F.policy.READS:
+        c, b = F.evaluate(cases, cand, r), F.evaluate(cases, base, r)
+        rows = [(g["acct"], g["sid"], c[g["case_id"]] - b[g["case_id"]]) for g in cases]
+        scale = wkf / share if share else 0.0
+        point, lo, hi, sd = hc.cluster_bootstrap(rows, scale, reps)
+        s = dict(point=point, lo=lo, hi=hi, nf=1.96 * sd, n=len(cases))
+        if worst is None or (s["lo"], s["point"]) < (worst["lo"], worst["point"]):
+            worst = s
+    return worst
+
+
+def shares(flow):
+    with open(os.path.join(hc.flow_dir(flow), "split.json")) as fh:
+        m = json.load(fh)
+    n = m["n_train"] + m["n_test"]
+    return m["n_train"] / n, m["n_test"] / n
+
+
+# ── subcommands ──────────────────────────────────────────────────────────────────────────────────
+def cmd_build(a, F):
+    if a.source:
+        cases, meta = F.import_cases(a.source)
+    else:
+        cases, meta = F.build(a.days, a.start, a.end)
+    d = hc.flow_dir(a.flow)
+    hc.write_jsonl(os.path.join(d, "cases.jsonl"), cases)
+    with open(os.path.join(d, "build.json"), "w") as fh:
+        json.dump(meta, fh, indent=1, sort_keys=True)
+    print(json.dumps(meta, sort_keys=True))
+    return 0
+
+
+def cmd_split(a, F):
+    cases = hc.read_jsonl(os.path.join(hc.flow_dir(a.flow), "cases.jsonl"))
+    m = hc.split(a.flow, cases)
+    print(json.dumps(m, sort_keys=True))
+    return 0
+
+
+def cmd_run(a, F):
+    if hc.FLOWS[a.flow]["model_runs"]:
+        hc.require_approved(a.flow)
+    if a.cases == "train":
+        cases, meta = hc.read_train(a.flow), build_meta(a.flow)
+        wkf = F.wk(meta) / shares(a.flow)[0]
+    elif a.cases == "all":
+        cases = hc.read_jsonl(os.path.join(hc.flow_dir(a.flow), "cases.jsonl"))
+        wkf = F.wk(build_meta(a.flow))
+    else:
+        cases, meta = F.import_cases(a.cases)
+        wkf = F.wk(meta)
+    prm = F.validate_params(params_arg(a.params))
+    for pol in a.policy or ["literal", "r2_busy", "candidate", "perfect_foresight", "never"]:
+        for rn, r in F.policy.READS:
+            print(F.policy.line("%s %s" % (pol, rn), F.policy.run(cases, pol, r, wk=wkf, params=prm)))
+    return 0
+
+
+def cmd_score(a, F):
+    st = hc.load_state(a.flow)
+    base = F.baseline_params(st)
+    cand = F.validate_params(params_arg(a.candidate))
+    tr, te = shares(a.flow)
+    if a.split == "test":
+        cases, share = hc.read_test(a.flow, unseal=a.unseal), te
+    else:
+        cases, share = hc.read_train(a.flow), tr
+    s = half_stats(F, cases, cand, base, share, F.wk(build_meta(a.flow)))
+    print(json.dumps(dict(split=a.split, baseline=base, candidate=cand, **s), sort_keys=True))
+    return 0
+
+
+def cmd_failures(a, F):
+    if a.split != "train":
+        raise Refused("failures reads the train split only (the analyzer never sees test rows)")
+    st = hc.load_state(a.flow)
+    prm = F.validate_params(params_arg(a.params)) if a.params else F.baseline_params(st)
+    for k, n, pp in F.failures(hc.read_train(a.flow), prm):
+        print("%-28s n=%-6d lost_pp=%.4f" % (k, n, pp))
+    return 0
+
+
+def cmd_check(a, F):
+    want = CHECKS if a.which == "all" else (a.which,)
+    ok_all = True
+    train = None
+    for name in want:
+        if name == "repro":
+            ref = a.ref or (F.REF_IMPORT if os.path.exists(F.REF_IMPORT) else F.REF_FIXTURE)
+            cases, meta = F.import_cases(ref)
+            ok, rows = F.check_repro(cases, meta)
+            rows.append("reference cases: %s (%d)" % (ref, len(cases)))
+        else:
+            if train is None:
+                train = hc.read_train(a.flow)
+            if name == "aa":
+                ok, rows = F.check_aa(train, hc)
+            else:
+                ok, rows = getattr(F, "check_" + name.replace("-", "_"))(train)
+        ok_all &= ok
+        print("%s %s" % ("PASS" if ok else "FAIL", name))
+        for r in rows:
+            print("  " + r)
+    return 0 if ok_all else 1
+
+
+def cmd_round(a, F):
+    sha = hc.require_approved(a.flow)
+    st = hc.load_state(a.flow)
+    act = hc.next_action(st["rounds"])
+    if act == hc.CONFIRM:
+        print("CONFIRM: %d rounds done — confirm the best candidate on the next 7 d of fresh production cases" % len(st["rounds"]))
+        return 0
+    base = F.baseline_params(st)
+    if act == hc.STALL:
+        fails = F.failures(hc.read_train(a.flow), base)
+        row = hc.record_round(a.flow, dict(verdict=hc.STALL, reason="3 non-KEEP rounds: sort train failures, no edit",
+                                           failures=fails[:6], harness=sha[:12], candidate=None))
+        print(json.dumps(row, sort_keys=True))
+        return 0
+    cand = F.validate_params(params_arg(a.candidate))
+    changed = sorted(k for k in cand if cand[k] != base[k])
+    if not changed:
+        raise Refused("candidate equals the baseline; a round needs exactly one change")
+    if len(changed) > 1:
+        raise Refused("one change per round; this candidate changes %s" % ", ".join(changed))
+    text = json.dumps(cand, sort_keys=True)
+    if a.text:
+        with open(a.text) as fh:
+            text += "\n" + fh.read()
+    test = hc.read_test(a.flow, unseal=True)
+    leak = hc.leak_check(text, [F.case_text(g) for g in test])
+    if leak:
+        raise Refused("candidate text shares %d 8-gram(s) with sealed test cases, e.g. %r" % (len(leak), leak[0]))
+    tr, te = shares(a.flow)
+    wkf = F.wk(build_meta(a.flow))
+    s_tr = half_stats(F, hc.read_train(a.flow), cand, base, tr, wkf)
+    s_te = half_stats(F, test, cand, base, te, wkf)
+    v, why = hc.decide(s_tr["point"], s_tr["nf"], s_te["point"], s_te["lo"], s_te["nf"], hc.FLOWS[a.flow]["min_act"])
+    row = hc.record_round(a.flow, dict(
+        verdict=v, reason=why, candidate=cand, baseline=base, changed=changed[0], harness=sha[:12],
+        train=round(s_tr["point"], 4), nf_train=round(s_tr["nf"], 4), test=round(s_te["point"], 4),
+        test_lo=round(s_te["lo"], 4), test_hi=round(s_te["hi"], 4), nf_test=round(s_te["nf"], 4)))
+    print(json.dumps(row, sort_keys=True))
+    return 0
+
+
+def cmd_report(a, F):
+    st = hc.load_state(a.flow)
+    unit = hc.FLOWS[a.flow]["kind"]
+    print("flow %s · unit %s · MIN_ACT %s · harness approved %s · rounds %d/%d · next %s" % (
+        a.flow, unit, hc.FLOWS[a.flow]["min_act"], ((st.get("harness") or {}).get("sha") or "no")[:12],
+        len(st["rounds"]), hc.MAX_ROUNDS, hc.next_action(st["rounds"])))
+    for r in st["rounds"]:
+        if r["verdict"] == hc.STALL:
+            print("  #%d STALL  %s" % (r["n"], r["reason"]))
+            continue
+        mark = "" if r["verdict"] == hc.KEEP else "  (NOT MERGED)"
+        print("  #%d %-10s %s=%s · test %+.3f [%+.3f, %+.3f] vs baseline · train %+.3f (NF %.3f)%s" % (
+            r["n"], r["verdict"], r["changed"], json.dumps(r["candidate"][r["changed"]]), r["test"],
+            r["test_lo"], r["test_hi"], r["train"], r["nf_train"], mark))
+    print("best params: %s" % json.dumps(F.baseline_params(st), sort_keys=True))
+    return 0
+
+
+def cmd_approve(a, F):
+    sha = hc.approve_harness(a.flow, a.confirm)
+    print("approved %s harness %s" % (a.flow, sha))
+    return 0
+
+
+def cmd_harness_sha(a, F):
+    print(hc.harness_sha(a.flow))
+    return 0
+
+
+def parser():
+    ap = argparse.ArgumentParser(prog="cc-lever-eval", description=__doc__.split("\n")[0])
+    sp = ap.add_subparsers(dest="cmd", required=True)
+
+    def sub(name, fn):
+        p = sp.add_parser(name)
+        p.add_argument("flow")
+        p.set_defaults(fn=fn)
+        return p
+
+    p = sub("build", cmd_build)
+    p.add_argument("--days", type=float, default=28.0)
+    p.add_argument("--start", type=float)
+    p.add_argument("--end", type=float)
+    p.add_argument("--from", dest="source")
+    sub("split", cmd_split)
+    p = sub("run", cmd_run)
+    p.add_argument("--policy", action="append")
+    p.add_argument("--params")
+    p.add_argument("--cases", default="train")
+    p = sub("score", cmd_score)
+    p.add_argument("--candidate", required=True)
+    p.add_argument("--split", choices=("train", "test"), default="train")
+    p.add_argument("--unseal", action="store_true")
+    p = sub("failures", cmd_failures)
+    p.add_argument("--params")
+    p.add_argument("--split", default="train")
+    p = sub("check", cmd_check)
+    p.add_argument("which", nargs="?", default="all", choices=("all",) + CHECKS)
+    p.add_argument("--ref")
+    p = sub("round", cmd_round)
+    p.add_argument("--candidate", required=True)
+    p.add_argument("--text")
+    sub("report", cmd_report)
+    p = sub("approve-harness", cmd_approve)
+    p.add_argument("--confirm", required=True)
+    sub("harness-sha", cmd_harness_sha)
+    return ap
+
+
+def main(argv):
+    a = parser().parse_args(argv)
+    for k in ("source", "ref", "text"):
+        if getattr(a, k, None):
+            setattr(a, k, os.path.abspath(getattr(a, k)))
+    if getattr(a, "cases", None) not in (None, "train", "all"):
+        a.cases = os.path.abspath(a.cases)
+    hc.enter_eval_context()
+    F = load_flow(a.flow)
+    try:
+        return a.fn(a, F)
+    except (Refused, hc.SealedError, hc.HarnessError) as e:
+        sys.stderr.write("cc-lever-eval: refused: %s\n" % e)
+        return 4
+    except ValueError as e:
+        sys.stderr.write("cc-lever-eval: %s\n" % e)
+        return 2
+    except FileNotFoundError as e:
+        sys.stderr.write("cc-lever-eval: missing %s — run build/split first\n" % e.filename)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
