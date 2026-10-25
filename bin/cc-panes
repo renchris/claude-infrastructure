@@ -1,0 +1,292 @@
+#!/usr/bin/env python3
+"""cc-panes — every kitty pane, read back: OS window → Desktop → pane → process → session → state.
+
+  cc-panes [--to unix:/path] [--json] [--no-screen]
+  cc-panes [--to unix:/path] --expect "WID=SID ?=SID …" [--wait SECS] [--poll SECS]
+
+WHY (2026-10-25 reboot). A restore reported launched=10 while 11 of the panes it opened were bare
+shells, two windows sat on the wrong display and a pane was 37 columns wide, and nothing in the
+restore ever looked at a pane: the counts came from launches, not from the screen. This reads the
+panes themselves, so "is every session back, live, where it belongs" has one answer.
+
+One row per pane:
+  DESK   f<N>@<display> for the Nth Space of that display when its OS window is a fullscreen Space
+         (com.apple.spaces fs_wid = kitty platform_window_id), else "desk" (a regular Desktop)
+  KIND   CLAUDE (Claude Code or the launcher resuming it) · TEAMMATE (a team member's claude)
+         · SHELL (only a login shell) · OTHER
+  SID    the session a CLAUDE pane RESUMES: an exact argv token after --resume/-r/--session-id, or
+         an argument of a resume launcher (reso-resume-one, lr-fire-resume); "?" when none says
+  STATE  prompt (the input line ❯ between two rules) · working ("esc to interrupt") · asking (a
+         choice dialog) · starting (Claude, none of those yet) · "-" for anything not Claude
+  COLS   the pane width in cells, so an uneven split is visible at a glance
+
+--expect: each WID=SID must be pane WID, a CLAUDE pane resuming SID, at prompt|working|asking;
+"?=SID" is the same for any pane. Polled every --poll seconds for up to --wait while sessions
+start. Prints one `cc-panes: expect wid=… sid=… state=… — why` line per row still wrong, then
+`cc-panes: expect ok=N bad=M`. Exit 0 all ok · 1 some bad · 2 usage · 3 kitty unreachable.
+
+Read-only: `kitty @ ls`, `kitty @ get-text` and `defaults export com.apple.spaces`, each bounded
+(CC_PANES_K_TIMEOUT, 10 s). Seams: CC_TERM_KITTY (kitty binary), CC_DEFAULTS_BIN ("" = no Spaces).
+"""
+import json
+import os
+import plistlib
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+CLAUDE_RE = re.compile(r"(^|[/ ])(claude|claude\.exe|reso-resume-one|lr-fire-resume|cc-close-attrib|cc-pane-runner)( |$)")
+TEAMMATE_RE = re.compile(r"--agent-id|--parent-session-id")
+RESUMERS = ("reso-resume-one", "lr-fire-resume", "cc-restore-one")
+SHELLS = ("zsh", "bash", "fish", "sh")
+LIVE = ("prompt", "working", "asking")
+TO = float(os.environ.get("CC_PANES_K_TIMEOUT") or 10)
+
+
+def die(msg, rc=2):
+    print("cc-panes: %s" % msg, file=sys.stderr)
+    sys.exit(rc)
+
+
+def kitty_bin():
+    k = os.environ.get("CC_TERM_KITTY")
+    if k:
+        return k
+    for c in ("/Applications/kitty.app/Contents/MacOS/kitty", "/opt/homebrew/bin/kitty", "/usr/local/bin/kitty"):
+        if os.access(c, os.X_OK):
+            return c
+    return shutil.which("kitty") or ""
+
+
+def socket(arg):
+    if arg:
+        return arg
+    for v in ("CC_TERM_KITTY_TO", "KITTY_LISTEN_ON"):
+        if os.environ.get(v):
+            return os.environ[v]
+    here = os.path.dirname(os.path.realpath(__file__))
+    for ks in (os.path.join(here, "cc-kitty-socket"), os.path.expanduser("~/.claude/bin/cc-kitty-socket")):
+        if os.access(ks, os.X_OK):
+            try:
+                out = subprocess.run([ks], capture_output=True, text=True, timeout=TO).stdout.split()
+                if out:
+                    return out[0]
+            except Exception:
+                pass
+    return ""
+
+
+def k(kb, sock, *args):
+    cmd = [kb, "@"] + (["--to", sock] if sock else []) + list(args)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=TO)
+    except Exception:
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def fs_spaces():
+    """{platform window id: "f<N>@<display>"} for every fullscreen Space; {} when unreadable."""
+    db = os.environ.get("CC_DEFAULTS_BIN", "/usr/bin/defaults")
+    if not db or not os.access(db, os.X_OK):
+        return {}
+    try:
+        raw = subprocess.run([db, "export", "com.apple.spaces", "-"], capture_output=True, timeout=TO).stdout
+        d = plistlib.loads(raw)
+    except Exception:
+        return {}
+    out = {}
+    for m in (d.get("SpacesDisplayConfiguration") or {}).get("Management Data", {}).get("Monitors") or []:
+        disp = str(m.get("Display Identifier") or "?")[:8]
+        n = 0
+        for s in m.get("Spaces") or []:
+            if s.get("type") == 4 and isinstance(s.get("fs_wid"), int):
+                n += 1
+                out[s["fs_wid"]] = "f%d@%s" % (n, disp)
+    return out
+
+
+def argvs(w):
+    return [[str(x) for x in (p.get("cmdline") or [])] for p in w.get("foreground_processes") or [] if isinstance(p, dict)]
+
+
+def resumed(w):
+    out = []
+    for a in argvs(w):
+        if any(TEAMMATE_RE.search(x) for x in a):
+            continue
+        launcher = any(os.path.basename(x) in RESUMERS for x in a[:2])
+        for i, x in enumerate(a):
+            v = None
+            if UUID.match(x) and (launcher or (i and a[i - 1] in ("--resume", "-r", "--session-id"))):
+                v = x
+            for f in ("--resume=", "--session-id="):
+                if x.startswith(f) and UUID.match(x[len(f):]):
+                    v = x[len(f):]
+            if v and v not in out:
+                out.append(v)
+    return out
+
+
+def kind(w):
+    av = argvs(w)
+    if any(TEAMMATE_RE.search(" ".join(a)) for a in av):
+        return "TEAMMATE"
+    if any(CLAUDE_RE.search(" ".join(a)) for a in av):
+        return "CLAUDE"
+    if len(av) == 1 and av[0] and os.path.basename(av[0][0].lstrip("-")) in SHELLS \
+            and all(x in ("-l", "-i", "--login", "-il", "-li") for x in av[0][1:]):
+        return "SHELL"
+    return "OTHER"
+
+
+def proc_cwd(w):
+    fg = [p for p in w.get("foreground_processes") or [] if isinstance(p, dict)]
+    for p in fg:
+        if CLAUDE_RE.search(" ".join(str(x) for x in p.get("cmdline") or [])) and p.get("cwd"):
+            return p["cwd"]
+    return (fg[0].get("cwd") if fg else None) or w.get("cwd") or ""
+
+
+RULE = re.compile(r"^\s*─{8,}")
+PROMPT = re.compile(r"^\s*[❯>](\s|$)")
+
+
+def screen_state(text):
+    lines = [l for l in (text or "").splitlines()][-60:]
+    if any("esc to interrupt" in l for l in lines):
+        return "working"
+    for i, l in enumerate(lines):
+        if PROMPT.match(l) and any(RULE.match(x) for x in lines[max(0, i - 3):i]) \
+                and any(RULE.match(x) for x in lines[i + 1:i + 6]):
+            return "prompt"
+    if any(re.search(r"❯\s*\d+\.\s", l) for l in lines) or any("Do you want to" in l for l in lines):
+        return "asking"
+    return "starting"
+
+
+def census(kb, sock, screens=True):
+    raw = k(kb, sock, "ls")
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    fs = fs_spaces()
+    rows = []
+    for o in data if isinstance(data, list) else []:
+        pwid = o.get("platform_window_id")
+        for t in o.get("tabs") or []:
+            for w in t.get("windows") or []:
+                kd = kind(w)
+                st = "-"
+                if kd == "CLAUDE" and screens:
+                    st = screen_state(k(kb, sock, "get-text", "--match", "id:%s" % w.get("id")))
+                sids = resumed(w) if kd == "CLAUDE" else []
+                rows.append({"oswin": o.get("id"), "platform_window_id": pwid, "desk": fs.get(pwid, "desk"),
+                             "tab": t.get("id"), "pane": w.get("id"), "cols": w.get("columns"), "lines": w.get("lines"),
+                             "kind": kd, "sid": sids[0] if sids else ("?" if kd == "CLAUDE" else "-"), "sids": sids,
+                             "state": st, "cwd": proc_cwd(w), "title": (w.get("title") or "").replace("\t", " ")})
+    return rows
+
+
+def judge(rows, want):
+    """[(wid, sid, state, why)] for each expectation still wrong."""
+    bad = []
+    for wid, sid in want:
+        if wid != "?":
+            r = next((r for r in rows if str(r["pane"]) == wid), None)
+            if r is None:
+                bad.append((wid, sid, "gone", "no pane %s" % wid)); continue
+            if r["kind"] != "CLAUDE":
+                bad.append((wid, sid, r["kind"].lower(), "pane %s is %s, not Claude" % (wid, r["kind"]))); continue
+            if sid not in r["sids"]:
+                bad.append((wid, sid, r["state"], "pane %s resumes %s" % (wid, ",".join(r["sids"]) or "no session id"))); continue
+            if r["state"] not in LIVE:
+                bad.append((wid, sid, r["state"], "not at a prompt yet")); continue
+        else:
+            hits = [r for r in rows if sid in r["sids"]]
+            if not hits:
+                bad.append((wid, sid, "missing", "no pane resumes it")); continue
+            if not any(r["state"] in LIVE for r in hits):
+                bad.append((wid, sid, hits[0]["state"], "pane %s not at a prompt yet" % hits[0]["pane"])); continue
+    return bad
+
+
+def main(argv):
+    to = expect = None
+    as_json = False; screens = True; wait = 0.0; poll = 10.0
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-h", "--help"):
+            print(__doc__); return 0
+        if a == "--json":
+            as_json = True
+        elif a == "--no-screen":
+            screens = False
+        elif a in ("--to", "--expect", "--wait", "--poll"):
+            if i + 1 >= len(argv):
+                die("%s needs a value" % a)
+            v = argv[i + 1]; i += 1
+            if a == "--to":
+                to = v
+            elif a == "--expect":
+                expect = v
+            else:
+                try:
+                    f = float(v)
+                except ValueError:
+                    die("%s needs seconds" % a)
+                if a == "--wait":
+                    wait = f
+                else:
+                    poll = f
+        else:
+            die("unknown argument: %s" % a)
+        i += 1
+    kb = kitty_bin()
+    if not kb:
+        die("no kitty binary (set CC_TERM_KITTY)", 3)
+    sock = socket(to)
+    if expect is not None:
+        want = []
+        for tok in expect.split():
+            if "=" not in tok:
+                die("--expect wants WID=SID or ?=SID, got %s" % tok)
+            w, s = tok.split("=", 1)
+            want.append((w, s))
+        t0 = time.time()
+        while True:
+            rows = census(kb, sock)
+            if rows is None:
+                die("kitty @ ls did not answer", 3)
+            bad = judge(rows, want)
+            if not bad or time.time() - t0 + poll > wait:
+                break
+            time.sleep(poll)
+        for w, s, st, why in bad:
+            print("cc-panes: expect wid=%s sid=%s state=%s — %s" % (w, s, st, why))
+        print("cc-panes: expect ok=%d bad=%d" % (len(want) - len(bad), len(bad)))
+        return 1 if bad else 0
+    rows = census(kb, sock, screens)
+    if rows is None:
+        die("kitty @ ls did not answer", 3)
+    if as_json:
+        print(json.dumps(rows, indent=1)); return 0
+    print("%-14s %5s %5s %9s %-8s %-8s %-8s %s" % ("DESK", "OSWIN", "PANE", "COLSxLNS", "KIND", "SID", "STATE", "CWD · TITLE"))
+    home = os.path.expanduser("~")
+    for r in rows:
+        cwd = r["cwd"].replace(home, "~", 1) if r["cwd"].startswith(home) else r["cwd"]
+        print("%-14s %5s %5s %9s %-8s %-8s %-8s %s · %s" % (
+            r["desk"], r["oswin"], r["pane"], "%sx%s" % (r["cols"], r["lines"]), r["kind"],
+            r["sid"][:8], r["state"], cwd, r["title"][:40]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
