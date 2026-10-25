@@ -103,7 +103,9 @@ SH
   export CC_SWIFT_BIN="$BATS_TEST_TMPDIR/no-swift" CC_LSOF_BIN="$BATS_TEST_TMPDIR/no-lsof"
   export CC_RESUME_STAGGER=0 CC_DESKTOP_SETTLE=0 CC_DESKTOP_FS_DELAY=0
   export CC_RESTORE_WAIT=0 CC_RESTORE_K_BACKOFF=0 CC_RESTORE_FS_GAP=0 CC_RESTORE_MAYBE_S=0
-  export CC_RESTORE_MAYBE_POLL=0 CC_RESTORE_FS_VERIFY=0 CC_RESTORE_APPLY_SETTLE=0
+  export CC_RESTORE_MAYBE_POLL=0 CC_RESTORE_FS_VERIFY=0 CC_RESTORE_APPLY_SETTLE=0 CC_RESTORE_FS_FIRST=0
+  export CC_PANES_BIN="$BATS_TEST_TMPDIR/cc-panes"     # the census answers "all live" (its own suite: cc-panes.bats)
+  printf '#!/bin/bash\necho "cc-panes: expect ok=1 bad=0"\n' > "$CC_PANES_BIN"; chmod +x "$CC_PANES_BIN"
   unset KITTY_WINDOW_ID KITTY_PID CC_TERM_KITTY_TO CC_RESTORE_KITTY_PID CC_RESTORE_TREE \
         CC_KITTY_APPLY_LAYOUT_KITTEN CC_KITTY_EQUALIZE_KITTEN CC_ADMIT_RESTORE_R CC_RESTORE_DEADLINE
   ROWS="$BATS_TEST_TMPDIR/rows.tsv"
@@ -118,14 +120,47 @@ import json, re, sys
 TOL = 0.005
 
 def pairs(x, leaf):
-    if x is None or isinstance(x, bool):
-        return None
-    if isinstance(x, int):
-        return leaf(x)
-    a, b = pairs(x.get("one"), leaf), pairs(x.get("two"), leaf)
-    if a is None or b is None:
-        return a if b is None else b
-    return {"h": x.get("horizontal", True) is not False, "b": float(x.get("bias", 0.5)), "one": a, "two": b}
+    """The tree that should come back: dropped leaves removed, and each kept pair re-biased so the
+    kept leaves keep their RECORDED proportions. Computed from geometry: every recorded leaf is laid
+    out in the unit square as kitty does (bias = share of `one`), and a kept pair's bias is the
+    kept width (or height) of `one` over that of both, measured as the union of leaf intervals."""
+    def lay(x, x0, y0, x1, y1, out):
+        if x is None or isinstance(x, bool):
+            return None
+        if isinstance(x, int):
+            l = leaf(x)
+            if l is not None:
+                out.append((x0, y0, x1, y1))
+            return {"leaf": l} if l is not None else None
+        h = x.get("horizontal", True) is not False
+        b = float(x.get("bias", 0.5))
+        oa, ob = [], []
+        if h:
+            m = x0 + (x1 - x0) * b
+            a, c = lay(x.get("one"), x0, y0, m, y1, oa), lay(x.get("two"), m, y0, x1, y1, ob)
+        else:
+            m = y0 + (y1 - y0) * b
+            a, c = lay(x.get("one"), x0, y0, x1, m, oa), lay(x.get("two"), x0, m, x1, y1, ob)
+        out.extend(oa + ob)
+        if a is None or c is None:
+            return a if c is None else c
+        def cover(rs):
+            iv = sorted((r[0], r[2]) if h else (r[1], r[3]) for r in rs)
+            tot, cs, ce = 0.0, None, None
+            for s, e in iv:
+                if cs is None or s > ce:
+                    tot += (ce - cs) if cs is not None else 0.0
+                    cs, ce = s, e
+                else:
+                    ce = max(ce, e)
+            return tot + ((ce - cs) if cs is not None else 0.0)
+        ca, cc = cover(oa), cover(ob)
+        return {"h": h, "b": ca / (ca + cc) if ca + cc > 0 else 0.5, "one": a, "two": c}
+    def strip(n):
+        if n is None:
+            return None
+        return n["leaf"] if "leaf" in n else dict(n, one=strip(n["one"]), two=strip(n["two"]))
+    return strip(lay(x, 0.0, 0.0, 1.0, 1.0, []))
 
 def leaves(n):
     return leaves(n["one"]) + leaves(n["two"]) if isinstance(n, dict) else [n]
@@ -361,10 +396,10 @@ ls_shows() { # <file> <sid in group 1> <group 2> <group 3> — kitty's answer, s
 }
 rb_restore() { run --separate-stderr /bin/bash "$LAYOUT" --desktops --restore --to unix:/tmp/cc-fake-sock --tree "$SM/hb.kitty-ls.json" --file "$ROWS"; }
 layout_tail() { printf '%s\n' "$output" | sed -n 's/^cc-resume-layout: layout tree_windows=1 .* \(tree_ok=.*\)$/\1/p'; }
-# The read-back's own `ls` calls: those after the last launch and before the first fullscreen toggle.
-# Other bare `ls` calls now exist outside that span (R21, 2026-10-21): the snapshot before any
-# launch, the fullscreen pass's window lookup, and the stray-window pass after it.
-readback_ls() { awk '/ launch / { n = 0; next } /toggle_fullscreen/ { exit } / ls$/ { n++ } END { print n + 0 }' "$KLOG"; }
+# The read-back's own `ls` calls: those after the last launch, less the one the stray-window pass
+# makes after them (R21). Since 2026-10-25 a window's fullscreen toggle, and its lookups, come right
+# after its head opens, so before the last launch of any window with more than one pane.
+readback_ls() { awk '/ launch / { n = 0; next } / ls$/ { n++ } END { print n - 1 }' "$KLOG"; }
 
 @test "read-back: a tab that reads back as planned is verdict=ok and no kitten is sent" {
   small_tree; ls_shows "$KLOG.lstpl" sid-a sid-b sid-c

@@ -3,7 +3,7 @@
 # inside each, instead of piling every session into tabs of the operator's own window.
 #
 #   Usage: cc-resume-layout.sh [--per-window N] [--stagger SECS] [--use-all-screens] [--dry-run]
-#          cc-resume-layout.sh --desktops [--to unix:/path] [--per-window N<=4, <=6 with --restore] [--stagger SECS] [--restore [--tree FILE]] [--dry-run]
+#          cc-resume-layout.sh --desktops [--to unix:/path] [--per-window N<=4, <=6 with --restore] [--stagger SECS] [--restore [--tree FILE] [--keep-shells]] [--dry-run]
 #          ... reading a TSV on stdin (or --file PATH):
 #              account <TAB> session-id <TAB> worktree <TAB> branch [<TAB> label]
 #          i.e. lr-select.py's own output, with an optional 5th label column. Under --restore the
@@ -202,6 +202,7 @@ USE_ALL_SCREENS=0
 DRY_RUN=0
 RESTORE=0             # --restore: the unattended restore path (W3)
 TREE=""               # --tree FILE: the recorded kitty tree to replay (--restore only)
+KEEP_SHELLS=0         # --keep-shells: a recorded pane that held no session comes back as a shell
 FILE=""
 
 die() { printf 'cc-resume-layout: %s\n' "$*" >&2; exit 2; }
@@ -218,6 +219,7 @@ while [ $# -gt 0 ]; do
     --dry-run)         DRY_RUN=1; shift ;;
     --restore)         RESTORE=1; shift ;;
     --tree)            TREE="${2:?--tree needs a kitty ls JSON file}"; shift 2 ;;
+    --keep-shells)     KEEP_SHELLS=1; shift ;;
     -h|--help)         sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0 ;;
     *)                 die "unknown argument: $1" ;;
   esac
@@ -352,7 +354,7 @@ EOF
     PAD=$'\037'                                   # boot-resume.sh's TSV_PAD: an empty cell
     R_WAIT="${CC_RESTORE_WAIT:-30}"; R_DEADLINE="${CC_RESTORE_DEADLINE:-1800}"
     R_BACKOFF="${CC_RESTORE_K_BACKOFF:-30}"; FD_MAX="${CC_RESTORE_FD_MAX:-180}"
-    FS_GAP="${CC_RESTORE_FS_GAP:-3}"
+    FS_GAP="${CC_RESTORE_FS_GAP:-1}"
     MAYBE_S="${CC_RESTORE_MAYBE_S:-240}"; MAYBE_POLL="${CC_RESTORE_MAYBE_POLL:-10}"
     RESTORE_R="${CC_ADMIT_RESTORE_R:-${CC_ADMIT_ACTIVE_CEILING:-8}}"
     LSOF_BIN="${CC_LSOF_BIN:-/usr/sbin/lsof}"
@@ -549,10 +551,15 @@ for _, f in sorted(cands, reverse=True):
     PLAN="$(i=0; for r in "${ROWS[@]}"; do
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$(cell "$r" 3)" "$(cell "$r" 8)" "$(cell "$r" 9)" "$(cell "$r" 10)" "$(cell "$r" 2)"
         i=$((i + 1)); done \
-      | python3 -c '
+      | CC_RESTORE_KEEP_SHELLS="$KEEP_SHELLS" python3 -c '
 import json, os, subprocess, sys
 per = int(sys.argv[1]); trees = [t for t in sys.argv[2:] if t]
 S = "\x1f"
+import re
+KEEP_SHELLS = os.environ.get("CC_RESTORE_KEEP_SHELLS") == "1"
+# a pane whose process is Claude Code, or the launcher that resumes it
+CLAUDE_RE = re.compile(r"(^|[/ ])(claude|claude\.exe|reso-resume-one|cc-close-attrib|cc-pane-runner)( |$)")
+TEAMMATE_RE = re.compile(r"--agent-id|--parent-session-id")
 def key(wt):
     try:
         out = subprocess.run(["git", "-C", wt, "rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -614,7 +621,96 @@ def load(path):
         pass
     kp = os.path.basename(d)
     return data, pane_sid, disp, (kp if kp.isdigit() else "tree")
-def tab_node(t, pane_sid):
+# ── PANE → SESSION (2026-10-25). The roster names a pane for each session, but a reconstructed
+#    roster can name the wrong pane, or none (after the 2026-10-25 reboot voiceink came back in a new
+#    window although pane 12 still ran `reso-resume-one … 509e3aad…`). In order of proof: a pane
+#    whose process argv carries the session id (a resume launcher, not a teammate: a teammate argv
+#    names its PARENT session); the roster pane, when its recorded cwd agrees with the row; the one
+#    unclaimed pane recorded in the cwd of the row, a Claude pane first; the roster pane regardless.
+#    A pane cwd is that of its Claude PROCESS, never kitty `cwd`, which is the shell cwd: pane 297
+#    read lead-idle-fix there while its claude (pid 3378, the tombstone of 3f1c1301) ran in
+#    lkw-scope-floor. A teammate pane never takes a session. ──
+def norm(p):
+    p = (p or "").rstrip("/")
+    return os.path.realpath(p) if p else ""
+def pane_cwd(w):   # the recorded cwd of the pane: that of its claude process, else of its first process, else of the kitty window
+    fg = [p for p in w.get("foreground_processes") or [] if isinstance(p, dict)]
+    for p in fg:
+        if CLAUDE_RE.search(" ".join(str(a) for a in p.get("cmdline") or [])) and p.get("cwd"):
+            return p["cwd"]
+    return (fg[0].get("cwd") if fg and fg[0].get("cwd") else None) or w.get("cwd") or ""
+def argvs(w):
+    return [" ".join(str(a) for a in p.get("cmdline") or []) for p in w.get("foreground_processes") or [] if isinstance(p, dict)]
+RESUMERS = ("reso-resume-one", "lr-fire-resume", "cc-restore-one")
+def resumed_sids(w):   # session ids a pane process RESUMES: an exact argv token, never a substring
+    out = set()
+    for p in w.get("foreground_processes") or []:
+        a = [str(x) for x in (p.get("cmdline") or [])] if isinstance(p, dict) else []
+        if any(TEAMMATE_RE.search(x) for x in a):
+            continue
+        launcher = any(os.path.basename(x) in RESUMERS for x in a[:2])
+        for i, x in enumerate(a):
+            if x in by_sid and (launcher or (i and a[i - 1] in ("--resume", "-r", "--session-id"))):
+                out.add(x)
+            for f in ("--resume=", "--session-id="):
+                if x.startswith(f) and x[len(f):] in by_sid:
+                    out.add(x[len(f):])
+    return out
+def is_teammate(w):
+    return any(TEAMMATE_RE.search(c) for c in argvs(w))
+def is_claude(w):
+    return any(CLAUDE_RE.search(" ".join(str(a) for a in p.get("cmdline") or []))
+               for p in w.get("foreground_processes") or [] if isinstance(p, dict))
+def cwd_ok(pc, wt):
+    a, b = norm(pc), norm(wt)
+    return not a or not b or a == b or a.startswith(b + "/")
+def assign(data, pane_sid):
+    """{pane id (str): sid} for every row this tree holds, cwd-validated."""
+    panes = {}
+    for o in data:
+        for t in (o.get("tabs") or []) if isinstance(o, dict) else []:
+            for w in t.get("windows") or []:
+                if isinstance(w, dict) and w.get("id") is not None:
+                    panes[str(w["id"])] = w
+    out, taken = {}, set()
+    sid_pane = {}
+    for p, s in pane_sid.items():
+        if p in panes:
+            sid_pane.setdefault(s, p)
+    if not pane_sid:                        # no roster beside the tree: find the sid in the pane itself
+        for p, w in panes.items():
+            blob = json.dumps([w.get(k) for k in ("cmdline", "last_reported_cmdline", "foreground_processes", "user_vars")])
+            for s in by_sid:
+                if s not in sid_pane and s in blob:
+                    sid_pane[s] = p
+    for p, w in panes.items():              # proof: the session id in a resume argv
+        if is_teammate(w):
+            continue
+        hit = resumed_sids(w)
+        if len(hit) == 1:
+            out[p] = hit.pop(); taken.add(p)
+    rows_here = [s for s in by_sid if s in sid_pane and s not in out.values()]
+    for s in rows_here:                     # then every roster pane whose cwd agrees with its row
+        p = sid_pane[s]
+        if p not in taken and cwd_ok(pane_cwd(panes[p]), by_sid[s][1]):
+            out[p] = s; taken.add(p)
+    pending = [s for s in rows_here if s not in out.values()] + \
+              [s for s in by_sid if s not in sid_pane and s not in out.values() and by_sid[s][1]]
+    for s in pending:
+        wt = by_sid[s][1]
+        # never a pane the roster gives to ANOTHER session: that would put s in the place of another
+        cands = [p for p, w in panes.items() if p not in taken and not is_teammate(w) and norm(pane_cwd(w))
+                 and cwd_ok(pane_cwd(w), wt) and pane_sid.get(p) in (None, s)]
+        cands.sort(key=lambda p: (0 if is_claude(panes[p]) else 1, int(p) if p.isdigit() else 0))
+        if cands:
+            out[cands[0]] = s; taken.add(cands[0])
+            if s in sid_pane and sid_pane[s] != cands[0]:
+                print("cc-resume-layout: %s: roster pane %s is recorded in %s, not %s — using pane %s, recorded there"
+                      % (s, sid_pane[s], pane_cwd(panes[sid_pane[s]]) or "?", wt, cands[0]), file=sys.stderr)
+        elif s in sid_pane and sid_pane[s] not in taken:
+            out[sid_pane[s]] = s; taken.add(sid_pane[s])   # no pane in its cwd: the roster stays the best record
+    return out, panes
+def tab_node(t, pane_sid, given, panes):
     wmap = {w.get("id"): w for w in t.get("windows") or [] if isinstance(w, dict)}
     st = t.get("layout_state") or {}
     gl = ((st.get("all_windows") or {}).get("window_groups")
@@ -625,36 +721,48 @@ def tab_node(t, pane_sid):
         wids = groups.get(gid) or []
         if not wids:
             return None
-        for w in wids:                      # a Claude pane that has a row
-            sid = pane_sid.get(str(w))
+        for w in wids:                      # a pane holding a row being restored
+            sid = given.get(str(w))
             if sid in by_sid and sid not in used:
                 used.add(sid); r = by_sid[sid]
                 return {"leaf": ("row", r[0], r[4])}
-        if not pane_sid:                    # no roster beside the tree: find the sid in the pane itself
-            blob = json.dumps([[wmap[w].get(k) for k in ("cmdline", "last_reported_cmdline", "foreground_processes", "user_vars")] for w in wids])
-            for sid, r in by_sid.items():
-                if sid not in used and sid in blob:
-                    used.add(sid)
-                    return {"leaf": ("row", r[0], r[4])}
-        if any(str(w) in pane_sid for w in wids):
+        if any(str(w) in pane_sid or is_claude(wmap[w]) for w in wids):
             return None                     # a Claude pane with no row: its session is not being restored
-        return {"leaf": ("shell", wmap[wids[-1]].get("cwd") or "")}
+        # A pane that held no session comes back only under --keep-shells: an empty shell where the
+        # operator expects a session is the defect the 2026-10-25 restore left in 11 panes.
+        return {"leaf": ("shell", wmap[wids[-1]].get("cwd") or "")} if KEEP_SHELLS else None
+    # build → (node, width span, height span): the spans are the share of the recorded
+    # extent that panes still being restored cover. The bias of a kept pair is re-derived from them, so a
+    # space of a dropped pane goes to its neighbours in their RECORDED proportions. Keeping the raw bias
+    # is what left two of an even four-pane row at 1/4 and 3/4 after the 2026-10-25 reboot: kitty
+    # writes an even row a|b|c|d as biases 1/4, 1/3, 1/2, and with c and d gone the 1/4 survived.
     def build(x):
         if x is None or isinstance(x, bool):
-            return None
+            return None, 0.0, 0.0
         if isinstance(x, int):
-            return leaf(x)
-        a, b = build(x.get("one")), build(x.get("two"))
-        if a is None or b is None:
-            return a or b                   # the pane that stays takes the space of the pair, as kitty does
+            n = leaf(x)
+            return (n, 1.0, 1.0) if n else (None, 0.0, 0.0)
+        a, ah, av = build(x.get("one"))
+        b, bh, bv = build(x.get("two"))
+        h = x.get("horizontal", True) is not False
         try:
             bias = min(0.99, max(0.01, float(x.get("bias", 0.5))))
         except (TypeError, ValueError):
             bias = 0.5
-        return {"h": x.get("horizontal", True) is not False, "bias": bias, "one": a, "two": b}
+        ua, ub = (ah, bh) if h else (av, bv)
+        span = bias * ua + (1 - bias) * ub
+        cross = max(av, bv) if h else max(ah, bh)
+        sh, sv = (span, cross) if h else (cross, span)
+        if a is None or b is None:
+            return (a or b), sh, sv         # the pane that stays takes the space of the pair, as kitty does
+        nb = bias * ua / span if span > 0 else 0.5
+        nb = min(0.99, max(0.01, nb))
+        if abs(nb - 0.5) < 1e-6:
+            nb = 0.5
+        return {"h": h, "bias": nb, "one": a, "two": b}, sh, sv
     name = t.get("layout") or "splits"
     if st.get("class") == "Splits" and isinstance(st.get("pairs"), dict):
-        n = build(st["pairs"])
+        n = build(st["pairs"])[0]
         return ("splits", n) if n else None
     ls = [l for l in (leaf(g.get("id")) for g in gl) if l]
     if not ls:
@@ -669,10 +777,11 @@ for path in trees:
         print("cc-resume-layout: tree unreadable, ignored: %s" % path, file=sys.stderr)
         continue
     data, pane_sid, disp, kp = got
+    given, panes = assign(data, pane_sid)
     for o in data:
         if not isinstance(o, dict):
             continue
-        tabs = [tn for tn in (tab_node(t, pane_sid) for t in o.get("tabs") or [] if isinstance(t, dict)) if tn]
+        tabs = [tn for tn in (tab_node(t, pane_sid, given, panes) for t in o.get("tabs") or [] if isinstance(t, dict)) if tn]
         if not tabs:
             continue
         pwid = str(o.get("platform_window_id") or "")
@@ -711,8 +820,18 @@ for g, rs in chunks:
         bins.append([list(rs), [g]])
 fb += [(sorted(rs, key=lambda r: -r[2]), gs) for rs, gs in bins]
 fb.sort(key=lambda w: -sum(r[2] for r in w[0]))
+# A window no tree places goes to the display most recorded windows were on, fullscreen: left to
+# kitty it opens wherever the key window is (2026-10-25: voiceink landed on the display of the lead).
+dd = {}
+for w in wins:
+    if w["disp"]:
+        dd.setdefault(w["disp"][0], [0, w["disp"]])[0] += 1
+home = None
+if dd:
+    d0 = max(dd.values(), key=lambda v: v[0])[1]
+    home = d0[:5] + ["1"] + d0[1:5]
 for rs, gs in fb:
-    wins.append({"src": "plan", "pwid": "", "disp": None, "grp": "+".join(gs),
+    wins.append({"src": "plan", "pwid": "", "disp": home, "grp": "+".join(gs),
                  "tabs": [("horizontal", chain([("row", r[0], r[2]) for r in rs]))],
                  "prompt": sum(r[2] for r in rs)})
 for n, w in enumerate(wins, 1):
@@ -760,7 +879,9 @@ for w in wins:
                        str(sum(1 for l in ls if l[0] == "row")), str(sum(1 for l in ls if l[0] == "shell")),
                        ";".join("%s:%s" % (lay, sig(n)) for lay, n in w["tabs"])] + (w["disp"] or [""] * 10)))
 out.append(S.join(["T", str(ntree)]))
-for w in sorted(wins, key=lambda w: -w["prompt"]):     # most prompt rows first (R17); stable otherwise
+# Recorded windows launch in their recorded order, which is the order their Desktops come back in
+# (each goes fullscreen as its head opens); then the planned ones, most prompt rows first (R17).
+for w in wins[:ntree] + sorted(wins[ntree:], key=lambda w: -w["prompt"]):
     out += [S.join(["P"] + o) for o in w["ops"]]
 print("\n".join(out))
 ' "$PER_WINDOW" ${TREES[@]+"${TREES[@]}"})" || die "the window planner failed"
@@ -771,9 +892,121 @@ print("\n".join(out))
       PROBE_FN=cc_capacity_admit
       note "cc-resume-layout: capacity-admit.sh has no cc_capacity_probe — each wait now spends the refusal budget"
     fi
+    # FULLSCREEN, PER WINDOW, AS ITS HEAD OPENS (2026-10-25). It used to be one pass after the whole
+    # batch, so every window sat windowed on the first Desktop for the batch's whole length (10
+    # sessions at --stagger 20 plus a 30 s capacity wait: about four minutes after the 2026-10-25
+    # reboot) before moving to its own Space. Now each window is toggled right after its head opens,
+    # before its other panes (their widths are fractions, so the resize keeps them), and the next
+    # window is opened only after this one is read back. The Spaces therefore come back in launch
+    # order, which for recorded windows is the recorded order.
+    # A window opened while its display shows a fullscreen Space opens on that display's Desktop
+    # BEHIND it, and kitty's first toggle then only brings that Desktop forward (measured
+    # 2026-10-25, three of three; focus-window before the toggle did not help, and the incident's
+    # retries took the second toggle). So the second toggle is expected for every window after the
+    # first. A toggle that lands takes about 1.5 s, so the first read-back waits up to FS_FIRST
+    # (4 s) before the second toggle, and a second toggle is sent only after a positive "windowed"
+    # reading, because a toggle that landed late would be undone by another.
+    # rc 0 from the toggle only says kitty took the request: on 2026-10-05 all five accepted toggles
+    # left their windows on the main Desktop. So the verdict is the READ-BACK: the window's
+    # CGWindow frame filling its display (hb_display_probe's fullscreen column).
+    # kitty 0.48.2 drops `action --match` (the client sends match_window, the server reads match)
+    # and toggles whichever window is ACTIVE, so the target rides in KITTY_WINDOW_ID with --self.
+    # R21 (reboot-resume 2026-10-21): an unread state was counted as fullscreen_ok, so all 8 windows
+    # of that restore were reported fullscreen without one being checked. Now a probe that answers
+    # nothing is asked ONCE more, then cross-checked against WindowServer's own record of fullscreen
+    # Spaces (com.apple.spaces: each fullscreen Space carries fs_wid, the CGWindow number, which is
+    # kitty's platform_window_id); a window still unread is fullscreen_unknown, never ok.
+    # CC_DEFAULTS_BIN is the seam; under bats with it unset nothing real is read.
+    spaces_fs_wids() { # → one CGWindow number per line, for every fullscreen Space
+      local db="${CC_DEFAULTS_BIN:-}"
+      if [ -z "$db" ]; then
+        [ -n "${BATS_TEST_FILENAME:-}${BATS_TEST_TMPDIR:-}${BATS_VERSION:-}" ] && return 0
+        db=/usr/bin/defaults
+      fi
+      [ -x "$db" ] || return 0
+      kb "$db" export com.apple.spaces - 2>/dev/null | python3 -c 'import plistlib, sys
+try:
+    d = plistlib.loads(sys.stdin.buffer.read())
+except Exception:
+    sys.exit(0)
+for m in (d.get("SpacesDisplayConfiguration") or {}).get("Management Data", {}).get("Monitors") or []:
+    for s in m.get("Spaces") or []:
+        if s.get("type") == 4 and isinstance(s.get("fs_wid"), int):
+            print(s["fs_wid"])' 2>/dev/null
+    }
+    fs_probe() { # <pwid> → "<fullscreen column> <display uuid>" for that window, or nothing
+      command -v hb_display_probe >/dev/null 2>&1 || return 0
+      CC_HB_SWIFT_BIN="$SWIFT_BIN" hb_display_probe "$1" 2>/dev/null | awk -F'\t' -v p="$1" '$1 == p { print $7, $2; exit }'
+    }
+    # <head pane> → "1 <uuid>" (frame fills its display) | "S" (no frame read, but a fullscreen
+    # Space holds it) | "0 <uuid>" (windowed) | "" (unknown)
+    fs_state() {
+      local pwid s
+      pwid="$(kr ls 2>/dev/null | python3 -c 'import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for o in data:
+    if any(w.get("id") == int(sys.argv[1]) for t in o.get("tabs") or [] for w in t.get("windows") or []):
+        print(o.get("platform_window_id") or "")
+        break' "$1" 2>/dev/null)"
+      [ -n "$pwid" ] || return 0
+      s="$(fs_probe "$pwid")"
+      [ -n "$s" ] || { sleep "${CC_RESTORE_FS_RETRY_S:-1}"; s="$(fs_probe "$pwid")"; }
+      # A herestring, not `| grep -q`: under pipefail the early exit would SIGPIPE the producer.
+      [ -z "$s" ] && grep -qx -- "$pwid" <<<"$(spaces_fs_wids)" && s=S
+      printf '%s' "$s"
+    }
+    fs_settled() { # <head pane> <bound s> → fs_state, polled every FS_POLL s up to the bound while it reads windowed
+      local s i=0 n
+      n="$(awk -v b="$2" -v p="$FS_POLL" 'BEGIN { print (p > 0 ? int(b / p) : 0) }')"
+      while :; do
+        s="$(fs_state "$1")"
+        [ "${s%% *}" = 0 ] && [ "$i" -lt "$n" ] || { printf '%s' "$s"; return 0; }
+        sleep "$FS_POLL"; i=$((i + 1))
+      done
+    }
+    FS_FIRST="${CC_RESTORE_FS_FIRST:-4}"; FS_VERIFY="${CC_RESTORE_FS_VERIFY:-10}"; FS_POLL="${CC_RESTORE_FS_POLL:-0.5}"
+    fs_ok=0; fs_bad=0; fs_unk=0
+    fs_window() { # <window#> <head pane> — toggle and read back; a window recorded as not fullscreen stays windowed
+      local n="$1" hd="$2" st uuid want
+      if [ "${WFS[$n]:-1}" = 0 ]; then
+        note "$([ "$DRY_RUN" = 1 ] && printf 'DRY' || printf ' ') [CC-DESK-$n] left windowed, as recorded"; return 0
+      fi
+      if [ "$DRY_RUN" = 1 ]; then note "DRY [CC-DESK-$n] KITTY_WINDOW_ID=$hd action --self toggle_fullscreen"; return 0; fi
+      # The existence check runs first: a toggle must never be sent for a window that is gone.
+      if ! kr ls --match "id:$hd" >/dev/null 2>&1; then
+        fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] window $hd not found — not toggled"; return 0
+      fi
+      if ! KITTY_WINDOW_ID="$hd" kr action --self toggle_fullscreen >/dev/null 2>&1; then
+        fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] toggle_fullscreen refused for window $hd — not re-toggled"; sleep "$FS_GAP"; return 0
+      fi
+      sleep "$FS_GAP"; st="$(fs_settled "$hd" "$FS_FIRST")"
+      if [ "${st%% *}" = 0 ]; then
+        note "  [CC-DESK-$n] window $hd still windowed after its first toggle (it opened behind a fullscreen Space) — toggling once more"
+        KITTY_WINDOW_ID="$hd" kr action --self toggle_fullscreen >/dev/null 2>&1
+        sleep "$FS_GAP"; st="$(fs_settled "$hd" "$FS_VERIFY")"
+      fi
+      uuid=""; case "$st" in *" "*) uuid="${st#* }" ;; esac
+      case "${st%% *}" in
+        1) fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen (read back, window $hd${uuid:+, display $uuid})" ;;
+        S) fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen (its frame unread; a fullscreen Space holds window $hd, per com.apple.spaces)" ;;
+        0) fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] NOT fullscreen after two toggles (read back, window $hd)" ;;
+        *) fs_unk=$((fs_unk + 1)); note "  [CC-DESK-$n] fullscreen toggled, state UNKNOWN (window $hd: no frame read twice, and no fullscreen Space names it)" ;;
+      esac
+      # A window opened by position is counted placed only once a read-back finds it on its display.
+      want="${WDISP[$n]%% *}"
+      if [ -n "${WPOS[$n]:-}" ] && [ -n "$uuid" ] && [ -n "$want" ]; then
+        if [ "$uuid" = "$want" ]; then placed=$((placed + 1))
+        else place_bad=$((place_bad + 1)); note "  [CC-DESK-$n] ⚠ opened on display $uuid, recorded $want"; fi
+      fi
+    }
+
     t0=$SECONDS; stopped=none; fd_blind=0
     launched=0; failed=0; shed=0; nwin=0; nshell=0; placed=0; place_bad=0
-    WIN_HEAD=(); WIN_NUM=(); MAYBE_SID=(); MAYBE_BASE=(); MAYBE_WT=(); WIDS=(); WDISP=(); WFS=()
+    WIN_HEAD=(); WIN_NUM=(); MAYBE_SID=(); MAYBE_BASE=(); MAYBE_WT=(); WIDS=(); WDISP=(); WFS=(); WPOS=()
+    ROW_EXPECT=""   # "<wid>=<sid> …" for the census, "?=<sid>" for a planned row with no pane
     NTREE=0
     while IFS=$'\037' read -r _t wn src pwid ntabs npanes nclaude nsh lsig duuid ddx ddy ddw ddh dfs dwx dwy dww dwh; do
       case "$_t" in
@@ -799,9 +1032,32 @@ EOF
       fi
       [ -n "$CUR_DISPLAYS" ] || note "cc-resume-layout: the attached displays are unreadable — windows open where kitty puts them"
     fi
-    # place_window <window#> <head pane> — put a new OS window on its recorded display, before any
-    # fullscreen. A window that was fullscreen only has to land on the display; one that was not gets
-    # its old frame back. A display is matched by uuid, else by identical bounds, else left alone.
+    # win_pos <window#> → "X x Y" (no spaces) where the window's head opens, from its recorded display
+    # as attached now, or nothing. kitty's own `launch --os-window-position` puts the window there as
+    # it is created (measured 2026-10-25 on kitty 0.48.2, both of two windows on the named display),
+    # so a fullscreen window needs no Accessibility move: the move's title-marker match missed one
+    # window after the 2026-10-25 reboot ("nomatch", it opened behind a fullscreen Space), and that
+    # window went fullscreen on the lead's display instead of its own.
+    win_pos() {
+      local rec="${WDISP[$1]:-}" uuid dx dy dw dh fs wx wy ww wh cur cx cy cw ch
+      [ -n "$rec" ] && [ -n "$CUR_DISPLAYS" ] || return 0
+      read -r uuid dx dy dw dh fs wx wy ww wh <<EOF
+$rec
+EOF
+      cur="$(printf '%s\n' "$CUR_DISPLAYS" | awk -F'\t' -v u="$uuid" '$1 == u { print $2, $3, $4, $5; exit }')"
+      [ -n "$cur" ] || cur="$(printf '%s\n' "$CUR_DISPLAYS" | awk -F'\t' -v a="$dx" -v b="$dy" -v c="$dw" -v d="$dh" \
+        '$2 == a && $3 == b && $4 == c && $5 == d { print $2, $3, $4, $5; exit }')"
+      [ -n "$cur" ] || return 0
+      read -r cx cy cw ch <<EOF
+$cur
+EOF
+      if [ "$fs" = 1 ]; then printf '%sx%s' "$((cx + 20))" "$((cy + 45))"
+      else printf '%sx%s' "$((cx + wx - dx))" "$((cy + wy - dy))"; fi
+    }
+    # place_window <window#> <head pane> — a window recorded as NOT fullscreen gets its old frame back
+    # through System Events (kitty has no launch size). A fullscreen one opened by position is
+    # counted by fs_window's read-back instead. A display is matched by uuid, else by identical
+    # bounds, else left alone.
     place_window() {
       local n="$1" wid="$2" rec="${WDISP[$1]:-}" uuid dx dy dw dh fs wx wy ww wh cur cx cy cw ch x y w h marker r
       [ -n "$rec" ] || return 0
@@ -813,6 +1069,9 @@ EOF
         return 0
       fi
       [ -n "$CUR_DISPLAYS" ] || return 0
+      if [ "$fs" = 1 ] && [ -n "${WPOS[$n]:-}" ]; then
+        note "  [CC-DESK-$n] opened on display $uuid at ${WPOS[$n]} (kitty --os-window-position)"; return 0
+      fi
       cur="$(printf '%s\n' "$CUR_DISPLAYS" | awk -F'\t' -v u="$uuid" '$1 == u { print $2, $3, $4, $5; exit }')"
       [ -n "$cur" ] || cur="$(printf '%s\n' "$CUR_DISPLAYS" | awk -F'\t' -v a="$dx" -v b="$dy" -v c="$dw" -v d="$dh" \
         '$2 == a && $3 == b && $4 == c && $5 == d { print $2, $3, $4, $5; exit }')"
@@ -1003,7 +1262,7 @@ print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
         else
           note "DRY [CC-DESK-$win $grp] $how shell $wt pane=#$key$at${bias:+ bias=$bias}"
         fi
-        if [ -z "$head" ]; then head="<head of CC-DESK-$win>"; place_window "$win" "$head"; fi
+        if [ -z "$head" ]; then head="<head of CC-DESK-$win>"; place_window "$win" "$head"; fs_window "$win" "$head"; fi
         [ -n "$thead" ] || { thead="<head of CC-DESK-$win>"; [ "$tab" = 0 ] || thead="<head of CC-DESK-$win tab $tab>"; }
         continue
       fi
@@ -1049,7 +1308,8 @@ print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
       [ "$how" = tab ] && [ -z "$a" ] && how="head"
       LA=(launch --keep-focus)
       case "$how" in
-        head) LA+=(--type=os-window) ;;
+        head) LA+=(--type=os-window)
+              WPOS[win]="$(win_pos "$win")"; [ -n "${WPOS[$win]}" ] && LA+=("--os-window-position=${WPOS[$win]}") ;;
         tab) LA+=(--type=tab --match "window_id:$a") ;;
         *) LA+=("--location=$how" --match "window_id:$a" --next-to "id:$a")
            [ -n "$bias" ] && LA+=(--bias "$bias") ;;
@@ -1090,9 +1350,9 @@ print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
       esac
       WIDS[key]="$wid"; tlast="$wid"
       [ -n "$thead" ] || thead="$wid"
-      if [ -z "$head" ]; then head="$wid"; place_window "$win" "$wid"; fi
+      if [ -z "$head" ]; then head="$wid"; place_window "$win" "$wid"; fs_window "$win" "$wid"; fi
       if [ "$kind" = row ]; then
-        launched=$((launched + 1))
+        launched=$((launched + 1)); ROW_EXPECT="$ROW_EXPECT $wid=$sid"
         printf 'cc-resume-layout: map sid=%s wid=%s oswin=%s\n' "$sid" "$wid" "$win"
         note "  [CC-DESK-$win $grp] win $wid  $acct  $(basename "$wt")"
         sleep "$STAGGER"
@@ -1104,101 +1364,6 @@ $PLAN
 EOF
     close_restore_window
 
-    # FULLSCREEN by id, paced: back-to-back toggles are dropped, and a second toggle undoes the first.
-    # In window-number order, which for replayed windows is the recorded order; a window recorded as
-    # not fullscreen is left windowed.
-    # rc 0 from the toggle only says kitty took the request: on 2026-10-05 all five accepted toggles
-    # left their windows on the main Desktop (fullscreen_ok=5). So the verdict is the READ-BACK —
-    # the window's CGWindow frame filling its display (hb_display_probe's fullscreen column) — and a
-    # window read back as windowed gets ONE more toggle after focus-window. Never re-toggled without
-    # a positive "windowed" reading, since a second toggle would undo a first that landed late.
-    # No probe or no frame ⇒ unknown, counted as before (by rc) and said so.
-    # R21 (reboot-resume 2026-10-21): an unread state was counted as fullscreen_ok, so all 8 windows
-    # of that restore were reported fullscreen without one being checked. Now a probe that answers
-    # nothing is asked ONCE more, then cross-checked against WindowServer's own record of fullscreen
-    # Spaces (com.apple.spaces: each fullscreen Space carries fs_wid, the CGWindow number, which is
-    # kitty's platform_window_id); a window still unread is fullscreen_unknown, never ok.
-    # CC_DEFAULTS_BIN is the seam; under bats with it unset nothing real is read.
-    spaces_fs_wids() { # → one CGWindow number per line, for every fullscreen Space
-      local db="${CC_DEFAULTS_BIN:-}"
-      if [ -z "$db" ]; then
-        [ -n "${BATS_TEST_FILENAME:-}${BATS_TEST_TMPDIR:-}${BATS_VERSION:-}" ] && return 0
-        db=/usr/bin/defaults
-      fi
-      [ -x "$db" ] || return 0
-      kb "$db" export com.apple.spaces - 2>/dev/null | python3 -c 'import plistlib, sys
-try:
-    d = plistlib.loads(sys.stdin.buffer.read())
-except Exception:
-    sys.exit(0)
-for m in (d.get("SpacesDisplayConfiguration") or {}).get("Management Data", {}).get("Monitors") or []:
-    for s in m.get("Spaces") or []:
-        if s.get("type") == 4 and isinstance(s.get("fs_wid"), int):
-            print(s["fs_wid"])' 2>/dev/null
-    }
-    fs_probe() { # <pwid> → the probe's fullscreen column for that window, or nothing
-      command -v hb_display_probe >/dev/null 2>&1 || return 0
-      CC_HB_SWIFT_BIN="$SWIFT_BIN" hb_display_probe "$1" 2>/dev/null | awk -F'\t' -v p="$1" '$1 == p { print $7; exit }'
-    }
-    # <head pane> → 1 (frame fills its display) | S (no frame read, but a fullscreen Space holds it)
-    # | 0 (windowed) | "" (unknown)
-    fs_state() {
-      local pwid s
-      pwid="$(kr ls 2>/dev/null | python3 -c 'import json, sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-for o in data:
-    if any(w.get("id") == int(sys.argv[1]) for t in o.get("tabs") or [] for w in t.get("windows") or []):
-        print(o.get("platform_window_id") or "")
-        break' "$1" 2>/dev/null)"
-      [ -n "$pwid" ] || return 0
-      s="$(fs_probe "$pwid")"
-      [ -n "$s" ] || { sleep "${CC_RESTORE_FS_RETRY_S:-1}"; s="$(fs_probe "$pwid")"; }
-      # A herestring, not `| grep -q`: under pipefail the early exit would SIGPIPE the producer.
-      [ -z "$s" ] && grep -qx -- "$pwid" <<<"$(spaces_fs_wids)" && s=S
-      printf '%s' "$s"
-    }
-    fs_settled() { # <head pane> → fs_state, polled up to FS_VERIFY s while it reads windowed
-      local s t=0
-      while :; do
-        s="$(fs_state "$1")"
-        [ "$s" = 0 ] && [ "$t" -lt "$FS_VERIFY" ] || { printf '%s' "$s"; return 0; }
-        sleep 1; t=$((t + 1))
-      done
-    }
-    FS_VERIFY="${CC_RESTORE_FS_VERIFY:-10}"
-    fs_ok=0; fs_bad=0; fs_unk=0
-    for w in $(j=0; while [ "$j" -lt "${#WIN_HEAD[@]}" ]; do printf '%s %s\n' "${WIN_NUM[$j]}" "$j"; j=$((j + 1)); done | sort -n | cut -d' ' -f2); do
-      hd="${WIN_HEAD[$w]}"; n="${WIN_NUM[$w]}"
-      if [ "${WFS[$n]:-1}" = 0 ]; then
-        note "$([ "$DRY_RUN" = 1 ] && printf 'DRY' || printf ' ') [CC-DESK-$n] left windowed, as recorded"
-      elif [ "$DRY_RUN" = 1 ]; then
-        note "DRY [CC-DESK-$n] KITTY_WINDOW_ID=$hd action --self toggle_fullscreen"
-      # kitty 0.48.2 drops `action --match` (the client sends match_window, the server reads match)
-      # and toggles whichever window is ACTIVE, so the target rides in KITTY_WINDOW_ID with --self.
-      # The existence check runs first: a toggle must never be sent for a window that is gone.
-      elif ! kr ls --match "id:$hd" >/dev/null 2>&1; then
-        fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] window $hd not found — not toggled"
-      elif KITTY_WINDOW_ID="$hd" kr action --self toggle_fullscreen >/dev/null 2>&1; then
-        sleep "$FS_GAP"; st="$(fs_settled "$hd")"
-        if [ "$st" = 0 ]; then
-          note "  [CC-DESK-$n] window $hd still windowed after its toggle — focusing it and toggling once more"
-          kr focus-window --match "id:$hd" >/dev/null 2>&1
-          KITTY_WINDOW_ID="$hd" kr action --self toggle_fullscreen >/dev/null 2>&1
-          sleep "$FS_GAP"; st="$(fs_settled "$hd")"
-        fi
-        case "$st" in
-          1) fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen (read back, window $hd)" ;;
-          S) fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen (its frame unread; a fullscreen Space holds window $hd, per com.apple.spaces)" ;;
-          0) fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] NOT fullscreen after two toggles (read back, window $hd)" ;;
-          *) fs_unk=$((fs_unk + 1)); note "  [CC-DESK-$n] fullscreen toggled, state UNKNOWN (window $hd: no frame read twice, and no fullscreen Space names it)" ;;
-        esac
-      else
-        fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] toggle_fullscreen refused for window $hd — not re-toggled"; sleep "$FS_GAP"
-      fi
-    done
     # STRAY STARTUP WINDOWS (R21, 2026-10-21): kitty opens its own window at login, a bare login
     # shell, and the restore left it beside the 8 it built as a ninth window. After a pass that
     # placed windows, an OS window that existed BEFORE this run and still holds exactly one pane,
@@ -1285,13 +1450,44 @@ for wid, pid in post.items():
       done
     fi
 
+    # THE CENSUS (2026-10-25). Counting launches proved nothing about what the operator sees: that
+    # restore reported launched=10 over 11 panes that were bare shells, and no step looked at a pane.
+    # bin/cc-panes now reads every planned row back from kitty itself — the pane is there, its
+    # process is Claude Code resuming THAT session, and its screen is at a prompt or working —
+    # polled for up to CC_RESTORE_CENSUS_S while sessions start. A row not found that way (shed,
+    # failed, maybe, a pane at a shell) makes the verdict failed, whatever the counts said.
+    census=skipped; census_bad=0
+    if [ "$DRY_RUN" = 0 ]; then
+      PANES_BIN="${CC_PANES_BIN:-$HERE/cc-panes}"
+      exp="$ROW_EXPECT"
+      for r in "${ROWS[@]}"; do
+        s2="$(cell "$r" 2)"
+        case " $exp " in *"=$s2 "*) ;; *) exp="$exp ?=$s2" ;; esac
+      done
+      if [ -x "$PANES_BIN" ]; then
+        crc=0
+        # cc-panes bounds itself: every kitty call it makes, and the whole wait.
+        cout="$("$PANES_BIN" ${SOCK:+--to "$SOCK"} --expect "$exp" \
+                --wait "${CC_RESTORE_CENSUS_S:-240}" --poll "${CC_RESTORE_CENSUS_POLL:-10}" 2>&1)" || crc=$?
+        printf '%s\n' "$cout" | grep -v '^cc-panes: expect ok=' | sed 's/^/  /' >&2
+        census_bad="$(printf '%s\n' "$cout" | sed -n 's/^cc-panes: expect ok=[0-9]* bad=\([0-9]*\).*/\1/p' | tail -1)"
+        case "$crc" in
+          0) census=ok; census_bad=0 ;;
+          1) census=fail ;;
+          *) census=unknown; note "cc-resume-layout: the census could not read kitty (rc $crc)" ;;
+        esac
+      else
+        census=unavailable; note "cc-resume-layout: bin/cc-panes not found — no pane was read back"
+      fi
+    fi
     if [ "$DRY_RUN" = 1 ]; then verdict=ok
     elif [ "$launched" -eq 0 ] && [ "$maybe_left" -eq 0 ]; then verdict=failed
-    elif [ "$failed" -eq 0 ] && [ "$fs_bad" -eq 0 ] && [ "$maybe_left" -eq 0 ] && [ "$shed" -eq 0 ]; then verdict=ok
-    elif [ "$failed" -eq 0 ] && [ "$fs_bad" -eq 0 ] && [ "$maybe_left" -eq 0 ]; then verdict=shed
+    elif [ "$census" = fail ]; then verdict=failed
+    elif [ "$failed" -eq 0 ] && [ "$fs_bad" -eq 0 ] && [ "$maybe_left" -eq 0 ] && [ "$shed" -eq 0 ] && [ "$census" = ok ]; then verdict=ok
+    elif [ "$failed" -eq 0 ] && [ "$fs_bad" -eq 0 ] && [ "$maybe_left" -eq 0 ] && [ "$census" = ok ]; then verdict=shed
     else verdict=degraded; fi
-    printf 'cc-resume-layout: verdict=%s launched=%s shed=%s failed=%s windows=%s fullscreen_ok=%s fullscreen_failed=%s fullscreen_unknown=%s maybe=%s stopped=%s strays_closed=%s\n' \
-      "$verdict" "$launched" "$shed" "$failed" "$nwin" "$fs_ok" "$fs_bad" "$fs_unk" "$maybe_left" "$stopped" "$strays"
+    printf 'cc-resume-layout: verdict=%s launched=%s shed=%s failed=%s windows=%s fullscreen_ok=%s fullscreen_failed=%s fullscreen_unknown=%s maybe=%s stopped=%s strays_closed=%s census=%s census_bad=%s\n' \
+      "$verdict" "$launched" "$shed" "$failed" "$nwin" "$fs_ok" "$fs_bad" "$fs_unk" "$maybe_left" "$stopped" "$strays" "$census" "${census_bad:-0}"
     [ "$verdict" = failed ] && exit 4
     exit 0
   fi

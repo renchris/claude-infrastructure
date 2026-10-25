@@ -288,7 +288,19 @@ exit 0
 SH
   export CC_RESTORE_FS_RETRY_S=0
   export CC_RESTORE_WAIT=0 CC_RESTORE_K_BACKOFF=0 CC_RESTORE_FS_GAP=0 CC_RESTORE_MAYBE_S=0 CC_RESTORE_MAYBE_POLL=0
-  export CC_RESTORE_FS_VERIFY=0
+  export CC_RESTORE_FS_VERIFY=0 CC_RESTORE_FS_FIRST=0
+  # The census (bin/cc-panes) is its own suite (tests/cc-panes.bats); here it answers "all live",
+  # logging what it was asked, unless $BATS_TEST_TMPDIR/census.rc names another exit.
+  export CC_PANES_BIN="$BATS_TEST_TMPDIR/cc-panes"
+  cat > "$CC_PANES_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$0.log"
+rc="$(cat "$0.rc" 2>/dev/null || echo 0)"
+[ "$rc" = 0 ] || echo "cc-panes: expect wid=101 sid=x state=shell — pane 101 is SHELL, not Claude"
+echo "cc-panes: expect ok=0 bad=$([ "$rc" = 0 ] && echo 0 || echo 1)"
+exit "$rc"
+SH
+  chmod +x "$CC_PANES_BIN"
   unset CC_ADMIT_RESTORE_R CC_ADMIT_ACTIVE_CEILING CC_RESTORE_DEADLINE CC_RESTORE_KITTY_PID KITTY_PID
 }
 restore() { run --separate-stderr bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS"; }
@@ -581,13 +593,15 @@ SH
   printf '[{"id":1,"platform_window_id":9001,"tabs":[{"windows":[{"id":101}]}]}]\n' > "$KLOG.ls"
 }
 
-@test "restore: a toggle read back as windowed gets focus-window and ONE more toggle, then counts by the read-back" {
+@test "restore: a toggle read back as windowed gets ONE more toggle, no focus-window, then counts by the read-back" {
+  # A window opened behind a fullscreen Space needs a second toggle; focus-window first did not
+  # bring its Desktop forward (measured 2026-10-25), and it would take the operator's focus.
   restore_setup; fs_probe_setup 0 1
   row repo-a 1
   restore
   [ "$status" -eq 0 ]
   [ "$(grep -c 'toggle_fullscreen' "$KLOG")" -eq 2 ]
-  grep -q 'focus-window --match id:101' "$KLOG"
+  ! grep -q 'focus-window' "$KLOG" || false
   grep -qx 9001 "$BATS_TEST_TMPDIR/probe.args"
   [ "$(kv fullscreen_ok)" = 1 ]; [ "$(kv fullscreen_failed)" = 0 ]
 }
@@ -603,6 +617,44 @@ SH
   [ "$(grep -c 'toggle_fullscreen' "$KLOG")" -eq 1 ]
   ! grep -q 'focus-window' "$KLOG" || false
   [ "$(kv fullscreen_ok)" = 1 ]; [ "$(kv fullscreen_failed)" = 0 ]
+}
+
+@test "restore: each window goes fullscreen as its head opens, before the next window's head (2026-10-25)" {
+  # The toggles used to wait for the whole batch, so every window sat windowed on the first Desktop
+  # for minutes. Now: head 1, its toggle, its other panes, then head 2.
+  restore_setup
+  for i in 1 2 3 4 5 6 7; do row repo-a "$i"; done                  # 6 + 1: two windows
+  restore
+  [ "$status" -eq 0 ]
+  seq="$(grep -nE 'type=os-window|toggle_fullscreen|location=vsplit' "$KLOG" | sed -E 's/^([0-9]+):.*(type=os-window|toggle_fullscreen|location=vsplit).*/\2/' | tr '\n' ' ')"
+  [ "$seq" = "type=os-window toggle_fullscreen location=vsplit location=vsplit location=vsplit location=vsplit location=vsplit type=os-window toggle_fullscreen " ]
+  [ "$(grep toggle_fullscreen "$KLOG" | grep -o '^KW=[0-9]*' | tr '\n' ' ')" = "KW=101 KW=107 " ]
+}
+
+@test "restore: the census decides — a planned row not live in its pane is verdict=failed, exit 4, whatever the counts say" {
+  restore_setup
+  row repo-a 1; row repo-a 2
+  echo 1 > "$CC_PANES_BIN.rc"
+  restore
+  [ "$status" -eq 4 ]
+  [ "$(kv verdict)" = failed ]; [ "$(kv launched)" = 2 ]; [ "$(kv census)" = fail ]; [ "$(kv census_bad)" = 1 ]
+  printf '%s\n' "$stderr" | grep -q 'pane 101 is SHELL, not Claude'
+  # it was asked for every planned row, by the pane each launched into
+  grep -q -- "--to unix:/tmp/kitty-4242 --expect  101=sid-repo-a-1 102=sid-repo-a-2 --wait 240 --poll 10" "$CC_PANES_BIN.log"
+  # a row that never got a pane is asked for by session id alone
+  : > "$KLOG"; rm -f "$KLOG.n" "$CC_PANES_BIN.rc" "$CC_PANES_BIN.log"; touch "$KLOG.fail"
+  restore
+  grep -q -- '?=sid-repo-a-1 ?=sid-repo-a-2' "$CC_PANES_BIN.log"
+}
+
+@test "restore: with no census tool the verdict is degraded, never ok, and says why" {
+  restore_setup
+  row repo-a 1
+  export CC_PANES_BIN="$BATS_TEST_TMPDIR/no-such-cc-panes"
+  restore
+  [ "$status" -eq 0 ]
+  [ "$(kv census)" = unavailable ]; [ "$(kv verdict)" = degraded ]
+  printf '%s\n' "$stderr" | grep -q 'cc-panes not found'
 }
 
 # R21 (reboot-resume 2026-10-21): an unread fullscreen state was counted as fullscreen_ok, so all 8
@@ -751,13 +803,13 @@ PADC=$'\037'
 trestore() { run --separate-stderr /bin/bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS"; }
 launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
 
-@test "tree: pairs are rebuilt with orientation and bias; a non-Claude pane reopens as a shell in its cwd" {
+@test "tree: pairs are rebuilt with orientation and bias; under --keep-shells a non-Claude pane reopens as a shell in its cwd" {
   tree_setup
   # (11 over 12) on the left at 60 %, 13 on the right: 12 is a plain shell, 11 and 13 are sessions.
   tree "$(koswin 6 700 "$(ktab splits '{"bias":0.6,"one":{"horizontal":false,"bias":0.25,"one":1,"two":2},"two":3}' 1:11 2:12 3:13)")"
   roster 11 sid-repo-a-1 13 sid-repo-a-2
   trow 1; trow 2
-  trestore
+  run --separate-stderr /bin/bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS" --keep-shells
   [ "$status" -eq 0 ]
   [ "$(launches)" -eq 3 ]
   launch_n 1 | grep -q -- "--type=os-window .*'sid-repo-a-1'"
@@ -771,6 +823,44 @@ launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
   printf '%s\n' "$output" | grep -qx 'cc-resume-layout: layout tree_windows=1 shells=1 placed=0 placed_failed=0 tree_ok=0 tree_fixed=0 tree_mismatch=0 tree_unknown=0'
   printf '%s\n' "$stderr" | grep -q 'tree read-back skipped'           # the zeros are a skip: no kitty_tree.py in this fixture
   [ "$(kv launched)" = 2 ]; [ "$(kv windows)" = 1 ]; [ "$(kv verdict)" = ok ]
+}
+
+@test "tree: without --keep-shells a pane that held no session is left out, and its column keeps the recorded width" {
+  # 2026-10-25: the restore reopened 11 session-less panes as bare shells where the operator
+  # expected sessions. Dropping 12 from (11 over 12) leaves 11 the whole left column: a stacked
+  # pair losing a pane loses no width, so 13 keeps the recorded 40 %.
+  tree_setup
+  tree "$(koswin 6 700 "$(ktab splits '{"bias":0.6,"one":{"horizontal":false,"bias":0.25,"one":1,"two":2},"two":3}' 1:11 2:12 3:13)")"
+  roster 11 sid-repo-a-1 13 sid-repo-a-2
+  trow 1; trow 2
+  trestore
+  [ "$status" -eq 0 ]
+  [ "$(launches)" -eq 2 ]
+  launch_n 2 | grep -q -- "--location=vsplit --match window_id:101 --next-to id:101 --bias 40.0000 .*'sid-repo-a-2'"
+  ! grep -q -- '--location=hsplit' "$KLOG" || false
+  printf '%s\n' "$output" | grep -q '^cc-resume-layout: layout tree_windows=1 shells=0 '
+}
+
+@test "tree: dropped panes give their space to the rest in the RECORDED proportions — an even row stays even" {
+  # kitty records an even row a|b|c|d as biases 1/4, 1/3, 1/2. With c and d not restored, the
+  # 1/4 must not survive: a and b come back at half each (2026-10-25: 76 and 154 columns).
+  tree_setup
+  tree "$(koswin 6 700 "$(ktab splits '{"bias":0.25,"one":1,"two":{"bias":0.3333333333333333,"one":2,"two":{"one":3,"two":4}}}' 1:11 2:12 3:13 4:14)")"
+  roster 11 sid-repo-a-1 12 sid-repo-a-2 13 sid-gone-1 14 sid-gone-2
+  trow 1; trow 2
+  trestore
+  [ "$status" -eq 0 ]
+  [ "$(launches)" -eq 2 ]
+  launch_n 2 | grep -q -- "--location=vsplit --match window_id:101 --next-to id:101 .*'sid-repo-a-2'"
+  ! launch_n 2 | grep -q -- '--bias' || false                    # 50 %: kitty's default, so no --bias
+  # with b gone, a keeps its quarter of four and c, d theirs: a third each of what is left
+  : > "$KLOG"; rm -f "$KLOG.n"; : > "$ROWS"
+  roster 11 sid-repo-a-1 12 sid-gone-1 13 sid-repo-a-3 14 sid-repo-a-4
+  trow 1; trow 3; trow 4
+  trestore
+  [ "$status" -eq 0 ]
+  launch_n 2 | grep -q -- "--location=vsplit --match window_id:101 --next-to id:101 --bias 66.6667 .*'sid-repo-a-3'"
+  ! launch_n 3 | grep -q -- '--bias' || false
 }
 
 @test "tree: tabs come back in order in their window; a Claude pane with no row is left out; fullscreen follows the recorded order" {
@@ -797,7 +887,7 @@ launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
   [ "$(kv windows)" = 2 ]; [ "$(kv fullscreen_unknown)" = 2 ]; [ "$(kv fullscreen_ok)" = 0 ]
 }
 
-@test "tree: each window is moved to its recorded display before fullscreen; a windowed one gets its frame back and is not toggled" {
+@test "tree: each head opens on its recorded display by kitty position; a windowed one gets its frame back and is not toggled" {
   tree_setup
   tree "$(koswin 6 700 "$(ktab splits '{"one":1}' 1:11)")" "$(koswin 7 701 "$(ktab splits '{"one":2}' 2:12)")" \
        "$(koswin 8 702 "$(ktab splits '{"one":3}' 3:13)")"
@@ -809,31 +899,40 @@ launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
   trestore
   [ "$status" -eq 0 ]
   [ "$(grep -c '^args=$' "$CC_SWIFT_BIN.log")" -eq 1 ]                    # the displays are read once
-  grep -q 'set position of x to {1748, 45}' "$CC_OSASCRIPT_BIN.log"       # fullscreen: anywhere on its display
-  grep -q 'set size of x to {2520, 1350}' "$CC_OSASCRIPT_BIN.log"
-  grep -q 'set position of x to {100, 80}' "$CC_OSASCRIPT_BIN.log"        # windowed: its old frame
+  launch_n 1 | grep -q -- '--type=os-window --os-window-position=1748x45 '   # fullscreen: anywhere on its display
+  launch_n 2 | grep -q -- '--type=os-window --os-window-position=100x80 '    # windowed: its old corner
+  ! launch_n 3 | grep -q -- '--os-window-position' || false                  # the unplugged display: where kitty puts it
+  ! grep -q 'set position of x to {1748, 45}' "$CC_OSASCRIPT_BIN.log" || false   # no Accessibility move for a fullscreen one
+  grep -q 'set position of x to {100, 80}' "$CC_OSASCRIPT_BIN.log"        # windowed: its old frame, size included
   grep -q 'set size of x to {900, 700}' "$CC_OSASCRIPT_BIN.log"
-  [ "$(grep -c 'set position' "$CC_OSASCRIPT_BIN.log")" -eq 2 ]           # the unplugged display moves nothing
-  # the marker is put on the head for the one call and handed back, and the move precedes the toggle
-  [ "$(grep -c "set-window-title --match id:101 CC-DESK-1-" "$KLOG")" -eq 1 ]
-  [ "$(grep -c 'set-window-title --match id:101 $' "$KLOG")" -eq 1 ]
-  [ "$(grep -n 'set-window-title --match id:101 CC-DESK' "$KLOG" | cut -d: -f1)" -lt "$(grep -n 'toggle_fullscreen' "$KLOG" | head -1 | cut -d: -f1)" ]
+  [ "$(grep -c 'set position' "$CC_OSASCRIPT_BIN.log")" -eq 1 ]
+  [ "$(grep -c "set-window-title --match id:101 CC-DESK" "$KLOG")" -eq 0 ]
+  [ "$(grep -c "set-window-title --match id:102 CC-DESK-2-" "$KLOG")" -eq 1 ]
   [ "$(grep toggle_fullscreen "$KLOG" | grep -o '^KW=[0-9]*' | tr '\n' ' ')" = "KW=101 KW=103 " ]   # 102 was windowed
-  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: layout tree_windows=3 shells=0 placed=2 placed_failed=1 tree_ok=0 tree_fixed=0 tree_mismatch=0 tree_unknown=0'
+  # placed: only the Accessibility move is confirmed here; a positioned window counts once a
+  # read-back finds it on its display, and this fixture reads no frame
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: layout tree_windows=3 shells=0 placed=1 placed_failed=1 tree_ok=0 tree_fixed=0 tree_mismatch=0 tree_unknown=0'
   printf '%s\n' "$stderr" | grep -q 'tree read-back skipped'           # the zeros are a skip: no kitty_tree.py in this fixture
   [ "$(kv fullscreen_unknown)" = 2 ]; [ "$(kv verdict)" = ok ]   # toggled, frame unread (R21)
 }
 
-@test "tree: Accessibility refusing the move is said and counted, and the window still goes fullscreen" {
+@test "tree: Accessibility refusing the move of a windowed window is said and counted" {
   tree_setup
   tree "$(koswin 6 700 "$(ktab splits '{"one":1}' 1:11)")"; roster 11 sid-repo-a-1
-  printf '700\tUUID-EXT\t0\t0\t2560\t1440\t1\t0\t0\t2560\t1440\n' > "$HBD/hb.displays.tsv"
+  printf '700\tUUID-EXT\t0\t0\t2560\t1440\t0\t10\t10\t900\t700\n' > "$HBD/hb.displays.tsv"
   printf 'UUID-EXT\t0\t0\t2560\t1440\n' > "$CC_SWIFT_BIN.out"; echo nomatch > "$CC_OSASCRIPT_BIN.reply"
   trow 1
   trestore
   printf '%s\n' "$stderr" | grep -q 'NOT placed (nomatch)'
   printf '%s\n' "$output" | grep -q 'placed=0 placed_failed=1'
-  [ "$(grep -c toggle_fullscreen "$KLOG")" -eq 1 ]; [ "$(kv fullscreen_unknown)" = 1 ]; [ "$(kv verdict)" = ok ]
+  [ "$(grep -c toggle_fullscreen "$KLOG")" -eq 0 ]; [ "$(kv verdict)" = ok ]
+  # a fullscreen window never asks Accessibility at all
+  : > "$KLOG"; rm -f "$KLOG.n" "$CC_OSASCRIPT_BIN.log"
+  printf '700\tUUID-EXT\t0\t0\t2560\t1440\t1\t0\t0\t2560\t1440\n' > "$HBD/hb.displays.tsv"
+  trestore
+  [ ! -s "$CC_OSASCRIPT_BIN.log" ]
+  launch_n 1 | grep -q -- '--os-window-position=20x45 '
+  [ "$(grep -c toggle_fullscreen "$KLOG")" -eq 1 ]; [ "$(kv fullscreen_unknown)" = 1 ]
 }
 
 @test "tree: a row the tree does not hold gets a one-row window after the recorded ones" {
@@ -912,7 +1011,7 @@ SH
        "$(koswin 7 701 "$(ktab splits '{"one":4}' 4:14)" "$(ktab horizontal - 5:15 6:16)")"
   roster 11 sid-repo-a-1 13 sid-repo-a-2 14 sid-repo-a-3 15 sid-repo-a-4 16 sid-repo-a-5
   printf '700\tUUID-EXT\t-832\t-1440\t2560\t1440\t1\t-832\t-1440\t2560\t1440\n' > "$HBD/hb.displays.tsv"
-  run --separate-stderr env -u CC_TERM_KITTY PATH=/usr/bin:/bin /bin/bash "$LAYOUT" --desktops --restore --dry-run --tree "$HBD/hb.kitty-ls.json" </dev/null
+  run --separate-stderr env -u CC_TERM_KITTY PATH=/usr/bin:/bin /bin/bash "$LAYOUT" --desktops --restore --dry-run --keep-shells --tree "$HBD/hb.kitty-ls.json" </dev/null
   [ "$status" -eq 0 ]
   [ ! -f "$KLOG" ]; [ ! -f "$CC_SWIFT_BIN.log" ]; [ ! -f "$CC_OSASCRIPT_BIN.log" ]
   printf '%s\n' "$output" | grep -qx 'cc-resume-layout: tree oswin=1 src=k4242w6 platform_window_id=700 tabs=1 panes=3 claude=2 shells=1 layout=splits:H:0.60(V(p,p),p) display=UUID-EXT display_rect=-832,-1440,2560x1440 fullscreen=1'

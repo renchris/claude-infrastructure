@@ -1,0 +1,282 @@
+[
+{
+"session_id": "5f18dd60-e18a-4328-aa00-7ca61f514066",
+"paneUUID": "29",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/personal",
+"name": "personal-29"
+},
+{
+"session_id": "1bede217-c25f-439e-8902-32a94e461ab1",
+"paneUUID": "262",
+"account": "claude-tertiary",
+"cwd": "/Users/chrisren/Development/.worktrees/tm2-w8copy",
+"name": "tm2-w8copy-262"
+},
+{
+"session_id": "562baac5-3cb3-4b28-a537-8080a9c3e36d",
+"paneUUID": "329",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/usage-levers-s5",
+"name": "usage-levers-s5-329"
+},
+{
+"session_id": "87a4411d-dde5-4b86-835d-e16d61d8bace",
+"paneUUID": "20",
+"account": "claude-next",
+"cwd": "/Users/chrisren/Development/personal",
+"name": "personal-20"
+},
+{
+"session_id": "43e6eb4b-de44-42de-93a3-7b553f512798",
+"paneUUID": "7",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-cc-142226-72029",
+"name": "wt-cc-142226-72029-7"
+},
+{
+"session_id": "58ec5fef-f49f-4070-83f5-3e5f7ad7e787",
+"paneUUID": "314",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-cc-225311-6680",
+"name": "wt-cc-225311-6680-314"
+},
+{
+"session_id": "0e2799a9-01ef-4478-81dc-e18127ecf564",
+"paneUUID": "307",
+"account": "claude-tertiary",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-cc-203953-20264",
+"name": "wt-cc-203953-20264-307"
+},
+{
+"session_id": "7396b781-d7a1-48b9-a699-06c3ae0415f5",
+"paneUUID": "274",
+"account": "claude-next",
+"cwd": "/Users/chrisren/Development/.worktrees/b13/r27-ra",
+"name": "r27-ra-274"
+},
+{
+"session_id": "3f1c1301-b674-4eb3-80b8-25eab985c225",
+"paneUUID": "297",
+"account": "claude-tertiary",
+"cwd": "/Users/chrisren/Development/.worktrees/lkw-scope-floor",
+"name": "lkw-scope-floor-297"
+},
+{
+"session_id": "92fc4fbe-5947-465a-842a-3069f6cbf0ea",
+"paneUUID": "343",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-cc-033121-87992",
+"name": "wt-cc-033121-87992-343"
+},
+{
+"session_id": "5cc74e8c-83f1-408f-a583-6f461772f631",
+"paneUUID": "13",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/personal",
+"name": "personal-13"
+},
+{
+"session_id": "2b3becea-6866-49cf-9dba-21fe5cdb6cd8",
+"paneUUID": "216",
+"account": "claude-next",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-cc-192116-88115",
+"name": "wt-cc-192116-88115-216"
+},
+{
+"session_id": "85c040d1-6467-4bf5-a9be-14592e73b9bf",
+"paneUUID": "47",
+"account": "claude-tertiary",
+"cwd": "/Users/chrisren/Development/personal",
+"name": "personal-47"
+},
+{
+"session_id": "eeb8db4d-178f-49eb-8aec-aa24efb42916",
+"paneUUID": "318",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/fix/lr-recon-defects",
+"name": "lr-recon-defects-318"
+},
+{
+"session_id": "c162b95c-9625-4a45-9cc6-a40c63131905",
+"paneUUID": "323",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/usage-levers-s2",
+"name": "usage-levers-s2-323"
+},
+{
+"session_id": "509e3aad-fe8e-4645-8a44-61d07e3adeff",
+"paneUUID": "22",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/voiceink",
+"name": "voiceink-22"
+},
+{
+"session_id": "aaf6ccd5-da7b-4dd5-9ff1-1461dfcae9c5",
+"paneUUID": "347",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-cc-033757-11504",
+"name": "wt-cc-033757-11504-347"
+},
+{
+"session_id": "cf477fab-2c4b-43e0-9e5b-14e53a36d9e9",
+"paneUUID": "303",
+"account": "claude-secondary",
+"cwd": "/Users/chrisren/Development/.worktrees/lkw-nudge-decide",
+"name": "lkw-nudge-decide-303"
+},
+{
+"session_id": "418d940f-347a-44a6-a136-87c0ae1bc2a2",
+"paneUUID": "316",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/personal",
+"name": "personal-316"
+},
+{
+"session_id": "ba56f290-6f55-44e2-ac89-6006b9afe99f",
+"paneUUID": "327",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/usage-levers-s11",
+"name": "usage-levers-s11-327"
+},
+{
+"session_id": "3d1dc252-a2b7-4ef2-97d7-e178c3411846",
+"paneUUID": "272",
+"account": "claude-tertiary",
+"cwd": "/Users/chrisren/Development/.worktrees/lead-idle-fix",
+"name": "lead-idle-fix-272"
+},
+{
+"session_id": "794296f2-1035-48d8-a33b-df8d64bc8034",
+"paneUUID": "67",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-cc-004846-55297",
+"name": "wt-cc-004846-55297-67"
+},
+{
+"session_id": "15e47f69-b382-461a-bba0-e007a4083b0c",
+"paneUUID": "335",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/personal",
+"name": "personal-335"
+},
+{
+"session_id": "a981134f-f7fd-4450-928a-248b2de9a073",
+"paneUUID": "3",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/reso-web-app",
+"name": "reso-web-app-3"
+},
+{
+"session_id": "15f652bd-2db4-47e2-bece-d01c5129bdb5",
+"paneUUID": "217",
+"account": "claude-next",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-cc-212741-59630",
+"name": "wt-cc-212741-59630-217"
+},
+{
+"session_id": "f27965bc-cb87-4bd9-8d06-a3a6ceb7bc9e",
+"paneUUID": "117",
+"account": "claude-tertiary",
+"cwd": "/Users/chrisren/Development/personal",
+"name": "personal-117"
+},
+{
+"session_id": "28a7b735-d941-4148-aaf8-230c2fde2fca",
+"paneUUID": "326",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/research/midturn-account-move",
+"name": "midturn-account-move-326"
+},
+{
+"session_id": "9ddc8ad3-ce4f-4425-b33d-a5d3d8b7e79f",
+"paneUUID": "309",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/husk-skill-and-fix",
+"name": "husk-skill-and-fix-309"
+},
+{
+"session_id": "502bd860-8623-4de6-947e-fbb850acd755",
+"paneUUID": "271",
+"account": "claude-next",
+"cwd": "/Users/chrisren/Development/agent-context-sync",
+"name": "agent-context-sync-271"
+},
+{
+"session_id": "79076bcf-e311-47d8-bf95-e12c422b94e9",
+"paneUUID": "2",
+"account": "claude-tertiary",
+"cwd": "/Users/chrisren/Development/sevenrooms-bridge",
+"name": "sevenrooms-bridge-2"
+},
+{
+"session_id": "501dda01-e036-4fff-8224-abda2e6f8bc2",
+"paneUUID": "263",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/tm-upstream-wt/.publish-state",
+"name": ".publish-state-263"
+},
+{
+"session_id": "dd833573-cead-44c5-af84-34bb83fb8c28",
+"paneUUID": "342",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/personal",
+"name": "personal-342"
+},
+{
+"session_id": "ad0e870f-60d1-4966-b41a-7afb3fbb7b4a",
+"paneUUID": "328",
+"account": "claude-secondary",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-b07461dcda72",
+"name": "wt-b07461dcda72-328"
+},
+{
+"session_id": "9c8dbf8c-91e1-4cad-9b95-ad517b60667a",
+"paneUUID": "345",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-pool-3",
+"name": "wt-pool-3-345"
+},
+{
+"session_id": "8cefc9c6-f2b1-4150-b999-41773b286d3d",
+"paneUUID": "346",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-pool-3",
+"name": "wt-pool-3-346"
+},
+{
+"session_id": "b292a869-f4b1-4126-8ce2-e6d8a4409d87",
+"paneUUID": "5",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/reso-gl-method",
+"name": "reso-gl-method-5"
+},
+{
+"session_id": "84d2ca45-8459-462b-834a-f6586a6d218d",
+"paneUUID": "340",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-pool-3",
+"name": "wt-pool-3-340"
+},
+{
+"session_id": "568f7c83-11e9-42c7-ac2f-acd5dcfec451",
+"paneUUID": "301",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/.worktrees/wt-pool-3",
+"name": "wt-pool-3-301"
+},
+{
+"session_id": "a85a7863-3c80-4d6e-bdab-3dc2efe5ef52",
+"paneUUID": "24",
+"account": "claude-quaternary",
+"cwd": "/Users/chrisren/Development/claude-infrastructure",
+"name": "claude-infrastructure-24"
+},
+{
+"session_id": "2a707a01-a8ad-43ea-b982-38d10be65244",
+"paneUUID": "194",
+"account": "claude-secondary",
+"cwd": "/Users/chrisren/Development/.worktrees/macapp-extract",
+"name": "macapp-extract-194"
+}
+]
