@@ -1589,9 +1589,15 @@ expect -c '
   # would turn a crash into a close. Drain to the eof of the spawn FIRST: `interact` also returns on
   # the USER side eof (a non-tty stdin) while claude still writes, and a child that cannot flush its pty never
   # finishes exiting, so a bare `wait` deadlocks (measured 2026-10-25: the child sat in state E, the
-  # wait in wait4, for 50 min). A signal death (CHILDKILLED <sig>) or a failed wait is 1.
+  # wait in wait4, for 50 min). The drain is bounded (LR_REAP_DRAIN_S, 60 s): a child still holding
+  # the pty after that is hung up by `close`, and its signal death reads as 1 — toward keeping the
+  # pane, never toward closing it. A signal death (CHILDKILLED <sig>) or a failed wait is 1.
   proc lr_exit_with_claude {} {
-    catch {expect -timeout -1 eof}
+    global env
+    set t [expr {[info exists env(LR_REAP_DRAIN_S)] ? $env(LR_REAP_DRAIN_S) : 60}]
+    set drained 0
+    catch {expect -timeout $t eof { set drained 1 }}
+    if {!$drained} { catch {close} }
     if {[catch {wait} w]} { exit 1 }
     if {[llength $w] > 4} { exit 1 }
     exit [lindex $w 3]
