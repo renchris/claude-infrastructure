@@ -11,6 +11,8 @@
 # Hermetic: HOME, the state dir, the IDL, the decision log, the lockwatch dir and the alarm log are all
 # under the test tmpdir, every other admission term is switched off, and pages go to a recorder.
 
+load helpers/cc-stub   # stubs the kernel never execs as #! (kalloc leak)
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LIB="$REPO/scripts/lib/capacity-admit.sh"
@@ -23,8 +25,7 @@ setup() {
   export CC_ADMIT_BROWNOUT_ALARM_LOG="$BATS_TEST_TMPDIR/capacity-alarm.jsonl"
   export CC_ADMIT_BROWNOUT_LATCH="$BATS_TEST_TMPDIR/brownout-latch.json"
   export CC_ADMIT_NOTIFY_BIN="$BATS_TEST_TMPDIR/notify"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/pages.txt"\n' "$BATS_TEST_TMPDIR" > "$CC_ADMIT_NOTIFY_BIN"
-  chmod +x "$CC_ADMIT_NOTIFY_BIN"
+  cc_stub "$BATS_TEST_TMPDIR" notify "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/pages.txt"\n' "$BATS_TEST_TMPDIR")"
   # Only the brownout term may decide in this file.
   export CC_ADMIT_LOAD_TERM=off CC_ADMIT_HEADROOM_TERM=off CC_ADMIT_SEGMENT_TERM=off
   export CC_ADMIT_ACTIVE_TERM=off CC_ADMIT_RESERVE_TERM=off
@@ -240,7 +241,8 @@ replay_summary() { # $1=library to source
 # under-band and non-autonomous callers write nothing.
 lb_checks() {
   local lib="$1" sc="$BATS_TEST_TMPDIR/sysctl" r
-  printf '#!/bin/bash\ncase "$*" in *hw.ncpu*) echo 10 ;; *) echo "{ 1.0 1.0 1.0 }" ;; esac\n' > "$sc"; chmod +x "$sc"
+  cc_stub "$BATS_TEST_TMPDIR" sysctl '#!/bin/bash
+case "$*" in *hw.ncpu*) echo 10 ;; *) echo "{ 1.0 1.0 1.0 }" ;; esac'
   : > "$CC_ADMIT_IDL"
   lb() { CC_ADMIT_SYSCTL="$sc" bash -c '. "$1"; cc_capacity_admit "$2" "lb spawn"' _ "$lib" "$1"; }
   CC_ADMIT_LOADBAND_LOAD15=600 lb cc-dispatch || return 1                                    # observe admits

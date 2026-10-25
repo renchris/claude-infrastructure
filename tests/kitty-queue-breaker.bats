@@ -6,6 +6,8 @@
 # Every kitty, kitten, netstat and sample the subjects could reach is a PATH stub that records its argv,
 # so "nothing connected" is asserted as zero recorded calls, never inferred from an exit code.
 
+load helpers/cc-stub   # stubs the kernel never execs as #! (kalloc leak)
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   KQ="$REPO/scripts/lib/kitty-queue.sh"
@@ -16,8 +18,7 @@ setup() {
   STUBS="$BATS_TEST_TMPDIR/stubs"; mkdir -p "$STUBS"
   local b
   for b in kitty kitten netstat sample; do
-    printf '#!/bin/bash\nprintf "%s %%s\\n" "$*" >> "%s"\nexit 0\n' "$b" "$CALLS" > "$STUBS/$b"
-    chmod +x "$STUBS/$b"
+    cc_stub "$STUBS" "$b" "$(printf '#!/bin/bash\nprintf "%s %%s\\n" "$*" >> "%s"\nexit 0\n' "$b" "$CALLS")"
   done
   export PATH="$STUBS:$PATH"
   unset CC_KITTY_RC_BREAKER CC_KQ_NOW CC_HF_NETSTAT_FILE CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE CC_PANE_CMD
@@ -112,7 +113,8 @@ rc_state() { # $1=kitty_rc value $2=hb age in seconds (absent = no hb)
 }
 
 @test "06 kq_main_kitty_pids is bounded: a ps that never returns costs its bound, not the caller" {
-  printf '#!/bin/bash\nsleep 60\n' > "$STUBS/slowps"; chmod +x "$STUBS/slowps"
+  cc_stub "$STUBS" slowps '#!/bin/bash
+sleep 60'
   local t0 t1
   t0="$(date +%s)"
   run bash -c '. "$1"; CC_KQ_PS_BIN="$2" CC_KQ_PS_TIMEOUT_S=1 kq_main_kitty_pids' _ "$KQ" "$STUBS/slowps"
@@ -121,8 +123,8 @@ rc_state() { # $1=kitty_rc value $2=hb age in seconds (absent = no hb)
   [ -z "$output" ] || false
   [ $(( t1 - t0 )) -lt 20 ] || { echo "took $(( t1 - t0 ))s"; false; }
   # and a ps that answers still yields the main kitty, not its helpers
-  printf '#!/bin/bash\nprintf "%%s\\n" " 610 /Applications/kitty.app/Contents/MacOS/kitty" " 611 /Applications/kitty.app/Contents/MacOS/kitty +kitten x" " 612 kitty --instance-group q"\n' > "$STUBS/fastps"
-  chmod +x "$STUBS/fastps"
+  cc_stub "$STUBS" fastps '#!/bin/bash
+printf "%s\n" " 610 /Applications/kitty.app/Contents/MacOS/kitty" " 611 /Applications/kitty.app/Contents/MacOS/kitty +kitten x" " 612 kitty --instance-group q"'
   run bash -c '. "$1"; CC_KQ_PS_BIN="$2" kq_main_kitty_pids' _ "$KQ" "$STUBS/fastps"
   [ "$output" = 610 ] || { echo "got: $output"; false; }
 }
