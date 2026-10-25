@@ -43,33 +43,40 @@
 # inherited here. Measured on kitty 0.48.2 / zsh, pane 331: ITERM_SESSION_ID=w0t0p0:331 (the NEW
 # pane's own id, not the leader's), shims on PATH, --env values present.
 #
-# ── AFTER THE COMMAND: A CLAUDE THAT EXITED CLEANLY CLOSES ITS PANE; ANYTHING ELSE KEEPS A SHELL ───
-# Exact parity with the pane this replaced was the original rule: today's split yields an interactive
-# shell that runs the command and returns to a prompt, so we `exec` an interactive login shell when
-# the command returns. That keeps every LATER `it2 session run/send` against this pane behaving as it
-# always did (there is a real prompt to type at again), which is what makes this safe for the
-# multi-send callers that legitimately type.
-# ONE EXCEPTION (2026-09-30, docs/research/husk-panes-2026-09-30.md root cause 2, fix F-a): when the
-# command was a CLAUDE SESSION and it exited 0, the runner exits instead and the pane closes from
-# inside. A clean exit is the intentional one — /exit, ^D, an approved teammate shutdown,
-# self-close's /exit — and the shell left behind it was a "husk": seven of 39 windows that night,
-# because the only thing that ever closed such a pane was an external kitty remote-control close,
-# and that socket was intermittently unresponsive. Three cases still keep the shell, each for a
-# reason a closed pane would destroy:
-#   · a non-zero or signal exit (143 = SIGTERM) — lead-crash-watchdog paints its resume verdict into
-#     this pane and the operator resumes HERE;
-#   · a recycle pending for this pane (lib/pane-recycle-pending.sh) — handoff-fire typed the /exit
-#     and is about to type the relaunch at this shell;
-#   · CC_PANE_CLOSE_ON_EXIT=0 — the kill switch.
+# ── AFTER THE COMMAND: THE RUNNER OWNS THE PANE'S END (docs/research/husk-history-2026-10-24) ─────
+# When the command returns, the pane ends in exactly one of three ways, and the runner writes which
+# into the exit record's `tail` (§ THE EXIT RECORD below) before it acts:
+#   · CLOSED (`closed`) — a claude session (or a fleet launch line) that exited cleanly: rc 0, rc 75
+#     (queued), or claude never started while a durable record owns the retry. The runner exits 0,
+#     which closes the pane from inside (husk-panes-2026-09-30 fix F-a), once kitty-fullscreen-guard
+#     says removing this pane cannot empty a native-fullscreen window (rc 0 or 4).
+#   · HELD (`hold:fs` / `hold:unreadable`) — the same clean exit, but the guard refused: this is the
+#     last pane of a fullscreen window, or kitty did not answer. The runner stays the pane's process,
+#     paints "closes itself when safe", ignores INT/QUIT/TSTP/TERM/HUP, and re-asks the guard with
+#     backoff; it exits 0 after two consecutive safe reads, a clear `--any-fs` read on a deaf kitty,
+#     or once kitty itself is gone. It never falls back to a shell for this: the shell left there was
+#     the "husk" (pane 289), and nothing would ever close it.
+#   · KEPT (`keep:<why>`) — an ordinary login shell, for a reason a closed pane would destroy:
+#     a crash (`keep:crash`: the watchdog paints its verdict here, the operator resumes HERE), a recycle
+#     pending for this pane (`keep:recycle`: handoff-fire types the relaunch at this shell), the kill
+#     switch CC_PANE_CLOSE_ON_EXIT=0, a command that is not a session (`keep:not-a-session`, parity
+#     with the split this replaced: later `it2 session run/send` find a prompt), a missing or unusable
+#     guard or recycle lib (fail closed), or `keep:fallback` — any unplanned exit of this runner after
+#     the command returned, caught by the EXIT trap.
+# From the command's return on, a signal cannot end this process unguarded (_guarded), and there is
+# exactly one `exec` of a shell in this file (_fallback).
 #
 # Env contract (all set by bin/it2-kitty split):
 #   CC_PANE_CMD_DIR   directory holding <pane-id>.armed / <pane-id>.cmd
 #   KITTY_WINDOW_ID   set by kitty in the new window; THIS pane's id, and the key for both files
 #   CC_PANE_CMD_WAIT_S  how long to wait for a command before giving up (default 300)
 #   CC_PANE_CLOSE_ON_EXIT  0 keeps a shell even after a clean claude exit (default 1)
-# Exported to the command: CC_PANE_RUNNER_OWNS_CLOSE=1 — this runner closes its own pane, so the
-#   opt-in close in bin/cc-close-attrib must stand down. (Not CC_PANE_RUNNER: that already carries
-#   this file's PATH into every runner pane, including the ordinary shell it degrades to.)
+#   CC_PANE_HOLD_STEP_S / CC_PANE_HOLD_MAX_POLLS  the hold's base poll step (default 5 s) and a
+#     poll budget after which it escapes to keep:fallback (default none) — test seams
+# Exported to the command: CC_PANE_RUNNER_OWNS_CLOSE=<this pane's window id> — this runner closes its
+#   own pane, so the opt-in close in bin/cc-close-attrib must stand down, and the self-close watcher
+#   reads the record's `tail` only when the id is ITS pane's. (Not CC_PANE_RUNNER: that already
+#   carries this file's PATH into every runner pane, including the ordinary shell it degrades to.)
 
 set -u
 # shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
@@ -97,7 +104,9 @@ _wait="${CC_PANE_CMD_WAIT_S:-300}"
 # a failure to remove it must never keep this pane from becoming the shell it promised to be.
 # The ownership marker goes too: once this file has exec'd away the pane is an ordinary shell, and a
 # claude the operator resumes at that prompt is no longer one this runner will close.
+# The shell gets the default signal dispositions back, and no EXIT trap: _guarded's are the runner's.
 _fallback() {
+  trap - INT QUIT TSTP TERM HUP EXIT
   [ -n "${_armed:-}" ] && rm -f "$_armed" 2>/dev/null
   [ -n "${1:-}" ] && _say warn "$1" "pane is an ordinary shell"
   unset CC_PANE_RUNNER_OWNS_CLOSE CC_PANE_STARTED_FILE CC_PANE_EXIT_OWED
@@ -228,8 +237,12 @@ _claude_verb() { # $1=command → prints the verb; rc 0 iff it is a claude sessi
   esac
 }
 
-# Decide what the pane becomes after the command returned. Exits the runner (the pane closes) on a
-# clean claude exit with no recycle pending; otherwise RETURNS, and the caller falls back to a shell.
+# Decide what the pane becomes after the command returned (§ AFTER THE COMMAND in the header). Three
+# steps, none in a subshell, because each sets globals the next one reads (FIX-DESIGN §4 W1a):
+#   _guarded      from the command's return, no signal ends this process unguarded (D2);
+#   _exit_policy  the decision the exit status alone makes: _TAIL=close, or keep:<why>;
+#   _end          gates a `close` (_gate → closed | hold:<class> | keep:<why>), writes the record's
+#                 tail, then acts on it. It never returns.
 # The recycle check's lib is a sibling of bin/ in the checkout, else the live layer; an unreadable lib
 # keeps the shell — the fail-safe direction (lib/pane-recycle-pending.sh says why).
 #
@@ -254,99 +267,159 @@ _claude_verb() { # $1=command → prints the verb; rc 0 iff it is a claude sessi
 #     relaunch.rc — the run-dir owner retries, K3's rc 9).
 # Every other non-zero exit keeps the shell, as before. And no reason closes an IN-PLACE pane: a
 # recycle pending for this pane means handoff-fire is about to type the relaunch at this shell.
-_close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher delivered it (interactive mode) $4=claude_started true|false $5=1 iff an owed record exists
-  local _v _why
-  if ! _v="$(_claude_verb "$1")"; then
-    [ "${3:-0}" = 1 ] || return 0
-    _v="the fleet launch line"
+_TAIL="" _V="" _WHY="" _KEEP_HINT="" _KEEP_DETAIL="" _SAY_ON_KEEP="" _GUARD="" _DONE=0
+_exit_policy() { # $1=command $2=rc $3=1 iff fleet launch line $4=claude_started $5=1 iff owed → _TAIL, _V, _WHY (no git, no transcript)
+  _TAIL=close _WHY=""
+  if ! _V="$(_claude_verb "$1")"; then
+    [ "${3:-0}" = 1 ] || { _TAIL=keep:not-a-session; return 0; }
+    _V="the fleet launch line"
   fi
-  if [ "${CC_PANE_CLOSE_ON_EXIT:-1}" = 0 ]; then
-    _detail "$_v exited $2 — CC_PANE_CLOSE_ON_EXIT=0, keeping the shell"
-    return 0
+  if [ "${CC_PANE_CLOSE_ON_EXIT:-1}" = 0 ]; then _TAIL=keep:kill-switch _WHY="exited $2"; return 0; fi
+  case "$2" in
+    0)  _WHY="exited 0"; return 0 ;;
+    75) _WHY="exited 75 (queued — one durable request retries it)"; return 0 ;;
+  esac
+  if [ "${4:-true}" = false ] && [ "${5:-0}" = 1 ]; then
+    _WHY="exited $2 before claude started, and a durable record owns the retry"; return 0
   fi
-  if [ "$2" = 0 ]; then
-    _why="exited 0"
-  elif [ "$2" = 75 ]; then
-    _why="exited 75 (queued — one durable request retries it)"
-  elif [ "${4:-true}" = false ] && [ "${5:-0}" = 1 ]; then
-    _why="exited $2 before claude started, and a durable record owns the retry"
-  else
-    _kept_line "$_v" "$2" "${3:-0}" "${4:-true}"
-    return 0
-  fi
-  _close_pane "$_v" "$_why"
+  _TAIL=keep:crash
 }
 
-# THE GATED CLOSE, shared by _close_on_exit and the no-command deadline below: recycle check, then
-# the fullscreen guard, then exit 0 (this runner IS the pane's process, so its exit closes the pane).
-# Returns 0 only when the pane must be KEPT; the caller then falls back to a shell.
-_close_pane() { # $1=what exited $2=why it may close
-  local _v="$1" _why="$2" _sd _c _lib=""
+# From the command's return, INT/QUIT/TSTP/TERM/HUP are ignored (and so are they in every child the
+# runner starts: the guard, the hold's sleep), and any exit that is not a planned one runs _escape,
+# which keeps a shell. HEAD's close asked the guard with default dispositions, so a ^C in that 5 s
+# window ended the pane unguarded (FIX-DESIGN D2, break 4). _fallback resets both before its exec.
+_guarded() { trap '' INT QUIT TSTP TERM HUP; trap '_escape' EXIT; }
+# shellcheck disable=SC2329  # invoked indirectly — the EXIT trap only.
+_escape() { # the EXIT trap: a planned exit set _DONE; anything else keeps a shell, said and retried
+  [ "${_DONE:-0}" = 1 ] && return 0
+  _pane_exit_tail keep:fallback
+  _husk_row runner-escape what="${_V:-}"
+  _fallback "the runner ended unexpectedly"
+}
+
+_recycle_lib() { # sources lib/pane-recycle-pending.sh; rc 1 when no readable copy sources
+  local _sd _c _lib=""
   _sd="$(_self_dir)"
   for _c in "${_sd:+$_sd/../lib/pane-recycle-pending.sh}" "${HOME:-}/.claude/lib/pane-recycle-pending.sh"; do
     [ -n "$_c" ] && [ -r "$_c" ] && { _lib="$_c"; break; }
   done
+  [ -n "$_lib" ] || return 1
   # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
-  if [ -z "$_lib" ] || ! . "$_lib" 2>/dev/null; then
-    CC_SAY_DETAIL="$_v $_why — recycle check unavailable, keeping the shell" _say warn "pane kept, not closed" "recycle check unavailable"
-    _husk_row recycle-check-unavailable what="$_v"
-    return 0
+  . "$_lib" 2>/dev/null
+}
+_guard_bin() { # → _GUARD; rc 1 when it is not executable. A CC_KITTY_FS_GUARD path overrides it.
+  local _sd
+  _GUARD="${CC_KITTY_FS_GUARD:-}"
+  if [ -z "$_GUARD" ]; then
+    _sd="$(_self_dir)"
+    _GUARD="${_sd:+$_sd/kitty-fullscreen-guard}"
+    [ -n "$_GUARD" ] && [ -x "$_GUARD" ] || _GUARD="${HOME:-}/.claude/bin/kitty-fullscreen-guard"
+  fi
+  [ -x "$_GUARD" ]
+}
+
+# THE GATE on a `close`: recycle check, then kitty-fullscreen-guard (docs/research/kitty-crash-2026-10-15
+# /README.md § Chosen fix — emptying a native-fullscreen OS window from inside crashed the whole kitty).
+# REFUSE mode never toggles. rc 0 (safe, or not the last pane) and rc 4 (the window is already gone)
+# close; rc 3 HOLDS — never a shell: the guard's rc is 3 for a fullscreen last pane AND for a kitty
+# that did not answer, and only its verdict TEXT tells the two apart (husk-panes-2026-10-22 F4), so
+# its words go to the cc-say log, never the pane. Any other rc is a guard that cannot answer: keep.
+# --scope pane, not os-window: the runner removes only ITS OWN pane, and the kitten counts "last"
+# across every tab of the OS window (K3 as amended). Not in kitty ⇒ nothing to empty ⇒ no gate;
+# CC_KITTY_FS_GUARD=off is the operator's kill switch.
+_gate() { # $1=what exited → _TAIL=closed|hold:fs|hold:unreadable|keep:<why>
+  local _o _rc=0
+  if ! _recycle_lib; then
+    _TAIL=keep:no-recycle-lib _KEEP_HINT="recycle check unavailable"
+    _KEEP_DETAIL="$1 $_WHY — recycle check unavailable, keeping the shell"; return 0
   fi
   if cc_pane_recycle_pending "${KITTY_WINDOW_ID:-}"; then
     # The relaunch that is coming here says what it is; a line from this runner would be a second.
-    _detail "$_v $_why — recycle pending, keeping the shell" "an in-place relaunch is coming here"
-    return 0
+    _detail "$1 $_WHY — recycle pending, keeping the shell" "an in-place relaunch is coming here"
+    _TAIL=keep:recycle; return 0
   fi
-  # THE LAST GATE: kitty-fullscreen-guard (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix).
-  # Emptying a native-fullscreen OS window from inside crashed the whole kitty on 2026-10-15, taking
-  # every session with it. REFUSE mode never toggles: rc != 0 (fullscreen, unreadable, not found)
-  # keeps the shell — the accepted cost is a husk in a fullscreen window. Not in kitty ⇒ nothing to
-  # empty ⇒ no gate. CC_KITTY_FS_GUARD=off is the operator's kill switch; a path overrides the guard.
-  if [ -n "${KITTY_WINDOW_ID:-}" ]; then
-    _c="${CC_KITTY_FS_GUARD:-}"
-    if [ "$_c" = off ]; then
-      _detail "CC_KITTY_FS_GUARD=off — closing without the fullscreen guard"
-    else
-      if [ -z "$_c" ]; then
-        _c="${_sd:+$_sd/kitty-fullscreen-guard}"
-        [ -n "$_c" ] && [ -x "$_c" ] || _c="${HOME:-}/.claude/bin/kitty-fullscreen-guard"
-      fi
-      if [ ! -x "$_c" ]; then
-        CC_SAY_DETAIL="fullscreen guard not executable at $_c — keeping the shell ($_v $_why)" _say warn "pane kept, not closed" "fullscreen guard missing"
-        _husk_row guard-missing what="$_v"
-        return 0
-      fi
-      # --scope pane, not os-window: the runner removes only ITS OWN pane, and the kitten counts
-      # "last" across every tab of the OS window, so this refuses exactly the crash trigger (the
-      # last pane of a fullscreen window) — os-window scope would refuse every pane of every
-      # fullscreen window and keep the husks this decision exists to remove (K3 as amended).
-      # The guard's own words go to the cc-say log, never the pane (husk-panes-2026-10-22 F4): its
-      # rc is 3 for a fullscreen last pane AND for a kitty that did not answer, and pane 42 showed
-      # "last pane of a fullscreen window" plus the guard's raw `state=UNKNOWN types=None` line for
-      # an unreadable read in a 3-pane window. Only the verdict TEXT tells the two apart, as in
-      # bin/it2-kitty's close branch.
-      local _gout
-      if ! _gout="$(cc_run "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner 2>&1)"; then
-        case "$_gout" in
-          *"refused (refused-fs)"*)
-            _husk_row guard-fullscreen what="$_v"
-            _verdict --state "${_PV_STATE:-DONE}" --guard fullscreen \
-              || CC_SAY_DETAIL="$_v $_why — guard: ${_gout:-no output}" _say warn "last pane of a fullscreen window" "⌘W closes it"
-            _detail "$_v $_why — guard: ${_gout:-no output}" "kept: last pane of a fullscreen window" ;;
-          *)
-            _husk_row guard-unreadable what="$_v"
-            _verdict --state "${_PV_STATE:-DONE}" --guard unreadable \
-              || CC_SAY_DETAIL="$_v $_why — guard: ${_gout:-no output}" _say wait "kitty didn't answer" "closes when it does"
-            _detail "$_v $_why — guard: ${_gout:-no output}" "kept: kitty did not answer" ;;
-        esac
-        return 0
-      fi
-    fi
+  [ -n "${KITTY_WINDOW_ID:-}" ] || { _TAIL=closed; return 0; }
+  if [ "${CC_KITTY_FS_GUARD:-}" = off ]; then
+    _detail "CC_KITTY_FS_GUARD=off — closing without the fullscreen guard"; _TAIL=closed; return 0
   fi
-  _detail "$_v $_why — closing this pane" "CC_PANE_CLOSE_ON_EXIT=0 keeps it"
-  [ -n "${_armed:-}" ] && rm -f "$_armed" 2>/dev/null
-  exit 0
+  if ! _guard_bin; then
+    _TAIL=keep:no-guard _KEEP_HINT="fullscreen guard missing"
+    _KEEP_DETAIL="fullscreen guard not executable at $_GUARD — keeping the shell ($1 $_WHY)"; return 0
+  fi
+  _o="$(cc_run "$_GUARD" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner 2>&1)" || _rc=$?
+  case "$_rc" in
+    0|4) _TAIL=closed ;;
+    3)   _detail "$1 $_WHY — guard: ${_o:-no output}" "held: closes itself when safe"
+         case "$_o" in *"refused (refused-fs)"*) _TAIL=hold:fs ;; *) _TAIL=hold:unreadable ;; esac ;;
+    *)   _TAIL=keep:no-guard _KEEP_HINT="fullscreen guard failed"
+         _KEEP_DETAIL="fullscreen guard rc $_rc — keeping the shell ($1 $_WHY): ${_o:-no output}" ;;
+  esac
 }
+
+_end() { # $1=what exited $2=rc $3=1 iff fleet launch line $4=claude_started — never returns
+  # The arming marker goes FIRST: one that outlives the decision answers armed() for whatever pane
+  # next carries this id, and the gate below can take seconds (FIX-DESIGN break 7).
+  [ -n "${_armed:-}" ] && rm -f "$_armed" 2>/dev/null
+  _V="${1:-}" # what _escape's row names
+  [ "$_TAIL" = close ] && _gate "${1:-}"
+  _pane_exit_tail "$_TAIL"
+  case "$_TAIL" in
+    closed)
+      _detail "${1:-} $_WHY — closing this pane" "CC_PANE_CLOSE_ON_EXIT=0 keeps it"
+      _DONE=1; exit 0 ;;
+    hold:*) _hold "${_TAIL#hold:}"; exit 1 ;;
+    keep:crash) _kept_line "${1:-}" "${2:-}" "${3:-0}" "${4:-true}" ;;
+    keep:kill-switch) _detail "${1:-} $_WHY — CC_PANE_CLOSE_ON_EXIT=0, keeping the shell" ;;
+    keep:no-guard|keep:no-recycle-lib)
+      CC_SAY_DETAIL="$_KEEP_DETAIL" _say warn "pane kept, not closed" "$_KEEP_HINT"
+      _husk_row "${_TAIL#keep:}" what="${1:-}" ;;
+    keep:recycle|keep:not-a-session) ;;
+    *) _TAIL=keep:fallback; _pane_exit_tail keep:fallback; _husk_row runner-escape what="${1:-}" ;;
+  esac
+  # One writer: when the verdict was painted, the fallback adds no line of its own.
+  [ "$_PV_PAINTED" = 1 ] && _SAY_ON_KEEP=""
+  _fallback "$_SAY_ON_KEEP"
+}
+
+# ── THE HOLD (FIX-DESIGN D1, D3) ─────────────────────────────────────────────────────────────────
+# A clean exit the guard refused. The runner stays the pane's process and re-asks the guard with
+# backoff (step CC_PANE_HOLD_STEP_S, doubling to a cap of 12 steps for fullscreen, 60 for a kitty that
+# does not answer). It closes only on TWO consecutive safe reads (rc 0 or 4) — a single safe read can
+# be a sample inside a fullscreen enter animation — on a clear `--any-fs` read when the kitten itself
+# failed (remote control down: the same no-socket proof cc-pane-close accepts), or once KITTY_PID is
+# gone (nothing left to empty). A guard that cannot answer, or the CC_PANE_HOLD_MAX_POLLS budget,
+# exits 1 into _escape. Painted as DONE + held, never RESUME: this was a clean exit.
+_hold() { # $1=fs|unreadable — exits 0 only once removing this pane cannot empty a fullscreen window
+  local _c="$1" _s="${CC_PANE_HOLD_STEP_S:-5}" _w _ok=0 _n=0 _rc _o _cap
+  case "$_s" in ''|*[!0-9]*) _s=5 ;; esac
+  _hold_paint "$_c"; _w="$_s"
+  while :; do
+    /bin/sleep "$_w"; _n=$((_n + 1))
+    if [ -n "${KITTY_PID:-}" ] && ! kill -0 "$KITTY_PID" 2>/dev/null; then _hold_done; fi
+    if [ -n "${CC_PANE_HOLD_MAX_POLLS:-}" ] && [ "$_n" -gt "$CC_PANE_HOLD_MAX_POLLS" ]; then exit 1; fi
+    _rc=0; _o="$(cc_run "$_GUARD" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-hold 2>&1)" || _rc=$?
+    if [ "$_rc" = 3 ] && [ -n "${KITTY_PID:-}" ]; then
+      case "$_o" in *kitten-failed*)
+        _rc=0; cc_run "$_GUARD" --any-fs --kitty-pid "$KITTY_PID" --tool cc-pane-hold >/dev/null 2>&1 || _rc=3 ;;
+      esac
+    fi
+    case "$_rc" in
+      0|4) _ok=$((_ok + 1)); [ "$_ok" -ge 2 ] && _hold_done; _w=$((2 * _s)) ;;
+      3)   _ok=0
+           case "$_o" in *"refused (refused-fs)"*) _hold_class fs ;; *) _hold_class unreadable ;; esac
+           _cap=$((12 * _s)); [ "$_c" = unreadable ] && _cap=$((60 * _s))
+           _w=$((_w * 2)); [ "$_w" -gt "$_cap" ] && _w="$_cap"; [ "$_w" -gt 0 ] || _w="$_s" ;;
+      *)   exit 1 ;;
+    esac
+  done
+}
+_hold_class() { [ "$1" = "$_c" ] && return 0; _c="$1"; _pane_exit_tail "hold:$_c"; _hold_paint "$_c"; } # _c: _hold's
+_hold_paint() { # $1=fs|unreadable
+  if [ "$1" = fs ]; then _verdict --state "${_PV_STATE:-DONE}" --guard held || _say wait "done · closes itself when safe" "⌘W closes it now"
+  else _verdict --state "${_PV_STATE:-DONE}" --guard unreadable || _say wait "kitty didn't answer" "closes when it does"; fi
+}
+_hold_done() { _DONE=1; _pane_exit_tail closed; _detail "held pane — removing it is safe now, closing it"; exit 0; }
 
 # A non-zero exit that keeps the shell. One line, or none (one event, one line):
 #   · rc 3 / 9 from a fleet launcher — lr-fire-resume already printed the refusal and why;
@@ -378,7 +451,7 @@ _kept_line() { # $1=verb $2=rc $3=1 iff fleet launch line $4=claude_started
 # Written on EVERY return of the command, before the pane decides what to become:
 #
 #   ~/.claude/run/pane-exit/<window>.json     (<window> = KITTY_WINDOW_ID; dir = $CC_PANE_EXIT_DIR)
-#   {"rc": <int>, "claude_started": <true|false>, "launch_sha": "<hex>", "ts": <int>}
+#   {"rc": <int>, "claude_started": <true|false>, "launch_sha": "<hex>", "ts": <int>, "tail": "<state>"}
 #
 #   rc              the command's exit status, as this runner saw it
 #   claude_started  true iff a claude session demonstrably started in THIS pane during this launch:
@@ -387,6 +460,11 @@ _kept_line() { # $1=verb $2=rc $3=1 iff fleet launch line $4=claude_started
 #   launch_sha      sha256 of the exact command line this runner ran (empty if no hasher), so a
 #                   reader can tell its own launch's record from an older one in the same window id
 #   ts              epoch seconds at which the command returned
+#   tail            what the pane became, added once decided and rewritten as a hold moves on:
+#                   closed · hold:fs · hold:unreadable · keep:<why>. Absent = not decided yet.
+#
+# The self-close watcher (scripts/handoff-fire.sh hf_pane_exit_tail) waits for `tail` on a record of
+# its own launch rather than reading `ts` alone, because the record is written before the decision.
 #
 # Readers: lr-fire-resume (Wave C), handoff-fire's PARKED verdict (Wave E), cc-pane-close's
 # never-launched arm (Wave F). Change a field only with all three. Exported to the command, so a
@@ -423,8 +501,21 @@ _pane_owed() { # → prints 1 iff a durable record owns this launch's retry, els
   if [ -n "${LR_RUN_DIR:-}" ] && [ -f "$LR_RUN_DIR/relaunch.rc" ]; then printf 1; return 0; fi
   printf 0
 }
+# The fields stay in globals, so the decision can rewrite the same record with its `tail` added
+# (§ AFTER THE COMMAND in the header) — same ts: the watcher reads "this launch's record, decided".
+_PE_RC="" _PE_STARTED="" _PE_SHA="" _PE_TS=""
+_pane_exit_write() { # [$1=tail] → writes the record from the globals atomically (tmp + mv); never fatal
+  local _id="${KITTY_WINDOW_ID:-}" _t
+  [ -n "$_PANE_EXIT_DIR" ] && [ -n "$_PE_RC" ] || return 0
+  _t="$_PANE_EXIT_DIR/.$_id.json.$$"
+  printf '{"rc":%s,"claude_started":%s,"launch_sha":"%s","ts":%s%s}\n' "$_PE_RC" "$_PE_STARTED" "$_PE_SHA" "$_PE_TS" \
+    "${1:+,\"tail\":\"$1\"}" > "$_t" 2>/dev/null && mv -f "$_t" "$_PANE_EXIT_DIR/$_id.json" 2>/dev/null
+  rm -f "$_t" 2>/dev/null
+  return 0
+}
+_pane_exit_tail() { _pane_exit_write "$1"; } # $1=closed|hold:<class>|keep:<why>
 _pane_exit_record() { # $1=command $2=rc $3=claude_started → writes the record atomically; never fatal
-  local _id="${KITTY_WINDOW_ID:-}" _sha="" _t
+  local _sha=""
   [ -n "$_PANE_EXIT_DIR" ] || return 0
   case "$2" in ''|*[!0-9]*) return 0 ;; esac
   # /sbin/sha256sum, never shasum: /usr/bin/shasum is a #! perl script (a kernel-memory leak per
@@ -435,11 +526,8 @@ _pane_exit_record() { # $1=command $2=rc $3=claude_started → writes the record
     _sha="$(printf '%s' "$1" | sha256sum 2>/dev/null | cut -d' ' -f1)"
   fi
   case "$_sha" in *[!0-9a-f]*) _sha="" ;; esac
-  _t="$_PANE_EXIT_DIR/.$_id.json.$$"
-  printf '{"rc":%s,"claude_started":%s,"launch_sha":"%s","ts":%s}\n' "$2" "$3" "$_sha" "$(date +%s)" > "$_t" 2>/dev/null \
-    && mv -f "$_t" "$_PANE_EXIT_DIR/$_id.json" 2>/dev/null
-  rm -f "$_t" 2>/dev/null
-  return 0
+  _PE_RC="$2" _PE_STARTED="$3" _PE_SHA="$_sha" _PE_TS="$(date +%s)"
+  _pane_exit_write
 }
 
 # ── RUNNING THE COMMAND: two eval shells, because two callers name things differently ────────────
@@ -566,17 +654,18 @@ _launch() { # $1=command — never returns
   # only supposed to transport. The guard exists for the runner's own logic above, and its job is done.
   set +u
   local _rc _started
-  export CC_PANE_RUNNER_OWNS_CLOSE=1
+  export CC_PANE_RUNNER_OWNS_CLOSE="${KITTY_WINDOW_ID:-1}"
   _pane_exit_prepare
   if [ "$_interactive" = 1 ]; then
-    "${SHELL:-/bin/zsh}" -l -i -c "$1"; _rc=$?
+    "${SHELL:-/bin/zsh}" -l -i -c "$1"; _rc=$?; _guarded
   else
-    eval "$1"; _rc=$?
+    eval "$1"; _rc=$?; _guarded
   fi
   _started="$(_pane_claude_started)"
   _pane_exit_record "$1" "$_rc" "$_started"
-  _close_on_exit "$1" "$_rc" "$_interactive" "$_started" "$(_pane_owed)"
-  _fallback ""
+  _exit_policy "$1" "$_rc" "$_interactive" "$_started" "$(_pane_owed)"
+  _end "$_V" "$_rc" "$_interactive" "$_started"
+  exit 1 # unreachable: _end never returns; if it did, _escape keeps a shell
 }
 
 # ── TWO DELIVERY MODES, because the two callers learn the command at different times ─────────────
@@ -611,15 +700,14 @@ _armed="$_dir/$_id.armed"
 # a human's to read. CC_PANE_CLOSE_ON_EXIT=0 keeps it here too, and the close takes the same gates.
 # The exit record comes FIRST (husk-panes-2026-10-22 F3, pane 101): without it cc-pane-close's
 # never-launched arm has no evidence and refuses this pane forever. rc 124, claude_started=false.
+# A refusal holds and closes itself, exactly as after a command (_end).
 _no_command() {
+  _guarded
   _pane_exit_prepare
   _pane_exit_record '<none>' 124 false
-  if [ "${CC_PANE_CLOSE_ON_EXIT:-1}" != 0 ]; then
-    _PV_STATE=NOTHING _close_pane "this armed agent pane" "received no command within ${_wait}s"
-  fi
-  # One writer: when the verdict was painted, the fallback adds no line of its own.
-  if [ "$_PV_PAINTED" = 1 ]; then _detail "no command arrived within ${_wait}s" "pane kept, verdict painted"; _fallback ""; fi
-  _fallback "no command arrived within ${_wait}s"
+  _TAIL=close _WHY="received no command within ${_wait}s" _SAY_ON_KEEP="no command arrived within ${_wait}s"
+  [ "${CC_PANE_CLOSE_ON_EXIT:-1}" = 0 ] && _TAIL=keep:kill-switch
+  _PV_STATE=NOTHING _end "this armed agent pane" 124 0 false
 }
 
 _deadline=$(( $(date +%s) + _wait ))
@@ -642,5 +730,5 @@ rm -f "$_cmdfile" "$_armed" 2>/dev/null
 
 # _launch says what it is starting first (_launch_line: one short line, the full command in the
 # cc-say log), and that line keeps the `--agent-name <n>` anchor cc-spawn-verify reads. It never
-# returns — it ends in a shell, or in a closed pane after a clean claude exit (_close_on_exit).
+# returns — it ends in a closed pane, a hold that closes itself, or a kept shell (_end).
 _launch "$_cmd"

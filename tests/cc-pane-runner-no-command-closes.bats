@@ -18,12 +18,18 @@ setup() {
   mkdir -p "$T/home" "$T/locks" "$T/cmd"
   export HOME="$T/home" LR_LOCKS_DIR="$T/locks" GLOG="$T/guard-log" SHELL_RAN="$T/shell-ran"
   export KITTY_WINDOW_ID=42 CC_PANE_WEDGE_WATCH=0 CC_PANE_CMD_DIR="$T/cmd" CC_PANE_CMD_WAIT_S=0
+  export CC_PANE_HOLD_STEP_S=0 GSEQ="$T/guard-seq"
   unset KITTY_LISTEN_ON CC_TERM_KITTY_TO CC_PANE_CLOSE_ON_EXIT CC_PANE_CMD_INTERACTIVE CC_PANE_CMD
-  unset CC_PANE_RUNNER_OWNS_CLOSE KITTY_PID LR_RUN_DIR CC_PANE_STARTED_FILE CC_PANE_EXIT_OWED
+  unset CC_PANE_RUNNER_OWNS_CLOSE KITTY_PID LR_RUN_DIR CC_PANE_STARTED_FILE CC_PANE_EXIT_OWED CC_PANE_HOLD_MAX_POLLS
   export PATH="$S:/usr/bin:/bin"
+  # answers $GUARD_RC — or, when $GSEQ exists, one rc per call from it, the last repeating
   cc_stub "$S" fsguard '#!/bin/bash
 printf "%s\n" "$*" >> "$GLOG"
-[ -n "${GUARD_ERR:-}" ] && printf "%s\n" "$GUARD_ERR" >&2
+if [ -s "$GSEQ" ]; then
+  n=$(( $(cat "$GSEQ.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$GSEQ.n"
+  GUARD_RC="$(sed -n "${n}p" "$GSEQ")"; [ -n "$GUARD_RC" ] || GUARD_RC="$(tail -n 1 "$GSEQ")"
+fi
+[ "${GUARD_RC:-0}" != 0 ] && [ -n "${GUARD_ERR:-}" ] && printf "%s\n" "$GUARD_ERR" >&2
 exit "${GUARD_RC:-0}"'
   export CC_KITTY_FS_GUARD="$S/fsguard"
   cc_stub "$S" fakeshell '#!/bin/bash
@@ -48,8 +54,16 @@ exit 7'
   [ -s "$GLOG" ]
 }
 
-@test "the guard refusing (last pane of a fullscreen window) keeps the shell — never a raw close" {
-  GUARD_RC=3 run "$RUNNER"
+@test "the guard refusing (last pane of a fullscreen window) holds, then closes once safe — never a raw close, never a shell" {
+  printf '3\n0\n0\n' > "$GSEQ"
+  run "$RUNNER"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$SHELL_RAN" ]
+  [ "$(wc -l < "$GLOG" | tr -d ' ')" = 3 ]
+}
+
+@test "a hold whose poll budget runs out keeps the shell — the only refusal that ends in one" {
+  CC_PANE_HOLD_MAX_POLLS=1 GUARD_RC=3 run "$RUNNER"
   [ "$status" -eq 7 ]
   [ -e "$SHELL_RAN" ]
 }
@@ -77,40 +91,50 @@ exit 7'
 @test "an UNREADABLE guard read says kitty didn't answer — never 'last pane of a fullscreen window', never the guard's raw line" {
   # husk-panes-2026-10-22 F4, pane 42: a kitten-failed read in a 3-pane window was painted as the
   # last pane of a fullscreen window, with the guard's placeholder state line under it. RED before
-  # the fix: both forbidden strings reached the pane.
-  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: timed out' run "$RUNNER"
-  [ "$status" -eq 7 ]
+  # the fix: both forbidden strings reached the pane. Now the read holds, then closes.
+  printf '3\n0\n0\n' > "$GSEQ"
+  GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: timed out' run "$RUNNER"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"kitty didn't answer"* ]] || { echo "$output"; false; }
   [[ "$output" != *"last pane of a fullscreen window"* ]] || { echo "$output"; false; }
   [[ "$output" != *"kitty-fullscreen-guard: refused"* ]] || { echo "$output"; false; }
 }
 
-@test "a refused-fs guard verdict says last pane of a fullscreen window and names ⌘W, without the guard's raw line" {
-  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 42 scope=pane mode=refuse: state=FS types=[4] onscreen=True' run "$RUNNER"
-  [ "$status" -eq 7 ]
-  [[ "$output" == *"last pane of a fullscreen window"*"⌘W closes it"* ]] || { echo "$output"; false; }
+@test "a refused-fs guard verdict says it closes itself when safe and names ⌘W, without the guard's raw line" {
+  printf '3\n0\n0\n' > "$GSEQ"
+  GUARD_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 42 scope=pane mode=refuse: state=FS types=[4] onscreen=True' run "$RUNNER"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"closes itself when safe"*"⌘W closes it now"* ]] || { echo "$output"; false; }
   [[ "$output" != *"kitty-fullscreen-guard: refused"* ]] || { echo "$output"; false; }
 }
 
-@test "no command and the guard cannot read kitty: an exit record (never launched) AND a husk row are left" {
+@test "no command and the guard cannot read kitty: an exit record (never launched), held with no row; an escape leaves one" {
   # husk-panes-2026-10-22 F3, pane 101: _no_command wrote no exit record, so cc-pane-close's
   # never-launched arm refused the pane forever, and nothing retried. RED before the fix.
   export CC_PANE_EXIT_DIR="$T/pane-exit" CC_PANE_CLOSE_QUEUE_DIR="$T/q"
-  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: x' run "$RUNNER"
-  [ "$status" -eq 7 ]
+  printf '3\n0\n0\n' > "$GSEQ"
+  GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: x' run "$RUNNER"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(jq -r .claude_started "$T/pane-exit/42.json")" = false ]
   [ "$(jq -r .rc "$T/pane-exit/42.json")" = 124 ]
-  [ "$(jq -r .reason "$T/q/husk-42.json")" = guard-unreadable ]
+  [ "$(jq -r .tail "$T/pane-exit/42.json")" = closed ]
+  [ ! -e "$T/q/husk-42.json" ]
+  rm -f "$GSEQ"
+  CC_PANE_HOLD_MAX_POLLS=1 GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: x' run "$RUNNER"
+  [ "$status" -eq 7 ]
+  [ "$(jq -r .tail "$T/pane-exit/42.json")" = keep:fallback ]
+  [ "$(jq -r .reason "$T/q/husk-42.json")" = runner-escape ]
   [ "$(jq -r .what "$T/q/husk-42.json")" = "this armed agent pane" ]
 }
 
-@test "F5: with a tty, the kept no-command pane is painted by cc-pane-verdict (NOTHING RAN) and the runner adds no line" {
+@test "F5: with a tty, the held no-command pane is painted by cc-pane-verdict (NOTHING RAN) and the runner adds no line" {
   # RED before F5: the runner printed its own two lines (the guard's and "pane is an ordinary shell").
   export CC_PANE_RUNNER_TTY="$T/ttys042" CC_PANE_EXIT_DIR="$T/pane-exit" CC_PANE_CLOSE_QUEUE_DIR="$T/q"
   export CC_PANE_VERDICT_DIR="$T/pv" CC_PANE_VERDICT_KITTY_BIN="$T/no-kitty" CC_SAY_LOG="$T/say.jsonl"
   : > "$CC_PANE_RUNNER_TTY"
-  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: x' run "$RUNNER"
-  [ "$status" -eq 7 ]
+  printf '3\n0\n0\n' > "$GSEQ"
+  GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: x' run "$RUNNER"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
   grep -qF '✗ no session started in this pane' "$CC_PANE_RUNNER_TTY" || { cat -v "$CC_PANE_RUNNER_TTY"; false; }
   grep -qF "kitty didn't answer · closes when it does" "$CC_PANE_RUNNER_TTY"
   [[ "$output" != *"pane is an ordinary shell"* ]] || { echo "$output"; false; }

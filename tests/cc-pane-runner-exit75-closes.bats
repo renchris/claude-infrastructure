@@ -21,13 +21,14 @@ setup() {
   S="$T/stub"
   mkdir -p "$S" "$T/home" "$T/locks"
   export HOME="$T/home" LR_LOCKS_DIR="$T/locks"
-  export KITTY_WINDOW_ID=42 CC_PANE_WEDGE_WATCH=0
+  export T KITTY_WINDOW_ID=42 CC_PANE_WEDGE_WATCH=0 CC_PANE_HOLD_STEP_S=0
   export CC_PANE_EXIT_DIR="$T/pane-exit" CC_REGISTRY_DIR="$T/reg" CC_BEAT_DIR="$T/beats"
   unset KITTY_LISTEN_ON CC_TERM_KITTY_TO CC_PANE_CLOSE_ON_EXIT CC_PANE_CMD_INTERACTIVE CC_PANE_CMD CC_PANE_CMD_DIR
-  unset CC_PANE_RUNNER_OWNS_CLOSE KITTY_PID LR_RUN_DIR CC_PANE_STARTED_FILE CC_PANE_EXIT_OWED
+  unset CC_PANE_RUNNER_OWNS_CLOSE KITTY_PID LR_RUN_DIR CC_PANE_STARTED_FILE CC_PANE_EXIT_OWED CC_PANE_HOLD_MAX_POLLS
   export PATH="$S:/usr/bin:/bin"
-  # the guard records its argv and answers $GUARD_RC (0 = safe to close)
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\n[ -n "${GUARD_ERR:-}" ] && printf "%%s\\n" "$GUARD_ERR" >&2\nexit "${GUARD_RC:-0}"\n' "$T/guard-log" > "$S/fsguard"
+  # the guard records its argv and answers $GUARD_RC (0 = safe to close) — or, when $T/guard-seq
+  # exists, one rc per call from it, the last repeating (a refusal now HOLDS and re-asks)
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nif [ -s "$T/guard-seq" ]; then n=$(( $(cat "$T/guard-n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$T/guard-n"; GUARD_RC="$(sed -n "${n}p" "$T/guard-seq")"; [ -n "$GUARD_RC" ] || GUARD_RC="$(tail -n 1 "$T/guard-seq")"; fi\n[ "${GUARD_RC:-0}" != 0 ] && [ -n "${GUARD_ERR:-}" ] && printf "%%s\\n" "$GUARD_ERR" >&2\nexit "${GUARD_RC:-0}"\n' "$T/guard-log" > "$S/fsguard"
   export CC_KITTY_FS_GUARD="$S/fsguard"
   # the launch line: exits $LAUNCH_RC; LAUNCH_OWED=1 touches the owed-record path the runner exports,
   # LAUNCH_STARTED=1 the started path — the two facts only a launcher can supply
@@ -56,15 +57,26 @@ field() { jq -r ".$1" "$CC_PANE_EXIT_DIR/42.json"; }
   [ "$(field claude_started)" = false ]
   [ "$(field launch_sha)" = "$(printf '%s' "bash $S/lr-launch" | shasum -a 256 | cut -d' ' -f1)" ]
   [[ "$(field ts)" =~ ^[0-9]+$ ]] || false
-  [ "$(jq -r 'keys | join(",")' "$CC_PANE_EXIT_DIR/42.json")" = "claude_started,launch_sha,rc,ts" ]
+  [ "$(jq -r 'keys | join(",")' "$CC_PANE_EXIT_DIR/42.json")" = "claude_started,launch_sha,rc,tail,ts" ]
+  [ "$(field tail)" = closed ]
 }
 
-@test "rc 75 with the guard REFUSING (last pane of a fullscreen window) keeps the shell — never a raw close" {
-  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 42 scope=pane mode=refuse: state=FS types=[4] onscreen=True' LAUNCH_RC=75 run_fleet "bash $S/lr-launch"
+@test "rc 75 with the guard REFUSING (last pane of a fullscreen window) holds, then closes once safe — never a raw close, never a shell" {
+  printf '3\n0\n0\n' > "$T/guard-seq"
+  GUARD_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 42 scope=pane mode=refuse: state=FS types=[4] onscreen=True' LAUNCH_RC=75 run_fleet "bash $S/lr-launch"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$T/shell-ran" ]
+  [[ "$output" == *"done · closes itself when safe"*"⌘W closes it now"* ]] || { echo "$output"; false; }
+  said "guard: kitty-fullscreen-guard: refused (refused-fs)"
+  [ "$(wc -l < "$T/guard-log" | tr -d ' ')" = 3 ]
+  [ "$(field tail)" = closed ]
+}
+
+@test "a hold whose poll budget runs out keeps the shell (keep:fallback) — the only refusal that ends in one" {
+  CC_PANE_HOLD_MAX_POLLS=1 GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 42 scope=pane mode=refuse: state=FS types=[4] onscreen=True' LAUNCH_RC=75 run_fleet "bash $S/lr-launch"
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
-  [[ "$output" == *"⚠ last pane of a fullscreen window · ⌘W closes it"* ]] || { echo "$output"; false; }
-  said "guard: kitty-fullscreen-guard: refused (refused-fs)"
+  [ "$(field tail)" = keep:fallback ]
 }
 
 @test "an in-place shell survives: rc 75 while a recycle is pending for this pane keeps the shell, guard never asked" {
@@ -102,6 +114,7 @@ field() { jq -r ".$1" "$CC_PANE_EXIT_DIR/42.json"; }
   LAUNCH_RC=9 LAUNCH_OWED=1 LAUNCH_STARTED=1 run_fleet "bash $S/lr-launch"
   [ "$status" -eq 7 ]
   [ "$(field claude_started)" = true ]
+  [ "$(field tail)" = keep:crash ]
 }
 
 @test "claude_started also reads this pane's registry row written after the launch began" {
@@ -131,11 +144,17 @@ husk() { jq -r ".$1" "$CC_PANE_CLOSE_QUEUE_DIR/husk-42.json"; }
   [ "$(husk producer)" = cc-pane-runner ]
 }
 
-@test "a guard refusal on a clean exit leaves a husk row naming the guard's verdict" {
+@test "a guard refusal on a clean exit holds with no row; only a hold that escapes leaves one (runner-escape)" {
   export CC_PANE_CLOSE_QUEUE_DIR="$T/q"
-  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: x' run_fleet "bash $S/lr-launch"
+  printf '3\n0\n0\n' > "$T/guard-seq"
+  GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: x' run_fleet "bash $S/lr-launch"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$CC_PANE_CLOSE_QUEUE_DIR/husk-42.json" ]
+  rm -f "$T/guard-seq"
+  CC_PANE_HOLD_MAX_POLLS=1 GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (kitten-failed) could not read kitty window 42: x' run_fleet "bash $S/lr-launch"
   [ "$status" -eq 7 ]
-  [ "$(husk reason)" = guard-unreadable ]
+  [ "$(husk reason)" = runner-escape ]
+  [ "$(husk what)" = "the fleet launch line" ]
 }
 
 @test "CONTROL: keeps on purpose leave no row (CC_PANE_CLOSE_ON_EXIT=0; claude never started, no owed record)" {
@@ -147,16 +166,20 @@ husk() { jq -r ".$1" "$CC_PANE_CLOSE_QUEUE_DIR/husk-42.json"; }
   [ ! -e "$CC_PANE_CLOSE_QUEUE_DIR/husk-42.json" ]
 }
 
-@test "STRUCTURAL PIN: every keep in _close_pane but the recycle-pending one writes a husk row" {
-  # A new keep site without a row is a pane nobody will ever retry. Each `return 0` in the function
-  # must have a _husk_row (or the recycle-pending keep, on purpose) in the 8 lines above it.
-  run awk '/^_close_pane\(\) \{/{f=1} f&&/^\}/{exit}
-           f{ L[++n]=$0; if ($0 ~ /return 0/) { ok=0; k++
-                for (i=n-1; i>=n-8 && i>0; i--) if (L[i] ~ /_husk_row |recycle pending, keeping the shell/) { ok=1; break }
-                if (!ok) { print "BARE KEEP: " $0; bad=1 } } }
+@test "STRUCTURAL PIN: every keep arm in _end but the on-purpose ones writes a husk row" {
+  # A new keep without a row is a pane nobody will ever retry. Each keep arm of _end's case (and its
+  # catch-all) must call _husk_row or _kept_line (which writes the crash row), unless it is a keep on
+  # purpose: the kill switch, a pending recycle, a command that is not a session.
+  run awk '/^_end\(\) \{/{f=1} f&&/^\}/{exit}
+           f && /^    (keep:[a-z:|-]+|\*)\)/ { arm=$0; while (arm !~ /;;/ && (getline l) > 0) arm = arm " " l; k++
+             if (arm ~ /_husk_row |_kept_line / || arm ~ /^    keep:(kill-switch|recycle[|]keep:not-a-session)\)/) next
+             print "BARE KEEP: " arm; bad=1 }
            END { print "keeps=" k; exit bad }' "$RUNNER"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$output" = "keeps=4" ] || { echo "$output"; false; }
+  [ "$output" = "keeps=5" ] || { echo "$output"; false; }
+  # and the EXIT trap's keep writes one too
+  run awk '/^_escape\(\) \{/{f=1} f&&/^\}/{exit} f&&/_husk_row runner-escape/{print "row"}' "$RUNNER"
+  [ "$output" = row ]
 }
 
 @test "F5: a crash keep prints no resume line and no exit code — the watchdog paints that verdict" {

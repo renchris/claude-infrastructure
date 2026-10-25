@@ -18,16 +18,17 @@ setup() {
   S="$T/stub"
   mkdir -p "$S" "$T/home" "$T/locks"
   export HOME="$T/home" LR_LOCKS_DIR="$T/locks" CC_CLOSE_RECORDS_DIR="$T/records"
-  export KITTY_WINDOW_ID=42 CC_PANE_WEDGE_WATCH=0
+  export T KITTY_WINDOW_ID=42 CC_PANE_WEDGE_WATCH=0 CC_PANE_HOLD_STEP_S=0
   unset KITTY_LISTEN_ON CC_TERM_KITTY_TO CC_PANE_CLOSE_ON_EXIT CC_PANE_CMD_INTERACTIVE CC_PANE_CMD CC_PANE_CMD_DIR
-  unset CC_PANE_RUNNER_OWNS_CLOSE CC_CLOSE_PANE_ON_EXIT CC_MEMDIR_REALPATH CC_CLOSE_ATTRIB_DISABLED
+  unset CC_PANE_RUNNER_OWNS_CLOSE CC_CLOSE_PANE_ON_EXIT CC_MEMDIR_REALPATH CC_CLOSE_ATTRIB_DISABLED CC_PANE_HOLD_MAX_POLLS
   export PATH="$S:/usr/bin:/bin"
   # The fullscreen guard (bin/kitty-fullscreen-guard) is the close's LAST gate: a stub that logs its
-  # argv and exits $GUARD_RC (default 0 = safe to close). No real kitty is reachable: KITTY_PID unset,
-  # kitty and osascript on PATH are loggers.
+  # argv and exits $GUARD_RC (default 0 = safe to close) — or, when $T/guard-seq exists, one rc per
+  # call from it, the last repeating (a refusal HOLDS and re-asks). No real kitty is reachable:
+  # KITTY_PID unset, kitty and osascript on PATH are loggers.
   unset KITTY_PID
   # shellcheck disable=SC2016
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\n[ -n "${GUARD_ERR:-}" ] && printf "%%s\\n" "$GUARD_ERR" >&2\nexit "${GUARD_RC:-0}"\n' "$T/guard-log" > "$S/fsguard"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nif [ -s "$T/guard-seq" ]; then n=$(( $(cat "$T/guard-n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$T/guard-n"; GUARD_RC="$(sed -n "${n}p" "$T/guard-seq")"; [ -n "$GUARD_RC" ] || GUARD_RC="$(tail -n 1 "$T/guard-seq")"; fi\n[ "${GUARD_RC:-0}" != 0 ] && [ -n "${GUARD_ERR:-}" ] && printf "%%s\\n" "$GUARD_ERR" >&2\nexit "${GUARD_RC:-0}"\n' "$T/guard-log" > "$S/fsguard"
   printf '#!/bin/bash\necho "$0 $*" >> %q\nexit 0\n' "$T/kitty-log" > "$S/kitty"
   cp "$S/kitty" "$S/osascript"
   export CC_KITTY_FS_GUARD="$S/fsguard" CC_TERM_KITTY="$S/kitty"
@@ -183,12 +184,20 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
   [ ! -e "$T/kitty-log" ]
 }
 
-@test "runner: the guard refusing (rc 3: last pane of a fullscreen window) keeps the shell" {
-  GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 42 scope=pane mode=refuse: state=FS types=[4] onscreen=True' run_runner "claude"
+@test "runner: the guard refusing (rc 3: last pane of a fullscreen window) holds, then closes once safe" {
+  printf '3\n0\n0\n' > "$T/guard-seq"
+  GUARD_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 42 scope=pane mode=refuse: state=FS types=[4] onscreen=True' run_runner "claude"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$T/shell-ran" ]
+  said "guard: kitty-fullscreen-guard: refused (refused-fs)"
+  [[ "$output" == *"done · closes itself when safe"*"⌘W closes it now"* ]] || { echo "$output"; false; }
+  [ ! -e "$T/kitty-log" ]
+}
+
+@test "runner: a hold whose poll budget runs out keeps the shell — the only refusal that ends in one" {
+  CC_PANE_HOLD_MAX_POLLS=1 GUARD_RC=3 GUARD_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 42 scope=pane mode=refuse: state=FS types=[4] onscreen=True' run_runner "claude"
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
-  said "guard: kitty-fullscreen-guard: refused (refused-fs)"
-  [[ "$output" == *"⚠ last pane of a fullscreen window · ⌘W closes it"* ]] || { echo "$output"; false; }
 }
 
 @test "runner: a guard that cannot be found keeps the shell (fail closed), naming the path" {
@@ -198,10 +207,10 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
   [[ "$output" == *"⚠ pane kept, not closed · fullscreen guard missing"* ]] || { echo "$output"; false; }
 }
 
-@test "runner: the command sees CC_PANE_RUNNER_OWNS_CLOSE=1; the fallback shell does not" {
+@test "runner: the command sees CC_PANE_RUNNER_OWNS_CLOSE=<its window id>; the fallback shell does not" {
   STUB_RC=1 run_runner "claude"
   [ "$status" -eq 7 ]
-  [ "$(cat "$T/claude-saw")" = 1 ]
+  [ "$(cat "$T/claude-saw")" = 42 ]
   [ "$(cat "$T/shell-ran")" = "" ]
 }
 
