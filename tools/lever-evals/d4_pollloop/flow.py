@@ -413,7 +413,9 @@ def hand_cases(
                 bg=bool(c.get("run_in_background")),
                 agent_id="reissue",
                 sid="hand",
-                acct="hand",
+                acct=S[s["n"] - 1][
+                    "acct"
+                ],  # the original's account (sims.jsonl n follows sample order)
                 t=0,
                 rt=None,
                 gap=None,
@@ -469,7 +471,10 @@ def check_repro(ref_cases, ref_meta):
     within ±5% of 3,730 / 326."""
     rows, ok = [], True
     hand = [g for g in ref_cases if g.get("hand")] or hand_cases()
-    rep = predicate.replay(hand)
+    try:
+        rep = predicate.replay(hand)
+    except predicate.PlumbingError as e:
+        return False, ["hand-read replay: no verdict — %s FAIL" % e]
     orig = [g for g in hand if g.get("hand") == "wait"]
     sims = [g for g in hand if g.get("hand") == "reissue"]
     if orig or sims:
@@ -607,10 +612,27 @@ def fixture(cases, meta, path=REF_FIXTURE):
         raise ValueError("hand-read import incomplete: %d of 40 cases" % len(hand))
     rows = predicate.replay(cases)
     order = sorted(cases, key=lambda g: hashlib.sha1(g["case_id"].encode()).hexdigest())
-    den = [g for g in order if predicate.would_deny(rows[g["case_id"]])][:FIXTURE_DENY]
-    oth = [g for g in order if not predicate.would_deny(rows[g["case_id"]])][
-        :FIXTURE_OTHER
-    ]
+    accts = sorted({g["acct"] for g in cases})
+    pick = []
+    # per account and per verdict, exactly 1 in 5 drawn from the hash split's test half, so the
+    # sample splits in band (hc.split refuses an account outside 10-30% test)
+    for a in accts:
+        for deny, quota in ((True, FIXTURE_DENY), (False, FIXTURE_OTHER)):
+            q = quota // len(accts)
+            pool = [
+                g
+                for g in order
+                if g["acct"] == a and predicate.would_deny(rows[g["case_id"]]) == deny
+            ]
+            te = [
+                g
+                for g in pool
+                if int(hashlib.sha1(g["case_id"].encode()).hexdigest(), 16) % 5 == 0
+            ]
+            tr = [g for g in pool if g not in te]
+            pick += te[: q // 5] + tr[: q - q // 5]
+    den = [g for g in pick if predicate.would_deny(rows[g["case_id"]])]
+    oth = [g for g in pick if not predicate.would_deny(rows[g["case_id"]])]
     out = list(hand)
     for g in den + oth:
         h = dict(g, sid=hashlib.sha1(g["sid"].encode()).hexdigest()[:12])

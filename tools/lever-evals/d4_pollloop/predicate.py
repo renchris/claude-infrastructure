@@ -32,7 +32,7 @@ HOOK = os.path.join(REPO, "hooks", "subagent-long-bash-shadow.sh")
 BASH = "/bin/bash"
 WORKERS = int(os.environ.get("CC_LEVER_D4_WORKERS", "8"))
 CONTROL_ID = "d4-positive-control"
-CONTROL_CMD = "until test -f /nonexistent/done; do sleep 10; done; echo done"
+CONTROL_CMD = "while ! test -f /nonexistent/done; do sleep 10; done; echo done"
 _cache = {}
 _lock = threading.Lock()
 
@@ -76,8 +76,10 @@ def _run_chunk(hook, chunk, log, env):
         )
 
 
-def replay(cases, hook=HOOK):
-    """→ {case_id: the hook's logged row, or None when it did not judge the call}."""
+def replay(cases, hook=None):
+    """→ {case_id: the hook's logged row, or None when it did not judge the call}. hook=None reads
+    HOOK at CALL time (a default bound at import would ignore a later reassignment of HOOK)."""
+    hook = hook or HOOK
     if not os.path.isfile(hook):
         raise PlumbingError("hook not found: %s" % hook)
     sha = hook_sha(hook)
@@ -125,7 +127,8 @@ def replay(cases, hook=HOOK):
         if not c or c.get("would_deny_class") != "poll-loop":
             raise PlumbingError(
                 "positive control not logged as a poll-loop would-deny (row: %r): the hook "
-                "is not running, so its silence is no verdict" % (c,)
+                "did not run, or no longer recognises a canonical while-sleep loop, so its "
+                "verdicts are no verdict" % (c,)
             )
         with _lock:
             for g in todo:
