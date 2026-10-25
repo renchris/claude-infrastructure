@@ -749,7 +749,7 @@ _gs_escalation_alive() { # <pid> — did this pid survive the TERM? rc 0 = still
 # (`sevenrooms-bridge/`) or one `.worktrees/<name>/` level, then only these six scripts under
 # scripts/macapp/ (on 2026-10-25 every scripts/macapp/ on this box belonged to sevenrooms-bridge). Any
 # other run.sh is still reaped. Pinned as a fixture pair.
-GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|wt-tombstone|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|lr-upgrade[.]sh --drain|lr-move-batch[.]sh|lr-move-worker[.]sh|lr-recon-act|/tmp/lrh-[0-9A-Za-z]+-(cure|red)/|(sevenrooms-bridge|[.]worktrees/[^/ ]+)/scripts/macapp/(refill|incremental|sweep|closed|run|reopen)[.]sh|kitty|tmux|iTerm|launchd"
+GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|wt-tombstone|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|lr-upgrade[.]sh --drain|lr-move-batch[.]sh|lr-move-worker[.]sh|lr-recon-act|/tmp/lrh-[0-9A-Za-z]+-(cure|red)/|(sevenrooms-bridge|[.]worktrees/[^/ ]+)/scripts/macapp/(refill|incremental|sweep|closed|run|reopen)[.]sh|kitty|tmux|iTerm|launchd|lockwatch|forensics|break-glass|devfs-canary"
 _gs_argv_reread() { # <pid> → that pid's argv on stdout, "" when unreadable. Under the fixture seam it
                     # reads CC_REAPER_GARBAGE_PS_B2 (else PS_B again), never the live process table.
   local pid="$1" f
@@ -866,7 +866,7 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
     return 0
   fi
   _gs_switch_on_clear "${1:-0}"
-  local reap="${1:-0}" snapA snapB list cls pid re age argsig desc pin ra
+  local reap="${1:-0}" snapA snapB snapC ptyk list cls pid re age argsig desc pin ra
   local nA=0 nkill=0 nskip=0
   _GS_T_PID=(); _GS_T_RE=(); _GS_T_SIG=(); _GS_T_PIN=()
   _gs_ancestors_init
@@ -874,17 +874,26 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
     snapA="$(cat "$CC_REAPER_GARBAGE_PS_A" 2>/dev/null)" || snapA=""
     snapB="$(cat "$CC_REAPER_GARBAGE_PS_B" 2>/dev/null)" || snapB=""
     _GS_SNAP_T="${CC_REAPER_GARBAGE_PS_EPOCH:-$(date +%s 2>/dev/null)}"
+    # A fixture world without a pty snapshot keeps the pre-2026-10-25 behaviour (L = legacy).
+    snapC=""; ptyk=L
+    if [ -n "${CC_REAPER_GARBAGE_PS_C:-}" ]; then snapC="$(cat "$CC_REAPER_GARBAGE_PS_C" 2>/dev/null)" || snapC=""; ptyk=1; fi
   else
     snapA="$(_rp_bounded "${CC_REAPER_GARBAGE_PS_TIMEOUT_S:-30}" /bin/ps -Axo pid=,ppid=,etime=,ucomm= 2>/dev/null)" || snapA=""
     _GS_SNAP_T="$(date +%s 2>/dev/null)"   # AFTER snapshot A returns: the start pin's clock (_gs_verify_kill)
     snapB="$(_rp_bounded "${CC_REAPER_GARBAGE_PS_TIMEOUT_S:-30}" /bin/ps -Axo pid=,args= 2>/dev/null)" || snapB=""
+    # THE pty SNAPSHOT (2026-10-25 lockup, DESIGN C2). `pgid` and `tdev` are devname-safe columns
+    # (no tt/tty: those call devname(3), the lookup that hung 23 ps that morning). A pty session
+    # leader is pid == pgid with tdev major 16; orphan-bash must never TERM one by pid (below).
+    snapC="$(_rp_bounded "${CC_REAPER_GARBAGE_PS_TIMEOUT_S:-30}" /bin/ps -Axo pid=,pgid=,tdev= 2>/dev/null)" || snapC=""
+    ptyk=1; [ -n "$snapC" ] || ptyk=0
   fi
+  [ "$ptyk" = 0 ] && log "garbage: pty snapshot EMPTY — orphan-bash is skipped this sweep (a pty session leader cannot be told apart)"
   [ -n "$snapA" ] || { log "garbage: snapshot unavailable — arm skipped (fail-open)"; return 0; }
   # An empty argv snapshot beside a full process snapshot is the whole-box argv-miss: say so, once,
   # so the per-pid SKIP lines below have a cause on record.
   [ -n "$snapB" ] || log "garbage: argv snapshot EMPTY — every argv-dependent candidate is re-read per pid, and skipped if still unreadable"
   # One awk, both snapshots: emits `class<TAB>pid<TAB>ucomm-ERE<TAB>age<TAB>desc` per candidate.
-  list="$(printf '%s\n===CUT===\n%s\n' "$snapA" "$snapB" | awk -v wl="$GARBAGE_WL" '
+  list="$(printf '%s\n===CUT===\n%s\n===PTY===\n%s\n' "$snapA" "$snapB" "$snapC" | awk -v wl="$GARBAGE_WL" -v ptyk="$ptyk" '
     # asig(pid) — the argv signature the kill-time re-identification checks against (see
     # _gs_verify_kill). Tabs are the field separator, so any in argv are folded to spaces; an
     # unobserved argv yields "-", which opts that candidate out rather than refusing it.
@@ -902,6 +911,8 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
       if(n==2) return d*86400+hms[1]*60+hms[2];
       return d*86400+hms[1] }
     /^===CUT===$/ { part=2; next }
+    /^===PTY===$/ { part=3; next }
+    part==3 { if ($1 ~ /^[0-9]+$/) { pg[$1]=$2; td[$1]=$3 } next }
     part!=2 { if ($1 !~ /^[0-9]+$/) next
       pid=$1; nm=$4; for(i=5;i<=NF;i++) nm=nm" "$i
       parent[pid]=$2; secs[pid]=esec($3); comm[pid]=nm; next }
@@ -968,7 +979,7 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
           # still being reaped at age 488 s, and SIGTERM-143 land deaths continued at 8.4%.
           # `wl` is matched against the whole argv, so it reaches the wrapped command as intended.
           if (comm[p] ~ /^(awk|grep|egrep|tee|sed|cat|tail|wc|jq|sleep|gtimeout|timeout)$/ && args[p] !~ ("(" wl ")") && secs[p]>=120) { printf "orphan-tool\t%s\t^%s$\t%s\t%s\t-\n", p, comm[p], secs[p], asig(p); continue }
-          if (comm[p]=="zsh" && args[p] ~ /^(-zsh|zsh|\/bin\/zsh)( |$)/ && secs[p]>=600) { printf "orphan-zsh\t%s\t^zsh$\t%s\t%s\t-\n", p, secs[p], asig(p); continue }
+          if (comm[p]=="zsh" && args[p] ~ /^(-zsh|zsh|\/bin\/zsh)( |$)/ && args[p] !~ ("(" wl ")") && secs[p]>=600) { printf "orphan-zsh\t%s\t^zsh$\t%s\t%s\t-\n", p, secs[p], asig(p); continue }
           # ORPHANED AGENT-BROWSER CHROME (2026-10-17, docs/research/load-reinvestigate-2026-10-17).
           # An agent-browser daemon owns its headless Chrome as a child and closes it after
           # AGENT_BROWSER_IDLE_TIMEOUT_MS. When the daemon dies first, Chrome is reparented to launchd and
@@ -977,7 +988,15 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
           # operator real Chrome is launchd-parented too and carries no agent-browser-chrome profile.
           # Helpers (--type=) die with their main; the 1 h floor is double the idle timeout.
           if (comm[p]=="Google Chrome" && args[p] ~ /--user-data-dir=[^ ]*agent-browser-chrome-/ && args[p] !~ / --type=/ && secs[p]>=3600) { printf "orphan-agent-chrome\t%s\t^Google Chrome$\t%s\t%s\t-\n", p, secs[p], asig(p); continue }
-          if (comm[p]=="bash" && args[p] !~ ("(" wl ")") && args[p] !~ /lead-crash-watchdog/ && secs[p]>=600) { printf "orphan-bash\t%s\t^bash$\t%s\t%s\t%s\n", p, secs[p], asig(p), substr(args[p],1,80); continue }
+          if (comm[p]=="bash" && args[p] !~ ("(" wl ")") && args[p] !~ /lead-crash-watchdog/ && secs[p]>=600) {
+            # THE 68298 SHAPE (2026-10-25). An orphaned bash that is a pty SESSION LEADER is exactly
+            # what wedged /dev: killed by pid, its exit revokes the tty while a member still sleeps
+            # in open() on it. Such a candidate is never TERMed here, it is SURFACED (class
+            # orphan-pty-leader) with the session-tree runbook. With no pty snapshot (ptyk 0) a leader
+            # cannot be told apart, so orphan-bash stands down for the sweep.
+            if (ptyk == "0") continue
+            if (ptyk == "1" && (p in pg) && pg[p] == p && td[p] ~ /^16\//) { printf "orphan-pty-leader\t%s\t^bash$\t%s\t%s\tpgid=%s tdev=%s %s\n", p, secs[p], asig(p), pg[p], td[p], substr(args[p],1,60); continue }
+            printf "orphan-bash\t%s\t^bash$\t%s\t%s\t%s\n", p, secs[p], asig(p), substr(args[p],1,80); continue }
         }
         # ANCHORED ON ARGV POSITION, BECAUSE THE UNANCHORED FORM ATE THE VERIFIER (2026-09-02).
         # NOTE FOR EDITORS: this whole awk program is SINGLE-QUOTED by the shell, so an apostrophe
@@ -1042,6 +1061,19 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
     # `garbage --class <name>`: an on-demand run scoped to one class. The scheduled sweep never sets it.
     [ -z "${GARBAGE_ONLY_CLASS:-}" ] || [ "$cls" = "$GARBAGE_ONLY_CLASS" ] || continue
     nA=$((nA+1))
+    if [ "$cls" = orphan-pty-leader ]; then
+      # NEVER signalled by pid (DESIGN I9). Paged once per pid with the runbook from the final RCA
+      # (~/incident-2026-10-25/RCA.md R3): capture, then the whole session tree, openers first —
+      # killing by pgid alone can miss an opener that sits in another group or session.
+      nskip=$((nskip+1))
+      log "garbage: SKIP orphan-pty-leader pid=$pid age=${age}s $desc — a pty session leader is never TERMed by pid; paged"
+      if [ "$reap" = 1 ]; then
+        notify_desk "cc-reaper: orphaned pty SESSION LEADER bash pid=$pid ($desc, age ${age}s) was NOT reaped: killing a pty session leader by pid can poison /dev (the 2026-10-25 lockup). If it is residue, capture first (bash ~/.claude/scripts/forensics/capture.sh snapshot pty-leader), then tear down its whole session tree, openers first, leader last (RCA R3: its ppid descendants, every pid whose session is this leader, every pgid in that set; a pgid kill alone can miss the opener): bash ~/.claude/scripts/break-glass/rescue.sh unpoison <pgid> <lstart>. Never kill the leader alone by pid." "pty-leader-$pid" || true
+      else
+        say "  garbage (SKIPPED — pty session leader, would page): orphan-pty-leader pid=$pid age=${age}s $desc"
+      fi
+      continue
+    fi
     pin="-"
     case "$age:$_GS_SNAP_T" in *[!0-9:]*|:*|*:) : ;; *) pin=$(( _GS_SNAP_T - age )) ;; esac
     # THE ARGV-MISS GATE (see GARBAGE_WL). `-` means snapshot B never showed this pid an argv, so the

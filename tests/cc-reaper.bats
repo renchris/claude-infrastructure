@@ -4245,3 +4245,70 @@ EOS
   run bash "$fn.run"
   [ "$output" = "4242 rc=0" ] || false              # pre-fix: " rc=1" — no mtime arm off macOS
 }
+
+# ── THE LOCKUP TOOLING AND THE pty SESSION LEADER (incident 2026-10-25, DESIGN C2) ───────────────
+# Two new protections, each pinned as a fixture pair against the closed world above. (1) GARBAGE_WL
+# gains lockwatch|forensics|break-glass|devfs-canary, and orphan-zsh now honours wl, because the
+# lockwatch zsh canary is a launchd-parented zsh by construction. (2) an orphaned bash that is a pty
+# SESSION LEADER (pid == pgid, tdev major 16) is the 68298 shape: killed by pid its exit revokes the
+# tty while a member sleeps in open() on it. It is never TERMed, it is paged with the RCA R3 runbook.
+
+@test "garbage: each lockup-tooling argv survives as orphan-bash, while an unrelated orphan bash still dies" {
+  mk_garbage_fixtures
+  cat >> "$GA" <<'EOF2'
+90031 1 45:00 bash
+90032 1 45:00 bash
+90033 1 45:00 bash
+90034 1 45:00 bash
+EOF2
+  cat >> "$GB" <<'EOF2'
+90031 bash /Users/x/.claude/scripts/lockwatch/run.sh
+90032 bash /Users/x/.claude/scripts/forensics/capture.sh full lockup
+90033 bash /Users/x/.claude/scripts/break-glass/rescue.sh capture
+90034 /usr/bin/perl /Users/x/.claude/scripts/forensics/devfs-canary.pl
+EOF2
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  [[ " $got " == *" 90006 "* ]] || false                         # control: the arm is live
+  for p in 90031 90032 90033 90034; do [[ " $got " != *" $p "* ]] || { echo "TERMed $p"; false; }; done
+}
+
+@test "garbage: orphan-zsh honours the whitelist — the lockwatch zsh canary survives, a bare -zsh dies" {
+  mk_garbage_fixtures
+  printf '90041 1 45:00 zsh\n' >> "$GA"
+  printf '90041 /bin/zsh -fc : lockwatch-canary; exit\n' >> "$GB"
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  [[ " $got " == *" 90003 "* ]] || false                         # control: orphan-zsh still reaps
+  [[ " $got " != *" 90041 "* ]]
+}
+
+@test "garbage: an orphan bash that is a pty SESSION LEADER is never TERMed by pid — it is paged; a non-leader dies" {
+  mk_garbage_fixtures
+  printf '90051 1 45:00 bash\n' >> "$GA"
+  printf '90051 bash -c sleep 9999\n' >> "$GB"
+  # pid pgid tdev: 90051 leads its own group on ttys063; 90006 is in another group with no tty.
+  printf '90051 90051 16/63\n90006 90005 ??\n' > "$D/gs_ps_c.txt"
+  export CC_REAPER_GARBAGE_PS_C="$D/gs_ps_c.txt"
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  [[ " $got " != *" 90051 "* ]] || { echo "TERMed the pty session leader"; false; }
+  [[ " $got " == *" 90006 "* ]] || false                         # control: a non-leader orphan bash dies
+  grep -q 'pty SESSION LEADER bash pid=90051' "$D/notify-calls"
+  grep -q 'Never kill the leader alone by pid' "$D/notify-calls"
+}
+
+@test "garbage: the same leader in DRY-RUN is reported as a skip, and nothing is paged" {
+  mk_garbage_fixtures
+  printf '90051 1 45:00 bash\n' >> "$GA"
+  printf '90051 bash -c sleep 9999\n' >> "$GB"
+  printf '90051 90051 16/63\n' > "$D/gs_ps_c.txt"
+  export CC_REAPER_GARBAGE_PS_C="$D/gs_ps_c.txt"
+  run "$R" garbage
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SKIPPED — pty session leader, would page): orphan-pty-leader pid=90051"* ]] || false
+  ! grep -q 'pty SESSION LEADER' "$D/notify-calls" 2>/dev/null
+}
