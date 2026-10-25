@@ -303,7 +303,15 @@ REG_PS=""; REG_PS_OK=0
 if [ "$REG_BULK" = 1 ]; then
   _pids="$(printf '%s\n' "$REG_TSV" | awk -F'\t' '$3 ~ /^[0-9]+$/ { print $3 }' | sort -un | paste -sd, -)"
   if [ -n "$_pids" ]; then
-    REG_PS="$(TZ=UTC LC_ALL=C "${CC_SESSIONS_PS_BIN:-ps}" -o pid=,lstart= -p "$_pids" 2>/dev/null \
+    # BOUNDED: a multi-pid `ps -p` can wedge for good under load (two cc-sessions sat 77 min here on
+    # 2026-10-25; same class as scripts/lib/spawn-presence.sh cc_sp_active). A timed-out read is
+    # empty, so REG_PS_OK stays 0 and kill -0 carries liveness, as for any unusable ps.
+    _tb=""
+    for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+              /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+      [ -n "$_c" ] && [ -x "$_c" ] && { _tb="$_c"; break; }
+    done
+    REG_PS="$(TZ=UTC LC_ALL=C ${_tb:+"$_tb" "${CC_SESSIONS_PS_TIMEOUT:-15}"} "${CC_SESSIONS_PS_BIN:-ps}" -o pid=,lstart= -p "$_pids" 2>/dev/null \
               | awk '{ p = $1; $1 = ""; sub(/^ +/, ""); gsub(/ +/, " "); print p "\t" $0 }')"
     [ -n "$REG_PS" ] && REG_PS_OK=1
   fi
