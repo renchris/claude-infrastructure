@@ -41,6 +41,8 @@ def table: {
     fix: "ls .claude-tasks/_current/"},
   "session-index-start.sh": {tier: 3, what: "the session-index row", model: null, fix: null},
   "frontier-status.sh": {tier: 3, what: "the Frontier line", model: null, fix: null},
+  "lever-arm-start.sh": {tier: 3, what: "the usage-lever session stamp", model: null,
+    fix: "tail -1 ~/.claude/logs/lever-arms.jsonl"},
   "accounts-board.sh": {tier: 3, what: "the accounts board", model: null, fix: "claude-accounts"},
   "activation-watch.sh": {tier: 3, what: "the activation notices", model: null,
     fix: "bash ~/.claude/hooks/activation-watch.sh --queue"},

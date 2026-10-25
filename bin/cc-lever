@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+"""cc-lever — the operator's CLI over the usage levers' flag file (~/.claude/state/levers/flags.json).
+
+Plan: docs/plans/USAGE_LEVERS.md § W7+ §2 (stage ladder) and §3 row "Operator CLI"; schema and
+precedence in hooks/lib/lever_flags.py. Only the operator raises a stage; the guard only lowers.
+
+  cc-lever status [--json]                       every lever: stage, pct, effective pct, heartbeat, trip
+  cc-lever stage <Dn> S0|S1|S2|S3 [--confirm] [--reason R]
+  cc-lever off <Dn|all> [--reason R]             pct 0, mode off (no new treatment; logging stays)
+  cc-lever candidate <Dn> --id ID --share N [--params JSON] --confirm   |   candidate <Dn> --clear
+  cc-lever promote <Dn> --confirm                the candidate's params become the incumbent's
+  cc-lever ack <trip_id> --reason R --confirm    releases a latched trip; raises nothing
+  cc-lever history [--lever Dn] [-n N] [--json]  the audit rows (~/.claude/logs/lever-flags.jsonl)
+
+A RAISE (stage up, candidate, promote) is refused (exit 3) unless all hold: --confirm (bare, or
+naming the lever), the latest lever-score row for that lever at its current stage, written since
+the stage began, says ADVANCE (candidate excepted: it runs only inside S2/S3); a guard heartbeat no
+older than CC_LEVER_DEADMAN_S; and no un-acked trip. Until cc-lever-score lands (wave S5) there is
+no verdict, so every raise is refused. Lowering needs none of it.
+
+Writes are tmp+rename under an exclusive flock on flags.lock; every write appends one audit row
+(one write(), at most 2 KB, UTC Z). A missing flags.json is created on first use with every lever
+at S0, pct 0, mode shadow; an unreadable one is never overwritten (fix it by hand; readers already
+treat it as pct 0). Exit codes: 0 ok · 2 usage · 3 refused.
+"""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import secrets
+import sys
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "hooks", "lib"))
+import lever_flags as lf  # noqa: E402
+
+REPO = os.path.realpath(os.path.join(HERE, ".."))
+STAGE_PCT = {"S0": 0, "S1": 10, "S2": 50, "S3": 100}
+S1_PCT = {"D2": 50, "D4": 50}               # the one-day trials run at 50% (§2 D2, D4)
+S3_HOLDBACK = {"D1": 10}                    # D1 keeps 10% for calibration; the rest 5% (§2)
+MAX_ROW = 2048
+
+
+class Refused(Exception):
+    pass
+
+
+def log_dir():
+    return os.environ.get("CC_LEVER_LOG_DIR") or os.path.join(lf.home(), ".claude", "logs")
+
+
+def stage_params(lever, stage):
+    pct = S1_PCT.get(lever, 10) if stage == "S1" else STAGE_PCT[stage]
+    hb = S3_HOLDBACK.get(lever, 5) if stage == "S3" else 0
+    return pct, hb, ("shadow" if stage == "S0" else "live")
+
+
+def default_doc():
+    now = lf.utc_now()
+    lv = {}
+    for L in lf.LEVERS:
+        lv[L] = {"decision": lf.DECISIONS[L], "stage": "S0", "pct": 0, "holdback": 0, "mode": "shadow",
+                 "salt": secrets.token_hex(8), "split_salt": secrets.token_hex(8), "params": {},
+                 "params_id": "p0", "candidate": None, "thresholds_sha": None,
+                 "stage_started_at": now, "trip": None}
+    return {"v": 1, "rev": 0, "updated_at": now, "updated_by": "operator:cc-lever", "levers": lv}
+
+
+def audit(row):
+    row = dict(row, ts=lf.utc_now())
+    if isinstance(row.get("reason"), str):
+        row["reason"] = row["reason"][:300]
+    line = (json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(line) > MAX_ROW:
+        row.pop("detail", None)
+        line = (json.dumps(row, sort_keys=True, separators=(",", ":"))[:MAX_ROW - 2] + "\n").encode()
+    os.makedirs(log_dir(), exist_ok=True)
+    fd = os.open(os.path.join(log_dir(), "lever-flags.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, line)
+    finally:
+        os.close(fd)
+
+
+class Locked:
+    """Exclusive flock on flags.lock for one read-modify-write."""
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(lf.flags_path()), exist_ok=True)
+        self.fd = os.open(os.path.join(os.path.dirname(lf.flags_path()), "flags.lock"), os.O_RDWR | os.O_CREAT, 0o644)
+        deadline = time.time() + 10
+        while True:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except BlockingIOError:
+                if time.time() > deadline:
+                    os.close(self.fd)
+                    raise Refused("flags.lock held for 10 s by another writer; nothing changed")
+                time.sleep(0.1)
+
+    def __exit__(self, *a):
+        fcntl.flock(self.fd, fcntl.LOCK_UN)
+        os.close(self.fd)
+
+
+def write_doc(doc):
+    lf._write_atomic(lf.flags_path(), json.dumps(doc, indent=2, sort_keys=True) + "\n")
+
+
+def load_or_init():
+    """Under the lock: the parsed doc, creating the default file when none exists."""
+    doc, src = lf.read_flags()
+    if src == "default":
+        doc = default_doc()
+        write_doc(doc)
+        audit({"rev": 0, "by": "operator:cc-lever", "verb": "init", "lever": "all",
+               "to": {"stage": "S0", "pct": 0, "mode": "shadow"}, "reason": "flags.json absent; default created"})
+        return doc
+    if src != "file":
+        raise Refused("%s is unreadable; readers treat it as pct 0. Fix or remove it by hand; "
+                      "cc-lever never overwrites it" % lf.flags_path())
+    return doc
+
+
+def ensure_default():
+    if lf.read_flags()[1] == "default":
+        with Locked():
+            load_or_init()
+
+
+def entry_of(doc, lever):
+    e = doc["levers"].get(lever)
+    if lf._norm_lever(e) is None:
+        raise Refused("%s entry in flags.json is malformed; readers treat it as pct 0. Fix it by hand" % lever)
+    return e
+
+
+def snap(e):
+    return {"stage": e.get("stage"), "pct": e.get("pct"), "holdback": e.get("holdback"),
+            "mode": e.get("mode"), "params_id": e.get("params_id")}
+
+
+def commit(doc, verb, lever, before, e, reason, verdict_ref=None, detail=None):
+    doc["rev"] = int(doc.get("rev") or 0) + 1
+    doc["updated_at"] = lf.utc_now()
+    doc["updated_by"] = "operator:cc-lever"
+    write_doc(doc)
+    audit({"rev": doc["rev"], "by": "operator:cc-lever", "verb": verb, "lever": lever, "from": before,
+           "to": snap(e) if e is not None else None, "reason": reason, "verdict_ref": verdict_ref,
+           "detail": detail})
+
+
+# ── raise gates ───────────────────────────────────────────────────────────────────────────────
+def check_confirm(args, *names):
+    c = getattr(args, "confirm", None)
+    if not c:
+        raise Refused("a raise needs --confirm")
+    if c is not True and c not in names:
+        raise Refused("--confirm %s does not name the target (%s)" % (c, " or ".join(names)))
+
+
+def check_live_gates(e, lever):
+    if not lf.heartbeat_fresh():
+        a = lf.heartbeat_age()
+        raise Refused("guard heartbeat %s (dead-man %d s): a raise needs a live cc-lever-guard" %
+                      ("absent" if a is None else "%d s old" % a, lf.deadman_s()))
+    if lf.trip_open(e):
+        raise Refused("%s has an un-acked trip %s; run cc-lever ack %s --reason .. --confirm first" %
+                      (lever, e["trip"].get("id"), e["trip"].get("id")))
+
+
+def latest_advance(lever, e):
+    """→ the ADVANCE row that licenses a raise, else raise Refused."""
+    p = os.path.join(log_dir(), "lever-score.jsonl")
+    last = None
+    try:
+        with open(p, "rb") as f:
+            for raw in f:
+                try:
+                    r = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and r.get("lever") == lever and r.get("stage") == e.get("stage"):
+                    last = r
+    except OSError:
+        pass
+    if last is None:
+        raise Refused("no lever-score verdict for %s at %s (%s absent or silent; cc-lever-score lands in "
+                      "wave S5): a raise needs the latest verdict to be ADVANCE" % (lever, e.get("stage"), p))
+    if last.get("verdict") != "ADVANCE":
+        raise Refused("the latest lever-score verdict for %s at %s is %s, not ADVANCE" %
+                      (lever, e.get("stage"), last.get("verdict")))
+    if str(last.get("ts", "")) < str(e.get("stage_started_at") or ""):
+        raise Refused("the latest ADVANCE for %s (%s) predates the stage start (%s)" %
+                      (lever, last.get("ts"), e.get("stage_started_at")))
+    return "%s@%s" % (lever, last.get("ts"))
+
+
+def thresholds_sha():
+    p = os.path.join(REPO, "config", "levers.json")
+    try:
+        with open(p, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+# ── verbs ─────────────────────────────────────────────────────────────────────────────────────
+def cmd_status(args):
+    ensure_default()
+    doc, src = lf.read_flags()
+    hb = lf.heartbeat_age()
+    out = {"flags": lf.flags_path(), "flag_src": src, "rev": (doc or {}).get("rev"),
+           "heartbeat_age_s": hb, "deadman_s": lf.deadman_s(), "levers": {}}
+    for L in lf.LEVERS:
+        e = (doc or {}).get("levers", {}).get(L) if doc else None
+        eff = lf.effective(L, doc, src)
+        out["levers"][L] = {"decision": lf.DECISIONS[L], "stage": (e or {}).get("stage"),
+                            "pct": (e or {}).get("pct"), "holdback": (e or {}).get("holdback"),
+                            "mode": (e or {}).get("mode"), "pct_eff": eff["pct_eff"], "flag_src": eff["flag_src"],
+                            "params_id": (e or {}).get("params_id"),
+                            "candidate": ((e or {}).get("candidate") or {}).get("id"),
+                            "trip": (e or {}).get("trip")}
+    if args.json:
+        print(json.dumps(out, indent=2, sort_keys=True))
+        return 0
+    print("flags %s · %s · rev %s · guard heartbeat %s" % (
+        out["flags"], src, out["rev"], "absent" if hb is None else "%d s old%s" % (hb, " (DEAD)" if hb > lf.deadman_s() else "")))
+    for L, r in out["levers"].items():
+        t = r["trip"]
+        trip = "none" if not t else "%s %s" % (t.get("id"), "acked" if t.get("acked_at") else "OPEN")
+        print("  %s %s  stage %-2s pct %-3s eff %-3s (%s)  mode %-6s params %s%s  trip %s" % (
+            L, r["decision"], r["stage"], r["pct"], r["pct_eff"], r["flag_src"], r["mode"], r["params_id"],
+            " cand %s" % r["candidate"] if r["candidate"] else "", trip))
+    return 0
+
+
+def cmd_stage(args):
+    L, to = args.lever, args.stage
+    with Locked():
+        doc = load_or_init()
+        e = entry_of(doc, L)
+        cur = e.get("stage", "S0")
+        before = snap(e)
+        pct, hb, mode = stage_params(L, to)
+        if (to, pct, hb, mode) == (cur, e.get("pct"), e.get("holdback"), e.get("mode")):
+            print("%s already at %s" % (L, to))
+            return 0
+        # A raise is anything that adds treatment, judged on the file's values, not the stage label:
+        # a guard demotion keeps the label at pct 0, and re-entering that stage is a raise.
+        raising = pct > (e.get("pct") or 0) or (mode == "live" and e.get("mode") != "live")
+        ref, detail = None, None
+        if raising:
+            check_confirm(args, L)
+            check_live_gates(e, L)
+            ref = latest_advance(L, e)
+            if e.get("trip"):                # an acked trip: the tripped cohort must not carry over
+                detail = {"rotated_salt_after_trip": e["trip"].get("id")}
+                e["salt"] = secrets.token_hex(8)
+                e["trip"] = None
+            e["thresholds_sha"] = thresholds_sha()
+        e.update(stage=to, pct=pct, holdback=hb, mode=mode, stage_started_at=lf.utc_now())
+        commit(doc, "raise" if raising else "lower", L, before, e, args.reason, ref, detail)
+    print("%s: %s → %s (pct %d, mode %s)" % (L, cur, to, pct, mode))
+    return 0
+
+
+def cmd_off(args):
+    targets = lf.LEVERS if args.lever == "all" else (args.lever,)
+    with Locked():
+        doc = load_or_init()
+        for L in targets:
+            e = entry_of(doc, L)
+            before = snap(e)
+            e.update(stage="S0", pct=0, holdback=0, mode="off", stage_started_at=lf.utc_now())
+            commit(doc, "off", L, before, e, args.reason)
+            print("%s: off (pct 0, mode off)" % L)
+    return 0
+
+
+def cmd_candidate(args):
+    L = args.lever
+    with Locked():
+        doc = load_or_init()
+        e = entry_of(doc, L)
+        before = snap(e)
+        if args.clear:
+            old = (e.get("candidate") or {}).get("id")
+            e["candidate"] = None
+            commit(doc, "candidate-clear", L, before, e, args.reason, detail={"cleared": old})
+            print("%s: candidate cleared" % L)
+            return 0
+        if not args.id or args.share is None:
+            raise Refused("candidate needs --id and --share (or --clear)")
+        if not 0 < args.share <= 100:
+            raise Refused("--share must be 1..100")
+        check_confirm(args, L)
+        if e.get("stage") not in ("S2", "S3") or e.get("mode") != "live":
+            raise Refused("an online candidate runs only inside a live S2/S3 (%s is %s, mode %s)" %
+                          (L, e.get("stage"), e.get("mode")))
+        check_live_gates(e, L)
+        try:
+            params = json.loads(args.params) if args.params else {}
+        except ValueError:
+            raise Refused("--params is not JSON")
+        rnd = int((e.get("candidate") or {}).get("round") or 0) + 1
+        e["candidate"] = {"id": args.id, "params": params, "share": args.share, "round": rnd,
+                          "round_salt": secrets.token_hex(8)}
+        commit(doc, "candidate", L, before, e, args.reason, detail={"candidate": args.id, "share": args.share})
+    print("%s: candidate %s at %d%% of treated units (round %d)" % (L, args.id, args.share, rnd))
+    return 0
+
+
+def cmd_promote(args):
+    L = args.lever
+    with Locked():
+        doc = load_or_init()
+        e = entry_of(doc, L)
+        c = e.get("candidate")
+        if not c:
+            raise Refused("%s has no candidate to promote" % L)
+        check_confirm(args, L)
+        check_live_gates(e, L)
+        ref = latest_advance(L, e)
+        before = snap(e)
+        e.update(params=c.get("params") or {}, params_id=c.get("id"), candidate=None)
+        commit(doc, "promote", L, before, e, args.reason, ref)
+    print("%s: promoted %s" % (L, c.get("id")))
+    return 0
+
+
+def cmd_ack(args):
+    if not args.reason:
+        raise Refused("ack needs --reason")
+    with Locked():
+        doc = load_or_init()
+        hit = [L for L in lf.LEVERS if isinstance(doc["levers"].get(L), dict)
+               and isinstance(doc["levers"][L].get("trip"), dict)
+               and doc["levers"][L]["trip"].get("id") == args.trip_id]
+        if not hit:
+            raise Refused("no trip %s in flags.json" % args.trip_id)
+        L = hit[0]
+        e = doc["levers"][L]
+        if not lf.trip_open(e):
+            print("%s: trip %s already acked at %s" % (L, args.trip_id, e["trip"].get("acked_at")))
+            return 0
+        check_confirm(args, L, args.trip_id)
+        before = snap(e)
+        e["trip"].update(acked_at=lf.utc_now(), acked_by="operator:cc-lever", ack_reason=args.reason[:300])
+        commit(doc, "ack", L, before, e, args.reason, detail={"trip_id": args.trip_id})
+    print("%s: trip %s released (nothing raised; the next stage raise rotates the salt)" % (L, args.trip_id))
+    return 0
+
+
+def cmd_history(args):
+    ensure_default()
+    rows = []
+    try:
+        with open(os.path.join(log_dir(), "lever-flags.jsonl"), "rb") as f:
+            for raw in f:
+                try:
+                    r = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and (not args.lever or r.get("lever") in (args.lever, "all")):
+                    rows.append(r)
+    except OSError:
+        pass
+    for r in rows[-args.n:]:
+        if args.json:
+            print(json.dumps(r, sort_keys=True))
+        else:
+            fr, to = r.get("from") or {}, r.get("to") or {}
+            print("%s rev %-4s %-15s %-3s %s/%s → %s/%s  %s" % (
+                r.get("ts"), r.get("rev"), r.get("verb"), r.get("lever"), fr.get("stage", "-"), fr.get("pct", "-"),
+                to.get("stage", "-"), to.get("pct", "-"), r.get("reason") or ""))
+    return 0
+
+
+def parser():
+    p = argparse.ArgumentParser(prog="cc-lever", description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="verb")
+    s = sub.add_parser("status"); s.add_argument("--json", action="store_true")
+    lv = list(lf.LEVERS)
+    s = sub.add_parser("stage"); s.add_argument("lever", choices=lv); s.add_argument("stage", choices=list(lf.STAGES))
+    s.add_argument("--confirm", nargs="?", const=True); s.add_argument("--reason", default="")
+    s = sub.add_parser("off"); s.add_argument("lever", choices=lv + ["all"]); s.add_argument("--reason", default="")
+    s = sub.add_parser("candidate"); s.add_argument("lever", choices=lv); s.add_argument("--id")
+    s.add_argument("--share", type=int); s.add_argument("--params"); s.add_argument("--clear", action="store_true")
+    s.add_argument("--confirm", nargs="?", const=True); s.add_argument("--reason", default="")
+    s = sub.add_parser("promote"); s.add_argument("lever", choices=lv)
+    s.add_argument("--confirm", nargs="?", const=True); s.add_argument("--reason", default="")
+    s = sub.add_parser("ack"); s.add_argument("trip_id"); s.add_argument("--reason", default="")
+    s.add_argument("--confirm", nargs="?", const=True)
+    s = sub.add_parser("history"); s.add_argument("--lever", choices=lv); s.add_argument("-n", type=int, default=20)
+    s.add_argument("--json", action="store_true")
+    return p
+
+
+VERBS = {"status": cmd_status, "stage": cmd_stage, "off": cmd_off, "candidate": cmd_candidate,
+         "promote": cmd_promote, "ack": cmd_ack, "history": cmd_history}
+
+
+def main(argv):
+    try:
+        args = parser().parse_args(argv)
+    except SystemExit as e:
+        return 2 if e.code else 0
+    if not args.verb:
+        sys.stderr.write(__doc__)
+        return 2
+    try:
+        return VERBS[args.verb](args)
+    except Refused as r:
+        sys.stderr.write("cc-lever: refused — %s\n" % r)
+        return 3
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

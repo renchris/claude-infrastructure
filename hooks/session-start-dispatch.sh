@@ -57,8 +57,10 @@ DIR="${CC_SSD_HOOK_DIR:-$HERE}"
 MERGE="$HERE/lib/ssd-merge.jq"
 # recycle-failed-inject.sh (RECYCLE_KEYSTROKELESS_DELIVERY §D4) is a TENTH child, added after
 # migration 0056, so it needed no settings.json edit. It is FIRST, and tier 0 in the merge's table:
-# a failed recycle's recovery packet must never be the context that gets cut.
-CHILDREN="${CC_SSD_CHILDREN:-recycle-failed-inject.sh session-start.sh setup-plan-symlinks.sh setup-task-symlinks.sh activation-watch.sh escalation-watch.sh accounts-board.sh session-index-start.sh config-mirror-assert.sh frontier-status.sh}"
+# a failed recycle's recovery packet must never be the context that gets cut. lever-arm-start.sh (the
+# usage levers' session stamp, USAGE_LEVERS.md § W7+ §3) is an ELEVENTH, likewise with no settings
+# edit; it prints nothing, so it is tier 3 and last.
+CHILDREN="${CC_SSD_CHILDREN:-recycle-failed-inject.sh session-start.sh setup-plan-symlinks.sh setup-task-symlinks.sh activation-watch.sh escalation-watch.sh accounts-board.sh session-index-start.sh config-mirror-assert.sh frontier-status.sh lever-arm-start.sh}"
 EMIT="${CC_SSD_EMIT_S:-9}"
 LATE="${CC_SSD_LATE_S:-60}"
 CAP="${CC_SSD_CAP:-9500}"

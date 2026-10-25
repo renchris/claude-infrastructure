@@ -336,15 +336,16 @@ wait_for() { # <seconds> <command...>
                 and all(.kids[]; .st == "ok" and .rc == 0 and .ms >= 0))' "$CC_SSD_LEDGER"
 }
 
-@test "the shipped child list names ten hooks that exist and none of the four kept separate" {
+@test "the shipped child list names eleven hooks that exist and none of the four kept separate" {
   run bash -c 'grep -o "CHILDREN:-[^}]*" "$1"' _ "$SSD"
   local list="${output#CHILDREN:-}" n=0 c
   for c in $list; do
     [ -x "$REPO/hooks/$c" ] || { echo "missing $c"; false; }
     n=$((n + 1))
   done
-  # nine folded by 0056, plus recycle-failed-inject.sh (§D4) — first, and tier 0, so it is never cut
-  [ "$n" -eq 10 ]
+  # nine folded by 0056, plus recycle-failed-inject.sh (§D4) — first, and tier 0, so it is never cut —
+  # plus lever-arm-start.sh (USAGE_LEVERS.md § W7+ §3, the usage levers' session stamp)
+  [ "$n" -eq 11 ]
   [ "${list%% *}" = recycle-failed-inject.sh ]
   for c in dod-persist.sh desk-brief-inject.sh mailbox-drain.sh mailbox-wake-arm.sh; do
     [[ " $list " != *" $c "* ]] || { echo "$c must stay separate"; false; }

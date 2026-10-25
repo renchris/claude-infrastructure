@@ -5298,10 +5298,34 @@ hf_succ_mode() { # → fresh|resume|transplant|remote — the recycle shape that
   else echo fresh; fi
 }
 
+# THE LEVER LINEAGE (USAGE_LEVERS.md § W7+ §2 D1 "Arm"). A successor inherits its predecessor's usage-lever
+# arm through its lineage root: the predecessor's own root (its arms/<sid> cache, else this process's
+# CC_LEVER_LINEAGE when the recycle runs in that pane), else the predecessor's sid. Written to
+# lineage/<pane>.json for any recycle (a typed relaunch reads it) and exported by the staged .cmd.
+# Sets HF_LEVER_LINEAGE; never fails the recycle. Kill switch CC_LEVER_LINEAGE_WRITE=off.
+hf_lever_lineage() {
+  local pred="${rcy_old_sid:-}" d="${CC_LEVER_STATE_DIR:-$HOME/.claude/state/levers}" line="" w root="" tmp
+  HF_LEVER_LINEAGE=""
+  [ "${CC_LEVER_LINEAGE_WRITE:-on}" = off ] && return 0
+  case "$pred" in ''|*[!A-Za-z0-9._:-]*) return 0 ;; esac
+  case "$SID" in ''|*[!A-Za-z0-9._:-]*) return 0 ;; esac
+  [ -r "$d/arms/$pred" ] && { IFS= read -r line < "$d/arms/$pred" || true; }
+  for w in $line; do case "$w" in lineage=*) root="${w#lineage=}" ;; esac; done
+  [ -z "$root" ] && [ "${RCY_REMOTE:-0}" != 1 ] && root="${CC_LEVER_LINEAGE:-}"
+  case "$root" in ''|*[!A-Za-z0-9._:-]*) root="$pred" ;; esac
+  HF_LEVER_LINEAGE="$root"
+  mkdir -p "$d/lineage" 2>/dev/null && tmp="$(mktemp "$d/lineage/.tmp.XXXXXX" 2>/dev/null)" || return 0
+  jq -n --arg pane "$SID" --arg pred "$pred" --arg root "$root" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --argjson ep "$(date +%s)" '{v:1, pane:$pane, pred_sid:$pred, root:$root, ts:$ts, epoch:$ep, succ_sid:null}' \
+        > "$tmp" 2>/dev/null && mv -f "$tmp" "$d/lineage/$SID.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
 # $1=pane tty $2=the typed-path cmdfile (its sibling files carry the stage) → 0 staged · 1 not staged.
 # Never fails a recycle: every refusal is one line and the typed path stays armed in the watcher.
 hf_succ_stage() {
   local tty="$1" base="$2" mode cfg wl sc mj tok rsid=""
+  ! command -v hf_lever_lineage >/dev/null 2>&1 || hf_lever_lineage || true
   mode="$(hf_succ_mode)"
   if [ "$mode" = remote ]; then echo "→ successor: remote recycle — not staged; the watcher types the relaunch after its rails"; return 1; fi
   if [ "${CC_PANE_SUCCESSOR:-on}" = off ]; then echo "→ successor: CC_PANE_SUCCESSOR=off — not staged; typed relaunch"; return 1; fi
@@ -5322,7 +5346,8 @@ hf_succ_stage() {
   if [ -z "$wl" ]; then echo "⚠ successor: watcher ${WATCHER_PID:-?} has no readable start time — not staged; typed relaunch" >&2; return 1; fi
   sc="$base.succ"; mj="$base.succ.json"; tok="hfs-$$-${RANDOM:-0}-$(date +%s)"
   rm -f "$base.rails" 2>/dev/null || true
-  { if [ "$mode" = resume ]; then
+  { [ -n "${HF_LEVER_LINEAGE:-}" ] && printf 'export CC_LEVER_LINEAGE=%q\n' "$HF_LEVER_LINEAGE"
+    if [ "$mode" = resume ]; then
       # The rails run in the pane, at the claim, before the launcher (hf_succ_rails). A refusal
       # starts nothing and leaves the pane at its shell; the watcher reads why from $base.rails.
       printf 'if bash %q __succ-rails --verdict %q --sid %q --cfg %q --src-tx %q --watcher-pid %q --record-id %q --attempt %q --launch-lock %q --fold-stub %q; then\n' \
