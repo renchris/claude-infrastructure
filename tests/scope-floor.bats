@@ -32,6 +32,7 @@ setup() {
   # Ledger stub: every field the floor reads, each overridable by STUB_<KEY> (set-but-empty counts).
   cc_stub "$BATS_TEST_TMPDIR/bin" wrap-ledger - <<'EOF'
 #!/bin/bash
+[ -n "${STUB_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$STUB_ARGV_LOG"
 if [ -n "${STUB_OLD:-}" ]; then printf 'RUNG=⛔\nBLOCKED=2\nBLOCKED_SRC=env\nDIRTY=0\n'; exit 0; fi
 for kv in "RUNG=⛔" "BLOCKED=2" "BLOCKED_SRC=env" "BLOCKED_RECHECKED=0" "RECHECKED_IDS=" "RECHECKED_SRC=none" \
   "BLOCKED_IDS=290215743799,e869fac7eb34" "LOOP_SCOPE=1" "LOOP_OPEN=1" "LOOP_SRC=own" "LOOP_RUNG=0" \
@@ -493,4 +494,11 @@ tx_close() {
   # the double-block yield would mask a contradiction, so judge completion-assert WITHOUT it
   ca="$(CC_DOUBLE_BLOCK_GUARD=0 run_hook_as completion-assert.sh "$p")"
   ! blocked "$ca" || { cat "$COMPLETION_IDL"; false; }
+}
+
+@test "S24: the ledger is asked with the Stop payload's session id (a Stop env need not carry one)" {
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/wl-argv"
+  out="$(actuate sidA "$(tx_f1)")"
+  blocked "$out"
+  grep -q -- '--machine --session sidA' "$STUB_ARGV_LOG" || { cat "$STUB_ARGV_LOG"; false; }
 }
