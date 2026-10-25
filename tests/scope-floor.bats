@@ -453,3 +453,40 @@ tx_agent() { # $1 = extra record (or ""); the async agent a8e552e552430265c, its
   [ -n "$(row scope-floor-unwritable)" ]
   jq -e . "$CONTINUE_IDL" >/dev/null
 }
+
+# ── S20 / S23 — composition with the other Stop arms on ONE Stop (real completion-assert, anti-deference) ──
+other_hooks_env() {
+  export COMPLETION_IDL="$BATS_TEST_TMPDIR/ca-idl.jsonl" COMPLETION_STATE_DIR="$BATS_TEST_TMPDIR/ca-state"
+  export ANTIDEF_IDL="$BATS_TEST_TMPDIR/ad-idl.jsonl" ANTIDEF_STATE_DIR="$BATS_TEST_TMPDIR/ad-state" CC_JEV=0
+  export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
+}
+run_hook_as() { printf '{"cwd":"%s","session_id":"sidA","transcript_path":"%s"}' "$CWD" "$2" | bash "$REPO/hooks/$1" 2>/dev/null; }
+tx_close() {
+  local p="$BATS_TEST_TMPDIR/close-$RANDOM.jsonl"
+  { u_str 'Scope (frozen): Loop until dry.'; u_str "$NOTE"; a_txt "$1"; } > "$p"; printf '%s' "$p"
+}
+
+@test "S20: the floor composes with completion-assert — its ⛔ contradiction yields to the floor's block (one message)" {
+  other_hooks_env
+  p="$(tx_close '✅ Good to close: yes — nothing left to do.')"
+  out="$(run_hook_as session-continue.sh "$p")"
+  blocked "$out"
+  run_hook_as completion-assert.sh "$p" >/dev/null
+  grep -q 'double-block-yield:session-continue-scope-floor' "$COMPLETION_IDL" || { cat "$COMPLETION_IDL"; false; }
+}
+
+@test "S23: a loop 🔧 under a 'yes' close — the floor blocks; anti-deference and completion-assert add no ledger block" {
+  other_hooks_env
+  export STUB_RUNG=🔧 STUB_LOOP_RUNG=1 STUB_BLOCKED=0 STUB_BLOCKED_IDS= STUB_BLOCKED_GLOSS=
+  p="$(tx_close '✅ Good to close: yes — nothing left to do')"
+  out="$(run_hook_as session-continue.sh "$p")"
+  blocked "$out"
+  [[ "$(reason_of "$out")" == *'dod-persist.sh done'* ]] || false
+  [ "$(row scope-floor | jq -r .kind)" = loop ]
+  ad="$(run_hook_as anti-deference-nudge.sh "$p")"
+  ! blocked "$ad" || false
+  ! grep -q '"false-done"' "$ANTIDEF_IDL" 2>/dev/null || false
+  # the double-block yield would mask a contradiction, so judge completion-assert WITHOUT it
+  ca="$(CC_DOUBLE_BLOCK_GUARD=0 run_hook_as completion-assert.sh "$p")"
+  ! blocked "$ca" || { cat "$COMPLETION_IDL"; false; }
+}
