@@ -858,11 +858,46 @@ def stale_reconcile(
         elif s is None or not s.holders:
             out.append((req.sid, "NOT_NEEDED", "dead-before-claim"))
     for sid, rec in records.items():
+        if rec.open and parked(rec):
+            why = park_release(rec, now, stores)
+            if why:
+                rec.terminal = T.Terminal(outcome="NOT_NEEDED", proof=why, at=now)
+                out.append((sid, "PARKED-RELEASED", why))
+            continue
         born = rec.timeline.planned or rec.timeline.detected
-        if rec.open and boottime and born and born < boottime and not parked(rec):
+        if rec.open and boottime and born and born < boottime:
             park(rec, now)
             out.append((sid, "PARKED-REBOOT", "planned before kern.boottime"))
     return out
+
+
+# How long a reboot park may stand before the reconciler lets it go. boot-resume runs within
+# minutes of a boot, and in page mode the operator relaunches by hand the same day; a park still
+# standing after 72 h is one nothing will ever pick up. 2026-10-24: four records (three since
+# 2026-09-30, one since 2026-10-18) sat open for weeks, so the readout's "4 waiting" was permanent
+# and hid every real wait. Closing the record moves no session: the reconciler only stops holding it,
+# and a later limit mints a fresh record.
+PARKED_REBOOT_MAX_S = 72 * 3600
+
+
+def park_release(
+    rec: T.Record, now: float, stores: Sequence[str] = ()
+) -> Optional[str]:
+    """The terminal reason for a reboot park nothing will relaunch, else None: past
+    PARKED_REBOOT_MAX_S, or no transcript (and no ``.handed-off`` tombstone) for its sid in any
+    account store — boot-resume refuses that one as ``no-transcript`` (064beecc). With no ``stores``
+    the transcript is not judged: an absent map is no evidence that the transcript is absent."""
+    since = rec.wait.since if rec.wait is not None else 0.0
+    if since and now - since >= PARKED_REBOOT_MAX_S:
+        return (
+            "parked before a reboot %.0f h ago and never relaunched by boot-resume"
+            % ((now - since) / 3600)
+        )
+    if stores:
+        tp, _handed = transcript.locate(list(stores), "", rec.sid)
+        if not tp:
+            return "parked before a reboot, and no account store holds its transcript (boot-resume: no-transcript)"
+    return None
 
 
 def parked(rec: T.Record) -> bool:

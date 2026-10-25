@@ -409,6 +409,52 @@ class CensusRecords(unittest.TestCase):
         self.assertEqual(plan.phantom_rows([rec]), [])
         self.assertEqual(C.stale_reconcile(recs, [], snap, NOW - 50, NOW), [])
 
+    def _parked(self, sid, since):
+        rec = T.Record(sid=sid, record_id="r-" + sid)
+        rec.timeline.detected = since - 100
+        C.park(rec, since)
+        return rec
+
+    def test_an_aged_or_transcriptless_reboot_park_closes_and_leaves_the_readout(self):
+        """2026-10-24: four PARKED-REBOOT records stood open for weeks (boot-resume skipped 064beecc
+        as no-transcript), so the readout's "4 waiting" never cleared and hid every real wait."""
+        from lr_recon import report
+
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        cfg = os.path.join(tmp, "cfg")
+        os.makedirs(os.path.join(cfg, "projects", "-w"))
+        open(os.path.join(cfg, "projects", "-w", "kept.jsonl"), "w").close()
+        snap = T.Snapshot(wall=NOW, uptime_raw=0.0)
+        aged = self._parked("aged", NOW - C.PARKED_REBOOT_MAX_S - 1)
+        gone = self._parked("gone", NOW - 60)
+        kept = self._parked("kept", NOW - 60)
+        recs = {"aged": aged, "gone": gone, "kept": kept}
+        before = report.readout_line(None, NOW, list(recs.values()))
+        self.assertIn("3 waiting", before)
+        out = C.stale_reconcile(recs, [], snap, NOW - 50, NOW, stores=[cfg])
+        self.assertEqual(
+            sorted((sid, v) for sid, v, _r in out),
+            [("aged", "PARKED-RELEASED"), ("gone", "PARKED-RELEASED")],
+        )
+        self.assertEqual(aged.terminal.outcome, "NOT_NEEDED")
+        self.assertIn("never relaunched", aged.terminal.proof)
+        self.assertIn("no-transcript", gone.terminal.proof)
+        self.assertTrue(
+            kept.open, "a recent park with a transcript stays boot-resume's"
+        )
+        after = report.readout_line(None, NOW, list(recs.values()))
+        self.assertIn("1 waiting", after)
+        self.assertEqual(
+            C.stale_reconcile(recs, [], snap, NOW - 50, NOW, stores=[cfg]), []
+        )
+
+    def test_no_store_map_is_no_evidence_against_a_recent_park(self):
+        rec = self._parked("p", NOW - 60)
+        snap = T.Snapshot(wall=NOW, uptime_raw=0.0)
+        self.assertEqual(C.stale_reconcile({"p": rec}, [], snap, NOW - 50, NOW), [])
+        self.assertTrue(rec.open)
+
     def _stores(self):
         """cfg-a holds only the source tombstone, cfg-b the target copy (a confirmed move)."""
         tmp = tempfile.mkdtemp()
