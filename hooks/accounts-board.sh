@@ -136,7 +136,10 @@ pane_cols() {
   case "${CC_PANE_COLS:-}" in '') ;; *[!0-9]*) return 1 ;; *) printf '%s' "$CC_PANE_COLS"; return 0 ;; esac
   p="${CC_HOOK_PARENT_PID:-$PPID}"
   for i in 1 2 3 4 5; do
-    t="$(ps -o tty= -p "$p" 2>/dev/null | tr -d ' ')"
+    # tdev, never tty: `-o tty` runs devname() — a /dev walk that hung every caller once one devfs
+    # node was poisoned (incident 2026-10-25, DESIGN.md I4). tdev prints major/minor with no lookup.
+    t="$(ps -o tdev= -p "$p" 2>/dev/null | tr -d ' ')"
+    case "$t" in 16/[0-9]*) printf -v t 'ttys%03d' "${t#16/}" ;; *) t="" ;; esac
     case "$t" in
       ''|'?'*) ;;
       *) sz="$(stty -f "/dev/$t" size 2>/dev/null || stty -F "/dev/$t" size 2>/dev/null)"

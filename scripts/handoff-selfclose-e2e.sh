@@ -1,7 +1,7 @@
 #!/bin/bash
 # shellcheck disable=SC2009,SC2015
-# ^ file-wide, matching scripts/handoff-fire.sh's own convention: SC2009 — `ps -o comm= -t <tty>` is a
-#   controlling-TTY process lookup (pgrep -t is not equivalent); SC2015 — `<cond> && ok "…" || bad "…"`
+# ^ file-wide, matching scripts/handoff-fire.sh's own convention: SC2009 — `ps -axo tdev=,comm= | awk` is a
+#   controlling-TTY process lookup (pgrep -t is not equivalent, and stats /dev/<tty>); SC2015 — `<cond> && ok "…" || bad "…"`
 #   is the intentional test-assertion idiom here (ok/bad are 0-returning counters, so `|| bad` runs
 #   only when <cond> is false, never as a side effect of ok failing).
 # E2E for `handoff-fire.sh self-close` — the SUCCESSION CONTRACT (2026-07-13).
@@ -103,9 +103,16 @@ end run
 AS
 }
 
+tty_comms() { # $1=/dev/ttysNNN → the comm of every process on that tty, selected by tdev
+  # never `ps -t`: it stats /dev/<tty>, which sleeps forever on a wedged node (incident 2026-10-25, I4)
+  local n; n="${1##*/}"; n="${n#ttys}"
+  [[ "$n" =~ ^[0-9]+$ ]] || return 1
+  ps -axo tdev=,comm= 2>/dev/null | awk -v t="16/$((10#$n))" '$1 == t { $1 = ""; print substr($0, 2) }'
+}
+
 fake_alive() { # $1=uuid → 0 when a `claude` process sits on the pane's tty
   local tty; tty="$(pane_tty "$1")"
-  [ -n "$tty" ] && ps -o comm= -t "$(basename "$tty")" 2>/dev/null | grep -qE 'node|claude'
+  [ -n "$tty" ] && tty_comms "$tty" | grep -qE 'node|claude'
 }
 
 split_pane() { # → new pane uuid on stdout (split prints "Created new pane: <id>"; diff fallback)
@@ -124,7 +131,7 @@ await_shell() { # $1=uuid — the typed launch is LOST if it lands before zsh fi
   local n=0 tty
   while [ "$n" -lt 15 ]; do
     tty="$(pane_tty "$1")"
-    if [ -n "$tty" ] && ps -o comm= -t "$(basename "$tty")" 2>/dev/null | grep -qE '(zsh|bash)$'; then
+    if [ -n "$tty" ] && tty_comms "$tty" | grep -qE '(zsh|bash)$'; then
       sleep 1   # prompt settle after the shell process appears
       return 0
     fi

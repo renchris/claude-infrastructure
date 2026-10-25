@@ -599,7 +599,9 @@ _pane_from_tty() {
   local pid="$1" tty
   [[ -n "$pid" ]] || return 1
   [[ -x "$PANE_PYTHON_BIN" ]] || return 1
-  tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+  # tdev, never `-o tty`: the tty column runs devname(), a /dev walk (incident 2026-10-25, I4).
+  tty=$(ps -o tdev= -p "$pid" 2>/dev/null | tr -d ' ')
+  case "$tty" in 16/[0-9]*) printf -v tty 'ttys%03d' "${tty#16/}" ;; *) return 1 ;; esac
   [[ -n "$tty" && "$tty" != "??" ]] || return 1
   tas_bounded "$PANE_PYTHON_BIN" - "/dev/$tty" <<'PY' 2>/dev/null
 import asyncio, sys

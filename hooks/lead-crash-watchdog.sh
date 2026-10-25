@@ -1604,7 +1604,7 @@ surface_death() {
 # --pane-verdict entrypoint and a one-off repaint of a pane whose daemon predates this arm.
 PANE_VERDICT_SETTLE_S="${CC_PANE_VERDICT_SETTLE_S:-45}"
 PANE_VERDICT_DEV="${CC_PANE_VERDICT_DEV:-/dev}"
-LEAD_TTY="${CC_PANE_VERDICT_TTY:-}"      # overwritten at registration from `ps -o tty= -p <lead>`
+LEAD_TTY="${CC_PANE_VERDICT_TTY:-}"      # overwritten at registration from `ps -o tdev= -p <lead>`
 LEAD_PANE="${CC_PANE_VERDICT_PANE:-}"    # …from CC_PANE_ID / KITTY_WINDOW_ID / ITERM_SESSION_ID
 LEAD_CFG="${CC_PANE_VERDICT_CFG:-}"      # …from CLAUDE_CONFIG_DIR (names the pinned launcher)
 LEAD_CWD="${CC_PANE_VERDICT_CWD:-}"      # …from the hook's $PWD (the session's working dir)
@@ -1625,7 +1625,13 @@ pane_is_desk() { # $1=pane → 0 iff the desk role pointer names this pane
 }
 pane_tty_procs() { # $1=tty → "<stat> <command>" for every process still attached to that tty
   if [[ -n "${CC_PANE_VERDICT_TTY_PROCS:-}" ]]; then cat "$CC_PANE_VERDICT_TTY_PROCS" 2>/dev/null; return 0; fi
-  lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" /bin/ps -t "$1" -o stat=,command= 2>/dev/null || true
+  # Selected by tdev, never `ps -t`: -t stats /dev/<tty>, a lookup that sleeps forever on exactly a
+  # wedged node, and lcw_bounded's wait cannot bound an uninterruptible caller (incident 2026-10-25,
+  # DESIGN.md I4). -x plus a tdev compare reads KERN_PROC only; 16/N is ttys%03d by construction.
+  local n="${1#ttys}"
+  [[ "$n" =~ ^[0-9]+$ ]] || return 0
+  lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" /bin/ps -axo tdev=,stat=,command= 2>/dev/null \
+    | awk -v t="16/$((10#$n))" '$1 == t { sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, ""); print }' || true
 }
 # "Is the pane at a bare prompt?" is a question about the tty's FOREGROUND process group, and the
 # kernel answers it directly: ps marks every member with `+` in STAT. Only those are judged — every
@@ -2272,7 +2278,12 @@ echo "$SESSION_ID" > "$WATCHDOG_DIR/$SESSION_ID.id"
 # paint_pane_verdict). The daemon inherits them; nothing can re-derive them after the death: the
 # registry row is gone by then (session-end.sh deletes it) and `ps` cannot answer for a dead pid.
 # A seam already set (a test, or a one-off repaint) wins over the live reading.
-LEAD_TTY="${CC_PANE_VERDICT_TTY:-$(ps -o tty= -p "$LEAD_PID" 2>/dev/null | tr -d ' ')}"
+# tdev, never `-o tty`: the tty column runs devname(), a /dev walk (incident 2026-10-25, DESIGN.md I4).
+LEAD_TTY="${CC_PANE_VERDICT_TTY:-}"
+if [[ -z "$LEAD_TTY" ]]; then
+  _lcw_tdev="$(ps -o tdev= -p "$LEAD_PID" 2>/dev/null | tr -d ' ')"
+  case "$_lcw_tdev" in 16/[0-9]*) printf -v LEAD_TTY 'ttys%03d' "${_lcw_tdev#16/}" ;; esac
+fi
 case "$LEAD_TTY" in ttys[0-9]*) ;; *) LEAD_TTY="" ;; esac
 # CC_PANE_ID WINS (see LEAD_PANE below), so the compat id is consulted only when it is unset.
 # The guard is on THIS line deliberately: it makes the precedence structural rather than a

@@ -274,7 +274,7 @@ case "$CMD" in
   launch|"")
     # Refuse LaunchAgent / background daemon launches (GUI registration abort on Dia 1.39.2)
     if [[ "${LAUNCHD_JOB_LABEL:-}" != "" ]] || \
-       [[ "$(ps -o tty= -p $PPID 2>/dev/null | tr -d ' ')" == "??" ]]; then
+       [[ "$(ps -o tdev= -p $PPID 2>/dev/null | tr -d ' ')" == "??" ]]; then   # tdev: no devname() /dev walk (I4)
       echo "[dia-cdp] REFUSED: must run from a foreground interactive shell, not launchd."
       exit 2
     fi

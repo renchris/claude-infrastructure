@@ -3998,6 +3998,38 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── DEVNAME HAZARD lint (incident 2026-10-25 DESIGN.md I4, C8) ──────────────────────────────────
+  # One poisoned devfs node hung every `/dev` name lookup: 23 `ps`, 17 `login` and every new zsh slept
+  # forever in ttyname → devname → lstat. A watchdog that runs `ps -o tty`, `ps -t`, `ps` without -x or
+  # `lsof` becomes a casualty of what it watches. LINE-scoped: only lines this land ADDS are judged, so
+  # a land is refused for a hazard it introduces and never for a sibling's legacy line it did not touch.
+  # gate_bounded: SHIP_LAND_DEVNAME_LINT=/nonexistent disarms a broken detector.
+  DHL_LINT="${SHIP_LAND_DEVNAME_LINT:-scripts/devname-hazard-lint.sh}"
+  if [[ -x "$DHL_LINT" ]]; then
+    local dhl_own=""
+    dhl_own="$(git diff --name-only "$range" -- 'hooks/*.sh' 'scripts/lockwatch/*' 'scripts/forensics/*' \
+                 'scripts/break-glass/*' 'scripts/compressor-sentinel.sh' 'scripts/capacity-alarm.sh' \
+                 'scripts/devname-hazard-lint.sh' 2>/dev/null || true)"
+    if [[ -n "$dhl_own" ]]; then
+      echo "→ gate: devname-hazard lint (this land edits $(printf '%s\n' "$dhl_own" | grep -c .) watchdog-path file(s))" >&2
+      if ! selftest_ok "$DHL_LINT"; then
+        echo "✗ gate: devname-hazard-lint --selftest FAILED — the detector no longer discriminates." >&2
+        echo "  Escape if it is the detector that is broken: SHIP_LAND_DEVNAME_LINT=/nonexistent" >&2
+        gate_red devname-hazard-selftest
+        return 1  # gate_bounded: SHIP_LAND_DEVNAME_LINT=/nonexistent — escape for a broken detector
+      fi
+      local _dhrc=0
+      cc_run "$DHL_LINT" --diff "$range" >&2 || _dhrc=$?
+      if (( _dhrc == 2 )); then arm_nonverdict "devname-hazard-lint"; return 1; fi
+      if (( _dhrc != 0 )); then
+        echo "✗ gate: devname-hazard RED — an added line runs a form that walks /dev (ps -o tty, ps -t/-T/-M, ps without -x, lsof)." >&2
+        echo "  Use ps -x with tdev (16/N = ttys%03d), or annotate '# devname-hazard-lint:allow <reason>'." >&2
+        gate_red devname-hazard
+        return 1  # gate_bounded: fires only on lands that add a hazard line on a watchdog path
+      fi
+    fi
+  fi
+
   # ── EXEC FORM ratchet, rule R2 (docs/plans/KALLOC_TRIGGER_ELIMINATION_2026-10-22.md W4) ─────────
   # Our own shell code running a tracked #! file BY PATH ("$HOME/.claude/bin/cc-backlog", a seam
   # variable holding one, through exec/timeout/nohup/env/xargs/find -exec) keeps ~1.1 KiB of kernel
