@@ -213,6 +213,65 @@ tx_f1() {
   done
 }
 
+# ── S8 / S8b / S9 / S9b with the REAL in-flight lib (hooks/lib/inflight.sh) ──
+# tx_bg <command> [<extra record>…]: F1, plus one background Bash task started by <command> whose
+# output file is fresh; the turn that closes idle was opened by an unrelated task notification.
+tx_bg() {
+  local p="$BATS_TEST_TMPDIR/bg-$RANDOM.jsonl" out="$BATS_TEST_TMPDIR/b1.output" c="$1"; shift
+  : > "$out"
+  { u_str 'Scope (frozen): Loop until dry.'
+    jq -nc --arg c "$c" '{type:"assistant",message:{content:[{type:"tool_use",id:"tb1",name:"Bash",input:{command:$c,run_in_background:true}}]}}'
+    jq -nc --arg o "$out" '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"tb1",content:("Command running in background with ID: b1. Output is being written to: " + $o + ". You will be notified when it completes.")}]},toolUseResult:{backgroundTaskId:"b1"}}'
+    for r in "$@"; do printf '%s\n' "$r"; done
+    u_str "$NOTE"; a_txt "$F1_CLOSE"; } > "$p"
+  printf '%s' "$p"
+}
+tx_agent() { # $1 = extra record (or ""); the async agent a8e552e552430265c, its transcript fresh
+  local p="$BATS_TEST_TMPDIR/ag-$RANDOM.jsonl"
+  { u_str 'Scope (frozen): Loop until dry.'
+    jq -nc '{type:"assistant",message:{content:[{type:"tool_use",id:"ta1",name:"Agent",input:{prompt:"x",run_in_background:true}}]}}'
+    jq -nc '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"ta1",content:[{type:"text",text:"Async agent launched successfully.\nagentId: a8e552e552430265c (internal ID - do not mention to user.)\nThe agent is working in the background."}]}]}}'
+    [ -n "${1:-}" ] && printf '%s\n' "$1"
+    u_str "$NOTE"; a_txt "$F1_CLOSE"; } > "$p"
+  mkdir -p "${p%.jsonl}/subagents"; : > "${p%.jsonl}/subagents/agent-a8e552e552430265c.jsonl"
+  printf '%s' "$p"
+}
+
+@test "S8 (real lib): a live non-watcher bg task and a live async agent each abstain inflight (bg / agent)" {
+  export INFLIGHT_LIB="$REPO/hooks/lib/inflight.sh"
+  ! blocked "$(actuate sidA "$(tx_bg 'bash scripts/ship-land.sh')")" || false
+  [ "$(row scope-floor-inflight | jq -r '.what')" = bg ]
+  : > "$CONTINUE_IDL"
+  ! blocked "$(actuate sidA "$(tx_agent "")")" || false
+  [ "$(row scope-floor-inflight | jq -r '.what')" = agent ]
+}
+
+@test "S8b (real lib): a finished agent, and an unfinished one whose transcript is 3 h old, are not in flight" {
+  export INFLIGHT_LIB="$REPO/hooks/lib/inflight.sh"
+  blocked "$(actuate sidA "$(tx_agent "$(u_str $'<task-notification>\n<task-id>a8e552e552430265c</task-id>\n<status>completed</status>')")")"
+  p="$(tx_agent "")"; touch -t "$(date -v-3H +%Y%m%d%H%M.%S)" "${p%.jsonl}/subagents/agent-a8e552e552430265c.jsonl"
+  blocked "$(CC_SCOPE_FLOOR_GAP_S=0 actuate sidB "$p")"
+}
+
+@test "S9 (real lib): an armed watcher alone is not in flight — absolute path, timeout prefix, env prefix" {
+  export INFLIGHT_LIB="$REPO/hooks/lib/inflight.sh" CC_SCOPE_FLOOR_GAP_S=0
+  for c in '/Users/someone/.claude/bin/cc-await-ping 134 --timeout 3300 --interval 15' \
+           'timeout 3400 /x/cc-await-ping 134' 'CC_X=1 cc-await-ping 134'; do
+    out="$(STUB_BLOCKED_IDS="$(printf '%s' "$c" | cksum | cut -c1-12)" actuate sidA "$(tx_bg "$c")")"
+    blocked "$out" || { echo "not blocked: $c"; cat "$CONTINUE_IDL"; false; }
+  done
+}
+
+@test "S9b (real lib): finished whatever record carries it (queued_command, queue-operation); a stale output file is not live" {
+  export INFLIGHT_LIB="$REPO/hooks/lib/inflight.sh" CC_SCOPE_FLOOR_GAP_S=0
+  qc="$(jq -nc '{type:"attachment",attachment:{type:"queued_command",prompt:"<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>"}}')"
+  qo="$(jq -nc '{type:"queue-operation",operation:"enqueue",content:"<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>"}')"
+  blocked "$(STUB_BLOCKED_IDS=aaaaaaaaaaa1 actuate sidA "$(tx_bg 'bash scripts/ship-land.sh' "$qc")")"
+  blocked "$(STUB_BLOCKED_IDS=aaaaaaaaaaa2 actuate sidA "$(tx_bg 'bash scripts/ship-land.sh' "$qo")")"
+  p="$(tx_bg 'bash scripts/ship-land.sh')"; touch -t "$(date -v-3H +%Y%m%d%H%M.%S)" "$BATS_TEST_TMPDIR/b1.output"
+  blocked "$(STUB_BLOCKED_IDS=aaaaaaaaaaa3 actuate sidA "$p")"
+}
+
 # ── S10 / S11 — unknowns abstain; held / nothing ungated ──
 @test "S10: unknowns abstain — ledger error, custody skipped under ungated ⛔, in-flight lib missing" {
   p="$(tx_f1)"
