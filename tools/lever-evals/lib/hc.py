@@ -72,8 +72,20 @@ FLOWS = {
     "d1_successor": dict(
         kind="points", min_act=10.0, model_runs=True, built=False, wave="S9"
     ),
+    # the grader's judge and rubric are part of the harness; agents/workflow-lean.md is not (it is
+    # the surface a round tunes, injected per run), nor is the shadow hook build_cases reads
     "d2_lean": dict(
-        kind="points", min_act=10.0, model_runs=True, built=False, wave="S10"
+        kind="points",
+        min_act=10.0,
+        model_runs=True,
+        built=True,
+        wave="S10",
+        extra=(
+            "docs/research/token-efficiency-2026-09-23/eval/harness/f2/setup.sh",
+            "docs/research/token-efficiency-2026-09-23/eval/harness/f2/workflow.js",
+            "bin/cc-lever-judge",
+            "config/lever-rubrics.json",
+        ),
     ),
 }
 

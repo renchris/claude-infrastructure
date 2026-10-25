@@ -19,8 +19,14 @@ usage:
   cc-lever-eval report <flow>                                  also appends the kind=offline row
   cc-lever-eval approve-harness <flow> --confirm <sha12>        the operator's act
   cc-lever-eval harness-sha <flow>
+model-run flows (d2_lean):
+  cc-lever-eval keys d2_lean [--cases train|all|PATH] [--smoke]  answer keys (F2 by code, keygen.js)
+  cc-lever-eval run d2_lean [--cases …] [--reps 2] [--acct A] [--tag T] [--dry-run] [--smoke]
+  cc-lever-eval grade d2_lean [--tag T] [--smoke] [--no-judge]  code facts, then cc-lever-judge
+  cc-lever-eval gate d2_lean [--tag T] [--smoke] [--write]       reported, never decided
+  Every model run but --smoke (at most 2 cases, R=1) needs the approved harness.
 
-flows: d3_keepalive (S7a), d1_recycle and d4_pollloop (S7b) built; d1_successor (S9), d2_lean (S10).
+flows: d3_keepalive (S7a), d1_recycle and d4_pollloop (S7b), d2_lean (S10) built; d1_successor (S9).
 exit: 0 ok / a verdict was computed · 1 a check failed · 2 usage · 3 flow not built yet ·
       4 refused (harness not approved, sealed split, leak, more than one change)
 """
@@ -129,6 +135,8 @@ def cmd_split(a, F):
 
 
 def cmd_run(a, F):
+    if hasattr(F, "run_model"):
+        return F.run_model(a)
     if hc.FLOWS[a.flow]["model_runs"]:
         hc.require_approved(a.flow)
     if a.cases == "train":
@@ -198,7 +206,9 @@ def cmd_check(a, F):
     ok_all = True
     train = None
     for name in want:
-        if name == "repro":
+        if name == "repro" and getattr(F, "REF_FIXTURE", "") is None:
+            ok, rows = F.check_repro(None, None)
+        elif name == "repro":
             ref = a.ref or (F.REF_IMPORT if os.path.exists(F.REF_IMPORT) else F.REF_FIXTURE)
             cases, meta = F.import_cases(ref)
             ok, rows = F.check_repro(cases, meta)
@@ -290,6 +300,16 @@ def cmd_report(a, F):
     return 0
 
 
+def flow_cmd(name):
+    """A subcommand only some flows have (d2_lean's keys / grade / gate): dispatch or refuse."""
+    def run(a, F):
+        fn = getattr(F, "cmd_" + name, None)
+        if fn is None:
+            raise Refused("flow %s has no %s step" % (a.flow, name))
+        return fn(a)
+    return run
+
+
 def cmd_approve(a, F):
     sha = hc.approve_harness(a.flow, a.confirm)
     print("approved %s harness %s" % (a.flow, sha))
@@ -321,6 +341,30 @@ def parser():
     p.add_argument("--policy", action="append")
     p.add_argument("--params")
     p.add_argument("--cases", default="train")
+    p.add_argument("--smoke", action="store_true")
+    p.add_argument("--tag")
+    p.add_argument("--acct")
+    p.add_argument("--reps", type=int, choices=(1, 2), default=2)
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--timeout", type=float, default=4 * 3600)
+    p = sub("keys", flow_cmd("keys"))
+    p.add_argument("--cases", default="all")
+    p.add_argument("--smoke", action="store_true")
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--acct")
+    p.add_argument("--timeout", type=float, default=2 * 3600)
+    p = sub("grade", flow_cmd("grade"))
+    p.add_argument("--tag")
+    p.add_argument("--smoke", action="store_true")
+    p.add_argument("--no-judge", action="store_true")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--judge-max", type=int, default=40)
+    p = sub("gate", flow_cmd("gate"))
+    p.add_argument("--tag")
+    p.add_argument("--smoke", action="store_true")
+    p.add_argument("--graded")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--write", action="store_true")
     p = sub("score", cmd_score)
     p.add_argument("--candidate", required=True)
     p.add_argument("--split", choices=("train", "test"), default="train")
@@ -344,10 +388,10 @@ def parser():
 
 def main(argv):
     a = parser().parse_args(argv)
-    for k in ("source", "ref", "text"):
+    for k in ("source", "ref", "text", "graded"):
         if getattr(a, k, None):
             setattr(a, k, os.path.abspath(getattr(a, k)))
-    if getattr(a, "cases", None) not in (None, "train", "all"):
+    if getattr(a, "cases", None) not in (None, "train", "all", "test"):
         a.cases = os.path.abspath(a.cases)
     hc.enter_eval_context()
     F = load_flow(a.flow)
