@@ -51,6 +51,10 @@ setup() {
   # cc-pane-verdict (F5) is a recorder here: the real one would ask kitty to retitle a window.
   cc_stub "$D/bin" pane-verdict "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\n' "$D/verdict-calls.log")"
   export CC_PCQ_VERDICT_BIN="$D/bin/pane-verdict"
+  # The pane census (FIX-DESIGN §4 W3) is a recorder: the real one would list this machine's kitty.
+  # shellcheck disable=SC2016   # stub source written literally; its $ must expand in the stub, not here
+  cc_stub "$D/bin" census "$(printf '#!/bin/bash\necho ran >> %q\nexit "${CC_TEST_CENSUS_RC:-0}"\n' "$D/census-calls.log")"
+  export CC_PCQ_CENSUS_BIN="$D/bin/census" CC_PANE_CLOSE_LOG="$D/pane-close.jsonl"
   printf '#!/bin/bash\nexit 4\n' > "$D/bin/nosock"
   chmod +x "$D/bin/kitty" "$D/bin/it2" "$D/bin/page" "$D/bin/pcqnotify" "$D/bin/nosock"
 }
@@ -319,6 +323,21 @@ recycle_row() { q recycle 41 sid=s41 reason=unreachable argv="--prompt-file /tmp
   [ ! -e "$D/kitty-calls.log" ]
 }
 
+# mutant: the census call placed after the empty-queue exit — no census on the common tick.
+@test "W3: the pane census runs on every tick, an empty queue included" {
+  run /bin/bash "$DRAIN"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c ran "$D/census-calls.log")" -eq 1 ]
+}
+
+@test "W3: a census that fails never stops the drain" {
+  husk42; lsjson 42 ls.json /bin/zsh; closer
+  CC_TEST_CENSUS_RC=7 run /bin/bash "$DRAIN"
+  [ "$status" -eq 0 ]
+  [ -e "$D/census-calls.log" ]
+  run test -e "$(ROW42)"; [ "$status" -eq 1 ]
+}
+
 # ══ the wiring ══════════════════════════════════════════════════════════════════════════════════
 
 @test "teammate-reap-alarm runs the drainer, and a failing drainer leaves its exit code unchanged" {
@@ -479,7 +498,7 @@ closer() {
   run "$DRAIN"
   [ ! -e "$(ROW42)" ]
   [ "$(grep -c . "$D/pc-calls.log")" -eq 1 ]    # not asked again
-  grep -q "husk pane=42 its tty was typed in since" "$D/pcq.log"
+  grep -q "husk pane=42 its tty was typed in since 20[0-9-]*T" "$D/pcq.log"   # first_ts read before the row went
 }
 
 @test "husk: an open custody row for the pane holds it — no close, no attempt counted" {
@@ -666,6 +685,18 @@ held42() { q husk 42 reason=guard-refused kitty_pid=610 producer=cc-pane-runner 
   run "$DRAIN"
   grep -q "husk pane=42 closer exceeded its 60s bound" "$D/pcq.log"
   [ ! -e "$D/verdict-calls.log" ]
+}
+
+@test "W3: a closer timeout is its own class — logged as timeout, never counted toward the attempts page" {
+  husk42; lsjson 42 ls.json /bin/zsh
+  cc_stub "$D/bin" cc-pane-close "$(printf '#!/bin/bash\nexit 124\n')"
+  CC_PCQ_MAX_ATTEMPTS=1 run "$DRAIN"
+  CC_PCQ_MAX_ATTEMPTS=1 run "$DRAIN"
+  [ "$(qget "$(ROW42)" attempts)" = 0 ]
+  [ "$(qget "$(ROW42)" timeouts)" = 2 ]
+  [ "$(qget "$(ROW42)" last_verdict)" = timeout ]
+  [ "$(jq -r '"\(.pane) \(.verdict)"' "$D/pane-close.jsonl" | sort -u)" = "42 timeout" ]
+  run test -e "$D/page-calls.log"; [ "$status" -eq 1 ]
 }
 
 @test "C4: husk rows drain least recently tried first, with kitty answering and deaf" {

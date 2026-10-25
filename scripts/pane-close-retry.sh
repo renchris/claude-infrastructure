@@ -60,6 +60,25 @@ while IFS= read -r _t; do
   [[ -n "$_t" ]] && rm -f -- "$_t" && log "leftover ${_t##*/} (a killed writer's tmp) older than 60 min — removed"
 done < <(find "$PCQ_DIR" -maxdepth 1 -name '*.json.tmp.*' -mmin +60 2>/dev/null)
 
+# Same bounding idiom as hooks/teammate-auto-shutdown.sh tas_bounded: a launchd PATH has no coreutils
+# `timeout`, so the absolute Homebrew paths are searched too; absent everywhere ⇒ unbounded, never
+# a refusal to run.
+PCQ_TIMEOUT_BIN=""
+for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+          /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+  [[ -n "$_c" && -x "$_c" ]] && { PCQ_TIMEOUT_BIN="$_c"; break; }
+done
+bounded() {
+  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }   # #! via its interpreter (cc-run.sh)
+  if [[ -z "$PCQ_TIMEOUT_BIN" ]]; then "$@"; return $?; fi
+  "$PCQ_TIMEOUT_BIN" -k 3 "$TIMEOUT_S" "$@"
+}
+
+# The standing pane census (husk-history-2026-10-24 FIX-DESIGN §4 W3) runs on EVERY tick, so it sits
+# above the empty-queue exit: a husk nobody queued is exactly what it exists to count. Read-only
+# against kitty, bounded, and its rc is ignored — a census that fails never stops a drain.
+TIMEOUT_S=20 bounded "${CC_PCQ_CENSUS_BIN:-$HERE/pane-census.sh}" >/dev/null 2>&1 </dev/null || true
+
 ROWS="$(pcq_list)"
 [[ -n "$ROWS" ]] || exit 0          # the common case: nothing queued, and kitty is never asked
 
@@ -104,20 +123,6 @@ if [[ -z "$SOCK" ]]; then
 fi
 LIVE_GEN=""
 [[ "$SOCK" =~ .*kitty-([0-9]+) ]] && LIVE_GEN="${BASH_REMATCH[1]}"
-
-# Same bounding idiom as hooks/teammate-auto-shutdown.sh tas_bounded: a launchd PATH has no coreutils
-# `timeout`, so the absolute Homebrew paths are searched too; absent everywhere ⇒ unbounded, never
-# a refusal to run.
-PCQ_TIMEOUT_BIN=""
-for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
-          /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
-  [[ -n "$_c" && -x "$_c" ]] && { PCQ_TIMEOUT_BIN="$_c"; break; }
-done
-bounded() {
-  declare -F cc_argv >/dev/null && { cc_argv "$1"; shift; set -- "${CC_ARGV[@]}" "$@"; }   # #! via its interpreter (cc-run.sh)
-  if [[ -z "$PCQ_TIMEOUT_BIN" ]]; then "$@"; return $?; fi
-  "$PCQ_TIMEOUT_BIN" -k 3 "$TIMEOUT_S" "$@"
-}
 
 page() { cc_run "$PAGE_BIN" --source pane-close-retry "$1" >/dev/null 2>&1 || true; }
 
@@ -276,7 +281,8 @@ drain_husk() { # uses $LS when kitty answered; LS="" means deaf (no pane/foregro
     if [[ ! "$base" =~ ^[0-9]+$ ]]; then
       pcq_add husk "$pane" tty_atime="$at" >/dev/null 2>&1 || true
     elif (( at > base )); then
-      pcq_remove "$row"; log "husk pane=$pane its tty was typed in since $(pcq_get "$row" first_ts) — the operator owns it; row removed, never closed"; return
+      first="$(pcq_get "$row" first_ts)"   # read before the remove: after it the row is gone and the log said "since "
+      pcq_remove "$row"; log "husk pane=$pane its tty was typed in since $first — the operator owns it; row removed, never closed"; return
     fi
   fi
   if [[ "$(pcq_get "$row" hold)" == operator ]]; then
@@ -306,10 +312,17 @@ drain_husk() { # uses $LS when kitty answered; LS="" means deaf (no pane/foregro
     *": CLOSED"*|*": NOTHING TO CLOSE"*|*": ALREADY CLOSED"*)
       pcq_remove "$row"; log "husk pane=$pane ✓ ${out//$'\n'/ }"; return ;;
   esac
-  # The closer was cut off and said nothing: there is no answer to repaint from (C4c).
+  # The closer was cut off and said nothing: there is no answer to repaint from (C4c). A timeout is
+  # its own class (FIX-DESIGN §4 W3): it says the box was slow, not that the pane refused, so it is
+  # counted apart and never toward the attempts page — 25 of the closer's rows were rc 124 (census).
   if (( rc == 124 )) && [[ -z "$out" ]]; then
-    log "husk pane=$pane closer exceeded its ${ct}s bound"
-    bump "$row" "$pane" "cc-pane-close rc=124 with no output" husk; return
+    local nt; nt="$(pcq_get "$row" timeouts)"; [[ "$nt" =~ ^[0-9]+$ ]] || nt=0; nt=$((nt + 1))
+    pcq_add husk "$pane" timeouts="$nt" last_verdict=timeout >/dev/null 2>&1 || true
+    log "husk pane=$pane closer exceeded its ${ct}s bound (timeout $nt) — row kept, not counted as an attempt"
+    jq -nc --arg ts "$(date -u +%FT%TZ)" --arg p "$pane" --arg r "cc-pane-close rc=124 with no output after ${ct}s (pane-close-retry)" \
+      --arg sid "$(pcq_get "$row" sid)" '{ts: $ts, pane: $p, verdict: "timeout", reason: $r, sid: $sid}' \
+      >> "${CC_PANE_CLOSE_LOG:-$HOME/.claude/logs/pane-close.jsonl}" 2>/dev/null || true
+    return
   fi
   # The last pane of a fullscreen OS window: operator-only, so held and paged once, never counted (C4a).
   if [[ "$out" == *refused-fs* && -n "$LS" ]] && ow="$(os_window_of "$pane")" && [[ "$ow" == *" 1" ]]; then

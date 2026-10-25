@@ -229,7 +229,8 @@ b10() { # the pane-304 assertions (§2 row 1b), for either transcript variant
     CC_PCQ_VERDICT_BIN="$S/pcq-verdict" CC_PCQ_KITTY_BIN="$S/kitty" CC_PCQ_IT2_BIN="$S/it2" \
     CC_PCQ_KITTY_SOCKET_BIN="$S/pcq-sock" CC_PCQ_CUSTODY_BIN="$S/cc-find" CC_PCQ_PAGE_BIN="$S/pager" \
     CC_PCQ_NOTIFY_BIN="$S/pager" CC_PCQ_LOG="$T/pcq.jsonl" CC_PCQ_PS_FILE="$T/ps.txt" \
-    CC_PCQ_KITTY_START_EPOCH="$KST" CC_PCQ_REGISTRY_DIR="$T/reg" /bin/bash "$REPO/scripts/pane-close-retry.sh"
+    CC_PCQ_KITTY_START_EPOCH="$KST" CC_PCQ_REGISTRY_DIR="$T/reg" CC_PCQ_CENSUS_BIN=/usr/bin/true \
+    /bin/bash "$REPO/scripts/pane-close-retry.sh"
   [ ! -e "$T/pcq-close.log" ] || { cat "$T/pcq-close.log" "$T/pcq.jsonl"; false; }
   run test -e "$T/pcq-verdict.log"; [ "$status" -eq 1 ]
 }
