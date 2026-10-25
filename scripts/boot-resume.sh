@@ -390,8 +390,8 @@ case "${1:-}" in --print-boottime) printf '%s\n' "$BOOT"; exit 0 ;; esac
 
 log_idl() { # <disposition> <extra-json>
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  printf '{"ts":"%s","tool":"boot-resume","disposition":"%s","boot":"%s","mode":"%s","source":"%s","tomb_joined":%s,"reg_joined":%s,"tree_joined":%s,"retired_skipped":%s%s}\n' \
-    "$(now_iso)" "$1" "$BOOT" "$MODE" "$SOURCE" "${TOMB_JOINED:-0}" "${REG_JOINED:-0}" "${TREE_JOINED:-0}" "${n_retired:-0}" \
+  printf '{"ts":"%s","tool":"boot-resume","disposition":"%s","boot":"%s","mode":"%s","source":"%s","tomb_joined":%s,"reg_joined":%s,"tree_joined":%s,"lockup_distrust":"%s","retired_skipped":%s%s}\n' \
+    "$(now_iso)" "$1" "$BOOT" "$MODE" "$SOURCE" "${TOMB_JOINED:-0}" "${REG_JOINED:-0}" "${TREE_JOINED:-0}" "${LOCKUP_DISTRUST:-}" "${n_retired:-0}" \
     "${EVENT:+,\"event\":$EVENT,\"kind\":\"$EVENT_KIND\",\"plan_only\":$([ "$PLAN_ONLY" = 1 ] && echo true || echo false)}${2:-}" \
     >> "$IDL" 2>/dev/null || true
 }
@@ -677,6 +677,32 @@ EOF
     read_rows "$rows"
   fi
 fi
+# 1a. AFTER A LOCKUP an empty heartbeat roster is not an answer (DESIGN.md C6, 2026-10-25): the
+#    process table is what hangs in a lockup, so a census that "answered" may have seen nobody. Two
+#    signs say so: the boot classifier filed this boot as LOCKUP_* (lockwatch/boot-<epoch>.json), or
+#    the heartbeat's kitty tree was more than 2 ticks older than the heartbeat itself (kitty remote
+#    control dead: 1881's tree was 03:45, its heartbeat 13:09). Then the search falls through to the
+#    alarm roster (alarm-reboot-prep.sh --files-only), the tombstones and the registry.
+#    CC_BOOT_RESUME_LOCKUP_DISTRUST=off is the rollback. Reboots only.
+LOCKUP_DISTRUST=""
+if [ "$SOURCE" = heartbeat ] && [ "$n_open" -eq 0 ] && [ -z "$EVENT" ] && [ "${CC_BOOT_RESUME_LOCKUP_DISTRUST:-on}" != off ]; then
+  bclass="$(jq -r '.class // empty' "${CC_LOCKWATCH_DIR:-$HOME/.claude/autonomy/lockwatch}/boot-$BOOT.json" 2>/dev/null)"
+  case "$bclass" in LOCKUP_*) LOCKUP_DISTRUST="boot class $bclass" ;; esac
+  if [ -z "$LOCKUP_DISTRUST" ]; then
+    while IFS= read -r hd; do
+      [ -n "$hd" ] && [ -f "$hd/hb.kitty-ls.json" ] || continue
+      hs="$(head -n 1 "$hd/hb.start" 2>/dev/null | awk '{ print $1 }')"; km="$(stat -f %m "$hd/hb.kitty-ls.json" 2>/dev/null)"
+      case "$hs$km" in ''|*[!0-9]*) continue ;; esac
+      [ $((hs - km)) -gt $((2 * ${CC_HB_TICK_S:-300})) ] && { LOCKUP_DISTRUST="kitty tree $((hs - km))s older than the heartbeat"; break; }
+    done <<HBD
+$HB_DIRS
+HBD
+  fi
+  if [ -n "$LOCKUP_DISTRUST" ]; then
+    echo "boot-resume: the empty heartbeat roster is not trusted ($LOCKUP_DISTRUST) — trying the alarm roster, tombstones and registry" >&2
+    SOURCE=""; SOURCE_LABEL=""; ANCHOR="$BOOT"
+  fi
+fi
 if [ -z "$SOURCE" ] && [ -n "$roster" ]; then
   if rows="$(jq -r --arg pad "$TSV_PAD" "$JQ_CELL"'
         [ (if type == "array" then . else (.sessions // []) end)[]
@@ -734,7 +760,7 @@ fi
 # RESUMING (an exact argv token after a resume launcher or --resume) or LEADING (the
 # --parent-session-id of a live teammate). The classifier below still decides which of them resume.
 REG_JOINED=0; TREE_JOINED=0
-if [ "$TOMB_JOINED" -gt 0 ]; then
+join_witnesses() { # the registry ghosts and the tree's resumed or leading sessions, once each
   have="$(printf '%s' "$GHOSTS" | cut -f3)"
   if [ -d "$REGISTRY_DIR" ]; then
     for f in "$REGISTRY_DIR"/*.json; do
@@ -803,7 +829,8 @@ $HB_DIRS
 HBD
   [ "$REG_JOINED" -gt 0 ] && SOURCE_LABEL="${SOURCE_LABEL} + ${REG_JOINED} registry ghosts"
   [ "$TREE_JOINED" -gt 0 ] && SOURCE_LABEL="${SOURCE_LABEL} + ${TREE_JOINED} from its kitty tree"
-fi
+}
+[ "$TOMB_JOINED" -gt 0 ] && join_witnesses
 
 # 2. shutdown tombstones (hooks/session-deregister.sh). reason=other also fires when the operator
 #    closes ONE pane, so a tombstone alone is not a shutdown. What is: the LAST burst before the boot.
@@ -829,6 +856,13 @@ if [ -z "$SOURCE" ] && [ -z "$EVENT" ] && [ -d "$TOMB_DIR" ]; then
     ANCHOR="$(printf '%s\n' "$tomb_rows" | awk -F'\t' '$6 > m { m = $6 } END { print m + 0 }')"
     read_rows "$tomb_rows"
   fi
+fi
+# After a distrusted heartbeat (1a) the tombstones answered, but sessions hung with kitty wrote none.
+[ -n "$LOCKUP_DISTRUST" ] && [ "$SOURCE" = tombstones ] && join_witnesses
+# The worktree GC holds this boot's interrupted sessions' worktrees for the boot (C6): it reads this
+# marker, "<reason>", when the snapshot was distrusted or proven stale. Reboots only, never a plan.
+if [ -z "$EVENT" ] && [ "$PLAN_ONLY" != 1 ] && { [ -n "$LOCKUP_DISTRUST" ] || [ "$TOMB_JOINED" -gt 0 ]; }; then
+  { mkdir -p "$STATE_DIR" && printf '%s\n' "${LOCKUP_DISTRUST:-snapshot older than ${TOMB_JOINED} shutdown tombstones}" > "$STATE_DIR/distrust-$BOOT"; } 2>/dev/null || true
 fi
 
 # An event is restored from a heartbeat or not at all: inside a running boot the registry lists the
