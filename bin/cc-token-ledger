@@ -137,7 +137,7 @@ def parse_file(args):
     is_main = ctx_type == "main"
     resp = {}
     order = []
-    tools = []  # (tool_use_id, is_error) in window
+    tools = []  # (tool_use_id, is_error, is_hook) in window; is_hook: a hook's deny, not the tool's
     instr = None
     cost_state = None
     first_ts = None
@@ -146,6 +146,9 @@ def parse_file(args):
     spans_end = False  # a transcript record at or past --until
     bounded = until != "9999"
     seq = -1
+    n_parsed = n_bad = 0  # JSON parses attempted / failed (the lever scorer's parse-failure gate)
+    ptl_n, ptl_last = 0, ""  # in-window "Prompt is too long" API refusals (main only)
+    cc_version = None  # the first Claude Code version a record carries
     try:
         fh = open(rp, "rb")
     except OSError:
@@ -174,15 +177,19 @@ def parse_file(args):
                         else:
                             spans_end = True
                 continue
+            n_parsed += 1
             try:
                 r = json.loads(raw)
             except Exception:
+                n_bad += 1
                 continue
             if not isinstance(r, dict):
                 continue
             t = r.get("type")
             ts = r.get("timestamp")
             inwin = isinstance(ts, str) and since <= ts[:19] < until
+            if cc_version is None and isinstance(r.get("version"), str):
+                cc_version = r["version"][:32]
             if isinstance(ts, str) and t in ("assistant", "user", "attachment"):
                 if start_ts is None or ts[:19] < start_ts:
                     start_ts = ts[:19]
@@ -197,6 +204,9 @@ def parse_file(args):
                 m = r.get("message")
                 if not isinstance(m, dict):
                     continue
+                if is_main and inwin and r.get("isApiErrorMessage") and _is_ptl(m):
+                    ptl_n += 1
+                    ptl_last = max(ptl_last, ts[:19])
                 u = m.get("usage") if isinstance(m.get("usage"), dict) else None
                 mid = m.get("id") or r.get("requestId") or ("nomid:%s:%d" % (rp, len(order)))
                 row = resp.get(mid)
@@ -257,7 +267,8 @@ def parse_file(args):
                 if isinstance(c, list):
                     for b in c:
                         if isinstance(b, dict) and b.get("type") == "tool_result":
-                            tools.append((b.get("tool_use_id") or "", 1 if b.get("is_error") else 0))
+                            err = 1 if b.get("is_error") else 0
+                            tools.append((b.get("tool_use_id") or "", err, err and _is_hook_error(b)))
             elif t == "attachment":
                 a = r.get("attachment") or {}
                 if a.get("type") != "instructions":
@@ -267,10 +278,31 @@ def parse_file(args):
                 cost_state = {"startTime": r.get("startTime"), "modelUsage": r.get("modelUsage") or {},
                               "totalCostUSD": r.get("totalCostUSD")}
     rows = [(mid,) + tuple(resp[mid]) for mid in order if resp[mid][2]]
-    if not rows and not tools and cost_state is None:
+    if not rows and not tools and cost_state is None and not n_bad:
         return None
     return {"path": rp, "cls": cls, "first_ts": first_ts or "", "start_ts": start_ts or "",
-            "spans_start": spans_start, "spans_end": spans_end, "resp": rows, "tools": tools, "instr": instr, "cost_state": cost_state}
+            "spans_start": spans_start, "spans_end": spans_end, "resp": rows, "tools": tools, "instr": instr,
+            "cost_state": cost_state, "n_parsed": n_parsed, "n_bad": n_bad, "ptl_n": ptl_n,
+            "ptl_last": ptl_last, "cc_version": cc_version}
+
+
+def _is_hook_error(b):
+    """A tool_result error a hook produced (a PreToolUse deny), not the tool failing: the rule of the
+    usage-levers noise-floor build (docs/research/usage-levers-2026-10-23/telemetry-design-2026-10-24/
+    scripts/noise-floor--scripts--scan.py), "hook" in the first 400 chars of the error text."""
+    c = b.get("content")
+    if isinstance(c, list):
+        c = " ".join(x.get("text", "") for x in c if isinstance(x, dict) and isinstance(x.get("text"), str))
+    return 1 if isinstance(c, str) and "hook" in c[:400].lower() else 0
+
+
+def _is_ptl(m):
+    """An API refusal whose text says the prompt is too long: the context-wall death."""
+    for b in m.get("content") or []:
+        if isinstance(b, dict) and b.get("type") == "text" and \
+                "prompt is too long" in (b.get("text") or "")[:400].lower():
+            return True
+    return False
 
 
 def instructions_label(a):
@@ -433,6 +465,11 @@ def scan(since, until="9999", sid_filter=None, workers=4, impute_output=True):
             res = parse_file(j)
             if res:
                 results.append(res)
+    # Parse accounting covers every file read; a file that yielded nothing but failed parses is
+    # counted, then dropped, so every view sees exactly the files it saw before the count existed.
+    n_parsed = sum(f["n_parsed"] for f in results)
+    n_bad = sum(f["n_bad"] for f in results)
+    results = [f for f in results if f["resp"] or f["tools"] or f["cost_state"] is not None]
     # Transplant filter: a message id (and a tool_use id) keeps only its earliest file.
     results.sort(key=lambda f: (f["first_ts"] or "~", f["path"]))
     seen_mid = set()
@@ -451,13 +488,16 @@ def scan(since, until="9999", sid_filter=None, workers=4, impute_output=True):
         f["kept"] = keep
         f["n_xdup"] = len(xd)
         tk = []
-        for tid, err in f["tools"]:
+        hk = 0
+        for tid, err, hook in f["tools"]:
             if tid and tid in seen_tool:
                 continue
             seen_tool.add(tid)
             tk.append(err)
+            hk += hook
         f["tool_n"] = len(tk)
         f["tool_err"] = sum(tk)
+        f["tool_err_hook"] = hk
     kept = [(f["cls"][0], r) for f in results for r in f["kept"]]
     if impute_output:
         est, n_imp = impute(kept)
@@ -471,6 +511,7 @@ def scan(since, until="9999", sid_filter=None, workers=4, impute_output=True):
     return results, {"files_scanned": len(jobs), "files_with_rows": len(results),
                      "responses": len(kept), "responses_xdup_dropped": n_xdup,
                      "responses_without_final_record": n_imp,
+                     "lines_parsed": n_parsed, "lines_unparseable": n_bad,
                      "config_roots": [r.replace(HOME, "~") for r in config_roots()]}
 
 
