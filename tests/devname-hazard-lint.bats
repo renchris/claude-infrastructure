@@ -76,8 +76,10 @@ EOF
 }
 
 @test "--diff judges only ADDED lines: a legacy hazard passes, a new one is RED" {
-  cd "$FX"
-  git init -q . && git config user.email t@t && git config user.name t
+  git init -q "$BATS_TEST_TMPDIR/repo"
+  git -C "$BATS_TEST_TMPDIR/repo" config user.email t@t
+  git -C "$BATS_TEST_TMPDIR/repo" config user.name t
+  cd "$BATS_TEST_TMPDIR/repo"
   printf 'old=$(ps -o tty= -p 1)\n' > hooks/legacy.sh
   git add -A && git commit -qm base
   printf 'echo unrelated\n' >> hooks/legacy.sh
