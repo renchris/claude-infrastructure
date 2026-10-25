@@ -272,6 +272,7 @@ i2_world() { # a stale yes, then a write only a Bash call made; the session cras
 
 # mutant: team not strict.
 @test "I3 guard: a retired teammate with no recorded writes, over an untracked file, is refused and never closed" {
+  # shellcheck disable=SC2034  # FX_X is read by the fixture's record writer (helpers/fixture-289.bash)
   { FX_X='{"teamName":"wave-c2","agentName":"m1"}'; _FX_N=0; fx_user "C2 brief"; fx_tool tu1 Bash '{"command":"ls"}'; fx_text "done"; } > "$TX"
   fx_close --pane 289
   [[ "$output" == *"pane 289: REFUSED"* ]] || { echo "$output"; false; }
