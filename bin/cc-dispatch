@@ -1932,6 +1932,47 @@ band_check() {
 }
 
 # ── one cron pass ────────────────────────────────────────────────────────────────────────────────
+# ── SURFACE UNAVAILABLE: backoff + the brownout latch (lockup incident 2026-10-25, DESIGN C4 R2) ──
+# State beside the IDL (so a fixtured CC_DISPATCH_IDL fixtures both): `<step> <next_ok_epoch>`, step
+# 1..4 ⇒ 5, 10, 20, 40 min. The latch is the brownout term's V4 input, {surface_unavailable_since, by}:
+# since is kept from the first rc 76 of the episode, so the 30-min V4 window is anchored on when the
+# terminal went deaf, not on the latest retry. Seams: CC_DISPATCH_SURFACE_STATE · CC_DISPATCH_BROWNOUT_LATCH
+# · CC_DISPATCH_NOW.
+SURFACE_STATE="${CC_DISPATCH_SURFACE_STATE:-$(dirname "$IDL")/cc-dispatch-surface.state}"
+BROWNOUT_LATCH="${CC_DISPATCH_BROWNOUT_LATCH:-$(dirname "$IDL")/brownout.json}"
+_disp_now() { if is_uint "${CC_DISPATCH_NOW:-}"; then printf '%s' "$CC_DISPATCH_NOW"; else date +%s; fi; }
+surface_backoff_left() { # → 0 + "<n>s left (step k)" while backing off · 1 not
+  local step next now
+  [ -f "$SURFACE_STATE" ] || return 1
+  read -r step next < "$SURFACE_STATE" 2>/dev/null || true
+  is_uint "${step:-}" && is_uint "${next:-}" || return 1
+  now="$(_disp_now)"
+  [ "$now" -lt "$next" ] || return 1
+  printf '%ss left of a %s-min hold (step %s of 4)' "$(( next - now ))" "$(( 5 << (step - 1) ))" "$step"
+}
+surface_down() { # rc 76 seen → advance the backoff, write the latch, print the sentence
+  local step=0 next now since="" mins
+  now="$(_disp_now)"
+  [ -f "$SURFACE_STATE" ] && read -r step next < "$SURFACE_STATE" 2>/dev/null
+  is_uint "${step:-}" || step=0
+  step=$(( step + 1 )); [ "$step" -gt 4 ] && step=4
+  mins=$(( 5 << (step - 1) ))
+  mkdir -p "$(dirname "$SURFACE_STATE")" 2>/dev/null || true
+  printf '%s %s\n' "$step" "$(( now + mins * 60 ))" > "$SURFACE_STATE" 2>/dev/null || true
+  since="$(jq -r '.surface_unavailable_since // empty | numbers' "$BROWNOUT_LATCH" 2>/dev/null || true)"
+  is_uint "$since" || since="$now"
+  jq -cn --argjson s "$since" --argjson t "$now" '{surface_unavailable_since:$s, last_seen:$t, by:"cc-dispatch"}' \
+    > "$BROWNOUT_LATCH.tmp.$$" 2>/dev/null && mv -f "$BROWNOUT_LATCH.tmp.$$" "$BROWNOUT_LATCH" 2>/dev/null
+  rm -f "$BROWNOUT_LATCH.tmp.$$" 2>/dev/null || true
+  printf 'surface unavailable (handoff-fire rc 76: the anchor probe could not see the terminal) — dispatcher backs off %s min (step %s of 4)' "$mins" "$step"
+}
+surface_ok() { # a fire succeeded → the backoff resets, and a latch only the dispatcher wrote is cleared
+  rm -f "$SURFACE_STATE" 2>/dev/null || true
+  [ -f "$BROWNOUT_LATCH" ] || return 0
+  [ "$(jq -r '.by // empty' "$BROWNOUT_LATCH" 2>/dev/null)" = cc-dispatch ] && rm -f "$BROWNOUT_LATCH" 2>/dev/null
+  return 0
+}
+
 dispatch() { # <dry|run|decide>
   local mode="$1" backlog waveplan spawn items dispatchable count wave plan rc n
   local v2=1; [ "$LANE" = v1 ] && v2=0
@@ -2772,6 +2813,16 @@ EOF
 
   clear_page   # a live placement means quota recovered → drop any standing cliff alarm.
 
+  # 4b. SURFACE BACKOFF (DESIGN C4 R2): a recent rc 76 holds every pass until its window ends.
+  local sbw
+  if sbw="$(surface_backoff_left)"; then
+    ABSTAINED=1
+    idl abstained "surface-unavailable backoff: $sbw"
+    note_unplaced_wave surface-backoff "the dispatcher is backing off a deaf terminal ($sbw) — re-admitted next pass" "$plan"
+    echo "cc-dispatch: ⏸ surface backoff — $sbw. No claim, no spawn." >&2
+    idl_summary; return 0
+  fi
+
   # 5. claim + spawn, capped at MAX_SPAWN.
   spawn="$(resolve_bin "${CC_DISPATCH_SPAWN_BIN:-}" handoff-fire.sh "$HOME/.claude/scripts/handoff-fire.sh")" \
     || die3 "spawn bin unresolvable (set CC_DISPATCH_SPAWN_BIN)"
@@ -3489,8 +3540,10 @@ EOF
         else                     cc_run "$offload_bin" "${up_args[@]}" >/dev/null 2>&1; frc=$?
         fi
       fi
-    elif [ -n "$ferrf" ]; then cc_run "$spawn" "${fire_args[@]}" >"$ferrf" 2>&1; frc=$?
-    else                     cc_run "$spawn" "${fire_args[@]}" >/dev/null 2>&1; frc=$?
+    # CC_ADMIT_CALLER names the dispatcher to handoff-fire's brownout term, which classes the fire as
+    # DISCRETIONARY (lockup incident 2026-10-25, DESIGN C4): the class is the caller's, not the fire's.
+    elif [ -n "$ferrf" ]; then CC_ADMIT_CALLER=cc-dispatch cc_run "$spawn" "${fire_args[@]}" >"$ferrf" 2>&1; frc=$?
+    else                     CC_ADMIT_CALLER=cc-dispatch cc_run "$spawn" "${fire_args[@]}" >/dev/null 2>&1; frc=$?
     fi
     # …BUT ONLY THE FAILURES WERE EVER READ, AND THAT IS ITS OWN BLIND SPOT (2026-08-07).
     # The paragraph above fixed "a failure verdict with no evidence" and left the mirror image
@@ -3515,6 +3568,7 @@ EOF
     # incident to ask and had no answer. Silence here reads as "no anchor line was emitted", which
     # is itself diagnostic rather than ambiguous.
     if [ "$frc" -eq 0 ]; then
+      surface_ok
       local fanch=""
       [ -n "$ferrf" ] && fanch="$(/usr/bin/grep -m1 -o 'anchored to live pane [^ ]*' "$ferrf" 2>/dev/null || true)"
       # The venue is deliberately NOT added to this line. It is already journalled at claim time
@@ -3542,6 +3596,25 @@ EOF
           idl undeclared "$id: $cdv — the session is LIVE and spending ${acct}'s quota, but nothing on this box can see, name or reap it"
         fi
       fi
+    elif [ "$venue" != cloud ] && { [ "$frc" -eq 76 ] || [ "$frc" -eq 75 ]; }; then
+      # THE SURFACE IS DOWN, OR THE BOX IS IN BROWNOUT — a PASS-WIDE fact, not this item's (lockup
+      # incident 2026-10-25, DESIGN C4 R2). 76 = handoff-fire's anchor probe could not see the
+      # terminal; 75 = brownout or the kitty RC breaker refused. Every later item in this pass would
+      # meet the same answer, and on 10-25 the dispatcher re-fired 69 times into a deaf terminal, so
+      # the claim is released, the rest of the wave is deferred, and the pass abstains. 76 also backs
+      # the dispatcher off 5 → 10 → 20 → 40 min (reset by the first success) and writes the
+      # brownout latch every other spawner reads (V4), so nothing else probes the dead terminal.
+      local fsr fwhy; fsr="$(self_release "$id" spawn-fail)"
+      fexc="$(fire_excerpt "$ferrf")"
+      if [ "$frc" -eq 76 ]; then fwhy="$(surface_down)"; else fwhy="refused by brownout or the kitty RC breaker (rc 75) — clears with its votes, no backoff"; fi
+      ABSTAINED=1
+      idl skipped "$id: spawn rc=$frc — $fwhy (claim released${fsr})${fexc:+ — $fexc}"
+      idl abstained "surface-unavailable rc=$frc: $fwhy"
+      [ -n "$ferrf" ] && fire_log_keep "$id" "$acct" "$frc" "$ferrf"
+      [ -n "$ferrf" ] && rm -f "$ferrf" 2>/dev/null || true
+      note_unplaced_wave surface-unavailable "the pass abstained at rc $frc ($fwhy) — re-admitted next pass" "$plan" "$i"
+      echo "cc-dispatch: ⛔ fire rc $frc — $fwhy. Pass abstains; nothing else fired." >&2
+      break
     else
       # THE HIGH-VOLUME ONE. rc 9 here is the fire CAPACITY GATE, whose refusal text is literally
       # "Shed load first … then re-fire" — a retryable machine state, measured at 36 refusals against

@@ -89,6 +89,7 @@
 #             the window gains a pane or leaves fullscreen (a runner pane holds and closes itself),
 #             so no immediate retry changes it
 #             (any OTHER guard refusal stays 1 and may be retried; see the `close` arm).
+#             · 75 the RC circuit breaker is open (lockwatch reads kitty_rc=dead): nothing connected
 #
 # Seams: CC_TERM_KITTY (kitty binary) · CC_TERM_KITTY_TO (socket) · IT2_KITTY_TIMEOUT_S
 #        · CC_TERM_KITTY_PID (optional: the kitty pid a delivery target must live in — prove_target
@@ -99,6 +100,20 @@ if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE
 set -uo pipefail
 # /usr/bin/shasum is a #! perl script (a kernel-memory leak per exec on macOS 15.8.1); these are Mach-O. Linux: coreutils.
 CC_SHA256=/sbin/sha256sum; [ -x "$CC_SHA256" ] || CC_SHA256=sha256sum
+
+# ── THE RC CIRCUIT BREAKER (lockup incident 2026-10-25, DESIGN C4) ─────────────────────────────
+# When lockwatch reads kitty's remote control as dead (and its heartbeat is fresh), every verb exits
+# 75 BEFORE any `kitty @` connects: an abandoned client of a deaf kitty is one more held peer toward
+# PEER_LIMIT 256, and 8,738 were dropped on 10-25. The predicate is scripts/lib/kitty-queue.sh's
+# cc_kitty_rc_open, the one detector boot-resume's deaf page also reads. Two file reads, no connect.
+# Kill switch: CC_KITTY_RC_BREAKER=off. An absent library leaves the breaker closed.
+_kq_lib="${BASH_SOURCE[0]%/*}/../scripts/lib/kitty-queue.sh"
+[ -f "$_kq_lib" ] || _kq_lib="$HOME/.claude/scripts/lib/kitty-queue.sh"
+# shellcheck source=/dev/null
+if [ -f "$_kq_lib" ] && . "$_kq_lib" 2>/dev/null && command -v cc_kitty_rc_open >/dev/null 2>&1 && cc_kitty_rc_open; then
+  printf 'it2-kitty: kitty remote control is DEAD (lockwatch state.json kitty_rc=dead, heartbeat fresh) — refusing without connecting (exit 75). Kill switch: CC_KITTY_RC_BREAKER=off\n' >&2
+  exit 75
+fi
 
 TIMEOUT_S="${IT2_KITTY_TIMEOUT_S:-15}"
 
