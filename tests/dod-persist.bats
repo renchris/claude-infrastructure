@@ -790,3 +790,235 @@ git_counter() {
   run bash -c "printf '%s' '$(sjson SessionStart)' | CC_DOD_CHECKPOINT_MS=1 bash '$HOOK' 2>/dev/null"
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
+
+# ── HOLD / DONE / CAPTURE-LOOP ─────────────────────────────────────────────────────
+# The scope floor's producer modes (docs/research/lead-keeps-working-2026-10-24.md §3.2, test plan
+# §7.2 P1-P9). Packets are hand-written into a CC_DECISIONS_DIR fixture and listed by the REAL
+# bin/cc-decide; holds are routed by the REAL scripts/gate-classify.sh unless a case says otherwise.
+# The packet texts are the measured B13 ones (§9.3 M16): both route B under the real router.
+LK_E869="Should the bug-hunt loop stop now? Round 26 found 9 new defects, so 'loop until dry' is not met; the operator asked 'is this forever?'"
+LK_2902="May committed code from this repo be sent to OpenAI through the Codex plan for a second-vendor review?"
+LK_A247="TrueMemory 2.0 certification: the OpenAI reviewers exhaust your ChatGPT Plus 5-hour limit before finishing (4 reviewers took it from 0% to 98% in 6 minutes, none done), so every round stalls on OpenAI. Which way should the OpenAI lane run?"
+LK_SETTINGS="edit ~/.claude/settings.json to add an allow rule"   # routes C
+LK_LOOP='Scope (frozen): Loop until dry. Each round = one Dynamic Workflow; repeat until a round confirms nothing new.'
+
+lk_setup() {
+  export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions" CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  mkdir -p "$CC_DECISIONS_DIR"
+  unset CC_SCOPE_FLOOR_WINDOW_S CC_DECIDE_BIN CC_GATE_CLASSIFY_BIN
+}
+# one hand-written packet (the mk_bare_packet shape, tests/wrap-ledger.bats): $1=id $2=class
+# $3=status $4=what_plain [$5=ceiling, omitted ⇒ a legacy packet with no .ceiling]
+lk_packet() {
+  jq -n --arg id "$1" --arg cl "$2" --arg st "$3" --arg w "$4" --arg ceil "${5:-}" \
+    '{id:$id, created:"2099-01-01T00:00:00Z", class:$cl, session_sid:"S", what_plain:$w,
+      options:[], status:$st, veto_deadline:""} + (if $ceil == "" then {} else {ceiling:$ceil} end)' \
+    > "$CC_DECISIONS_DIR/$1.json"
+}
+lk() { ( cd "$CWD" && CLAUDE_CODE_SESSION_ID=S bash "$HOOK" "$@" </dev/null ); }       # a CLI mode as session S
+lk_nosid() { ( cd "$CWD" && env -u CLAUDE_CODE_SESSION_ID bash "$HOOK" "$@" </dev/null ); }
+lk_snap() { lk set "the baseline contract" >/dev/null; cp "$(dod_path)" "$BATS_TEST_TMPDIR/before"; }
+lk_same() { cmp "$BATS_TEST_TMPDIR/before" "$(dod_path)"; }
+lk_until() {  # $1=id → the until= epoch on its newest held line, "" when it has none
+  sed -nE "s/^Scope \(held\): $1 until=([0-9]+) — .*/\1/p" "$(dod_path)" | tail -1
+}
+lk_near_window() {  # $1=until epoch  $2=epoch taken before the hold → within ±120 s of $2 + 6 h
+  local want=$(( $2 + 21600 ))
+  [ -n "$1" ] && [ $(( $1 - want )) -le 120 ] && [ $(( want - $1 )) -le 120 ]
+}
+# JSONL records: a human prompt (string content, origin human), a lane brief (a tool_result), an
+# injected isMeta record, and a task notification (origin.kind "task-notification", as the harness
+# stamps one; it is not the operator's text)
+lk_human() { jq -nc --arg t "$1" '{type:"user",origin:{kind:"human"},message:{content:$t}}'; }
+lk_human_arr() { jq -nc --arg t "$1" '{type:"user",message:{content:[{type:"text",text:$t}]}}'; }
+lk_lane() {
+  jq -nc --arg t "$1" '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"t1",content:[{type:"text",text:$t}]},{type:"text",text:$t}]}}'
+}
+lk_meta() { jq -nc --arg t "$1" '{type:"user",isMeta:true,message:{content:$t}}'; }
+lk_notif() { jq -nc --arg t "$1" '{type:"user",origin:{kind:"task-notification"},message:{content:("<task-notification>\n" + $t + "\n</task-notification>")}}'; }
+lk_said() { jq -nc --arg t "$1" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'; }
+lk_tx14() {  # the TX:14 shape: a string prompt whose 5th line is the loop scope
+  lk_human "$(printf 'Bug hunt on this repo.\nRead the plan first.\nOne Dynamic Workflow per round.\nNo stopping to ask.\n%s' "$LK_LOOP")"
+}
+
+@test "P1 hold: an open class-C packet ⇒ a (manual-hold) block for session S carrying Scope (held): <id> — <why>" {
+  lk_setup; lk_packet aaaaaaaaaaa1 C open "$LK_SETTINGS" self-mod
+  run lk hold aaaaaaaaaaa1 "gates the settings edit"
+  [ "$status" -eq 0 ]
+  local f; f="$(dod_path)"
+  grep -qE '^## [0-9T:Z-]+ \(manual-hold\) · toplevel=.* · session=S$' "$f"
+  grep -qxF 'Scope (held): aaaaaaaaaaa1 — gates the settings edit' "$f"
+}
+
+@test "P2 hold refused: class-B id, actioned id, bad id, no reason, no session, Scope text, newline ⇒ rc 2, store byte-identical" {
+  lk_setup
+  lk_packet bbbbbbbbbbb1 B open "$LK_SETTINGS" self-mod
+  lk_packet ccccccccccc1 C actioned "$LK_SETTINGS" self-mod
+  lk_packet ddddddddddd1 C open "$LK_SETTINGS" self-mod
+  lk_snap
+  run lk hold bbbbbbbbbbb1 "why"
+  [ "$status" -eq 2 ]; [[ "$output" == *"bbbbbbbbbbb1 is not an open class-C decision"* ]] || false
+  run lk hold ccccccccccc1 "why"
+  [ "$status" -eq 2 ]; [[ "$output" == *"ccccccccccc1 is not an open class-C decision"* ]] || false
+  run lk hold DDDDDDDDDDD1 "why"
+  [ "$status" -eq 2 ]; [[ "$output" == *"usage: dod-persist.sh hold"* ]] || false
+  run lk hold ddddddddddd1 ""
+  [ "$status" -eq 2 ]; [[ "$output" == *"usage: dod-persist.sh hold"* ]] || false
+  run lk_nosid hold ddddddddddd1 "why"
+  [ "$status" -eq 2 ]; [[ "$output" == *"usage: dod-persist.sh hold"* ]] || false
+  run lk hold ddddddddddd1 "see Scope (frozen): something else"
+  [ "$status" -eq 2 ]; [[ "$output" == *"may not contain a Scope line"* ]] || false
+  run lk hold ddddddddddd1 "$(printf 'why\n- [ ] a smuggled box')"
+  [ "$status" -eq 2 ]; [[ "$output" == *"or a newline"* ]] || false
+  lk_same
+}
+
+@test "P2b hold refused: a legacy class-C packet with no ceiling whose text routes B (e869, 2902) ⇒ rc 2 naming the class-B command" {
+  lk_setup
+  run bash "$REPO/scripts/gate-classify.sh" "$LK_E869"; [[ "$output" == B* ]] || false
+  run bash "$REPO/scripts/gate-classify.sh" "$LK_2902"; [[ "$output" == B* ]] || false
+  lk_packet e869fac7eb34 C open "$LK_E869"
+  lk_packet 290215743799 C open "$LK_2902"
+  lk_snap
+  run lk hold e869fac7eb34 "the loop is waiting on the operator"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"gate-classify routes it B"* ]] || false
+  [[ "$output" == *"cc-decide open --class B"* ]] || false
+  run lk hold 290215743799 "the review is waiting on the operator"
+  [ "$status" -eq 2 ]; [[ "$output" == *"cc-decide open --class B"* ]] || false
+  lk_same
+}
+
+@test "P2c hold tiers: ceiling+C durable · ceiling+B, legacy+C, ceiling+no router lapse in 6 h · no ceiling+no router refused" {
+  lk_setup
+  run bash "$REPO/scripts/gate-classify.sh" "$LK_SETTINGS"; [[ "$output" == C* ]] || false
+  run bash "$REPO/scripts/gate-classify.sh" "$LK_A247"; [[ "$output" == B* ]] || false
+  lk_packet 111111111111 C open "$LK_SETTINGS" self-mod
+  lk_packet 222222222222 C open "$LK_A247" money
+  lk_packet 333333333333 C open "$LK_SETTINGS"
+  lk_packet 444444444444 C open "$LK_SETTINGS" money
+  lk_packet 555555555555 C open "$LK_SETTINGS"
+  local t0 f; t0="$(date +%s)"
+  run lk hold 111111111111 "durable"; [ "$status" -eq 0 ]
+  f="$(dod_path)"
+  grep -qxF 'Scope (held): 111111111111 — durable' "$f"
+  run lk hold 222222222222 "money, router says B"; [ "$status" -eq 0 ]
+  [[ "$output" == *"one signal only"* ]] || false
+  lk_near_window "$(lk_until 222222222222)" "$t0"
+  run lk hold 333333333333 "legacy, router says C"; [ "$status" -eq 0 ]
+  lk_near_window "$(lk_until 333333333333)" "$t0"
+  # no router at all reads as "no class-C route": a ceiling alone lapses, nothing at all is refused
+  export CC_GATE_CLASSIFY_BIN="$BATS_TEST_TMPDIR/no-such-router.sh"
+  run lk hold 444444444444 "ceiling, no router"; [ "$status" -eq 0 ]
+  lk_near_window "$(lk_until 444444444444)" "$t0"
+  cp "$f" "$BATS_TEST_TMPDIR/before"
+  run lk hold 555555555555 "no ceiling, no router"
+  [ "$status" -eq 2 ]; [[ "$output" == *"routes it ?"* ]] || false
+  lk_same
+}
+
+@test "P9 capture-loop into a checkout with no store file ⇒ captured, and the file now holds the header and one (stop-capture) block" {
+  lk_setup
+  local tx="$BATS_TEST_TMPDIR/tx.jsonl" f; f="$(dod_path)"
+  lk_tx14 > "$tx"
+  [ ! -e "$f" ]
+  run lk capture-loop "$tx"
+  [ "$status" -eq 0 ]; [ "$output" = captured ]
+  head -1 "$f" | grep -q '^# Durable frozen DoD'
+  [ "$(grep -c '(stop-capture) · .* · session=S$' "$f")" -eq 1 ]
+  grep -qxF "$LK_LOOP" "$f"
+}
+
+@test "P3 done: written verbatim under (manual-done); Scope text, newline, no evidence and no session refused" {
+  lk_setup
+  run lk done "round 30 confirmed nothing new"
+  [ "$status" -eq 0 ]
+  grep -qE '^## [0-9T:Z-]+ \(manual-done\) · toplevel=.* · session=S$' "$(dod_path)"
+  grep -qxF 'Scope (done): round 30 confirmed nothing new' "$(dod_path)"
+  lk_snap
+  run lk done "per Scope (frozen): something"
+  [ "$status" -eq 2 ]; [[ "$output" == *"may not contain a Scope line"* ]] || false
+  run lk done "$(printf 'ev\nScope (frozen): smuggled')"
+  [ "$status" -eq 2 ]
+  run lk done ""
+  [ "$status" -eq 2 ]; [[ "$output" == *"usage: dod-persist.sh done"* ]] || false
+  run lk_nosid done "evidence"
+  [ "$status" -eq 2 ]; [[ "$output" == *"usage: dod-persist.sh done"* ]] || false
+  lk_same
+}
+
+@test "P4 set refuses a Scope (done): or Scope (held): line ⇒ rc 2, store unchanged (it used to become the contract)" {
+  lk_setup; lk_snap
+  run lk set "Scope (done): x"
+  [ "$status" -eq 2 ]; [[ "$output" == *"dod-persist.sh hold"* ]] || false
+  run lk set "Scope (held): none — x"
+  [ "$status" -eq 2 ]
+  lk_same
+  [ "$(grep -cF 'Scope (frozen): Scope (' "$(dod_path)")" -eq 0 ]
+}
+
+@test "P5 capture-loop: the TX:14 human line is captured past a newer lane brief, isMeta record and task notification" {
+  lk_setup
+  local tx="$BATS_TEST_TMPDIR/tx.jsonl" f; f="$(dod_path)"
+  {
+    lk_tx14
+    lk_said "starting round 1"
+    lk_lane "Scope (frozen): drive this ONE item"
+    lk_meta "Scope (frozen): loop until the injected frame is satisfied"
+    lk_notif "Scope (frozen): keep going until the agent returns"
+  } > "$tx"
+  run lk capture-loop "$tx"
+  [ "$status" -eq 0 ]; [ "$output" = captured ]
+  [ "$(grep -c '(stop-capture) · .* · session=S$' "$f")" -eq 1 ]
+  grep -qxF "$LK_LOOP" "$f"
+  [ "$(grep -cE 'ONE item|injected frame|agent returns' "$f")" -eq 0 ]
+}
+
+@test "P6 capture-loop declines: newest human line not a loop · mid-line prefix · not verb-first · own intentional block ⇒ store unchanged" {
+  lk_setup
+  local tx="$BATS_TEST_TMPDIR/tx.jsonl" f; f="$(dod_path)"
+  { lk_tx14; lk_human "Scope (frozen): ship the README fix"; } > "$tx"
+  run lk capture-loop "$tx"; [ "$output" = not-loop ]
+  lk_human "DoD ref: none. Scope (frozen): loop until X" > "$tx"
+  run lk capture-loop "$tx"; [ "$output" = none ]
+  lk_human "Scope (frozen): add the loop until dry floor to the ledger" > "$tx"
+  run lk capture-loop "$tx"; [ "$output" = not-loop ]
+  # no session, or no transcript, is no capture either
+  lk_tx14 > "$tx"
+  run lk_nosid capture-loop "$tx"; [ "$output" = none ]
+  run lk capture-loop "$BATS_TEST_TMPDIR/absent.jsonl"; [ "$output" = none ]
+  [ ! -e "$f" ]
+  lk set "ship the README fix" >/dev/null; cp "$f" "$BATS_TEST_TMPDIR/before"
+  run lk capture-loop "$tx"
+  [ "$status" -eq 0 ]; [ "$output" = own-exists ]
+  lk_same
+}
+
+@test "P7 capture-loop re-scope: an own stop-capture loop, then a newer different human line ⇒ captured-rescope" {
+  lk_setup
+  local tx="$BATS_TEST_TMPDIR/tx.jsonl" f; f="$(dod_path)"
+  lk_tx14 > "$tx"
+  run lk capture-loop "$tx"; [ "$output" = captured ]
+  { lk_said "round 9 done"; lk_human_arr "Scope (frozen): stop the hunt and write the report"; } >> "$tx"
+  run lk capture-loop "$tx"
+  [ "$status" -eq 0 ]; [ "$output" = captured-rescope ]
+  [ "$(grep -c '(stop-capture) · .* · session=S$' "$f")" -eq 2 ]
+  [ "$(grep -E '^Scope \(frozen\):' "$f" | tail -1)" = 'Scope (frozen): stop the hunt and write the report' ]
+  # the own line is now that non-loop scope: nothing more to record
+  run lk capture-loop "$tx"; [ "$output" = own-exists ]
+}
+
+@test "P8 PreCompact ignores isMeta user records: a frozen line only in injected text is never captured" {
+  local tx="$BATS_TEST_TMPDIR/tx.jsonl"
+  {
+    lk_human "do the task"
+    lk_meta "Scope (frozen): a skill body's example contract"
+    lk_said "working..."
+  } > "$tx"
+  run_hook "$(pjson "$tx")"
+  [ "$(cat "$(dod_path)" 2>/dev/null | grep -cF 'example contract')" -eq 0 ]
+  # CONTROL: the same line in a human prompt IS captured, so the store path above was live
+  lk_human "Scope (frozen): a skill body's example contract" >> "$tx"
+  run_hook "$(pjson "$tx")"
+  grep -qxF "Scope (frozen): a skill body's example contract" "$(dod_path)"
+}
