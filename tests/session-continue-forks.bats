@@ -51,6 +51,9 @@ setup() {
   printf '1 0 /sbin/launchd\n' > "$CC_WF_PSTABLE_FILE"
   : > "$CC_BACKLOG_FILE"
   W="$BATS_TEST_TMPDIR/w"
+  # The mechanical-dirty row gained a `rung` field (lead-keeps-working, design §3.4 (ii)); the
+  # SHF_BASE hook never wrote it, so the parity compares every OTHER field (shf_idl's own seam).
+  export SHF_IDL_DEL='.ts, .rung'
 }
 
 have_old() {
