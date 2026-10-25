@@ -8,6 +8,8 @@
 # agentType reader always returns None fails test 1 (the `lean` slot reads would-deny).
 # W6 RED-proof (2026-10-24): against the base hook (git show 11f7f87fa:…) test 4 fails: the `nd` slot
 # reads would-deny (no marker) and the row has no resume_from_run_id / script_sha / repeat_in_session.
+# S3 RED-proof (2026-10-25): against the base hook (git show c43f39d2b:…) 5-7 fail: ts carries -0500,
+# no acct / arm / follows_deny, and a row over 2 KB is written whole.
 # Hermetic: scratch HOME; the log path is $HOME-rooted.
 
 setup() {
@@ -16,19 +18,23 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   LOG="$HOME/.claude/logs/workflow-lean-shadow.jsonl"
   FIX="$REPO/tests/fixtures/workflow-lean-shadow/mixed.js"
+  unset CLAUDE_CONFIG_DIR CC_LEVER_LINEAGE CC_LEVER_EXCLUDE CC_LEVER_ALL CC_LEVER_D2 CC_LEVER_FLAGS CC_HOOK_PARENT_PID CC_WORKFLOW_SHADOW
+  export CC_LEVER_STATE_DIR="$BATS_TEST_TMPDIR/levers"
 }
 
 # fire <tool_input json> — one PreToolUse event on stdin, as Claude Code sends it
 fire() { jq -nc --argjson ti "$1" '{session_id:"S",tool_use_id:"T",cwd:"/nonexistent",tool_name:"Workflow",tool_input:$ti}' \
   | /usr/bin/env python3 "$HOOK"; }
-slot() { jq -r --arg l "$1" ".slots[] | select(.label == \$l) | $2" "$LOG"; }
+# a row over 2 KB is split into the call row plus kind=slots rows (S3): slot() reads across both
+slot() { jq -r --arg l "$1" "(.slots // [])[] | select(.label == \$l) | $2" "$LOG"; }
+call() { jq -r "select(.kind != \"slots\") | $1" "$LOG"; }
 
 @test "1: every agent() call in code is classified; strings, comments and x.agent( are not calls" {
   run fire "$(jq -nc --rawfile s "$FIX" '{script:$s}')"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
-  [ "$(jq -r '.parse' "$LOG")" = ok ]
-  [ "$(jq -r '.calls' "$LOG")" -eq 6 ]
+  [ "$(call .parse)" = ok ]
+  [ "$(call .calls)" -eq 6 ]
   [ "$(slot r1 .verdict)" = would-deny ]
   [ "$(slot r1 .rewrite)" = "agentType: 'workflow-lean'" ]
   [ "$(slot fix .verdict)" = keep-default ]
@@ -37,10 +43,10 @@ slot() { jq -r --arg l "$1" ".slots[] | select(.label == \$l) | $2" "$LOG"; }
   [ "$(slot lean .verdict)" = has-agent-type ]
   [ "$(slot lean .agent_type)" = workflow-lean ]
   [ "$(slot "s-\${i}" .markers.skill)" = true ]
-  [ "$(jq -r '[.slots[] | select(.agent_type == "opaque")] | length' "$LOG")" -eq 1 ]
-  [ "$(jq -r '.would_deny' "$LOG")" = true ]
-  [ "$(jq -r '.latency_ms.timeout_s' "$LOG")" -eq 5 ]
-  jq -e '.latency_ms.wall >= 0 and .latency_ms.cpu > 0' "$LOG" >/dev/null
+  [ "$(jq -s '[.[] | (.slots // [])[] | select(.agent_type == "opaque")] | length' "$LOG")" -eq 1 ]
+  [ "$(call .would_deny)" = true ]
+  [ "$(call .latency_ms.timeout_s)" -eq 5 ]
+  [ "$(call '.latency_ms.wall >= 0 and .latency_ms.cpu > 0')" = true ]
   # the brief text itself is never written
   ! grep -q 'Fix the bug' "$LOG" || false
 }
@@ -63,7 +69,7 @@ slot() { jq -r --arg l "$1" ".slots[] | select(.label == \$l) | $2" "$LOG"; }
 @test "3: a scriptPath workflow is read from its file and logged with its source" {
   run fire "$(jq -nc --arg p "$FIX" '{scriptPath:$p}')"
   [ "$status" -eq 0 ]
-  [ "$(jq -r '.source + " " + (.calls|tostring)' "$LOG")" = "scriptPath 6" ]
+  [ "$(call '.source + " " + (.calls|tostring)')" = "scriptPath 6" ]
 }
 
 @test "4: W6 — resumeFromRunId, script sha, repeat-in-session, and a needs-default comment keeps the default agent" {
@@ -128,14 +134,23 @@ fire_as() { # <sid> <tool_use_id> <script>
   awk -v g="$gap" 'BEGIN { exit !(g >= 85 && g <= 120) }' || { echo "prev_gap_s=$gap"; false; }
 }
 
-@test "7: S3 — a row stays under 2 KB in one write: slot detail is shed, never the verdict counts" {
+@test "7: S3 — every row is one write of at most 2 KB: a larger call is split losslessly into slot rows" {
   s=""; for i in $(seq 1 60); do s="$s await agent(\`brief $i\`, {label: \"slot-label-number-$i\"});"; done
   fire_as S T1 "$s"
-  [ "$(wc -l < "$LOG")" -eq 1 ]
-  [ "$(LC_ALL=C wc -c < "$LOG")" -le 2048 ]
-  [ "$(jq -r '"\(.slots_shed):\(.calls):\(.verdicts["would-deny"]):\(.would_deny)"' "$LOG")" = "all:60:60:true" ]
+  [ "$(LC_ALL=C awk '{ if (length($0) > m) m = length($0) } END { print m }' "$LOG")" -le 2047 ]
+  k="$(call .slot_rows)"
+  [ "$k" -ge 2 ]
+  [ "$(wc -l < "$LOG")" -eq $(( k + 1 )) ]
+  [ "$(call '"\(.slots_shed):\(.calls):\(.verdicts["would-deny"]):\(.would_deny):\(has("slots"))"')" = "split:60:60:true:false" ]
+  # the slot rows carry every slot, in order, joined by the call's tool_use_id
+  [ "$(jq -sr '[.[] | select(.kind == "slots" and .tool_use_id == "T1") | .slots[] | .label] | join(",")' "$LOG")" \
+    = "$(for i in $(seq 1 60); do printf 'slot-label-number-%s\n' "$i"; done | paste -sd, -)" ]
+  # a slot row is never read back as the session's previous call
+  fire_as S T2 'await agent(`x`, {agentType: "workflow-lean"})'
+  [ "$(call 'select(.tool_use_id == "T2") | "\(.prev_tool_use_id):\(.follows_deny)"')" = "T1:true" ]
+  # a call that fits stays one row
   : > "$LOG"
-  s=""; for i in $(seq 1 12); do s="$s await agent(\`brief $i\`, {label: \"slot-label-number-$i\"});"; done
-  fire_as S T2 "$s"
-  [ "$(jq -r '"\(.slots_shed):\(.slots | length):\(.slots[0].verdict)"' "$LOG")" = "compact:12:would-deny" ]
+  fire_as S T3 'await agent(`x`)'
+  [ "$(wc -l < "$LOG")" -eq 1 ]
+  [ "$(jq -r '"\(.slots_shed):\(.slots | length)"' "$LOG")" = "null:1" ]
 }

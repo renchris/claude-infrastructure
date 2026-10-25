@@ -29,8 +29,9 @@ W7+ S3 (plan § W7+ §2 D2 "Arm", §3 "Telemetry rows", §6 on UTC and 2 KB rows
   - `follows_deny`: whether this session's previous Workflow row was a would-deny (null when there is
     none in the log's tail), with `prev_tool_use_id`, `prev_gap_s` and `prev_same_script` — the
     edited-resubmit signal D2's compliance metric is scored from.
-Each row is ONE write() of at most 2 KB, so concurrent appends stay whole: past that the slot list is
-compacted to (line, verdict, agent_type), then dropped (`slots_shed`).
+Each row is ONE write() of at most 2 KB, so concurrent appends stay whole. A call whose row would be
+larger is split losslessly: the row without `slots` (slots_shed "split", slot_rows k), then k rows
+of kind "slots" carrying the slots in order; readers join them back by tool_use_id.
 
 One JSON row per Workflow call to $HOME/.claude/logs/workflow-lean-shadow.jsonl. The brief text is
 never logged, only its length and the markers.
@@ -64,7 +65,9 @@ MARKERS = {
 }
 IDENT = re.compile(r"[A-Za-z0-9_$]")
 NEEDS_DEFAULT = re.compile(r"\bneeds-default\b")
-LOG_TAIL_BYTES = 4_000_000  # repeat_in_session and follows_deny scan this much of the log's end
+LOG_TAIL_BYTES = (
+    4_000_000  # repeat_in_session and follows_deny scan this much of the log's end
+)
 MAX_ROW = 2048  # one write() at most this many bytes (lever_flags.MAX_ROW)
 
 
@@ -371,7 +374,9 @@ def script_source(ti: Dict[str, Any], cwd: str) -> Tuple[str, Optional[str]]:
     return "none", None
 
 
-def history(log: str, sid: Any, sha: Optional[str]) -> Tuple[int, Optional[Dict[str, Any]]]:
+def history(
+    log: str, sid: Any, sha: Optional[str]
+) -> Tuple[int, Optional[Dict[str, Any]]]:
     """(earlier rows of this session with the same script sha, this session's latest row) from the
     log's tail."""
     if not isinstance(sid, str) or not sid:
@@ -392,7 +397,11 @@ def history(log: str, sid: Any, sha: Optional[str]) -> Tuple[int, Optional[Dict[
             r = json.loads(ln)
         except ValueError:
             continue
-        if not isinstance(r, dict) or r.get("session_id") != sid:
+        if (
+            not isinstance(r, dict)
+            or r.get("session_id") != sid
+            or r.get("kind") == "slots"
+        ):
             continue
         prev = r
         if sha and r.get("script_sha") == sha:
@@ -413,7 +422,9 @@ def ts_epoch(ts: Any) -> Optional[float]:
 def lever_arm(sid: Any) -> Dict[str, Any]:
     """lineage, lineage_src and the D2 arm of the lineage root; empty when the lib is unavailable."""
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+        sys.path.insert(
+            0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")
+        )
         import lever_flags as lf  # noqa: E402 — the hook must run even when the lib is missing
 
         if not isinstance(sid, str) or not lf._safe(sid):
@@ -423,29 +434,47 @@ def lever_arm(sid: Any) -> Dict[str, Any]:
     except Bounded:
         raise
     except Exception as e:
-        return {"lineage": None, "lineage_src": None, "arm": None,
-                "arm_error": f"{e.__class__.__name__}: {e}"[:120]}
+        return {
+            "lineage": None,
+            "lineage_src": None,
+            "arm": None,
+            "arm_error": f"{e.__class__.__name__}: {e}"[:120],
+        }
 
 
-def encode(row: Dict[str, Any]) -> Optional[bytes]:
-    """The row as one line of at most MAX_ROW bytes, shedding slot detail first; None if it cannot fit."""
+def encode(row: Dict[str, Any]) -> List[bytes]:
+    """The row as lines of at most MAX_ROW bytes each. A row that fits is one line. One that does
+    not is split losslessly: the row without its slots (slots_shed "split", slot_rows k), then k
+    kind=slots rows carrying the slots in order, joined back by tool_use_id."""
+
     def enc(r: Dict[str, Any]) -> bytes:
         return (json.dumps(r, separators=(",", ":")) + "\n").encode("utf-8")
 
     line = enc(row)
-    if len(line) <= MAX_ROW or "slots" not in row:
-        return line if len(line) <= MAX_ROW else None
-    compact = [
-        {"line": s.get("line"), "verdict": s.get("verdict"),
-         "agent_type": (s.get("agent_type") or None) and str(s.get("agent_type"))[:40]}
-        for s in row["slots"]
-    ]
-    line = enc(dict(row, slots=compact, slots_shed="compact"))
     if len(line) <= MAX_ROW:
-        return line
+        return [line]
+    slots = row.get("slots") or []
+    head = {
+        "kind": "slots",
+        "ts": row.get("ts"),
+        "hook": row.get("hook"),
+        "session_id": row.get("session_id"),
+        "tool_use_id": row.get("tool_use_id"),
+    }
+    parts: List[bytes] = []
+    cur: List[Dict[str, Any]] = []
+    for sl in slots:
+        if cur and len(enc(dict(head, part=len(parts), slots=cur + [sl]))) > MAX_ROW:
+            parts.append(enc(dict(head, part=len(parts), slots=cur)))
+            cur = []
+        cur.append(sl)
+    if cur:
+        parts.append(enc(dict(head, part=len(parts), slots=cur)))
     rest = {k: v for k, v in row.items() if k != "slots"}
-    line = enc(dict(rest, slots_shed="all"))
-    return line if len(line) <= MAX_ROW else None
+    main_line = enc(dict(rest, slots_shed="split", slot_rows=len(parts)))
+    if len(main_line) > MAX_ROW or any(len(x) > MAX_ROW for x in parts):
+        return []
+    return [main_line] + parts
 
 
 def main() -> None:
@@ -456,7 +485,10 @@ def main() -> None:
         "hook": "workflow-lean-shadow",
         "v": 3,
         "acct": os.path.basename(
-            (os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")).rstrip("/")
+            (
+                os.environ.get("CLAUDE_CONFIG_DIR")
+                or os.path.join(os.path.expanduser("~"), ".claude")
+            ).rstrip("/")
         ),
     }
     log = os.path.join(
@@ -469,11 +501,12 @@ def main() -> None:
         row.update(
             session_id=data.get("session_id"),
             tool_use_id=data.get("tool_use_id"),
-            cwd=data.get("cwd")[:300] if isinstance(data.get("cwd"), str) else data.get("cwd"),
+            cwd=data.get("cwd")[:300]
+            if isinstance(data.get("cwd"), str)
+            else data.get("cwd"),
             tool_name=data.get("tool_name"),
             resume_from_run_id=rid if isinstance(rid, str) and rid else None,
         )
-        row.update(lever_arm(row["session_id"]))
         source, src = script_source(ti, data.get("cwd") or os.getcwd())
         row["source"] = source
         sha = (
@@ -511,19 +544,31 @@ def main() -> None:
     except Exception as e:  # never let a parse failure become a hook failure
         row["parse"] = "error"
         row["error"] = f"{e.__class__.__name__}: {e}"[:200]
+    # The arm comes LAST: importing the lib is the slowest step under load, so a self-bound costs
+    # only the arm, never the parse. After a self-bounded parse the alarm is spent: skip it.
+    if row.get("parse") in ("ok", "unresolved"):
+        try:
+            row.update(lever_arm(row.get("session_id")))
+        except Bounded:
+            row.update(
+                lineage=None, lineage_src=None, arm=None, arm_error="self-bounded"
+            )
+    elif "session_id" in row:
+        row.update(lineage=None, lineage_src=None, arm=None, arm_error="skipped")
     row["latency_ms"] = {
         "wall": round((time.monotonic() - t0) * 1000, 2),
         "cpu": round(time.process_time() * 1000, 2),
         "timeout_s": TIMEOUT_S,
     }
-    line = encode(row)
-    if line is None:
-        return
+    lines = encode(row)
     try:
         os.makedirs(os.path.dirname(log), exist_ok=True)
         fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
         try:
-            os.write(fd, line)  # one write(): O_APPEND keeps concurrent rows whole
+            for line in lines:
+                os.write(
+                    fd, line
+                )  # one write() per row: O_APPEND keeps concurrent rows whole
         finally:
             os.close(fd)
     except OSError:

@@ -76,20 +76,26 @@ _sha256=/sbin/sha256sum; [ -x "$_sha256" ] || _sha256=sha256sum
 _acct="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _acct="${_acct%/}"; _acct="${_acct##*/}"
 _tp_acct=""; [[ $_tp =~ /(\.claude[A-Za-z0-9_-]*)/ ]] && _tp_acct="${BASH_REMATCH[1]}"
 _aid_ok=""; case "$_aid" in *[!A-Za-z0-9._-]*|.*) ;; *) [ ${#_aid} -le 128 ] && _aid_ok=1 ;; esac
-_now="$(date -u '+%s %FT%TZ')"; _epoch="${_now%% *}"; _ts="${_now#* }"
 _cmdsha() { _sha="$(printf '%s' "$_cmd" | "$_sha256" 2>/dev/null)"; _sha="${_sha%% *}"; }
 
-# D4 arm per agent_id: one jq + one sha256sum (lever-flags.sh). A missing lib or an unsafe id logs null.
-_armj=null
-_lf="${BASH_SOURCE[0]%/*}/lib/lever-flags.sh"
-if [ -n "$_aid_ok" ] && [ -r "$_lf" ]; then
-  # shellcheck source=lib/lever-flags.sh
-  # shellcheck disable=SC1091  # resolved at RUNTIME from BASH_SOURCE
-  . "$_lf" && lf_arm D4 "$_aid" && _armj="$(lf_arm_json)"
-fi
+# Clock and D4 arm per agent_id, computed only for a call that will be logged: a call the gates
+# below drop pays no extra fork. The arm is one jq + one sha256sum (lever-flags.sh); a missing lib
+# or an unsafe id logs null.
+_armj=""
+_prep() {
+  [ -z "$_armj" ] || return 0
+  _now="$(date -u '+%s %FT%TZ')"; _epoch="${_now%% *}"; _ts="${_now#* }"
+  _armj=null
+  local lf="${BASH_SOURCE[0]%/*}/lib/lever-flags.sh"
+  if [ -n "$_aid_ok" ] && [ -r "$lf" ]; then
+    # shellcheck source=lib/lever-flags.sh
+    # shellcheck disable=SC1091  # resolved at RUNTIME from BASH_SOURCE
+    . "$lf" && lf_arm D4 "$_aid" && _armj="$(lf_arm_json)"
+  fi
+  return 0
+}
 
 # One row, one write(), at most 2 KB: shed cmd_head and transcript_path first, else write nothing.
-# shellcheck disable=SC2016  # a jq program
 _emit() { # <jq object program> [jq args…] — the row is built by the program from its --arg values
   local prog="$1" line; shift
   line="$(jq -nr "$@" --argjson arm "$_armj" "($prog) as \$r
@@ -107,10 +113,11 @@ if [ -n "$_aid_ok" ] && [ -e "$_pend/$_aid" ]; then
   if mv "$_pend/$_aid" "$_pend/.claim.$_aid.$$" 2>/dev/null; then
     IFS=$'\t' read -r _f_tuid _f_cls _f_wider _f_sha _f_epoch < "$_pend/.claim.$_aid.$$" || true
     rm -f "$_pend/.claim.$_aid.$$" 2>/dev/null
-    _cmdsha
+    _prep; _cmdsha
     case "$_f_epoch" in ''|*[!0-9]*) _gap=-1 ;; *) _gap=$(( _epoch - _f_epoch )) ;; esac
     _rc=false; [[ $_cmd == *'rc=$?'* ]] && _rc=true
     _toj=null; case "$_to" in ''|*[!0-9.]*) ;; *) _toj="${_to%%.*}" ;; esac
+    # shellcheck disable=SC2016  # a jq program: its $vars are jq's
     _emit '{kind:"d4_follow",v:3,ts:$ts,acct:$acct,sid:$sid[0:128],agent_id:$aid[0:128],
             agent_type:$atype[0:128],tool_use_id:$tuid[0:128],
             follows_tool_use_id:$ftuid[0:128],follows_class:(if $fcls == "-" then null else $fcls end),
@@ -174,7 +181,8 @@ if [ -n "$_wider" ] && [ -z "$_class" ] && [ -z "$_exempt" ] && ! { [ "$_inner" 
   _wider_wd=true
 fi
 
-_cmdsha
+_prep; _cmdsha
+# shellcheck disable=SC2016  # a jq program: its $vars are jq's
 _emit 'def nul: if . == "" then null else . end;
    {kind:"subagent_bash",v:3,ts:$ts,acct:$acct,tp_acct:($tpa|nul),sid:$sid[0:128],agent_id:$aid[0:128],
     agent_type:$atype[0:128],tool_use_id:$tuid[0:128],timeout_ms:$to,broad:true,narrow:($cls != ""),

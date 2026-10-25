@@ -8,6 +8,8 @@
 # fails (2); dropping the validate-bash passenger block fails (4).
 # W6 RED-proof (2026-10-24): against the base hook (git show 11f7f87fa:…) (5) fails: no
 # would_deny_class field, and `bash -c '<loop>'` was not a poll loop.
+# S3 RED-proof (2026-10-25): against the base hooks (git show c43f39d2b:…) (6)-(10) fail: rows are
+# v:2 with no arm and no wider class, and validate-bash never pipes a no-timeout call, so no d4_follow.
 #
 # Hermetic: $HOME and the log are fixtures; validate-bash runs with the same isolation its own
 # suites use (CC_SHARED_CHECKOUT, CC_VB_DECISION_LOG, no kitty).
@@ -55,8 +57,9 @@ long-runner|pnpm test
 -|sleep 30
 -|timeout 60 curl -s example.com
 EOF
-  [ "$(wc -l < "$CC_SUBAGENT_LONG_BASH_LOG")" -eq 13 ]
-  jq -e -s 'all(.[]; .broad == true and .would == "count" and (.cmd_sha256 | length) == 64
+  # each would-deny also arms a follow row for the next call (S3): count the verdict rows
+  [ "$(jq -s '[.[] | select(.kind == "subagent_bash")] | length' "$CC_SUBAGENT_LONG_BASH_LOG")" -eq 13 ]
+  jq -e -s '[.[] | select(.kind == "subagent_bash")] | all(.[]; .broad == true and .would == "count" and (.cmd_sha256 | length) == 64
              and .agent_type == "workflow-lean" and .tool_use_id == "toolu_1")' "$CC_SUBAGENT_LONG_BASH_LOG" >/dev/null
 }
 
@@ -89,10 +92,10 @@ EOF
   # a benign one passes silently either way
   vb "$(payload 'sleep 400')"
   [ "$status" -eq 0 ]; [ -z "$output" ]
-  [ "$(wc -l < "$CC_SUBAGENT_LONG_BASH_LOG")" -eq 2 ]
+  [ "$(jq -sr '[.[] | .kind] | join(",")' "$CC_SUBAGENT_LONG_BASH_LOG")" = "subagent_bash,d4_follow,subagent_bash" ]
   # the main thread's call never reaches the rule
   vb "$(payload 'sleep 400' 600000 '')"
-  [ "$(wc -l < "$CC_SUBAGENT_LONG_BASH_LOG")" -eq 2 ]
+  [ "$(wc -l < "$CC_SUBAGENT_LONG_BASH_LOG")" -eq 3 ]
 }
 
 @test "(5) W6: would-deny splits by class, and an inner timeout under 300 s is exempt from the count" {
@@ -202,11 +205,12 @@ ROWS
 }
 
 @test "(10) S3 rows stay under 2 KB in one write: oversize fields shed, concurrent appends stay whole" {
-  # 4-byte characters in the command and 128-char ids push the full row past 2 KB
+  # 4-byte characters in the command and 128-char ids (the agent_id is logged twice: id and arm unit)
+  # push the full row past 2 KB
   big="until [ -f /tmp/d ]; do sleep 30; done; $(printf '\360\237\230\200%.0s' $(seq 200))"
   id="$(printf 'x%.0s' $(seq 128))"
   tp="/Users/u/.claude/projects/$(printf 'p%.0s' $(seq 400))/s.jsonl"
-  jq -nc --arg c "$big" --arg tp "$tp" --arg id "$id" '{session_id:$id,agent_id:"agent-a1",agent_type:$id,
+  jq -nc --arg c "$big" --arg tp "$tp" --arg id "$id" '{session_id:$id,agent_id:$id,agent_type:$id,
     tool_use_id:$id,transcript_path:$tp,tool_input:{command:$c,timeout:600000}}' | /bin/bash "$HOOK"
   [ "$(wc -l < "$CC_SUBAGENT_LONG_BASH_LOG")" -eq 1 ]
   [ "$(LC_ALL=C wc -c < "$CC_SUBAGENT_LONG_BASH_LOG")" -le 2048 ]
