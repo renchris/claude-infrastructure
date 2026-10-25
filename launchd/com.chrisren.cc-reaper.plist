@@ -13,11 +13,17 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>            <string>com.chrisren.cc-reaper</string>
+  <!--
+      /bin/bash -c, NOT /bin/zsh -lc (lockup incident 2026-10-25, DESIGN C4 R5; migrations/0083): a
+      spawner or mitigation job must start on a sick box without a login shell's profile reads and
+      startup forks. The PATH below is the login shell's tool order written out, so every command
+      resolves as it did under -l.
+  -->
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>export PATH="$HOME/.claude/bin:$PATH"; /bin/bash "$HOME/.claude/bin/cc-reaper" sweep --reap</string>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>export PATH="$HOME/.claude/bin:$HOME/.claude/shims:$HOME/.local/bin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /bin/bash "$HOME/.claude/bin/cc-reaper" sweep --reap</string>
   </array>
   <key>StartInterval</key>    <integer>300</integer>
   <key>RunAtLoad</key>        <false/>
