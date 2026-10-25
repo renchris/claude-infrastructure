@@ -38,7 +38,15 @@ verdict. Every track runs its own direct suites, asserts the `1..N` plan line, a
 | Track | Worktree / branch | Status | Landed shas |
 |---|---|---|---|
 | A scope floor | `lkw-scope-floor` | fired 2026-10-24 (next3, pane 297) | |
-| B+C subject nudge + decide/grant code | `lkw-nudge-decide` | fired 2026-10-25 (next2, pane 303) | |
+| B+C subject nudge + decide/grant code | `lkw-nudge-decide` | **DONE 2026-10-25**, landed + converged, 15 paths content-verified by the lead | `476870a58` nudge (test T43) · `65e7af8df` xvendor-review.sh · `cadfaff50` cc-decide `--help`/`--ceiling`/hints + cc-memory-search `--decisions` + anti-deference + gate_sweep `--ceiling program` · `ea8d879cb` operator-readout setup · `94c9b550d` e2e STALL_S 5→60 |
+
+B+C receipts (its commit bodies hold the detail): RED on the pre-change subject — T43 28/39, xvendor 23/23, cc-decide
+new 10/12 (2 negative gates green by design), cc-memory-search 2/2, research-kit-gate 1/1, anti-deference 1/2;
+mutants — supervisor 20/20, xvendor 6/6, decide 13/13 red; GREEN — lead-supervisor 1..12, xvendor-review 1..23,
+cc-decide 1..88, cc-memory-search 1..21, plus 10 neighbour suites. Live Codex smoke (meter 0%, 3,395 tokens): the
+export is readable and a real-HOME file reads "Operation not permitted". Design correction: tests/operator-readout.bats
+did NOT already unset the session ids (4 class-C cases went red until `ea8d879cb`). Trunk red not ours:
+tests/headless-address-consumers.bats test 9 (red on `3d6d8f85a` too).
 | D rule text | `lkw-rule-text` | pending (fires after A, B+C) | |
 | E re-gate | `lkw-regate` | pending (fires after D) | |
 
