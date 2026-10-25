@@ -200,7 +200,7 @@ When work remains that involves the user (an interactive login, `sudo`, a classi
 - A file you hand over contains no permission grants, no `settings*.json` or allowlist edits and no credential writes. Ask for a permission in chat, as its own request.
 - Reading permission state is yours: run `cc-permission-audit` (reports redundant or shadowed allow rules; writes nothing without `CONFIRM=1`; `--prune` is a dry run by default) and hand over its findings. Applying them is the operator's.
 - Verdicts fail closed: success is an exit code, or a value read back by a different call than the one that made the change, never a grep for a phrase.
-- If what remains is a decision, there is no script; file it by class (§ The close message).
+- If what remains is a decision, there is no script; file it by class (§ The six slots).
 
 Full rule → the **manual-command-delivery** skill.
 

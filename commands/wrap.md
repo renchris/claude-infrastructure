@@ -54,7 +54,7 @@ all three, and **every one is rendered by the code the Stop hooks use**, never r
 
 | axis | rendered by | why it is not obvious |
 |---|---|---|
-| tasks & decisions | `hooks/operator-readout.sh --render` | filed rows only; a decision nobody filed is in no store — file it (`cc-decide open`) and it becomes the `⛔` rung |
+| tasks & decisions | `hooks/operator-readout.sh --render` | filed rows only; a decision nobody filed is in no store — file it (`cc-decide open`); class C becomes the `⛔` rung |
 | **working vs idling** | `scripts/wrap-ledger.sh --busy` → `hooks/lib/session-busy.sh` | **nothing measured this until 2026-09-10.** A backgrounded job is invisible to you, so `🔧 Unchanged.` read identically to a 20-minute gate and to a stuck poll loop |
 | good to close | the rung below, + the `✅` certificate | the certificate fires only on a `✅` **write-turn** close — by design, so it carries information |
 

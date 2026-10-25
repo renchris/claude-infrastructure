@@ -690,8 +690,9 @@ never DEFERRED**:
 F4 caps how much you take on, and is not a reason to file what you took. On PASS: append
 `Scope (grown): +<item>` and execute. On FAIL: **drop it** — name it in one line and let it go —
 **unless it passes the FILED test** in § Three dispositions (an impossibility CLASS · why-still-true ·
-who-for); a FAIL is not a licence to mint (STOP-ASK only for a genuine
-fork/escalation). Asking the user to re-affirm an F1-F4 PASS is itself a defect
+who-for); a FAIL is not a licence to mint. A genuine fork is FILED by class (§ The close message,
+*Corollary*: class B keeps its course meanwhile); STOP-ASK only for an operator-only escalation that gates
+all that remains. Asking the user to re-affirm an F1-F4 PASS is itself a defect
 (deference-fishing); so is laundering a FAIL through as a PASS (scope-metastasis). The
 kill-switch ("just do X", "…and stop") suspends the gate for that turn, like all
 auto-continue.
@@ -725,11 +726,13 @@ research scope only — G1-G4, the ship policy and the ledger's dirty, unlanded 
 bind inside a program.
 
 **Standing operator grants.** A standing grant is an operator ruling that covers a class of acts in every
-repo. An act inside its envelope needs no ask and no decision packet; an act outside it is an ordinary
-decision (F2). Each entry carries the operator's words, the envelope and how each limit is checked. The slim
-rules carry the operative line (§ Follow-On Gate); this section is the record, and an answered class-A packet in
-the decision store carries it for `cc-memory-search --decisions`. Adding, widening or revoking a grant is the
-operator's: a rule edit is self-modification, class C.
+repo. An act inside its envelope needs no ask; where it answered a below-90 question, F2's class-A packet
+citing the grant is the only paper, and an act outside the envelope is an ordinary decision (F2). Each entry
+carries the operator's words, the envelope and how each limit is checked. The slim rules carry the operative
+line (§ Follow-On Gate); this section is the record. Once the plan's Wave 3 files it, an answered class-A
+packet in the decision store will carry it for `cc-memory-search --decisions`; until then this section and
+the ruling packet are the record (checked 2026-10-25: no class-A grant packet in `~/.claude/autonomy/decisions/`).
+Adding, widening or revoking a grant is the operator's: a rule edit is self-modification, class C.
 
 - **Cross-vendor review** (operator, 2026-10-24, ruling `d610f8473106`; builds on the 2026-10-11 ChatGPT Pro
   purchase, packet `a247b7288149`, "Upgraded to 100. Continue."). The operator, 2026-10-24T18:11:47Z: *"I thought
@@ -740,8 +743,8 @@ operator's: a rule edit is self-modification, class C.
     through the ChatGPT Codex plan's CLI. The Claude side still verifies what they find.
   - **Envelope, enforced by `~/.claude/scripts/xvendor-review.sh`:** a `git archive` export of committed code
     unpacked into a fresh temp dir — never the live home, the working tree, or a path the repo lists in
-    `.claude/xvendor-review.exclude`; codex runs read-only, never widened
-    (`docs/plans/CODEX_ADVERSARIAL_SLOT_PROBE.md:248-249`), under a permission profile written into a fresh temp
+    `.claude/xvendor-review.exclude`; codex writes nothing and is never widened, under a permission profile
+    (the `xvr` profile) written into a fresh temp
     `CODEX_HOME` (also its `HOME`) that holds only a copy of the Codex login: the profile reads the export and the
     system minimum and writes nothing, so reads are confined to that export or no run; no new call at 80% or more of
     the plan's weekly meter (`used_percent` of the 10080-minute window in the newest
@@ -783,14 +786,14 @@ rung (priority **⛔ > 📤 > 🔧 > 📦 > 🚀 > 👤 > ✅**); each is exactl
 
 | State | = disposition row | One-line readout |
 |---|---|---|
-| ⛔ **Blocked** | needs a **decision** (destructive migration / auth / nav / timeout) or **info** | `⛔ Blocked — need your call: <decision>.` |
+| ⛔ **Blocked** | an open **class-C** decision (self-modification / money / permission / credential / a G2 surface such as a destructive migration) or **info** | `⛔ Blocked — need your call: <decision>.` |
 | 📤 **Handoff** | context/budget exhausted, work remains | `📤 Out of context — recycling / handing off.` (three dispositions below) |
 | 🔧 **Loose ends** | unwritten / unverified / uncommitted, or a gate ran **red** | `🔧 Loose ends — continuing.` |
 | 📦 **Parked** | committed, **not pushed/landed** (`trunk..HEAD > 0`) | `📦 Done, on a branch only — /ship to land it (else lost).` |
 | 🚀 **Landed, not live** | landed on trunk, but the **enforcing store** does not carry it — live layer past its converge budget, or a migration could not reach it | `🚀 Landed but NOT live — the machine is not running this yet.` |
 | 👤 **Yours** | agent side complete AND landed, but operator-only step(s) THIS SESSION filed are unrun | `👤 My side is done & landed — N step(s) need you; see the OPERATOR block.` |
 | ✅ **Live** | genuinely complete AND on trunk (`trunk..HEAD = 0`, clean) | `✅ Complete & live on trunk — nothing this session filed is open.` |
-| _E0_ read-only (no tracked writes) | — | **no readout** — answer and yield. 🚨 **`yield` governs the READOUT, never identified work.** A read-only turn that NAMES drivable work is not E0: run the Follow-On Gate on each item and DRIVE the passes — here, in a subagent, in a team, or by firing a session — before you yield. What it **cannot** drive it FILES — `cc-decide open` for a new decision, `cc-decide recheck <id>` for a packet it re-checked — so the rung is `⛔`, never a silent E0, and its verdict reads `❌ Good to close: no — research done, implementation pending: …`. Suppressing a state readout on a turn with no state is correct (alarm polarity); yielding on work you just identified is the defect this row was read as licensing. **Nothing on this box catches it:** every `session-continue.sh` floor is gated on session WRITES, pending mail, or an armed sentinel, and `operator-readout.sh` cites E0 by name as the reason the certificate stays silent — so a research turn that identifies ten items trips no arm and closes clean. (`anti-deference-nudge.sh` does run here, but only reaches a turn carrying a lexical tell — 96% of its evaluations abstain `no-tell`.) Inside an ACTIVE research program, a completeness or pushback question is answered by relaying the certificate, and the residuals it names are not drivable work — § Follow-On Gate, *Active research program exemption*. |
+| _E0_ read-only (no tracked writes) | — | **no readout** — answer and yield. 🚨 **`yield` governs the READOUT, never identified work.** A read-only turn that NAMES drivable work is not E0: run the Follow-On Gate on each item and DRIVE the passes — here, in a subagent, in a team, or by firing a session — before you yield. What it **cannot** drive it FILES by class — `cc-decide open` for a new decision, `cc-decide recheck <id>` for a packet it re-checked; a class-C packet is the `⛔` rung, a class-B one keeps its course — never a silent E0, and its verdict reads `❌ Good to close: no — research done, implementation pending: …`. Suppressing a state readout on a turn with no state is correct (alarm polarity); yielding on work you just identified is the defect this row was read as licensing. **Nothing on this box catches it:** every `session-continue.sh` floor is gated on session WRITES, pending mail, or an armed sentinel, and `operator-readout.sh` cites E0 by name as the reason the certificate stays silent — so a research turn that identifies ten items trips no arm and closes clean. (`anti-deference-nudge.sh` does run here, but only reaches a turn carrying a lexical tell — 96% of its evaluations abstain `no-tell`.) Inside an ACTIVE research program, a completeness or pushback question is answered by relaying the certificate, and the residuals it names are not drivable work — § Follow-On Gate, *Active research program exemption*. |
 
 `📦` vs `✅` (*committed ≠ landed*) is the load-bearing split — it surfaces the branch-stranded risk.
 `🚀` vs `✅` is the third (*landed ≠ live*), added 2026-08-07 — face 4 of the inertness generator
@@ -852,7 +855,7 @@ after 6 h, so the floor and the supervisor ask again each window. *(Why, 2026-10
 judgment calls as class C, wrote "Nothing more runs until you answer", and idled 11 h with its frozen
 `loop until dry` scope ungated; round 27 depended on neither answer, and the same lead ran it under an
 open class-C packet once told to. Every Stop hook accepted the idle, because this sentence let ⛔ end a
-turn unconditionally. Legit stops are untouched: in 7 of 11 transcript-checked ⛔ idles the lead had
+turn unconditionally. Legit stops are untouched: in 8 of 11 transcript-checked ⛔ idles the lead had
 already finished or handed off all ungated work, `docs/research/lead-keeps-working-2026-10-24/maps/legit-stops.md` §4.)*
 **Keep a wake path while a decision you filed is open and work waits on its answer:** the
 `cc-await-ping` recipe under `run_in_background` (unless a `/goal` is live), never a detached
@@ -1094,7 +1097,7 @@ the decision).
 
 **Corollary — a decision you are holding must be FILED, and its CLASS decides whether it is the rung.**
 First look for a ruling (F2). Otherwise open it the moment you have it, by class (`cc-decide help`;
-`bin/cc-decide:13-19`):
+`bin/cc-decide` header, "THE THREE CLASSES"):
 - **Class C** — waits, has no default, and is the only class `wrap-ledger.sh` counts as `⛔`: an act only the
   operator may authorize (self-modification, a money path, a permission denial, a credential, a G2 escalation
   surface: auth/session, destructive migration, navigation pattern, DB timeout), declared with its ceiling:
@@ -1156,7 +1159,7 @@ currently overflow one pane.** This is the bound the word cap was reaching for a
 |---|---|---|
 | **DRIVEN** | you did it this turn | S4, past tense, with its receipt in S5 |
 | **FILED** | 🚨 **the EXCEPTION — it carries the burden of proof, and it is NOT co-equal with DRIVEN** | The default for anything you notice is **fix it now, or drop it.** Mint a row only if you can answer all three, in the close: **(a) why not now — a named IMPOSSIBILITY, never a reason.** `--why-not-now` must OPEN with one of four classes and `cc-backlog add` refuses the rest: `needs-credential` · `needs-human` (a value call that is theirs — and ONLY with `--conviction N --receipt R`, N ≤ 90, per the F2 number rule; the row is born blocked. Sudo · physical · GUI-only steps are not decisions and go through `cc-backlog needs "<step>" --class needs-human`, which carries no conviction) · `not-yet-true` (an external precondition has not happened — pair it with a `--falsifier`) · `no-capacity` (**measured, not felt**: `claude-accounts --rank general` routes nowhere AND the machine admission gate refuses the spawn). Anything else ⇒ **DRIVE it — in this session, or by firing one (`~/.claude/scripts/handoff-fire.sh`) — or DROP it.** "Out of scope" · "I was told not to start new work" · "the remediation half is the operator's" · "it needs more investigation" are *reasons*, and each one names work you could have done. **Capacity is the test this rule never asked** (operator ruling 2026-09-05, after a session filed a production tenant's 48 schema discrepancies and closed "optional next" while four accounts sat idle), and unused weekly quota is decaying inventory, not savings — it does not roll over: measured that day, ~167pp (≈1.7 account-weeks) stranding in one cycle against ~5pp/window through August (`~/.claude/scripts/desk-strand-replay.py`; the live `/accounts` weekly column UNDERSTATES spend, so read the strand nowcast, never the percentage) · **(b) why it will still be true** — the condition keeping it real after a p90 of 9.3 days in the queue, ideally as a `--falsifier` so it self-retracts · **(c) who it is for** — `cc-backlog needs "<step>" --class needs-human|needs-credential` for an operator-only gate (the class is required: an unclassed `needs` is logged now and refused once the gate enforces) (`--run "<cmd>"` when one exists — and `cc-do <id>` is how the operator's run CLOSES it), `cc-backlog add --why-not-now "<answer (a)>"` for genuine agent work — answer (a) is a FIELD on the row, not a sentence in the close: an add this session made WITHOUT it is this session's own 🔧 in the ledger (`wrap-ledger.sh` FILED_MINE) until it is driven, closed, or handed off with the reason. **Cannot answer all three ⇒ DROP IT.** An unanswerable row is noise a future session pays to re-derive. Filing something you could have fixed this turn is the defect this rule exists to prevent. When you do file, the STANDING pile renders as ONE counted line in the `OPERATOR ▸` block — never as your prose — and an item THIS SESSION filed is still named, in S2 or S6 |
-| **BLOCKED** | an open **class-C** decision — credential · sudo · destructive migration · money · self-modification (a value fork or a pick among new options has a course to keep, so it is class B and blocks nothing) | it IS S1's rung (`⛔`), stated as the one decision you need, and it holds only the act it gates. 🚨 **One exception, and it is the TERMINAL one:** when the session has driven every Follow-On Gate F1-F4 pass and every ≥90%-conviction item, and what REMAINS is a set of genuine operator decisions, those are **itemized, answer-first — one line each**, stating the decision as a sentence (never a label as the subject), its conviction number, and its measured options. That close may carry more than one row; "the one decision you need" describes a mid-work `⛔` whose decision gates everything left, not the exhaustion close, and `wrap-ledger.sh` already computes `BLOCKED` as a count over open class-C packets, so plural is what the ledger expects. § The close message S6 already binds the same way (*named, never counted*). The counted `◆` line still owns the machine's STANDING pile — what is itemized here is only what THIS session drove to the wall |
+| **BLOCKED** | an open **class-C** decision — self-modification · money · permission · credential · a G2 surface (destructive migration, auth, navigation pattern, DB timeout). A value fork or a pick among new options has a course to keep, so it is class B and blocks nothing; sudo, physical and GUI-only steps are `cc-backlog needs` rows, not decisions | it IS S1's rung (`⛔`), stated as the one decision you need, and it holds only the act it gates. 🚨 **One exception, and it is the TERMINAL one:** when the session has driven every Follow-On Gate F1-F4 pass and every ≥90%-conviction item, and what REMAINS is a set of genuine operator decisions, those are **itemized, answer-first — one line each**, stating the decision as a sentence (never a label as the subject), its conviction number, and its measured options. That close may carry more than one row; "the one decision you need" describes a mid-work `⛔` whose decision gates everything left, not the exhaustion close, and `wrap-ledger.sh` already computes `BLOCKED` as a count over open class-C packets, so plural is what the ledger expects. § The close message S6 already binds the same way (*named, never counted*). The counted `◆` line still owns the machine's STANDING pile — what is itemized here is only what THIS session drove to the wall |
 
 **Offering is the defect** (operator ruling 2026-08-01): *"the answer will always be yes — the job is
 not done until the job is done."* Naming researched, in-scope remaining work and then saying *"say the
@@ -1245,10 +1248,11 @@ continuation hook so a turn-close re-prompts you instead of stopping with work l
 a packet) is never a step: wait with `cc-await-ping` under `run_in_background` (unless a `/goal` is live:
 a running background Bash makes Claude Code skip goal evaluation), or the armed path
 re-prompts a session that has nothing to do. **Clear it** (`~/.claude/hooks/session-continue.sh clear`)
-the instant the state becomes ✅ / 📦 / a held or all-gated ⛔ / 📤, at the context boundary (an armed
-sentinel makes boundary-handoff abstain on every axis, `hooks/boundary-handoff.sh:694`), on a read-only
-turn, or when the kill-switch fires — those MUST stop. The unarmed idle over ungated scope is the scope
-floor's job, not a reason to arm (§ Stop-hook arms). A Stop
+the instant the state becomes ✅ / 📦 / any other ⛔ (held, all-gated, or with no `Not gated by it` clause
+at all, as when the session recorded no scope) / 📤, at the context boundary (an armed sentinel makes
+boundary-handoff abstain on every axis: its compose guard, `abstain "continue-hook-armed"`), on a read-only
+turn, or when the kill-switch fires — those MUST stop. Over ungated scope the scope floor (§ Stop-hook arms)
+catches an idle you left unarmed; it is the backstop, never a reason to skip arming. A Stop
 hook actuates it (`decision:block` feeds the step back as your next turn). 🚨 **Nothing here bounds a
 compliant chain, and the resident rules used to claim otherwise** (measured 2026-09-08).
 `CLAUDE_CONTINUE_MAX` (default 8) bounds only the MECHANICAL arm, as `CC_MECH_MAX ×

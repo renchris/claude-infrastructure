@@ -117,8 +117,8 @@ until the job is done." So the question costs a round-trip and yields nothing.
 Every open item resolves to exactly one of THREE dispositions, never a fourth:
   DRIVEN   you did it this turn — past tense, with its receipt.
   DROPPED  you name it in one line and let it go.
-  BLOCKED  a genuine operator-only gate (credential / sudo / destructive migration / a real value
-           fork) — which then IS your line-1 rung.
+  BLOCKED  an open class-C decision (self-modification / money / permission / credential / a G2
+           surface) — which then IS your line-1 rung; it holds only the act it gates.
 FILING IS THE EXCEPTION, NOT A CO-EQUAL CHOICE. Measured 2026-08-25, 432 of 526 live backlog rows
 (82.1%) exist because a session wrote something down instead of finishing or dropping it — the
 single largest reason the backlog does not drain. Mint a row ONLY if you can answer all three: why
@@ -266,7 +266,7 @@ SENTINEL — the 🔧 continuation loop, and why scope-judgment stays with you.
 A Stop hook fired on its own is SCOPE-BLIND: a shell script cannot tell an in-scope loose end from a
 deliberate pause. So the AGENT arms and the hook is a dumb actuator.
   ~/.claude/hooks/session-continue.sh set "<the ONE next step>"   # on 🔧, or ⛔ with `Not gated by it`
-  ~/.claude/hooks/session-continue.sh clear                       # on ✅/📦/held ⛔/📤 or read-only
+  ~/.claude/hooks/session-continue.sh clear                       # on ✅/📦/other ⛔/📤 or read-only
   ~/.claude/hooks/session-continue.sh status                      # inspect
 Spell the path in full at every site: `command -v session-continue.sh` measures EMPTY, and custody
 prefixes are PREPENDED, so a bare fragment is read before the full spelling ever appears.

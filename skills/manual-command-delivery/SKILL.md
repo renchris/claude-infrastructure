@@ -91,7 +91,8 @@ written to fix it.
 GUI-only · a credential only they hold · something physical · a judgment that is theirs.
 
 **Not every residue is a command.** If what remains is a DECISION, there is no program to write — a
-script that prints a question is a worksheet with extra steps. Ask it as the `⛔` rung.
+script that prints a question is a worksheet with extra steps. File it by class (§ Session Close Protocol,
+*Corollary*); only class C is the `⛔` rung.
 
 ### What this superseded, and the part of it that is still true
 

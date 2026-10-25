@@ -82,9 +82,11 @@ r_grants() { awk '/^Standing operator grants /{p=1} p&&/^### /{exit} p' "$R" | t
     has "$f" 'Not gated by it'
     has "$f" 'unless a `/goal` is live'
   done
-  has "$R" 'Within a turn, keep working rather than stopping on 🔧'
+  has "$R" 'Within a turn, keep working rather than stopping on 🔧'  # preservation: already on origin/main
 }
 
+# PRESERVATION GUARD (green on origin/main by design): the change compacted this sentence, and the guard
+# pins that the compaction kept it. Mutant receipt: delete 'strand nowcast' from R → not ok.
 @test "R keeps the capacity trap it compacted" {
   has "$R" 'strand nowcast'
   has "$R" 'which understates spend'
@@ -110,6 +112,8 @@ r_grants() { awk '/^Standing operator grants /{p=1} p&&/^### /{exit} p' "$R" | t
     || { echo "G grant lacks the operator's 18:11:47Z words verbatim"; false; }
 }
 
+# RATCHET GUARD (green on origin/main by design: neither old text carried the grant at all). Mutant
+# receipt: R's grant re-says `codex exec -s read-only` → not ok.
 @test "the grant never prescribes the -s read-only sandbox, which confines writes and not reads" {
   # measured 2026-10-24 (scripts/xvendor-review.sh header): `codex exec -s read-only` let the model read
   # a canary under the real HOME, and -s overrides a permission profile
@@ -123,10 +127,51 @@ r_grants() { awk '/^Standing operator grants /{p=1} p&&/^### /{exit} p' "$R" | t
   lacks "$R" 'and only on 🔧'
   lacks "$R" 'a real value fork'
   lacks "$R" '(`dod-persist.sh` captures it)'
-  lacks "$R" 'no status quo'
-  lacks "$G" 'no status quo'
 }
 
+@test "the sentinel clears on every ⛔ that does not arm it, not only a held one" {
+  # A session with no recorded scope reads SCOPE_UNGATED=0 and HELD=0 (wrap-ledger.sh), so its ⛔ carries
+  # no clause; "a held ⛔" left that ⛔ neither an arm case nor a clear case.
+  has "$R" '✅ / 📦 / any other ⛔ / 📤'
+  lacks "$R" 'a held ⛔'
+  has "$G" 'any other ⛔ (held, all-gated, or with no `Not gated by it` clause'
+}
+
+@test "a genuine fork is filed by class; only an escalation gating all that remains stops the turn" {
+  has "$R" 'File a genuine fork by class (class B keeps its course)'
+  lacks "$R" 'stop and ask only for a genuine fork'
+  has "$G" 'A genuine fork is FILED by class'
+  lacks "$G" 'STOP-ASK only for a genuine fork'
+  # E0 files by class too: only class C is the rung
+  has "$R" 'files by class (`cc-decide open`/`recheck <id>`; class C is the `⛔` rung)'
+  has "$G" 'FILES by class'
+  # the BLOCKED disposition lists the --ceiling set, never sudo (a `cc-backlog needs` row, not a decision)
+  has "$R" 'gate (self-modification, money, permission, credential, a G2 surface)'
+  lacks "$R" 'credential, sudo,'
+  lacks "$G" 'credential · sudo ·'
+}
+
+@test "the rule set's companions file a decision by class, never 'ask it as the rung'" {
+  local k="$D/skills/manual-command-delivery/SKILL.md" w="$D/commands/wrap.md" da="$D/hooks/dispatch-assert.sh"
+  for f in "$k" "$w" "$da"; do [ -f "$f" ] || { echo "missing subject: $f"; false; }; done
+  has "$k" 'only class C is the `⛔` rung'
+  lacks "$k" 'Ask it as the `⛔` rung'
+  has "$w" 'class C becomes the `⛔` rung'
+  # both dispatch-assert class-B hints carry what cc-decide requires of a class-B open
+  [ "$(grep -cF -- '--default-effect no-change --project <repo> --conviction N --receipt R' "$da")" -eq 2 ] \
+    || { echo "dispatch-assert: a class-B hint cc-decide would refuse"; false; }
+}
+
+@test "R names the scope floor and the Stop-hook reference, and never advertises the hold verb" {
+  has "$R" '- Scope floor: `session-continue.sh` blocks an idle ⛔ or loop 🔧'
+  has "$R" 'never judge scope'
+  has "$R" 'writing or debugging a Stop hook (which output fields reach the model, which extend the turn)'
+  lacks "$R" 'set|hold|done'
+  lacks "$R" 'dod-persist.sh hold'
+}
+
+# RATCHET GUARD (green on origin/main by design: no old file had such a line). Mutant receipt: G gains a
+# `Scope (frozen): loop until dry` line → not ok.
 @test "no rule file carries a literal loop scope line, which PreCompact would scrape as a contract" {
   local f
   for f in "$R" "$S" "$G"; do
@@ -134,6 +179,8 @@ r_grants() { awk '/^Standing operator grants /{p=1} p&&/^### /{exit} p' "$R" | t
   done
 }
 
+# RATCHET GUARD (green on origin/main by design: the cap IS origin/main's sum). Mutant receipt: R padded
+# past 58,790 → not ok.
 @test "budget: the always-loaded S + R does not grow past its measured pre-change sum (58,790)" {
   local out sum
   out="$(cd "$D" && python3 -I "$REPO/hooks/lib/instruction_budget.py" measure \
