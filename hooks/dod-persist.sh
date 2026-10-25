@@ -140,8 +140,10 @@ dod_file_for() { dod_path_for "$1" write; }   # the canonical path — where new
 last_recorded_scope() { grep -aoE 'Scope \(frozen\):.*' 2>/dev/null | tail -1; }
 
 # ── newest "Scope (frozen): …" line stated anywhere in a transcript (all text records) ──
+# An isMeta user record is injected text (a skill or command body, Stop-hook feedback, the cc-wake
+# frame), never the operator's, so it can never become a captured contract (lead-keeps-working §3.2).
 extract_scope() {  # $1 = transcript path
-  jq -r 'select(.type=="assistant" or .type=="user")
+  jq -r 'select(.type=="assistant" or (.type=="user" and (.isMeta != true)))
          | .message.content
          | if type=="string" then .
            elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n"))
@@ -479,11 +481,75 @@ $_lead"
   return 0
 }
 
+# ── THE SCOPE FLOOR's producer side (docs/research/lead-keeps-working-2026-10-24.md §3.2, C1 + C3) ──
+# `hold`, `done` and `capture-loop` write the lines scripts/wrap-ledger.sh § LOOP reads. Their helpers
+# resolve repo siblings the way the dod-path lib is resolved above: beside $0, then beside its symlink
+# target, then the config dir. Lazily, so SessionStart pays nothing for them. Every miss FAILS OPEN:
+# no loop lib reads "not a loop" (never capture), no cc-decide reads "no open packet" (refuse the hold),
+# no gate-classify reads "no class-C route" (a ceiling alone then lapses, §3.2 hold tiers).
+_dp_beside() {  # $1=path relative to the hooks dir → the first candidate that exists, "" when none
+  local c t
+  t="$0"; [ -L "$t" ] && t="$(readlink "$t")"
+  for c in "$_dpd/$1" "$(cd "$(dirname "$t")" 2>/dev/null && pwd)/$1" \
+           "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/$1" "$HOME/.claude/hooks/$1"; do
+    [ -e "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 0
+}
+# The ONE loop definition, shared with the ledger (hooks/lib/loop-scope.sh), so this producer can never
+# record a line the consumer does not read as a loop.
+_dp_is_loop() {  # $1=scope text → rc 0 when a verb-first loop; rc 1 when not, or when the lib is absent
+  local lib
+  if ! command -v loop_scope_is_loop >/dev/null 2>&1; then
+    lib="$(_dp_beside lib/loop-scope.sh)"
+    [ -n "$lib" ] || return 1
+    # shellcheck disable=SC1090  # runtime-resolved beside this file
+    . "$lib" 2>/dev/null || return 1
+    command -v loop_scope_is_loop >/dev/null 2>&1 || return 1
+  fi
+  loop_scope_is_loop "${1:-}"
+}
+_dp_decide_open_c() {  # $1=12-hex id → that OPEN class-C packet's JSON; rc 1 when absent or unreadable
+  local bin="${CC_DECIDE_BIN:-$(_dp_beside ../bin/cc-decide)}"
+  [ -n "$bin" ] && [ -f "$bin" ] || return 1
+  bash "$bin" list --open --class C --json 2>/dev/null \
+    | jq -ec --arg id "$1" 'first(.[] | select(.id == $id))' 2>/dev/null
+}
+_dp_gate_route() {  # $1=decision text → A|B|C from the repo's own router, "" when it cannot run
+  local bin="${CC_GATE_CLASSIFY_BIN:-$(_dp_beside ../scripts/gate-classify.sh)}" r
+  [ -n "$bin" ] && [ -f "$bin" ] || return 0
+  r="$(bash "$bin" "$1" 2>/dev/null)" || r=""
+  case "$r" in [ABC]*) printf '%s' "${r%"${r#?}"}" ;; esac
+  return 0
+}
+# The session's newest INTENTIONAL frozen line: an own block (session=<sid>) whose label is not
+# PreCompact*, which scrapes any user or assistant text (§3.1 (ii)). Column 0, as the ledger reads it.
+_dp_own_intent_scope() {  # $1=store file  $2=sid → that line, "" when none
+  [ -f "$1" ] && [ -n "${2:-}" ] || return 0
+  DP_OI_SID="$2" LC_ALL=C awk '
+    BEGIN { k = " · session=" }
+    index($0, "## ") == 1 {
+      lbl = $0; sub(/^## [^(]*\(/, "", lbl); sub(/\).*/, "", lbl)
+      s = ""; i = index($0, k)
+      if (i) { s = substr($0, i + length(k)); j = index(s, " · "); if (j) s = substr(s, 1, j - 1) }
+      keep = (s != "" && s == ENVIRON["DP_OI_SID"] && lbl !~ /^PreCompact/); next
+    }
+    index($0, "# ") == 1 { keep = 0; next }
+    keep && /^Scope \(frozen\):/ { last = $0 }
+    END { if (last != "") print last }' "$1" 2>/dev/null
+  return 0
+}
+
 # ── CLI modes ──
 case "${1:-}" in
   set)
     scope="${2:-}"
     [ -n "$scope" ] || { printf 'usage: dod-persist.sh set "<Scope (frozen): DoD>"\n' >&2; exit 2; }
+    # held/done lines have their own writers (and their own guards); through `set` they would be
+    # rewritten to `Scope (frozen): Scope (done): …` and become the new contract (§3.2)
+    case "$scope" in "Scope (held):"*|"Scope (done):"*)
+      # shellcheck disable=SC2016  # the backticks are literal: they quote the commands to run
+      printf 'refused: use `dod-persist.sh hold` or `dod-persist.sh done`\n' >&2; exit 2 ;; esac
     case "$scope" in *"Scope (frozen):"*|*"Scope (grown):"*) ;; *) scope="Scope (frozen): $scope" ;; esac
     dod_prime "$PWD"
     f="$(dod_path_for "$PWD" write)"
@@ -515,6 +581,65 @@ case "${1:-}" in
 $(dod_read_files "$_gc")
 GETEOF
     printf '%s\n' "$_g"; exit 0 ;;
+  hold)
+    # dod-persist.sh hold <12-hex id|none> "<what it gates and why>" — the line the ledger reads as
+    # `Scope (held): <id|none> [until=<epoch>] — <why>` (§3.1 (ii)). A newline in the reason is
+    # refused with `Scope (`: either would let it smuggle a line (a `- [ ]` box, a frozen line) in.
+    id="${2:-}"; why="${3:-}"; sid="${CLAUDE_CODE_SESSION_ID:-}"; lapse=""
+    { [ -n "$sid" ] && [ -n "$why" ] && [[ "$id" =~ ^([0-9a-f]{12}|none)$ ]]; } \
+      || { printf 'usage: dod-persist.sh hold <decision id|none> "<what it gates and why>" (needs a session)\n' >&2; exit 2; }
+    case "$why" in *"Scope ("*|*"$_dod_nl"*) printf 'refused: the reason may not contain a Scope line or a newline\n' >&2; exit 2 ;; esac
+    if [ "$id" != none ]; then   # a hold names an OPEN class-C decision: a class-B default fires, so it holds nothing
+      pkt="$(_dp_decide_open_c "$id")" || { printf 'refused: %s is not an open class-C decision (cc-decide list --open --class C)\n' "$id" >&2; exit 2; }
+      # ...and only an OPERATOR-ONLY gate holds the drive. Two independent signals: the ceiling the filer
+      # declared (§3.6; absent on a legacy packet, which folds to "none") and the repo's own router on the
+      # packet text. Neither alone ends the drive for good: the router misses real gates, a ceiling is the
+      # filer's own claim (§3.2 hold tiers).
+      ceil="$(printf '%s' "$pkt" | jq -r '.ceiling // ""' 2>/dev/null)"
+      case "$ceil" in self-mod|money|permission|credential|g2) dc=1 ;; *) dc=0 ;; esac
+      rt="$(_dp_gate_route "$(printf '%s' "$pkt" | jq -r '.what_plain // ""' 2>/dev/null)")"
+      case "$dc$rt" in
+        1C) ;;                                                                    # durable: lapses only when answered
+        1*|0C) lapse=$(( $(date +%s) + ${CC_SCOPE_FLOOR_WINDOW_S:-21600} )) ;;  # one signal: lapsing
+        *) printf 'refused: %s declares no operator-only ceiling and gate-classify routes it %s. A judgment call with a status-quo course is class B and holds nothing: cc-decide open --class B --what … --default "<the frozen-scope course>" --deadline <ISO> --default-effect no-change --project <repo> --conviction N --receipt R. If it truly is a money, self-modification, permission, credential or G2 gate, file it again with --ceiling.\n' "$id" "${rt:-?}" >&2; exit 2 ;;
+      esac
+    fi
+    dod_prime "$PWD"; f="$(dod_path_for "$PWD" write)"
+    persist_dod "$f" "Scope (held): $id${lapse:+ until=$lapse} — $why" "$PWD" "manual-hold" "$sid"
+    printf 'held%s → %s\n' "${lapse:+ (lapses in ${CC_SCOPE_FLOOR_WINDOW_S:-21600} s: one signal only)}" "$f"; exit 0 ;;
+  done)
+    # dod-persist.sh done "<evidence the loop's condition holds, or the operator's ruling>"
+    ev="${2:-}"; sid="${CLAUDE_CODE_SESSION_ID:-}"
+    { [ -n "$sid" ] && [ -n "$ev" ]; } || { printf 'usage: dod-persist.sh done "<evidence>" (needs a session)\n' >&2; exit 2; }
+    case "$ev" in *"Scope ("*|*"$_dod_nl"*) printf 'refused: the evidence may not contain a Scope line or a newline\n' >&2; exit 2 ;; esac
+    dod_prime "$PWD"; f="$(dod_path_for "$PWD" write)"
+    persist_dod "$f" "Scope (done): $ev" "$PWD" "manual-done" "$sid"; printf 'done → %s\n' "$f"; exit 0 ;;
+  capture-loop)
+    # C1, called by session-continue at Stop. Prints EXACTLY one of
+    # captured|captured-rescope|not-loop|own-exists|none, and always exits 0.
+    tp="${2:-}"; sid="${CLAUDE_CODE_SESSION_ID:-}"
+    { [ -n "$sid" ] && [ -f "$tp" ] && command -v jq >/dev/null 2>&1; } || { echo none; exit 0; }
+    # NEWEST human-origin prompt line that STARTS with the prefix. Human origin: type user, not isMeta,
+    # origin.kind human or absent, no tool_result in the content (lane briefs live in tool_results).
+    # Line-anchored, so a mid-line mention ("DoD ref: none. Scope (frozen): …") is no capture.
+    scope="$(grep -a 'Scope (frozen):' "$tp" 2>/dev/null | jq -r 'select(.type=="user" and (.isMeta != true)
+               and ((.origin.kind // "human") == "human")) | .message.content
+             | if type=="string" then . elif type=="array" then
+                 (if ([.[]?|select(.type=="tool_result")]|length) > 0 then empty
+                  else ([.[]?|select(.type=="text")|.text]|join("\n")) end) else empty end' 2>/dev/null \
+             | grep -aE '^[[:space:]>*-]*Scope \(frozen\):' | tail -1 | sed -E 's/^[[:space:]>*-]*//')"
+    [ -n "$scope" ] || { echo none; exit 0; }
+    dod_prime "$PWD"; f="$(dod_path_for "$PWD" write)"
+    own="$(_dp_own_intent_scope "$f" "$sid")"
+    if [ -z "$own" ]; then
+      _dp_is_loop "${scope#Scope (frozen):}" || { echo not-loop; exit 0; }   # loop scopes only: no DRAIN_SCOPE crosstalk
+      persist_dod "$f" "$scope" "$PWD" "stop-capture" "$sid"; echo captured; exit 0
+    fi
+    # the operator re-scoped a LOOP session in a later prompt: record it so the loop stops being driven
+    if _dp_is_loop "${own#Scope (frozen):}" && [ "$own" != "$scope" ]; then
+      persist_dod "$f" "$scope" "$PWD" "stop-capture" "$sid"; echo captured-rescope; exit 0
+    fi
+    echo own-exists; exit 0 ;;
 esac
 
 # ── Hook modes (JSON on stdin; dispatch by hook_event_name) ──
