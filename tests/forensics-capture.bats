@@ -60,7 +60,10 @@ bundle() { printf '%s\n' "$output" | tail -1; }
   row="$(grep '^99-slow' "$d/steps.tsv")"
   [ "$(printf '%s' "$row" | cut -f2)" = 124 ]
   [ "$(printf '%s' "$row" | cut -f5)" = ABANDON ]
-  [ "$(printf '%s' "$row" | cut -f3)" -le 2000 ]
+  # deadline 1 s + 1 s, plus the runner's own fork/perl overhead measured on a trivial step in
+  # this same run (it balloons at ~15/core and is not the step's time)
+  base="$(grep '^01-vm_stat' "$d/steps.tsv" | cut -f3)"
+  [ "$(printf '%s' "$row" | cut -f3)" -le $((2000 + base)) ]
   [ "$(tail -1 "$d/progress")" = "EXIT 0" ]
   grep -q '"abandoned": \[' "$d/manifest.json"
   grep -q '99-slow' "$d/manifest.json"

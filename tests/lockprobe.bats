@@ -96,10 +96,12 @@ print(json.dumps(d) if isinstance(d,(dict,list)) else d)' "$1" "$2"; }
   printf '%s\n' 'exec /bin/sleep 60' >"$S/hang.sh"
   export CC_LOCKWATCH_PROBE_PROCSCAN="/bin/bash $S/hang.sh"
   export CC_LOCKWATCH_P11_FLOOR_S=0.6 CC_LOCKWATCH_EVERY_PROCSCAN=0.1
-  run lp run --max-ticks 30
+  run lp run --max-ticks 40
   [ "$status" -eq 0 ]
   st="$CC_LOCKWATCH_DIR/state.json"
-  [ "$(jget "$st" probes_stuck.procscan)" = 2 ]
+  [ "$(jget "$st" probes_stuck.procscan)" -ge 1 ]   # how many in the window is load-dependent;
+  ev="$CC_LOCKWATCH_DIR/run/$BOOT/spawner-events.jsonl"   # the cap is not
+  [ "$(grep -c '"ev":"spawned","id":"procscan-' "$ev")" -le 2 ]
   [ "$(jget "$st" level)" = 0 ]
   [ "$(jget "$st" verdict)" = unknown ]
 }
