@@ -45,6 +45,17 @@ or `hooks/boundary-handoff.sh` (the `~` spelling fix landed in `cfba3c54a`).
 First batch, fired 2026-10-25: Z1, W0, W1, W2 (A and B once the capacity gate admits; the box was at
 12–13 sessions mid-turn against a ceiling of 8 at plan time).
 
+**First-batch status (2026-10-25 08:45 CDT): not launched, blocked on the terminal.** Every fire of Z1, W0,
+W1, W2 failed to open a pane: kitty pid 1881's remote-control socket `/tmp/kitty-1881` answers every
+connection with EOF or `write: broken pipe`. This is not load: it persisted as load fell from 487 to 164, and
+kitty held exactly 258 unix sockets across an hour. Already filed for the operator by another session as
+backlog `8aaba6defbc5` (relaunch kitty if its UI is frozen). Two fire-path hangs found on the way are fixed
+and live: unbounded multi-pid `ps -o pid=,lstart= -p` in `scripts/lib/spawn-presence.sh` (`57730d18c`) and
+`bin/cc-sessions` (`19c297766`). Re-fire: `bash /tmp/zh-fire/fire-when-kitty.sh` (waits for kitty, fires the
+four briefs `/tmp/fire-zh-{Z1,W1,W2,W0}.txt` one at a time; if /tmp is gone, rebuild the briefs from this
+plan's wave rows and the mid-turn REPORT §12). Branches `feat/zh-*` and their worktrees exist, kept by the
+UNKNOWN-outcome cleanup; no session ever ran in them.
+
 ## 1. Why this shape
 
 - **Allow rules, not hooks, are the permission fix.** Verified in the 2.1.293 binary: a narrow
