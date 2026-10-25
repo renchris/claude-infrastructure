@@ -56,7 +56,7 @@ ptymap() { printf '{"leaders":[{"pid":%s,"lstart":"x","pgid":%s,"tdev":"16/63","
   prog="$(ls -d "$BG_ROOT"/kits/*-capture-*)/progress"
   b=$(awk '$2 == "BEGIN" && $3 == "teststep" {print $1}' "$prog")
   a=$(awk '$2 == "ABANDON" && $3 == "teststep" {print $1}' "$prog")
-  [ -n "$a" ] && [ $(( a - b )) -le 3 ]
+  [ -n "$a" ] && [ $(( a - b )) -le 3 ] || false
   [[ "$output" == *"abandoned=teststep,"* ]] || false
   [[ "$(tail -1 "$prog")" == *" EXIT rc=0" ]] || false
   p=$(awk '$2 == "ABANDON" {sub("pid=", "", $4); print $4}' "$prog")
@@ -151,7 +151,7 @@ ptymap() { printf '{"leaders":[{"pid":%s,"lstart":"x","pgid":%s,"tdev":"16/63","
   HOME="$H" CC_MIGRATION_REPO="$REPO" CC_MIGRATION_NO_HS=1 run bash "$M"       # idempotent
   [ "$status" -eq 0 ]
   HOME="$H" CC_MIGRATION_NO_HS=1 run bash "$M" --undo
-  [ ! -e "$H/.claude/scripts/break-glass/rescue.sh" ] && [ ! -e "$P" ]
+  [ ! -e "$H/.claude/scripts/break-glass/rescue.sh" ] && [ ! -e "$P" ] || false
   printf 'mine\n' > "$H/.claude/scripts/break-glass/rescue.sh"                 # a real file is never clobbered
   HOME="$H" CC_MIGRATION_REPO="$REPO" CC_MIGRATION_NO_HS=1 run bash "$M"
   [ "$status" -eq 1 ]
