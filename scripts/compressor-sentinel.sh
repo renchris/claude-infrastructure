@@ -1012,7 +1012,8 @@ select_stop_targets() { # <exe_file> <prev_census_pids> <rss_floor_kb> <cap> [<n
       if (b == "claude.exe" || b == "claude") next
       if (args ~ /claude/) next
       if (args ~ /(^|[\/ _-])mcp([-_\/ @.]|$)|modelcontextprotocol/) next
-      if (index(never, " " pid " ") > 0) next          # a live forensics step or lockprobe (fx_never_list)
+      if (index(never, " " pid " ") > 0) next          # forensics step, lockprobe, or a pty leader/holder (never list)
+      if (b ~ /^(expect|script|login|tmux|sshd|screen)$/ || b ~ /^(tmux|sshd):/) next   # session-owning programs
       if (args ~ /lockwatch|cc-forensics|break-glass|devfs-canary/) next   # the lockup tooling, by argv
       if (rss <= floor) next
       if (index(prev, " " pid " ") > 0) next          # present at the last census ⇒ not the burst
@@ -1062,8 +1063,8 @@ select_stop_targets() { # <exe_file> <prev_census_pids> <rss_floor_kb> <cap> [<n
 # Only pid → (comm, protected?) is retained, never argv: agent briefs travel in argv (memory
 # pgrep-f-matches-agent-briefs), so buffering the table's argv to answer a question about parentage
 # would make the instrument allocate in proportion to the fleet at the one moment memory is scarce.
-select_break_parents() { # <exe_file> <cohort_pids> <min_children> <cap> <self_pid> <self_ppid>
-  awk -v cohort=" $2 " -v min="$3" -v cap="$4" -v self="$5" -v selfp="$6" '
+select_break_parents() { # <exe_file> <cohort_pids> <min_children> <cap> <self_pid> <self_ppid> [<never " pid " list>]
+  awk -v cohort=" $2 " -v min="$3" -v cap="$4" -v self="$5" -v selfp="$6" -v never=" ${7:-} " '
     NR == FNR { if ($1 ~ /^[0-9]+$/) { ebase[$1] = $4; eppid[$1] = $2; eprot[$1] = ($6 == "0" ? 0 : 1) } next }
     $1 ~ /^[0-9]+$/ {
       pid = $1; ppid = $2
@@ -1092,6 +1093,8 @@ select_break_parents() { # <exe_file> <cohort_pids> <min_children> <cap> <self_p
         if (pp + 0 == self + 0 || pp + 0 == selfp + 0) continue
         if (!(pp in seen)) continue
         if (pp in protect) continue
+        if (index(never, " " pp " ") > 0) continue     # forensics step, lockprobe, pty leader/holder
+        if (name[pp] ~ /^(expect|script|login|tmux|sshd|screen)$/) continue
         cand[++k] = pp
       }
       # Selection sort rather than a pipe to sort(1): `sort | head` under `set -o pipefail` SIGPIPEs
@@ -1609,8 +1612,9 @@ release_frozen() { # <now-epoch> <mode: clear|ceiling|exit|sweep> [<parent_ok 0|
 # stamp, or the row is dropped without a signal. Expired and stale rows are pruned on every pass so
 # the file cannot grow without bound.
 probation_refreeze() { # <now-epoch> → "refroze=N" on stdout; re-ledgers each refrozen pid
-  local now="$1" keep n=0 pid ls at comm cur
+  local now="$1" keep n=0 pid ls at comm cur ptyp
   [ -s "$PROBATION_DB" ] || { printf 'refroze=0'; return 0; }
+  ptyp="$(pty_guard_pids)"
   keep="$(mktemp -t cc-sentinel-probation)" || { printf 'refroze=0'; return 0; }
   while IFS="$(printf '\t')" read -r pid ls at comm; do
     [ -n "$pid" ] || continue
@@ -1619,6 +1623,9 @@ probation_refreeze() { # <now-epoch> → "refroze=N" on stdout; re-ledgers each 
       printf '%s\t%s\t%s\t%s\n' "$pid" "$ls" "$at" "$comm" >> "$keep"; continue
     fi
     if [ -z "$cur" ] || [ "$cur" != "$ls" ]; then continue; fi # gone or recycled: never signal
+    # A pty session leader or holder is never re-frozen: the stamp is dropped, no signal (DESIGN I9).
+    case "$ptyp" in *" $pid "*) continue ;; esac
+    pty_comm_guarded "$comm" && continue
     if kill -STOP "$pid" 2>/dev/null; then
       n=$((n + 1))
       record_frozen "$pid" parent "$comm"
@@ -2702,7 +2709,9 @@ while :; do
       PSTABLE=""
       br_sync psact "${CC_SENTINEL_PS_DEADLINE_S:-15}" ps -axwwo pid=,ppid=,rss=,args=
       [ $? -ne 124 ] && [ -n "$BR_OUT" ] && [ -s "$BR_OUT" ] && PSTABLE="$(cat "$BR_OUT")"
-      NEVER="$(fx_never_list)"
+      # A pty session leader or master/slave holder is never frozen either (2026-10-25, lane F's sweep):
+      # the kill rung below may later act on custody, and the only safe custody is none.
+      NEVER="$(fx_never_list)$(pty_guard_pids)"
       TARGETS="$(printf '%s\n' "$PSTABLE" | select_stop_targets "$EXEF" "$CENSUS_PIDS" "$ACT_RSS_KB" "$ACT_CAP" "$NEVER")"
       COHORT="$(printf '%s\n' "$TARGETS" | awk '$1 ~ /^[0-9]+$/ { printf "%s ", $1 }')"
       COHORT_N="$(printf '%s' "$COHORT" | wc -w | tr -d ' ')"   # derived from COHORT so they cannot disagree
@@ -2735,7 +2744,7 @@ while :; do
       # into the next 60 s cooldown. Stopping the parent first makes the cohort a closed set.
       if [ "$ACT_PARENT" = "on" ]; then
         PARENTS="$(printf '%s\n' "$PSTABLE" \
-                   | select_break_parents "$EXEF" "$COHORT" "$ACT_PARENT_MIN" "$ACT_PARENT_CAP" "$$" "$PPID")"
+                   | select_break_parents "$EXEF" "$COHORT" "$ACT_PARENT_MIN" "$ACT_PARENT_CAP" "$$" "$PPID" "$NEVER")"
         while read -r ppid pkids pcomm; do
           [ -n "$ppid" ] || continue
           PARENT_N=$((PARENT_N + 1)); PARENT_PIDS="$PARENT_PIDS$ppid "

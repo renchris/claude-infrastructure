@@ -255,6 +255,37 @@ run_kill() { # <now> — kill_escalate over $D/fdb, kill(1) recorded, never sent
   [ "$(cut -f1 "$D/fdb")" = "6005" ] || false
 }
 
+@test "(c) STOP selection: a session-owning comm (expect) is never selected; a same-shape worker is (control)" {
+  printf '8001 1 200000 expect /usr/bin/expect 0\n8002 1 200000 worker /usr/local/bin/worker 0\n' > "$D/exe"
+  printf '8001 1 200000 /usr/bin/expect -f x.exp\n8002 1 200000 /usr/local/bin/worker --go\n' > "$D/ps"
+  run bash -c '. "$1"; select_stop_targets "$2" "1 2" 102400 10 " " < "$3"' _ "$D/lib.sh" "$D/exe" "$D/ps"
+  ! printf '%s\n' "$output" | grep -q '^8001 ' || false
+  printf '%s\n' "$output" | grep -q '^8002 ' || false
+}
+
+@test "(c) parent-breaker: a spawner on the never list (pty leader) is never frozen; unlisted it is (control)" {
+  printf '8100 1 50000 bash /bin/bash 0\n8101 8100 200000 node /x/node 0\n8102 8100 200000 node /x/node 0\n8103 8100 200000 node /x/node 0\n' > "$D/exe"
+  printf '8100 1 50000 /bin/bash -l\n8101 8100 200000 node a\n8102 8100 200000 node b\n8103 8100 200000 node c\n' > "$D/ps"
+  run bash -c '. "$1"; select_break_parents "$2" "8101 8102 8103" 3 4 1 1 " 8100 " < "$3"' _ "$D/lib.sh" "$D/exe" "$D/ps"
+  [ -z "$output" ] || false
+  run bash -c '. "$1"; select_break_parents "$2" "8101 8102 8103" 3 4 1 1 < "$3"' _ "$D/lib.sh" "$D/exe" "$D/ps"
+  [ "$output" = "8100 3 bash" ] || false
+}
+
+@test "(c) probation never re-freezes a pid that pty.json names; an unnamed spawner is re-frozen (control)" {
+  now="$(date +%s)"
+  mkpsmap "$(printf '8200\tMon 26 Oct 01:00:00 2026\n8201\tMon 26 Oct 01:00:01 2026')"
+  printf '8200\tMon 26 Oct 01:00:00 2026\t%s\tbash\n8201\tMon 26 Oct 01:00:01 2026\t%s\tnext-server\n' $((now - 10)) $((now - 10)) > "$D/prob"
+  printf '{"v":1,"ts_epoch":%s,"boot":"test-boot","ttl_s":90,"leaders":[{"pid":8200}]}\n' "$now" > "$D/pty.json"
+  : > "$D/kill.log"
+  run env PATH="$STUB:$PATH" PSMAP="$D/psmap" PROBATION_DB="$D/prob" FROZEN_DB="$D/fdb" SNAP="$D/snap.log" \
+    KILLLOG="$D/kill.log" PROBATION_S=300 LW_BOOT=test-boot PTY_JSON="$D/pty.json" CC_SENTINEL_RUN_DIR="$D/br" \
+    bash -c 'set -uo pipefail; kill() { printf "%s\n" "$*" >> "$KILLLOG"; return 0; }; . "$1"; probation_refreeze "$2"' _ "$D/lib.sh" "$now"
+  [ "${lines[${#lines[@]}-1]}" = "refroze=1" ] || false
+  ! grep -q -- '-STOP 8200' "$D/kill.log" || false
+  grep -qx -- '-STOP 8201' "$D/kill.log" || false
+}
+
 # ══ (d) a ps that never returns ══════════════════════════════════════════════════════════════════
 
 @test "(d) with a stub ps that never returns, every tick still writes its row (and stuck reads are capped)" {
