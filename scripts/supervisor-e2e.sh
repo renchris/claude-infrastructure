@@ -22,7 +22,10 @@ export CC_SUPERVISOR_PAGEDIR="$SBX/pages";        mkdir -p "$CC_SUPERVISOR_PAGED
 export CC_PAGE_TO=""                              # no cc-notify in tests
 export CC_PAGE_TO_FILE=/dev/null                  # …and no role-file fallback either (T9 opts back in)
 export CC_SUP_T=73
-export CC_SUP_STALL_S=5
+# 60, not 5: "fresh" fixtures are 1-2 s old and "stale" ones 100 s, so the threshold must sit between
+# them with room for a slow sweep. At 5 a sweep that starts >3 s after its mktel read a fresh session as
+# STALL? and the shared e2e went red (41-44 ✗ at load ~650, 2026-10-25); at 60 the same load gave 197/0.
+export CC_SUP_STALL_S=60
 export CC_SUP_PAGE_DEADLINE_S=1
 export CC_PERMPEND_DIR="$SBX/permpend";           mkdir -p "$CC_PERMPEND_DIR"
 export CC_PERMPEND_NOTICE_S=1                      # page a beacon pending ≥1s (fast tests; prod default 120)
@@ -320,7 +323,7 @@ reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
 WCFG="$SBX/warmcfg"; WSLUG="$(slug "$REPO")"
 mkdir -p "$WCFG/projects/$WSLUG"
 : > "$WCFG/projects/$WSLUG/warm1.jsonl"                            # mtime = now ⇒ warm
-mktel warm1 40 100 "$ALIVE" "$REPO" "$WCFG"                       # telemetry 100s stale (≥ STALL_S=5), pid alive
+mktel warm1 40 100 "$ALIVE" "$REPO" "$WCFG"                       # telemetry 100s stale (≥ STALL_S=60), pid alive
 once
 paged warm1 && no "paged a warm-transcript session (exemption FAILED — idle-live false positive)" || ok "warm transcript exempts STALL? candidacy"
 idl_has '"state":"STALL?"' && no "STALL? finding emitted for a warm-transcript session" || ok "no STALL? finding for a warm transcript"
@@ -381,7 +384,7 @@ CC_SUP_PAGE_DEADLINE_S=0 CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$S
 echo "T23 REGISTERED-DESK EXEMPTION (role=sid) — a pid-alive idle desk with STALE telemetry+transcript is NOT a STALL? candidate (item ff95faea46c8)"
 reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
 printf '%s' "deskA" > "$SBX/desk-role"                            # role file holds the desk's sid DIRECTLY
-mktel deskA 40 100 "$ALIVE" "$REPO"                              # live pid, telemetry 100s stale (≥ STALL_S=5), NO transcript ⇒ cold — exactly the idle-monitor false positive
+mktel deskA 40 100 "$ALIVE" "$REPO"                              # live pid, telemetry 100s stale (≥ STALL_S=60), NO transcript ⇒ cold — exactly the idle-monitor false positive
 CC_PAGE_TO_FILE="$SBX/desk-role" bash "$SUP" --once >/dev/null 2>&1
 paged deskA && no "paged the registered desk (exemption FAILED — idle-monitor STALL? false positive)" || ok "registered desk (role=sid) exempt from STALL?"
 idl_has '"sid":"deskA","state":"STALL?"' && no "STALL? finding emitted for the registered desk" || ok "no STALL? finding for the registered desk"
@@ -1064,7 +1067,7 @@ adsweep CC_SUP_ADOPT_RECHECK_S=0 CC_SUP_RECOVERY_S=1; sleep 2; adsweep CC_SUP_AD
   && no "check 4: the ESCALATED marker is PINNED — the first page after the hold would be swallowed" \
   || ok "check 4: sustained suppression RE-ARMS the sticky marker (placement proven)"
 
-# check 5 — CACHE: two sweeps inside the TTL classify once and record once (TTL = min(recheck, STALL_S)=5).
+# check 5 — CACHE: two sweeps inside the TTL classify once and record once (TTL = min(recheck, STALL_S)).
 rm -f "$CC_TELEMETRY_DIR/ow.json"; rm -rf "$CC_SUPERVISOR_PAGEDIR/adopt"
 c0="$(ncalls ad)"; : > "$CC_IDL"; adsweep; adsweep
 { [ "$(( $(ncalls ad) - c0 ))" -eq 1 ] && [ "$(nsupp ad)" -eq 1 ] && ! idl_has '"sid":"ad","state":"STALL?"'; } \
