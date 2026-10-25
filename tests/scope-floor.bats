@@ -382,7 +382,7 @@ tx_agent() { # $1 = extra record (or ""); the async agent a8e552e552430265c, its
   [[ "$r" == *'--class needs-human'* ]] || false
   [ "$(row scope-floor | jq -r '.kind')" = loop ]
   : > "$CONTINUE_IDL"
-  out="$(STUB_RUNG=🔧 STUB_LOOP_RUNG=0 STUB_DIRTY=1 actuate sidA "$(tx_f1)")"
+  out="$(STUB_RUNG=🔧 STUB_LOOP_RUNG=0 STUB_DIRTY=1 actuate sidB "$(tx_f1)")"   # a fresh sid: sidA's fire would rightly draw one clear row
   ! blocked "$out" || false
   [ "$(rows_like)" = 0 ]
 }
