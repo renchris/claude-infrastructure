@@ -37,8 +37,17 @@ verdict. Every track runs its own direct suites, asserts the `1..N` plan line, a
 
 | Track | Worktree / branch | Status | Landed shas |
 |---|---|---|---|
-| A scope floor | `lkw-scope-floor` | fired 2026-10-24 (next3, pane 297) | |
+| A scope floor | `lkw-scope-floor` | **DONE 2026-10-25**, landed + converged, 13 paths content-verified by the lead (diff vs A head empty) | tip `44948733e` (receipts in its body); ledger fields + loop-scope lib, dod-persist capture-loop/hold/done, inflight lib, scope floor + ⛔ mechanical arm |
 | B+C subject nudge + decide/grant code | `lkw-nudge-decide` | **DONE 2026-10-25**, landed + converged, 15 paths content-verified by the lead | `476870a58` nudge (test T43) · `65e7af8df` xvendor-review.sh · `cadfaff50` cc-decide `--help`/`--ceiling`/hints + cc-memory-search `--decisions` + anti-deference + gate_sweep `--ceiling program` · `ea8d879cb` operator-readout setup · `94c9b550d` e2e STALL_S 5→60 |
+
+A receipts (commit `44948733e` body; ping 2026-10-25 07:22): RED on `origin/main` — scope-floor 30/30, C5 5/7 (M3 by
+mutant, M5 control), ledger L 26/27 + memo 1/1, dod-persist 11/11, inflight 15/15; MUTANTS — 15 floor/C5, 10 ledger,
+5 store, 4 inflight, all red; GREEN — scope-floor 1..31, inflight 1..15, session-continue 1..68, dod-persist 1..64,
+ship-floor 1..10, wake-floor 1..54, wrap-ledger-memo 1..30, forks 1..5, wrap-ledger 167/169 (59/60 load flakes, green
+isolated). Live after converge: the B13 session reads `LOOP_SRC=own LOOP_OPEN=1 SCOPE_UNGATED=1`. Deviations: no
+`--session` flag (the hook env already carries `CLAUDE_CODE_SESSION_ID`), L24 is a control, assignee/teardown abstain
+silently, a tsv-pad-lint exemption for inflight.sh, forks parity normalised. Pre-existing reds not ours:
+tests/tsv-field-collapse.bats 30, tests/wrap-ledger-research.bats 7 (load).
 
 B+C receipts (its commit bodies hold the detail): RED on the pre-change subject — T43 28/39, xvendor 23/23, cc-decide
 new 10/12 (2 negative gates green by design), cc-memory-search 2/2, research-kit-gate 1/1, anti-deference 1/2;
