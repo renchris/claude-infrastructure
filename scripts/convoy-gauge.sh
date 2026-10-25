@@ -220,7 +220,7 @@ EOF
     esac
     if [ -z "$MAX" ] || [ "$n" -gt "$MAX" ]; then MAX="$n"; fi
   done <<EOF
-$("$PS_BIN" -M -p "$pids" 2>/dev/null | /usr/bin/awk -v cands="$cands" '
+$("$PS_BIN" -x -M -p "$pids" 2>/dev/null | /usr/bin/awk -v cands="$cands" '
   BEGIN { m = split(cands, L, " "); for (i = 1; i <= m; i++) { split(L[i], f, ":"); name[f[2]] = f[1] } }
   NR > 1 { pid = ($1 ~ /^[0-9]+$/) ? $1 : $2; c[pid]++ }
   END { for (p in c) if (p in name) { k = name[p]; if (!(k in best) || c[p] > best[k]) { best[k] = c[p]; bp[k] = p } }

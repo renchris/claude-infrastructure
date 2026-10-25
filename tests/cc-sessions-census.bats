@@ -88,6 +88,38 @@ calls() { cat "$D/$1.calls" 2>/dev/null | wc -l | tr -d ' '; }
   [ ! -e "$CC_REGISTRY_DIR/n-nouuid.json" ]
 }
 
+# 2026-10-25: `ps -o … -p a,b` WITHOUT -x hung indefinitely on Darwin 24.6 (dead pids too; one pid,
+# or the same list with -x, was instant) and wedged every handoff-fire census for 50+ min. The stub
+# reproduces exactly that: a multi-pid -p list without -x hangs; anything else is the real ps.
+# RED-proof, run against ba9e991dc's bin/cc-sessions: the bulk read hangs to CC_SESSIONS_PS_TIMEOUT,
+# ps.hung is written, and the census falls back to one ps per row (3 calls, not 1).
+@test "multi-pid ps: the one bulk read passes -x, so a ps that hangs without it never wedges the census" {
+  cat > "$D/shim/ps" <<STUB
+#!/bin/sh
+echo "\$*" >> "$D/ps.argv"; echo x >> "$D/ps.calls"
+x=0; multi=0; prev=
+for a in "\$@"; do
+  [ "\$a" = -x ] && x=1
+  [ "\$prev" = -p ] && case "\$a" in *,*) multi=1 ;; esac
+  prev="\$a"
+done
+if [ "\$multi" = 1 ] && [ "\$x" = 0 ]; then echo hung >> "$D/ps.hung"; exec sleep 300; fi
+exec /bin/ps "\$@"
+STUB
+  chmod +x "$D/shim/ps"
+  PAR=$PPID
+  PAR_LS="$(TZ=UTC LC_ALL=C /bin/ps -o lstart= -p "$PAR" | tr -s ' ' | sed 's/^ //;s/ $//')"
+  now_ms="$(( $(date +%s) * 1000 ))"
+  reg self "$LIVE" "$LIVE_LS" "$now_ms"; reg parent "$PAR" "$PAR_LS" "$now_ms"
+  reg reused "$PAR" "Thu Jan  1 00:00:00 2026" "$now_ms"
+  CC_SESSIONS_PS_TIMEOUT=5 run "$REPO/bin/cc-sessions" --names
+  [ "$status" -eq 0 ]
+  [ ! -e "$D/ps.hung" ] || { echo "ps hung on: $(cat "$D/ps.argv")"; false; }
+  [ "$(calls ps)" = 1 ] || { echo "ps calls: $(calls ps): $(cat "$D/ps.argv")"; false; }
+  grep -qx -- "-x -o pid=,lstart= -p [0-9][0-9]*,[0-9][0-9]*" "$D/ps.argv"
+  [ "$(printf '%s\n' "$output" | sort | tr '\n' ' ')" = "n-parent n-self " ]
+}
+
 @test "R19: the table renders every live row with one jq" {
   now_ms="$(( $(date +%s) * 1000 ))"
   reg a "$LIVE" "$LIVE_LS" "$now_ms"; reg b "$LIVE" "$LIVE_LS" "$now_ms"

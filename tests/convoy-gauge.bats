@@ -42,15 +42,18 @@ setup() {
   #   (no file = no such process), parented by launchd, ours and at /usr/libexec/<name> unless
   #   parent.<pid> / uid.<pid> / path.<pid> say otherwise; then one row per "<state> <pri>" line of
   #   bands.out, as unrelated processes.
-  #   `-M -p <a,b>` prints a header and one row per thread of each listed pid: threads.<pid> holds the
-  #   count for each successive read of that pid (the last one repeats); no file = the pid is gone.
+  #   `-x -M -p <a,b>` prints a header and one row per thread of each listed pid: threads.<pid> holds
+  #   the count for each successive read of that pid (the last one repeats); no file = the pid is gone.
+  #   A multi-pid list WITHOUT -x prints nothing and fails: that read hung for good on 2026-10-25
+  #   (docs/lessons/multi-pid-ps-without-x-hangs.md). A single pid (the evidence capture) needs no -x.
   cat > "$FX/ps" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$FX/ps.argv"
 case "$*" in
-  "-M -p "*)
+  "-M -p "*,*) exit 1 ;;
+  "-x -M -p "*|"-M -p "*)
     echo "USER       PID   TT   %CPU STAT PRI     STIME     UTIME COMMAND"
-    for pid in $(echo "$3" | tr , ' '); do
+    for pid in $(echo "${!#}" | tr , ' '); do
       [ -f "$FX/threads.$pid" ] || continue
       c=$(( $(cat "$FX/calls.$pid" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$FX/calls.$pid"
       n="$(awk -v c="$c" '{ print (c <= NF) ? $c : $NF }' "$FX/threads.$pid")"
@@ -389,9 +392,9 @@ all_dead() {
   [ "$(row '[.lsd,.lsd_pid,.state]|join(",")')" = "9,201,clear" ]
   # one process-table read and one thread read, however many instances: a clear run stays cheap
   [ "$(lines "$FX/ps.argv")" = 2 ]
-  local m; m="$(grep -- '^-M -p ' "$FX/ps.argv")"
-  [[ ",${m#-M -p }," == *,201,* ]] || false                       # both of ours were counted
-  [[ ",${m#-M -p }," != *,301,* ]] || false                       # root's never was
+  local m; m="$(grep -- '^-x -M -p ' "$FX/ps.argv")"
+  [[ ",${m#-x -M -p }," == *,201,* ]] || false                       # both of ours were counted
+  [[ ",${m#-x -M -p }," != *,301,* ]] || false                       # root's never was
 }
 
 # mutants (2026-10-10): the ppid-1 check removed (reds on secd) · the CoreSimulator path check

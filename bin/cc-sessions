@@ -311,7 +311,9 @@ if [ "$REG_BULK" = 1 ]; then
               /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
       [ -n "$_c" ] && [ -x "$_c" ] && { _tb="$_c"; break; }
     done
-    REG_PS="$(TZ=UTC LC_ALL=C ${_tb:+"$_tb" "${CC_SESSIONS_PS_TIMEOUT:-15}"} "${CC_SESSIONS_PS_BIN:-ps}" -o pid=,lstart= -p "$_pids" 2>/dev/null \
+    # -x: on 2026-10-25 `ps -o … -p a,b` WITHOUT -x hung indefinitely (dead pids too, no culprit pid),
+    # while the same list with -x was instant (docs/lessons/multi-pid-ps-without-x-hangs.md).
+    REG_PS="$(TZ=UTC LC_ALL=C ${_tb:+"$_tb" "${CC_SESSIONS_PS_TIMEOUT:-15}"} "${CC_SESSIONS_PS_BIN:-ps}" -x -o pid=,lstart= -p "$_pids" 2>/dev/null \
               | awk '{ p = $1; $1 = ""; sub(/^ +/, ""); gsub(/ +/, " "); print p "\t" $0 }')"
     [ -n "$REG_PS" ] && REG_PS_OK=1
   fi
