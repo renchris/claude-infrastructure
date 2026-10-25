@@ -62,7 +62,7 @@ pgrep() {
   if [ "$_rf$_rc" = 11 ]; then
     _rescue_refuse "pgrep $*" "-f claude also matches lockwatch and the sentinel" "command pgrep -a -x 'claude(\\.exe)?'"; return
   fi
-  command pgrep "$@"
+  command pgrep "$@"   # devname-hazard-lint:allow the operator's own flags, passed through
 }
 pkill() {
   local _rf=0 _rc=0; _rescue_claude_pattern "$@"
@@ -88,7 +88,7 @@ RESCUE shell (bash, no login, no zsh). Safe tools:
   lwstate                  lockwatch's current verdict (diagnosis names pgid + leader lstart)
   unpoison <pgid> <lstart> the cure for a poisoned /dev node: kill -KILL -- -<pgid>, re-verified
   brownout [min|off]       hold new fleet spawns (default 60 min)
-  psx                      ps -axww with no tty column
+  psx                      the process list, -axww, no tty column
 Never: kill a pty session leader by pid, or kill kitty under a devfs verdict (Unpoison first).
 Last resort: Apple menu > Restart (writes the shutdown_stall stackshot), never the power button.
 EOF
