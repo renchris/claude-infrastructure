@@ -18,7 +18,7 @@ setup() {
   unset KITTY_LISTEN_ON CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
   export CC_PANE_CLOSE_KITTY_PID=610 CC_PANE_CLOSE_REMOTE=off CC_PANE_CLOSE_SETTLE_S=1
   export CC_PANE_CLOSE_WATCHDOG_LOG="$F/watchdog.log" CC_PANE_CLOSE_LOG="$F/close.jsonl"
-  export CC_PANE_CLOSE_STORES="$F/store" CC_PANE_CLOSE_CUSTODY_BIN="$S/custody" FIX="$F"
+  export CC_PANE_CLOSE_STORES="$F/store" CC_CUSTODY_DIR="$F/custody" FIX="$F"
   export CC_PANE_CLOSE_PS_BIN="$S/ps" CC_PANE_CLOSE_KILL_BIN="$S/kill"
   # ps: `-o lstart= -p <pid>` → $FIX/lstart.<pid>; `-o pid=,ppid=,comm= -t <tty>` → $FIX/tty.<tty>
   # shellcheck disable=SC2016  # stub bodies expand when the STUB runs
@@ -26,7 +26,6 @@ setup() {
   # kill: records its argv, and the window then goes away (its root process loses its lstart)
   # shellcheck disable=SC2016
   printf '#!/bin/bash\necho "$*" >> "$FIX/kill.log"\nrm -f "$FIX/lstart.$ROOT"\n' > "$S/kill"
-  printf '#!/bin/bash\ncat "$FIX/custody.tsv" 2>/dev/null\n' > "$S/custody"
   # the fullscreen guard: records its argv, answers $STUB_RC (0 = no window reads fullscreen)
   printf '#!/bin/bash\necho "$*" >> "$FIX/guard.log"\nexit "${STUB_RC:-0}"\n' > "$S/fs-guard"
   export CC_KITTY_FS_GUARD="$S/fs-guard"
@@ -53,7 +52,7 @@ plain_no()  { transcript '{"type":"user","cwd":"CWD","message":{"role":"user","c
   teammate
   run "$CLOSE" --pane 69
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pane 69: CLOSED"*"retired Agent-Teams member"*"SIGHUP to the window shell (pid 5001)"* ]] || false
+  [[ "$output" == *"pane 69: CLOSED"*"team member aaaaaaaa left a clean cwd"*"SIGHUP to the window shell (pid 5001)"* ]] || false
   [ "$(cat "$FIX/kill.log")" = "-HUP 5001" ]
 }
 
@@ -131,21 +130,29 @@ plain_no()  { transcript '{"type":"user","cwd":"CWD","message":{"role":"user","c
   plain_no
   run "$CLOSE" --pane 69
   [ "$status" -eq 1 ]
-  [[ "$output" == *"nothing says session aaaaaaaa meant to end"*"cc-husk-sweep --pane 69"* ]] || false
+  [[ "$output" == *"session aaaaaaaa never said Good to close: yes"*"cc-husk-sweep --pane 69"*"[state=CANTTELL]"* ]] || { echo "$output"; false; }
   [ ! -e "$FIX/kill.log" ]
 }
 
+# The custody store is read through lib/pane-custody.sh, the ONE reader (FIX-DESIGN D8): an open row
+# for this pane at or after the session's start, discharged by its abandon/return.
+custody() { # $1 = open epoch  $2 = discharge epoch ('' = none)
+  mkdir -p "$FIX/custody"
+  { printf '{"ts":"%s","kind":"open","slug":"w2-x","targetPane":69,"marker":"MARK","originatorPane":12}\n' "$(date -u -r "$1" +%FT%TZ)"
+    [ -z "$2" ] || printf '{"ts":"%s","kind":"abandon","slug":"w2-x","targetPane":69,"marker":"MARK"}\n' "$(date -u -r "$2" +%FT%TZ)"
+  } > "$FIX/custody/x.jsonl"
+}
 @test "an orchestrator's custody abandon after the registration makes a killed lead closeable" {
   plain_no
-  printf '%s\tabandon\tw2-x\t69\tMARK\tprov?\n' "$(date -u -r $((REG + 60)) +%FT%TZ)" > "$FIX/custody.tsv"
+  custody $((REG + 30)) $((REG + 60))
   run "$CLOSE" --pane 69
   [ "$status" -eq 0 ]
-  [[ "$output" == *"abandoned/returned its custody"* ]]
+  [[ "$output" == *"custody of session aaaaaaaa was discharged by its originator"* ]] || { echo "$output"; false; }
 }
 
 @test "a custody abandon from BEFORE this registration does not count" {
   plain_no
-  printf '%s\tabandon\tw2-x\t69\tMARK\tprov?\n' "$(date -u -r $((REG - 600)) +%FT%TZ)" > "$FIX/custody.tsv"
+  custody $((REG - 700)) $((REG - 600))
   run "$CLOSE" --pane 69
   [ "$status" -eq 1 ]
 }
@@ -162,7 +169,7 @@ fired() { # $1 = closedAt epoch  $2 = transcript sid
   plain_no; fired $((REG + 60)) "$SID"
   CC_PANE_CLOSE_FIRED_DIR="$FIX/fired" run "$CLOSE" --pane 69
   [ "$status" -eq 0 ]
-  [[ "$output" == *"retired itself (self-close stamped"*"kind terminal"* ]] || false
+  [[ "$output" == *"session aaaaaaaa closed itself and left nothing of its own open"* ]] || { echo "$output"; false; }
 }
 
 @test "a self-close stamp from before the registration, or for another session, does not count" {

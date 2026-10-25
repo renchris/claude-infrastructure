@@ -2,7 +2,7 @@
 # cc-pane-verdict — the ONE writer of a dead pane's screen and title.
 #
 #   cc-pane-verdict --pane N --state DONE|RESUME|OWNED|NOTHING|CANTTELL [--sid S]
-#                   [--guard safe|fullscreen|unreadable|stuck] [--owner M] [--unsaved K] [--moved-to M]
+#                   [--guard safe|fullscreen|unreadable|stuck|held] [--owner M] [--unsaved K] [--moved-to M]
 #                   [--stranded] [--tty PATH] [--kitty-pid P] [--dry-run]
 #   cc-pane-verdict --pane N --recompute [--reason R] [--closer-out TEXT] [--sid S] [--tty PATH] …
 #
@@ -21,8 +21,13 @@
 # Nothing from the contract's banned list reaches the screen: no exit codes or signals, no cause
 # classes, no guard output, no internal terms, never "closed" or ✅ in an open pane's title.
 #
-# --recompute is the reconciler's entry: it derives the state from the pane's exit record and from
-# one bin/cc-pane-close line (--closer-out), which already carries every fact the close gates read.
+# --recompute is the reconciler's entry: it RENDERS, it does not decide (husk-history FIX-DESIGN D11).
+# The state is the `[state=DONE|RESUME|CANTTELL|OWNED:<pane>]` token bin/cc-pane-close ends every
+# post-verdict refusal with — computed once, by lib/pane-end.sh's pe_verdict — or DONE for the
+# closer's own verb lines (WOULD CLOSE / CLOSED / ALREADY CLOSED / NOTHING TO CLOSE), or NOTHING when
+# the exit record says no claude ever started. No token is CANTTELL, never RESUME: the substring map
+# this replaces read pane 289's "138 uncommitted change(s)" — a shared cwd's sibling dirt — as
+# "stopped mid-task · 138 unsaved files" and offered --resume over a session that had finished.
 # An empty --closer-out paints nothing: no answer is not a fact, and repainting from it turned a true
 # screen false (skeptics.md FX4).
 #
@@ -80,15 +85,18 @@ if [ "$RECOMPUTE" = 1 ]; then
   if [ -f "$xr" ] && [ "$(jq -r 'if .claude_started == false and .rc != 0 then "never" else "" end' "$xr" 2>/dev/null)" = never ]; then
     STATE=NOTHING
   else
+    tok="$(printf '%s' "$CLOSER_OUT" | sed -n 's/.*\[state=\([A-Z][A-Z]*\(:[0-9][0-9]*\)\{0,1\}\)\].*/\1/p' | tail -n 1)"
     case "$CLOSER_OUT" in
       *"WOULD CLOSE"*|*": CLOSED"*|*"ALREADY CLOSED"*|*"NOTHING TO CLOSE"*) STATE=DONE ;;
-      *"remote control is down"*|*"fullscreen guard"*) STATE=DONE ;;
-      *"uncommitted change"*)
-        STATE=RESUME; UNSAVED="$(printf '%s' "$CLOSER_OUT" | sed -n 's/.* holds \([0-9][0-9]*\) uncommitted.*/\1/p' | head -1)" ;;
-      *STRANDED*) STATE=RESUME; STRANDED=1 ;;
-      *"nothing says session"*) if [ "$REASON" = crash ]; then STATE=RESUME; else STATE=CANTTELL; fi ;;
-      *) STATE=CANTTELL ;;
+      *)
+        case "$tok" in
+          DONE|COLLECTED) STATE=DONE ;;
+          RESUME) STATE=RESUME ;;
+          OWNED:*) STATE=OWNED; OWNER="${tok#OWNED:}" ;;
+          *) STATE=CANTTELL ;;
+        esac ;;
     esac
+    case "$CLOSER_OUT" in *STRANDED*) [ "$STATE" != RESUME ] || STRANDED=1 ;; esac
   fi
 fi
 
@@ -98,6 +106,7 @@ case "$GUARD" in
   fullscreen) g2="⌘W closes it · last pane of a fullscreen window" ;;
   unreadable) g2="kitty didn't answer · closes when it does" ;;
   stuck)      g2="⌘W closes it · won't close by itself" ;;
+  held)       g2="closes itself when its window gains a pane · ⌘W now" ;;
   *)          g2="closing now · Ctrl-D closes it" ;;
 esac
 case "$STATE" in

@@ -22,16 +22,18 @@
 # 2. NOTHING LIVE. The registered claude pid is gone (or is a different process: its start time is
 #    after the registration), and the window's process tree — the tty process whose parent is kitty,
 #    plus its descendants — holds only login/shell processes. Anything else is a live job.
-# 3. THE SESSION MEANT TO END, or its work is ruled done. One of: its transcript carries `teamName`
-#    (an Agent-Teams member: not resumable, its lead re-spawns members); its LAST assistant text says
-#    `Good to close: yes`; or cc-custody holds an abandon/return for this pane after the registration
-#    (its orchestrator collected the work); or handoff-fire's self-close stamped this pane's fired
-#    record (`closedAt`) after the registration, for THIS session's transcript. Instructions text
-#    never counts — assistant text only. The stamp exists because the text is not durable: pane 476
-#    (2026-10-21) wrote its `Good to close: yes` in the same message as its self-close call, the
-#    transcript kept that text only as a paraphrasing narration-thinking block, and the closer refused
-#    a session that had retired itself — which the reboot an hour later then resumed.
-# 4. NO WORK AT RISK. The session's cwd (from its transcript) has no uncommitted changes.
+# 3+4. THE SESSION IS FINISHED — one call, `pe_verdict` (lib/pane-end.sh, husk-history FIX-DESIGN §2
+#    and D8), the same function the sweep and the watchdog ask, so the three can no longer disagree
+#    (pane 304, 2026-10-25: refused 33 times here, CANTTELL on screen, COLLECTED in the sweep). It
+#    answers COLLECTED (custody returned/abandoned since the session started) or DONE — a session
+#    that never received a turn and ended cleanly (row 1b: an absent or 0-record transcript is no
+#    longer a refusal here), a team member over a clean cwd, or a `Good to close: yes` in assistant
+#    TEXT / a self-close stamp for THIS transcript, with nothing of its OWN open: on a clean end only
+#    the files the session wrote count, so a shared cwd's sibling dirt no longer keeps its pane (pane
+#    289); on a crash or an unknown end every change counts. Those two go on to the guard. RESUME,
+#    CANTTELL and OWNED refuse with its reason and end the line `[state=<STATE>]` (OWNED:<pane>),
+#    which is the token bin/cc-pane-verdict --recompute renders — every refusal after this gate
+#    carries one, so the painter never re-derives a state from refusal prose.
 #
 # ── WHAT THE 2026-10-18 HUSKS ADDED (docs/research/lr-wake-incident-2026-10-18/, h defects 1 and 7) ──
 # The gates above refused all 18 overnight husks. Four additions, each still fail-closed:
@@ -68,9 +70,10 @@
 # Exit: 0 every named pane closed (or would be, under --dry-run) · 1 at least one refused or failed ·
 # 2 usage. One line per pane on stdout; a JSON row per pane to $CC_PANE_CLOSE_LOG.
 # Seams (tests): CC_PANE_CLOSE_WATCHDOG_LOG · CC_PANE_CLOSE_KITTY_PID · CC_PANE_CLOSE_PS_BIN ·
-# CC_PANE_CLOSE_KILL_BIN · CC_PANE_CLOSE_IT2 · CC_PANE_CLOSE_STORES · CC_PANE_CLOSE_CUSTODY_BIN ·
+# CC_PANE_CLOSE_KILL_BIN · CC_PANE_CLOSE_IT2 · CC_PANE_CLOSE_STORES ·
 # CC_PANE_CLOSE_LOG · CC_PANE_CLOSE_REMOTE (off = skip remote control) · CC_PANE_CLOSE_SETTLE_S · CC_PANE_CLOSE_REAP_S ·
-# CC_PANE_CLOSE_EXIT_DIR · CC_PANE_CLOSE_FIND_BIN · CC_PANE_CLOSE_HANDOFFS_LOG · CC_PANE_CLOSE_FIRED_DIR.
+# CC_PANE_CLOSE_EXIT_DIR · CC_PANE_CLOSE_FIND_BIN · CC_PANE_CLOSE_HANDOFFS_LOG · CC_PANE_CLOSE_FIRED_DIR ·
+# and lib/pane-end.sh's own: CC_CUSTODY_DIR (the custody store) · CC_CRASH_LOG · CC_PE_READ_TIMEOUT_S.
 set -u
 # shellcheck disable=SC1091  # #! helpers run via their interpreter, not by path (kalloc leak; plan KALLOC_TRIGGER_ELIMINATION W4)
 if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_argv() { CC_ARGV=("$1"); }; cc_run() { "$@"; }; fi
@@ -79,7 +82,6 @@ WLOG="${CC_PANE_CLOSE_WATCHDOG_LOG:-$HOME/.claude/logs/lead-crash-watchdog.log}"
 PS="${CC_PANE_CLOSE_PS_BIN:-/bin/ps}"
 KILL="${CC_PANE_CLOSE_KILL_BIN:-/bin/kill}"
 IT2="${CC_PANE_CLOSE_IT2:-$HOME/.claude/bin/it2}"
-CUSTODY="${CC_PANE_CLOSE_CUSTODY_BIN:-$HOME/.claude/bin/cc-custody}"
 LOG="${CC_PANE_CLOSE_LOG:-$HOME/.claude/logs/pane-close.jsonl}"
 STORES="${CC_PANE_CLOSE_STORES:-$HOME/.claude-next:$HOME/.claude-secondary:$HOME/.claude-tertiary:$HOME/.claude-quaternary:$HOME/.claude}"
 SETTLE="${CC_PANE_CLOSE_SETTLE_S:-3}"
@@ -95,6 +97,13 @@ for _wr in "$SELF_DIR/../hooks/lib/watchdog-registration.sh" "$HOME/.claude/hook
   [ -f "$_wr" ] && . "$_wr" && break
 done
 declare -F wd_reg_norm >/dev/null || wd_reg_norm() { sed -E 's/ teammate=[^ ]*[[:space:]]*$//'; }
+# The ONE verdict (gates 3+4). The lib reads the exit record and the fired stamp through its own
+# seams, so they are pointed at this closer's; unreadable ⇒ gate 3 refuses CANTTELL.
+export CC_PANE_EXIT_DIR="$EXITDIR" CC_FIRED_DIR="$FIRED"
+for _pe in "$SELF_DIR/../lib/pane-end.sh" "$HOME/.claude/lib/pane-end.sh"; do
+  # shellcheck source=/dev/null  # resolved at run time (checkout, else the live layer)
+  [ -f "$_pe" ] && . "$_pe" && break
+done
 DRY=0; PANES=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -336,58 +345,6 @@ recycled_into() { # sid pane since → 0 iff handoff-fire recorded a recycle of 
              | jq -r --arg s "$1" --arg p "$2" 'select(.prev_sid == $s and ((.target_pane // "") | tostring) == $p) | .ts // empty' 2>/dev/null)
   return 1
 }
-# Facts from the transcript in ONE streaming pass: teammate(0|1) <US> last assistant close (yes|no|-) <US> cwd.
-# The separator is \x1f, not a tab: tab is IFS whitespace, so an empty cell would shift the next
-# column left instead of reading back empty (scripts/tsv-pad-lint.sh).
-transcript_facts() {
-  python3 - "$1" <<'PY' 2>/dev/null || printf '0\x1f-\x1f\n'
-import json, re, sys
-team, close, cwd = 0, "-", ""
-pat = re.compile(r"Good to close: (yes|no)")
-with open(sys.argv[1], "rb") as fh:
-    for raw in fh:
-        try:
-            rec = json.loads(raw)
-        except Exception:
-            continue
-        if not isinstance(rec, dict):
-            continue
-        if rec.get("teamName"):
-            team = 1
-        if rec.get("cwd"):
-            cwd = rec["cwd"]
-        msg = rec.get("message")
-        if isinstance(msg, dict) and msg.get("role") == "assistant":
-            content = msg.get("content")
-            texts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"] if isinstance(content, list) else []
-            for m in pat.findall("\n".join(texts)):
-                close = m
-print(f"{team}\x1f{close}\x1f{cwd}")
-PY
-}
-custody_ruled_done() { # pane since-epoch → 0 iff an abandon/return row for this pane is newer than since
-  [ -x "$CUSTODY" ] || return 1
-  local ts state pane ep
-  # cc-custody prints tab-separated rows; awk -F'\t' keeps an empty cell empty, and the fields are
-  # re-joined on \x1f (not IFS whitespace) so the read below cannot shift them.
-  while IFS=$'\x1f' read -r ts state pane; do
-    [ "$pane" = "$1" ] || continue
-    case "$state" in abandon|return) ;; *) continue ;; esac
-    ep="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null || echo 0)"
-    [ "$ep" -ge "$2" ] && return 0
-  done < <("$CUSTODY" list 2>/dev/null | awk -F'\t' '{ printf "%s\x1f%s\x1f%s\n", $1, $2, $4 }')
-  return 1
-}
-self_closed() { # pane sid since-epoch → 0 iff the pane's fired record says THIS session self-closed after since
-  local f="$FIRED/$1.json" row at tp ep
-  [ -s "$f" ] && [ -n "$2" ] || return 1
-  row="$(jq -r '[.closedAt // "", .transcript // "", .succession.kind // ""] | join("\u001f")' "$f" 2>/dev/null)" || return 1
-  IFS=$'\x1f' read -r at tp SC_KIND <<<"$row"
-  [ -n "$at" ] && [ "${tp##*/}" = "$2.jsonl" ] || return 1
-  ep="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$at" +%s 2>/dev/null || echo 0)"
-  [ "$ep" -ge "$3" ] || return 1
-  SC_AT="$at"
-}
 remote_answers() { # → 0 iff kitty remote control answered this run's (pinned) listing
   kitty_list_once
   [ "$KLIST_OK" = 1 ]
@@ -401,7 +358,8 @@ KSTART="$(lstart_epoch "$KPID")"
 RC=0
 close_one() { # pane — one verdict line on stdout, one log row; RC=1 on a refusal or failure
   local pane="$1" reg="" reg_ep=0 line ts ep sid="" cpid="" tty="" kt="" kroot="" ktty="" since never=0
-  local rows root rst tree shell live pid comm b team close cwd="" why="" skipwork=0 d how who cst
+  local rows root rst tree shell live pid comm b close cwd="" why="" how who cst
+  local pv st="" pwhy owner
   case "$pane" in ''|*[!0-9]*) refuse "$pane" "not a kitty window id"; return ;; esac
   # 0. GONE — kitty answered its listing and this window id is not in it. kitty never reuses a window
   # id within one process, so the pane is closed (by us earlier, by hand, by anyone): nothing to prove
@@ -486,30 +444,35 @@ close_one() { # pane — one verdict line on stdout, one log row; RC=1 on a refu
   done <<<"$tree"
   [ -z "$live" ] || { refuse "$pane" "a live job runs in the window:$live" "$sid"; return; }
   [ -n "$shell" ] || { refuse "$pane" "no shell in the window on $tty" "$sid"; return; }
-  # 3. THE SESSION MEANT TO END, or its work is ruled done — or no session ever ran here.
+  # 3+4. THE SESSION IS FINISHED (header) — or no session ever ran here, or a LIVE copy runs elsewhere.
   if [ "$never" = 1 ]; then
-    why="its launch never started claude (rc $XR_RC${XR_SHA:+, launch ${XR_SHA:0:12}}, exit record at $(date -r "$XR_TS" '+%H:%M:%S' 2>/dev/null))"; skipwork=1
+    why="its launch never started claude (rc $XR_RC${XR_SHA:+, launch ${XR_SHA:0:12}}, exit record at $(date -r "$XR_TS" '+%H:%M:%S' 2>/dev/null))"
   else
     transcript_resolve "$sid"
-    [ -n "$TP" ] || { refuse "$pane" "no transcript for session $sid" "$sid"; return; }
-    IFS=$'\x1f' read -r team close cwd < <(transcript_facts "$TP")
-    if [ "$team" = 1 ]; then why="a retired Agent-Teams member (not resumable)"
-    elif [ "$close" = yes ]; then why="its last close said Good to close: yes${TP_MOVED:+ (in its full transcript on ${TP_MOVED##*/})}"
-    elif custody_ruled_done "$pane" "$reg_ep"; then why="its orchestrator abandoned/returned its custody after it registered"
-    elif self_closed "$pane" "$sid" "$reg_ep"; then why="it retired itself (self-close stamped $SC_AT, kind $SC_KIND)"
-    elif moved_live "$sid" "$pane" "$reg_ep"; then
-      why="it moved on and a LIVE copy runs in pane $LIVE_PANE (session ${LIVE_SID:0:8})"; skipwork=1
+    if ! command -v pe_verdict >/dev/null 2>&1; then
+      refuse "$pane" "lib/pane-end.sh could not be loaded, so nothing can say whether session ${sid:0:8} finished [state=CANTTELL]" "$sid"; return
     fi
-    if [ -z "$why" ] && [ -n "$TP_MOVED$MOVED_WHERE" ]; then
-      refuse "$pane" "session ${sid:0:8} moved (${TP_MOVED:+to ${TP_MOVED##*/}}${TP_MOVED:+${MOVED_WHERE:+, }}${MOVED_WHERE:+re-registered in $MOVED_WHERE}) but no LIVE copy runs anywhere — STRANDED: lr-fleet --one ${sid:0:8}" "$sid"; return
-    fi
-    [ -n "$why" ] || { refuse "$pane" "nothing says session ${sid:0:8} meant to end (last close: $close; not a teammate; no custody ruling) — resume or triage it instead: cc-husk-sweep --pane $pane" "$sid"; return; }
+    pv="$(pe_verdict "$sid" "$TP" "$pane" "$reg_ep")"
+    IFS=$'\x1f' read -r st pwhy _ close _ owner cwd <<<"$pv"   # work and end only feed why
+    case "$st" in
+      COLLECTED) why="$pwhy" ;;
+      DONE)
+        why="$pwhy"
+        [ "$close" != yes ] || why="its last close said Good to close: yes${TP_MOVED:+ (in its full transcript on ${TP_MOVED##*/})}, and $pwhy" ;;
+      *)
+        # IDENTITY, not a verdict: a session that moved on is closeable here while a LIVE copy runs —
+        # its work belongs to that copy — and a move with no live copy is STRANDED.
+        if moved_live "$sid" "$pane" "$reg_ep"; then
+          why="it moved on and a LIVE copy runs in pane $LIVE_PANE (session ${LIVE_SID:0:8})"; st=DONE
+        elif [ -n "$TP_MOVED$MOVED_WHERE" ]; then
+          refuse "$pane" "session ${sid:0:8} moved (${TP_MOVED:+to ${TP_MOVED##*/}}${TP_MOVED:+${MOVED_WHERE:+, }}${MOVED_WHERE:+re-registered in $MOVED_WHERE}) but no LIVE copy runs anywhere — STRANDED: lr-fleet --one ${sid:0:8} [state=RESUME]" "$sid"; return
+        else
+          [ "$st" != OWNED ] || st="OWNED:$owner"
+          refuse "$pane" "$pwhy${cwd:+ ($cwd)} — resume or triage it instead: cc-husk-sweep --pane $pane [state=$st]" "$sid"; return
+        fi ;;
+    esac
   fi
-  # 4. NO WORK AT RISK — unless no session ran here, or its work belongs to a LIVE copy elsewhere.
-  if [ "$skipwork" = 0 ] && [ -n "$cwd" ] && [ -d "$cwd" ]; then
-    d="$(git -C "$cwd" status --porcelain 2>/dev/null | grep -c . || true)"
-    [ "${d:-0}" = 0 ] || { refuse "$pane" "$cwd holds $d uncommitted change(s)" "$sid"; return; }
-  fi
+  [ -n "$st" ] || st=DONE
   # ACT — remote control first (pinned to this kitty), else signal the window's shell. The SIGHUP is a
   # fallback for remote control being DOWN, never for remote control saying no: a refusal from the
   # it2 shim (its fullscreen guard, composer guard or identity pin) is a verdict, and a HUP sent past
@@ -517,7 +480,7 @@ close_one() { # pane — one verdict line on stdout, one log row; RC=1 on a refu
   # Either way the fullscreen guard is asked FIRST, and --dry-run asks it too (header).
   how=""; who="no session"; [ -z "$sid" ] || who="session ${sid:0:8}"
   if remote_answers; then
-    fs_guard_pane "$pane" || { refuse "$pane" "$(guard_refusal)" "$sid"; return; }
+    fs_guard_pane "$pane" || { refuse "$pane" "$(guard_refusal) [state=$st]" "$sid"; return; }
     if [ "$DRY" = 1 ]; then
       printf 'pane %s: WOULD CLOSE — %s, %s; via kitty remote control\n' "$pane" "$who" "$why"
       log_row "$pane" would-close "$why" "$sid"; return
@@ -525,20 +488,20 @@ close_one() { # pane — one verdict line on stdout, one log row; RC=1 on a refu
     if CC_TERM=kitty CC_TERM_KITTY_TO="unix:/tmp/kitty-$KPID" "$IT2" session close -f -s "$pane" --expect-generation "$KPID" >/dev/null 2>&1; then
       how="kitty remote control"
     else
-      refuse "$pane" "kitty remote control refused the close (fullscreen guard, composer guard or identity pin); not falling back to SIGHUP" "$sid"; return
+      refuse "$pane" "kitty remote control refused the close (fullscreen guard, composer guard or identity pin); not falling back to SIGHUP [state=$st]" "$sid"; return
     fi
   elif ! fs_guard_any_clear; then
     # THE FULLSCREEN GUARD (kitty-crash-2026-10-15). Without remote control nothing here can count
     # this window's siblings, so a HUP might empty a native-fullscreen OS window — the crash
     # precondition. Any window reading fullscreen (or an unreadable read) keeps the pane.
-    refuse "$pane" "kitty remote control is down and a kitty window is in native fullscreen (or unreadable); a SIGHUP cannot prove this pane is not the last one of a fullscreen window" "$sid"; return
+    refuse "$pane" "kitty remote control is down and a kitty window is in native fullscreen (or unreadable); a SIGHUP cannot prove this pane is not the last one of a fullscreen window [state=$st]" "$sid"; return
   elif [ "$DRY" = 1 ]; then
     printf 'pane %s: WOULD CLOSE — %s, %s; window shell pid %s on %s\n' "$pane" "$who" "$why" "$shell" "$tty"
     log_row "$pane" would-close "$why" "$sid"; return
   elif "$KILL" -HUP "$shell" 2>/dev/null; then
     how="SIGHUP to the window shell (pid $shell)"
   else
-    refuse "$pane" "neither remote control nor a signal could reach the window shell (pid $shell)" "$sid"; return
+    refuse "$pane" "neither remote control nor a signal could reach the window shell (pid $shell) [state=$st]" "$sid"; return
   fi
   # VERIFY by effect: the window's root process has exited (gone, or a zombie kitty has not reaped).
   local i=0; while [ "$i" -lt "$SETTLE" ] && [ "$(win_state "$root")" = alive ]; do sleep 1; i=$((i + 1)); done

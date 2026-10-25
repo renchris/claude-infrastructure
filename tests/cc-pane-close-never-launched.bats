@@ -20,7 +20,7 @@ setup() {
   unset KITTY_LISTEN_ON CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
   export CC_PANE_CLOSE_KITTY_PID=610 CC_PANE_CLOSE_REMOTE=on CC_PANE_CLOSE_SETTLE_S=1
   export CC_PANE_CLOSE_WATCHDOG_LOG="$F/watchdog.log" CC_PANE_CLOSE_LOG="$F/close.jsonl"
-  export CC_PANE_CLOSE_STORES="$F/storeA:$F/storeB" CC_PANE_CLOSE_CUSTODY_BIN="$S/custody" FIX="$F"
+  export CC_PANE_CLOSE_STORES="$F/storeA:$F/storeB" CC_CUSTODY_DIR="$F/custody" FIX="$F"
   export CC_PANE_CLOSE_PS_BIN="$S/ps" CC_PANE_CLOSE_KILL_BIN="$S/kill" CC_PANE_CLOSE_IT2="$S/it2"
   export CC_PANE_CLOSE_EXIT_DIR="$F/pane-exit" CC_PANE_CLOSE_FIND_BIN="$S/cc-find"
   export CC_PANE_CLOSE_HANDOFFS_LOG="$F/handoffs.jsonl" CC_KITTY_FS_GUARD="$S/fs-guard"
@@ -28,7 +28,6 @@ setup() {
   #     tty= → $FIX/ttyof.<pid> · the -t listing → $FIX/tty.<tty>
   printf '#!/bin/bash\nfor a; do prev="$a"; done\ncase "$2" in lstart=) cat "$FIX/lstart.$prev" 2>/dev/null ;; stat=) if [ -f "$FIX/stat.$prev" ]; then cat "$FIX/stat.$prev"; elif [ -f "$FIX/lstart.$prev" ]; then echo Ss; fi ;; tty=) cat "$FIX/ttyof.$prev" 2>/dev/null ;; *) cat "$FIX/tty.$prev" 2>/dev/null ;; esac\nexit 0\n' > "$S/ps"
   printf '#!/bin/bash\necho "$*" >> "$FIX/kill.log"\nrm -f "$FIX/lstart.$ROOT"\n' > "$S/kill"
-  printf '#!/bin/bash\ncat "$FIX/custody.tsv" 2>/dev/null\n' > "$S/custody"
   # it2: the listing is kitty's own; a close takes the window away (its root loses its lstart)
   printf '#!/bin/bash\necho "it2 $*" >> "$FIX/it2.log"\ncase "$1 $2" in "session list") cat "$FIX/klist.json"; exit 0 ;; "session close") rm -f "$FIX/lstart.$ROOT"; exit 0 ;; esac\nexit 1\n' > "$S/it2"
   printf '#!/bin/bash\necho "$*" >> "$FIX/guard.log"\nexit "${STUB_RC:-0}"\n' > "$S/fs-guard"

@@ -24,7 +24,7 @@ setup() {
   unset KITTY_WINDOW_ID KITTY_PID KITTY_LISTEN_ON CC_TERM CC_TERM_KITTY_TO CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
   export CC_PANE_CLOSE_KITTY_PID=610 CC_PANE_CLOSE_REMOTE=on CC_PANE_CLOSE_SETTLE_S=1 CC_PANE_CLOSE_REAP_S=1
   export CC_PANE_CLOSE_WATCHDOG_LOG="$F/watchdog.log" CC_PANE_CLOSE_LOG="$F/close.jsonl"
-  export CC_PANE_CLOSE_STORES="$F/store" CC_PANE_CLOSE_CUSTODY_BIN="$S/custody" FIX="$F"
+  export CC_PANE_CLOSE_STORES="$F/store" CC_CUSTODY_DIR="$F/custody" FIX="$F"
   export CC_PANE_CLOSE_PS_BIN="$S/ps" CC_PANE_CLOSE_KILL_BIN="$S/kill" CC_PANE_CLOSE_IT2="$S/it2"
   export CC_PANE_CLOSE_EXIT_DIR="$F/pane-exit" CC_PANE_CLOSE_FIND_BIN="$S/cc-find"
   export CC_PANE_CLOSE_HANDOFFS_LOG="$F/handoffs.jsonl" CC_KITTY_FS_GUARD="$S/fs-guard"
@@ -35,8 +35,6 @@ exit 0'
   cc_stub "$S" kill '#!/bin/bash
 echo "$*" >> "$FIX/kill.log"
 rm -f "$FIX/lstart.$ROOT"'
-  cc_stub "$S" custody '#!/bin/bash
-cat "$FIX/custody.tsv" 2>/dev/null'
   cc_stub "$S" cc-find '#!/bin/bash
 exit 0'
   # it2, as the real shim behaves for a caller outside kitty: an UNPINNED call goes to the iTerm2 CLI
@@ -132,7 +130,7 @@ teammate_tx() { printf '{"type":"user","teamName":"session-x","cwd":"%s","messag
   printf '[%s] registered session=%s pid=7000 tty=ttys057 pane=144 teammate=tm2-H11@session-x\n' "$(wts "$REG")" "$SID" > "$FIX/watchdog.log"
   run "$CLOSE" --pane 144
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"pane 144: CLOSED — session aaaaaaaa, a retired Agent-Teams member"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"pane 144: CLOSED — session aaaaaaaa, team member aaaaaaaa left a clean cwd"* ]] || { echo "$output"; false; }
 }
 
 @test "C2 CONTROL: pane=14 is not pane=144's registration, suffix or not" {

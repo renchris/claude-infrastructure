@@ -69,19 +69,27 @@ SID=570d3917-79ac-4aa4-93d1-896b843b8b9f
   done
 }
 
+# The painter RENDERS the closer's [state=…] token (husk-history FIX-DESIGN D11); it never re-derives a
+# state from refusal prose, and a line with no token is CANTTELL — never RESUME, whatever --reason says.
 @test "--recompute maps the closer's line and the exit record to the contract's states" {
-  [ "$("$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — kitty remote control is down and …' --dry-run | sed -n 1p)" = state=DONE ]
-  "$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — kitty remote control is down' --dry-run | grep -qF "kitty didn't answer"
-  [ "$("$PV" --pane 42 --recompute --reason crash --closer-out 'pane 42: REFUSED — nothing says session 570d3917 meant to end' --dry-run | sed -n 1p)" = state=RESUME ]
+  [ "$("$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — kitty remote control is down and … [state=DONE]' --dry-run | sed -n 1p)" = state=DONE ]
+  "$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — kitty remote control is down [state=DONE]' --dry-run | grep -qF "kitty didn't answer"
+  [ "$("$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — session 570d3917 crashed before it said Good to close: yes — resume or triage it instead: cc-husk-sweep --pane 42 [state=RESUME]' --dry-run | sed -n 1p)" = state=RESUME ]
+  [ "$("$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — session 570d3917 crashed; pane 12 holds its custody [state=OWNED:12]' --dry-run | sed -n 1p)" = state=OWNED ]
+  [ "$("$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — the custody was returned [state=COLLECTED]' --dry-run | sed -n 1p)" = state=DONE ]
+  [ "$("$PV" --pane 42 --recompute --reason crash --closer-out 'pane 42: REFUSED — nothing says session 570d3917 meant to end' --dry-run | sed -n 1p)" = state=CANTTELL ]
   [ "$("$PV" --pane 42 --recompute --reason ended --closer-out 'pane 42: REFUSED — nothing says session 570d3917 meant to end' --dry-run | sed -n 1p)" = state=CANTTELL ]
-  "$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — /x holds 4 uncommitted change(s)' --dry-run | grep -qF '4 unsaved files'
+  # pane 289: a shared cwd's sibling dirt in HEAD's whole-cwd refusal is not "unsaved files"
+  [ "$("$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — /x holds 4 uncommitted change(s)' --dry-run | sed -n 1p)" = state=CANTTELL ]
+  run "$PV" --pane 42 --recompute --closer-out 'pane 42: REFUSED — /x holds 4 uncommitted change(s)' --dry-run
+  [[ "$output" != *"unsaved"* && "$output" != *"stopped mid-task"* ]]
   mkdir -p "$CC_PANE_EXIT_DIR"; printf '{"rc":124,"claude_started":false,"launch_sha":"","ts":1}\n' > "$CC_PANE_EXIT_DIR/101.json"
   [ "$("$PV" --pane 101 --recompute --closer-out 'pane 101: REFUSED — anything' --dry-run | sed -n 1p)" = state=NOTHING ]
 }
 
 # ── C3: the closer's refusal class picks row 2 — only a transient refusal promises "closes when" ───
-FS_LINE='pane 165: REFUSED — the fullscreen guard refused (--scope pane --mode refuse): refused-fs — this is the last pane of a fullscreen OS window; only the operator can close it (⌘W)'
-STUCK_LINE='pane 9: REFUSED — kitty remote control refused the close (fullscreen guard, composer guard or identity pin); not falling back to SIGHUP'
+FS_LINE='pane 165: REFUSED — the fullscreen guard refused (--scope pane --mode refuse): refused-fs — this is the last pane of a fullscreen OS window; only the operator can close it (⌘W) [state=DONE]'
+STUCK_LINE='pane 9: REFUSED — kitty remote control refused the close (fullscreen guard, composer guard or identity pin); not falling back to SIGHUP [state=DONE]'
 
 @test "C3: a refused-fs line on a DONE pane names ⌘W and the fullscreen window, never 'closes when it does' (pane 165)" {
   run "$PV" --pane 165 --recompute --closer-out "$FS_LINE" --dry-run
@@ -102,7 +110,7 @@ STUCK_LINE='pane 9: REFUSED — kitty remote control refused the close (fullscre
 }
 
 @test "C3: only a closer line where kitty did not answer promises 'closes when it does'" {
-  run "$PV" --pane 7 --recompute --closer-out "pane 7: REFUSED — the fullscreen guard refused (--scope pane --mode refuse): rc 124 — it could not read this pane's window (kitty did not answer it)" --dry-run
+  run "$PV" --pane 7 --recompute --closer-out "pane 7: REFUSED — the fullscreen guard refused (--scope pane --mode refuse): rc 124 — it could not read this pane's window (kitty did not answer it) [state=DONE]" --dry-run
   [ "${lines[0]}" = state=DONE ]
   [ "${lines[3]}" = "kitty didn't answer · closes when it does" ] || { echo "$output"; false; }
 }
