@@ -84,6 +84,14 @@ stop() {
   local root="$REPO"
   [ "$1" = old ] && root="$OLD"
   TMPDIR="$BATS_TEST_TMPDIR/tmp" shf_run "$2" "$root/hooks/session-continue.sh" || true
+  # ONE deliberate text change since SHF_BASE (lead-keeps-working, design §3.4 (iii), ruling
+  # d610f8473106): continue_reason's disarm list says "held on the user for everything that remains
+  # (a held ⛔)" where it said "blocked on the user (⛔)". Rewrite exactly that clause in the OLD arm's
+  # output so every other byte is still compared; any other drift stays red.
+  if [ "$1" = old ]; then
+    sed 's/blocked on the user (⛔)/held on the user for everything that remains (a held ⛔)/' \
+      "$SHF_OUT_DIR/$2.out" > "$SHF_OUT_DIR/$2.out.n" && mv "$SHF_OUT_DIR/$2.out.n" "$SHF_OUT_DIR/$2.out"
+  fi
   shf_keep "$2" "$CONTINUE_IDL" "$CLAUDE_CONFIG_DIR/state"
 }
 # armed <old|new> — arm the 🔧 loop for $W through that arm's own `set`.
