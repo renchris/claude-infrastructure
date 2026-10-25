@@ -749,6 +749,9 @@ _fires() {
       recovery-of)       printf '%s' "$mapped" | grep -q 'recovery-of'       || false ;;
       # lr-wake Wave E — admit-before-spawn's refusal is the capacity-admit library's verdict: own denominator.
       capacity-admit)    printf '%s' "$mapped" | grep -q 'capacity-admit)'   || false ;;
+      # Lockup incident 2026-10-25 (DESIGN C4) — the kitty RC breaker's refusal measured kitty's
+      # remote control (lockwatch state.json), nothing else: own denominator.
+      kitty-rc-dead)     printf '%s' "$mapped" | grep -q 'kitty-rc-dead)'    || false ;;
       *) echo "UNMAPPED refusal reason '$reason' — it will fall into the fail-visible *) arm and be"
          echo "missing from every gate denominator. Add it to _fire_gate_of and to this case."; false ;;
     esac
