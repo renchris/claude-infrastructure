@@ -625,9 +625,14 @@ session_unlanded_mine() {
   # The idiom is the sibling's, deliberately: session_dirty_mine above runs the same class of read
   # through a tempfile with an explicit `|| return 2`. This was the one git read in the file whose
   # failure was not converted, and that asymmetry is what settled the intent.
+  #
+  # THREE DOTS, NOT TWO (2026-10-25, husk-history FIX-DESIGN D10). `trunk..HEAD` diffs the two TIPS, so
+  # a checkout that is only BEHIND trunk lists every file trunk moved since — a sibling's landed edit
+  # to a file this session wrote read as "my unlanded work". `trunk...HEAD` diffs from the merge base:
+  # only what HEAD carries that trunk does not.
   local difff
   difff="$(mktemp "${TMPDIR:-/tmp}/sw-diff.XXXXXX" 2>/dev/null)" || return 2
-  if ! ( cd "$top" 2>/dev/null && _sw_bounded 5 git diff --name-only "$trunk"..HEAD ) >"$difff" 2>/dev/null; then
+  if ! ( cd "$top" 2>/dev/null && _sw_bounded 5 git diff --name-only "$trunk"...HEAD ) >"$difff" 2>/dev/null; then
     rm -f "$difff" 2>/dev/null; return 2
   fi
   # Array + one join, never `needles="${needles}…"`: that loop alone took 33-73 s over a 7,940-file
