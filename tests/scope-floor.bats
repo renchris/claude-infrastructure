@@ -502,3 +502,26 @@ tx_close() {
   blocked "$out"
   grep -q -- '--machine --session sidA' "$STUB_ARGV_LOG" || { cat "$STUB_ARGV_LOG"; false; }
 }
+
+@test "S19b: C1 into a checkout with NO store file — real ledger + real dod-persist capture, next ledger reads LOOP_OPEN=1" {
+  unset WRAP_LEDGER_BIN DOD_PERSIST_BIN
+  export WRAP_DOD_DIR="$BATS_TEST_TMPDIR/dod" WRAP_TRUNK=origin/main CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
+  git init -q --bare "$BATS_TEST_TMPDIR/origin.git"
+  git -C "$CWD" remote add origin "$BATS_TEST_TMPDIR/origin.git"
+  git -C "$CWD" push -q -u origin HEAD:main 2>/dev/null
+  git -C "$CWD" fetch -q origin
+  p="$BATS_TEST_TMPDIR/tx14.jsonl"   # TX:14 shape: a string prompt, the scope on its 5th line
+  { jq -nc '{type:"user",origin:{kind:"human"},message:{content:"recycle brief\nline 2\nline 3\nline 4\nScope (frozen): Loop until dry. Each round = one Dynamic Workflow; repeat until a round confirms nothing new."}}'
+    a_txt "round done"; u_str "$NOTE"; a_txt "idle"; } > "$p"
+  [ -z "$(ls -A "$WRAP_DOD_DIR" 2>/dev/null)" ]
+  led0="$(cd "$CWD" && WRAP_BUSY=off bash "$REPO/scripts/wrap-ledger.sh" --machine --session sidA)"
+  [ "$(printf '%s\n' "$led0" | sed -n 's/^LOOP_SRC=//p')" = none ] || { printf '%s\n' "$led0" | grep -E '^(RUNG|LOOP_|DOD)'; false; }
+  actuate sidA "$p" >/dev/null
+  f="$(ls "$WRAP_DOD_DIR"/*.md 2>/dev/null | head -1)"
+  [ -n "$f" ] || { cat "$CONTINUE_IDL"; false; }
+  grep -q '(stop-capture) .*session=sidA' "$f"
+  grep -q '^Scope (frozen): Loop until dry' "$f"
+  [ -n "$(row scope-capture)" ]
+  led1="$(cd "$CWD" && WRAP_BUSY=off bash "$REPO/scripts/wrap-ledger.sh" --machine --session sidA)"
+  [ "$(printf '%s\n' "$led1" | sed -n 's/^LOOP_OPEN=//p')" = 1 ] || { printf '%s\n' "$led1" | grep -E '^(RUNG|LOOP_|DOD)'; false; }
+}
