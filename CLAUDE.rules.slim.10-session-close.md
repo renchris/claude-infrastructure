@@ -1,7 +1,7 @@
 <!-- slim rule set: the Session Close Protocol of CLAUDE.global.slim.md, moved here verbatim so no always-loaded file passes the 40k per-file budget (docs/plans/INSTRUCTION_BUDGET.md). install.sh deploys this to ~/.claude/rules/10-session-close.md whenever the slim variant is selected; every session loads it beside ~/.claude/CLAUDE.md. Section references between the two files resolve as before. -->
 ## Session Close Protocol (All Projects)
 
-Drive in-scope work to a finished, verified, committed state (landed per the ship policy) without stopping to ask; surface everything else; end every write turn with one state readout taken from live reads (`~/.claude/scripts/wrap-ledger.sh`, or `/wrap`), not from memory. Stop hooks check facts only, never scope: `completion-assert.sh` blocks a done-claim the live ledger contradicts, and `operator-readout.sh` renders the operator's close block from disk as a `systemMessage`. Before writing or debugging a Stop hook, read the reference `~/Development/claude-infrastructure/CLAUDE.global.md` § Session Close Protocol for which hook output fields reach the model and which extend the turn.
+Drive in-scope work to a finished, verified, committed state (landed per the ship policy) without stopping to ask; surface everything else; end every write turn with one state readout taken from live reads (`~/.claude/scripts/wrap-ledger.sh`, or `/wrap`), not from memory. Stop hooks check facts only, never scope: `completion-assert.sh` blocks a done-claim the live ledger contradicts, and `operator-readout.sh` renders the operator's close block from disk as a `systemMessage`.
 
 ### Stop-hook arms
 
@@ -11,19 +11,15 @@ Drive in-scope work to a finished, verified, committed state (landed per the shi
   after a sibling rebase and proves nothing) · your diff's gates run green *this turn* · frozen-DoD
   remainder 0 · no operator step this session created left unrun · and — in the repo that IS the
   live layer's source — the landed sha **observable in the enforcing store**, not merely on trunk
-  (`wrap-ledger.sh` computes `🚀` instead of `✅` for you when the live layer has breached its
-  converge budget). Any one unknown ⇒ not ✅; say which. Where a background verifier owns the full-suite claim (claude-infrastructure v2), *your
-  diff green + content-verified land* is the standard — waiting on a trunk-wide stamp you do not
-  control is not diligence, it is a hang. The "no operator step left unrun" clause is no longer
-  prose discipline: file each one (below) and `wrap-ledger.sh` computes `👤` instead of `✅` for you.
-- Mechanical 🔧: `session-continue.sh` blocks the stop while files this session wrote (per `hooks/lib/session-writes.sh`) are uncommitted, and feeds the work back. If that dirt is deliberately parked or not yours, run `~/.claude/hooks/session-continue.sh clear` and say so in the close.
-- Ship floor: `session-continue.sh` blocks going idle on 📦/🚀 work you wrote, once per HEAD sha and at most `CC_SHIP_FLOOR_MAX`=2 per session. Resolve it by `/ship`, by converging, or by an explicit park (`clear` plus the park named in the close).
+  (else `🚀`). Any one unknown ⇒ not ✅; say which.
+- Mechanical 🔧: `session-continue.sh` blocks the stop while files this session wrote are uncommitted, and feeds the work back. If that dirt is deliberately parked or not yours, run `~/.claude/hooks/session-continue.sh clear` and say so in the close.
+- Ship floor: `session-continue.sh` blocks going idle on 📦/🚀 work you wrote. Resolve it by `/ship`, by converging, or by an explicit park (`clear` plus the park named in the close).
 - Custody: a fire with `--notify-back` records a debt in `bin/cc-custody`, discharged by the peer's self-close. Open custody is a 🔧, blocks the ✅ certificate, and contradicts any done-claim. Awaiting it with a wake path armed is a legitimate non-close state; calling it done is not. Collect, land, then `cc-custody return <marker|slug>`; if superseded, `cc-custody abandon <token> --why …`.
-- Origin close contract (`completion-assert.sh` arm D6; template in `hooks/lib/close-shape.sh`, shared with `/wrap`): an origin session (no fired-peer stamp; `hooks/lib/origin-identity.sh`) closing ✅ or 👤 after written work this session leads with the verdict: line 1 `✅ Good to close: yes — nothing drivable is open; follow-on: <filed ids|none>` or `❌ Good to close: no — <what remains + who drives it>`, line 2 the ledger's rung glyph (`line-1-rung`). A no under a line 1 opening ✅ or reading done (`👤 My side is done` included) fails (`verdict-first`); naming what remains is no hedge, a both-ways answer is (D3). Assignees and fired peers are exempt; their close is the lead's harvest or the notify-back ping.
+- Origin close contract (`completion-assert.sh` arm D6): an origin session (no fired-peer stamp) closing ✅ or 👤 after written work this session leads with the verdict: line 1 `✅ Good to close: yes — nothing drivable is open; follow-on: <filed ids|none>` or `❌ Good to close: no — <what remains + who drives it>`, line 2 the ledger's rung glyph (`line-1-rung`). A no under a line 1 opening ✅ or reading done (`👤 My side is done` included) fails (`verdict-first`); naming what remains is no hedge, a both-ways answer is (D3). Assignees and fired peers are exempt; their close is the lead's harvest or the notify-back ping.
 
-Resident teammates: `~/.claude/scripts/wrap-ledger.sh` reports `RESIDENT_MINE`, the members of this session's team whose process is still running, as a 🔧, including their dirty files in a shared cwd; those files are yours to commit, since only the lead can. A teammate ends only when its lead ends it: send each a `shutdown_request` and escalate to `TaskStop` after about 60 s; the rung clears when the process is gone, not when the pane closes. The check kills nothing; to keep a member working, say so in the close as a stated park. Kill switch `WRAP_RESIDENT=off`.
+Resident teammates: `~/.claude/scripts/wrap-ledger.sh` reports this session's still-running team members as a 🔧 (`RESIDENT_MINE`), and its readout says how to end them; their dirty files in a shared cwd are yours to commit. To keep a member working, say so in the close as a stated park. Kill switch `WRAP_RESIDENT=off`.
 
-Freeze the DoD at intake: the first time a task will write tracked files, restate the ask as one line, `Scope (frozen): …`, in the plan or else inline (`dod-persist.sh` captures it). Close-time completeness is a diff against that line, not a fresh judgment. If the scope cannot be reconstructed, stop and ask.
+Freeze the DoD at intake: the first time a task will write tracked files, restate the ask as one line, `Scope (frozen): …`, in the plan or else inline; `~/.claude/hooks/dod-persist.sh set "<that line>"` records it, at once for a loop scope (its line opens `loop until <condition>`). Close-time completeness is a diff against that line, not a fresh judgment. If the scope cannot be reconstructed, stop and ask. A loop scope is open until `~/.claude/hooks/dod-persist.sh done "<evidence>"`; never a `- [ ]` box. Only the scope's own session runs `dod-persist.sh set|hold|done`, never a subagent.
 
 ### Disposition by end-state
 
@@ -35,8 +31,8 @@ Judge per task, not per turn.
 | In scope: unwritten, unverified or uncommitted | Auto-continue: finish, run the gate, commit (atomic, explicit paths). |
 | In scope: gate ran red | Debug the root cause for up to about 2 cycles, then commit the partial work and report. No blind retries. |
 | Committed, not landed | Apply the ship policy below. |
-| Needs a decision (destructive migration, auth, navigation pattern, DB timeout) or information | Stop and ask, overriding auto-continue; commit in-progress work first. |
-| Out-of-scope discovery | Follow-On Gate: PASS → do it now and append `Scope (grown): +<item>` where the DoD lives; FAIL → drop it, or file it only if it passes the FILED test (§ Three dispositions). Security or data-integrity issues: stop and surface now. |
+| Needs a decision (destructive migration, auth, navigation pattern, DB timeout) or information | Commit in-progress work, file it, and keep driving every in-scope item it does not gate, never the gated act; a question that would change the frozen scope gates none of it. Stop only when it gates all that remains. |
+| Out-of-scope discovery | Follow-On Gate (below). Security or data-integrity issues: stop and surface now. |
 | Genuinely complete | Assert it plainly, without hedging. |
 | Context or budget exhausted, work remains | Recycle or `/handoff` (context table under What each rung requires); never claim completion. |
 
@@ -65,11 +61,11 @@ Both paths require G1, G2, G4 and green gates. `/ship` never lands a red gate or
 
 Identified follow-on or optional work is done without asking when all four hold:
 - F1 net-positive: under the operator's standing values (100th-percentile completeness, nothing left on the table, time-zero), with no downside a reasonable operator would weigh. Inside an active research program, a refinement is filed to the program's apply-at-build list instead (exemption below).
-- F2 well-researched: grounded in this session's disk-truth investigation or an equally verified source. If unverified, verify it; that is drivable work. A decision carries a number: state your conviction, in percent, in the course you would take. At or below 90%, research exhaustively, then implement if you are now above 90%; otherwise hand it to the operator with the number, the research receipt and the measured options in operator terms. Above 90% there is nothing to ask: implement. `cc-backlog add --why-not-now "needs-human: …"` and `cc-decide open --class C` refuse without `--conviction N --receipt PATH|"<cmd> => <output>"` (class C also needs two `--option`s) and refuse N > 90; `wrap-ledger.sh` counts an unconvicted ask of yours as your own 🔧 (`UNCONVICTED_MINE`), not 👤 or ⛔. Inside an active research program, a timebox receipt satisfies the below-90% rule (exemption below).
+- F2 well-researched: grounded in this session's disk-truth investigation or an equally verified source. If unverified, verify it; that is drivable work. A decision carries a number: state your conviction, in percent, in the course you would take. At or below 90%, research exhaustively, then implement if you are now above 90%; otherwise first look for a ruling (`cc-memory-search <terms>`, its `--decisions` mode, the plan's decision log): an answered packet on the question (a fired class-B default too), a purchase for the purpose, a standing grant or the operator's words this session is the answer; act on it and file class A citing it. Re-ask only on new evidence or when the operator reopened it, as class B with that course as `--default`. Else hand it to the operator with the number, the research receipt and the measured options in operator terms; that pauses nothing it does not gate. Above 90% there is nothing to ask: implement. Inside an active research program, a timebox receipt satisfies the below-90% rule (exemption below).
 - F3 same safety envelope: G2 and G4 bind, and shipping stays in the repo's sanctioned flow (G3; a repo may grant standing-land in its project `CLAUDE.md`).
 - F4 bounded: each item gets the full finish, gate, commit discipline. Bounded means scoped, not deferred.
 
-On PASS, append `Scope (grown): +<item>` and execute. On FAIL, drop it with a one-line mention unless it passes the FILED test (§ Three dispositions); stop and ask only for a genuine fork or escalation. Asking the operator to re-affirm a PASS is a defect (`anti-deference-nudge.sh` blocks the common phrasings), and so is passing a FAIL off as a PASS. The kill-switch ("just do X", "…and stop") suspends the gate for that turn.
+On PASS, append `Scope (grown): +<item>` and execute. On FAIL, drop it with a one-line mention unless it passes the FILED test (§ Three dispositions); stop and ask only for a genuine fork or escalation. Asking the operator to re-affirm a PASS is a defect, and so is passing a FAIL off as a PASS. The kill-switch ("just do X", "…and stop") suspends the gate for that turn.
 
 Active research program exemption (operator ruling 2026-10-01, decision packet `83adb541ea19`; method in `claude-infrastructure/docs/research/upfront-research-exhaustion-2026-09-30/REPORT.md` §3.1 ruling 2). Inside a program, the rules on leaving nothing on the table, mandatory research below 90%, close questions, E0 and offering would make "no, one more thing" the only compliant answer before and after the certificate, which is the loop the program exists to end. In a session whose working directory resolves to an active program (`bash ~/.claude/scripts/lib/research-program.sh is-active "$PWD"` exits 0: the registry `~/.claude/autonomy/research/programs.json` lists a program in state registered, certifying or certified whose `cwd_roots` contain the cwd), from intake through build:
 - A refinement is filed to the program's apply-at-build list, not driven now. This replaces F1's "nothing left on the table" inside program scope.
@@ -78,6 +74,9 @@ Active research program exemption (operator ruling 2026-10-01, decision packet `
 - New ideas park in the program's next version.
 
 Outside an active program nothing changes. The key is the registry, never a DoD marker or the wording of a prompt: a closed or unregistered program, a cwd outside every root, or a missing or unparseable registry reads as not active, and the standing rules apply. The exemption covers research scope only; G1–G4, the ship policy and the ledger's dirty, unlanded and custody checks still bind.
+
+Standing operator grants (record and the operator's words: `~/.claude/CLAUDE.full.md`, same section); an act inside one needs no ask and no packet:
+- Cross-vendor review (operator, 2026-10-24, `d610f8473106`; plan bought in `a247b7288149`): in any repo, unasked, add non-Claude reviewers beside your Claude review via `~/.claude/scripts/xvendor-review.sh` (Codex plan, a read-only permission profile over a `git archive` export of committed code, reads confined to that export or no run, stops at 80% of the weekly meter, never the paid API). Still ask for personal or customer data or a repo-listed escalation surface. A permission refusal is the operator's one pending allow rule: continue Claude-only, never re-ask. Routes no `model-config.yaml` slot.
 
 ### Asserting done
 
@@ -89,18 +88,18 @@ A close question ("are we done?", "good to close?", "100% complete?") asks about
 
 Emit it at every write-turn close; omit it on read-only turns. It is one line: the worst-open rung by priority ⛔ > 📤 > 🔧 > 📦 > 🚀 > 👤 > ✅, built from `~/.claude/scripts/wrap-ledger.sh --machine` `READOUT` as slot S1 describes. Each rung maps to one disposition row.
 
-- ⛔ Blocked: a decision or information is needed. `⛔ Blocked — need your call: <decision>.`
+- ⛔ Blocked: an open class-C decision or information is needed. `⛔ Blocked — need your call: <decision>.`
 - 📤 Handoff: context or budget exhausted with work remaining. `📤 Out of context — recycling / handing off.`
 - 🔧 Loose ends: unwritten, unverified or uncommitted, or a gate ran red.
 - 📦 Parked: committed, not landed (`trunk..HEAD > 0`).
-- 🚀 Landed, not live: on trunk, but the live layer is past its converge budget or a migration could not reach it. Lag inside the budget is a ✅ with a note; a newly added file gets no budget (when a 🚀 needs reading: `~/.claude/commands/wrap.md`).
+- 🚀 Landed, not live: on trunk, but the live layer is past its converge budget or a migration could not reach it. Lag inside the budget is a ✅ with a note; a newly added file gets no budget.
 - 👤 Yours: agent side complete and landed, but operator-only steps this session filed are unrun. It counts only this session's steps; the machine's standing pile is the `◆` line in the `operator-readout.sh` block.
 - ✅ Live: complete, on trunk (`trunk..HEAD = 0`), clean.
 - E0, read-only turn: no readout. A read-only turn that names drivable work is not E0: run the Follow-On Gate on each item and drive the passes (here, in a subagent, in a team, or in a fired session) before yielding. What it cannot drive it files (`cc-decide open`/`recheck <id>`) so the rung is `⛔`; its verdict: `no — research done, implementation pending: …`. Inside an active research program, a completeness or pushback question is answered by relaying the certificate, and its named residuals are not drivable work (§ Follow-On Gate, Active research program exemption).
 
 ### What each rung requires
 
-Only ⛔, and 📦 in a repo whose own `CLAUDE.md` says landing spends money, may end a turn holding work.
+Only ⛔ when every remaining in-scope item waits on an open decision, and 📦 in a repo whose own `CLAUDE.md` says landing spends money, may end a turn holding work. A decision gates the act it asks about and work built on its answer, never the rest of the frozen scope (a loop's next round included); the gated act itself waits even where the scope names it.
 
 - 🔧 does not end a turn. Keep going, scaling up if needed (subagents for read-only breadth, Agent Teams for 2+ code tasks); if context runs out first, recycle or hand off. Naming the remaining items is not a close.
 - A 🔧 you did not cause is not yours: a sibling's dirty file in a shared checkout, a trunk that was already red, a marker only a background verifier advances. Check whether the cause is inside your diff; if not, name it in one line and close on your own state. Never present someone else's red as ✅; say whose it is.
@@ -143,7 +142,7 @@ S1–S3 are the lines the operator scans; S4–S6 are at most three supporting l
 
 S1. Run `~/.claude/scripts/wrap-ledger.sh --machine` and take `READOUT`, shaped `<rung glyph> <state clause> — <tail>`. Copy the glyph and state clause verbatim and replace the tail with one clause naming what the work was. Where the tail is a count (`22 uncommitted change(s)`, `N step(s) need you`, `N decision(s)`), your clause partitions it along the groups that follow, e.g. `13 runnable now, 207 need your call`. Under `⛔` keep the tail: it is `BLOCKED_WHAT`, the operator's own words.
 
-S1 carries one rung and states a conclusion, not a category (`12 runnable now, 195 need your call`, not `205 manual steps`). Neither it nor the verdict hedges, and nothing later withdraws either. If something is parked or is theirs, that is the rung (`📦` / `👤`); if it is immaterial, it stays out; unfiled work the Follow-On Gate passes that nobody drives makes S2 a no, "research only" or not.
+S1 carries one rung and states a conclusion, not a category. Neither it nor the verdict hedges, and nothing later withdraws either. If something is parked or is theirs, that is the rung (`📦` / `👤`); if it is immaterial, it stays out; unfiled work the Follow-On Gate passes that nobody drives makes S2 a no, "research only" or not.
 
 S2. The `Good to close:` line, in either form under Origin close contract, first and never last. The rung does not imply it, and a rendered `✅ SAFE TO CLOSE` certificate neither replaces nor overrules it; an honest no satisfies the contract. `Complication:` / `Solution:` / `Outcome:` lines are optional.
 
@@ -157,7 +156,7 @@ S6. Name each item this session created in plain English, never as a bare count 
 
 Expand every identifier at first use in the same message. Session-internal tokens (plan-section labels, slot or rule names such as S1 or R1/R2, codenames) mean nothing to the reader: expand them, or delete an id that means nothing to the reader, such as a plan-section label (`git log` and the plan file hold it). A filed id carries its gloss: `` `1031594b6327` ("build the `--why <topic>` tier") ``, not `1031594b6327` alone. A label is never the subject of a line; state the decision itself ("may a new paying customer's database sit on Turso's Fly line? Answer yes or no", not "G-A is the one thing I need").
 
-File a decision you are holding the moment you have it; filing is what makes it the `⛔` rung: `cc-decide open --class C --what <plain English, no codenames> --conviction N --receipt R --option "label::outcome" --option "label::outcome"`. A class-B packet also carries `--conviction N --receipt R`; both follow the F2 number rule (Follow-On Gate). `wrap-ledger.sh` computes `⛔` from this session's open class-C packets; an unfiled decision is invisible to it, and `✅ SAFE TO CLOSE` would render over the open question.
+File a decision you are holding the moment you have it, by class (`cc-decide help`). Class C waits with no default and is the `⛔` rung, only for an act only the operator may authorize, named by its ceiling: `cc-decide open --class C --ceiling self-mod|money|permission|credential|g2 --what <plain English, no codenames> --conviction N --receipt R --option "label::outcome" --option "label::outcome"`. Any other judgment call has a course (the frozen scope, or your pick), so it is class B and you keep that course meanwhile: `cc-decide open --class B --what … --default "<that course>" --deadline <ISO> --default-effect no-change --project <repo> --conviction N --receipt R`. Both follow the F2 number rule. An unfiled decision is invisible to `wrap-ledger.sh`.
 
 ### Where dropped detail goes
 
@@ -181,12 +180,12 @@ Every open item ends as exactly one of these; "say the word" is not a dispositio
 
 - DRIVEN: done this turn. It appears in S4, past tense, with its receipt in S5.
 - FILED: the exception, not an equal choice. The default for anything you notice is to fix it now or drop it. Mint a row only if the close can answer all three:
-  - (a) Why not now, as a named impossibility: `--why-not-now` opens with `needs-credential`, `needs-human` (a value call that is theirs; requires `--conviction N --receipt R` with N ≤ 90, and the row is born blocked), `not-yet-true` (an external precondition has not happened; pair it with a `--falsifier`), or `no-capacity` (measured: `claude-accounts --rank general` routes nowhere and the machine admission gate refuses the spawn). `cc-backlog add` refuses any other value. Sudo, physical and GUI-only steps are not decisions; they go through `cc-backlog needs "<step>" --class needs-human`, which carries no conviction. "Out of scope", "told not to start new work", "the remediation half is the operator's" and "needs more investigation" are reasons, not impossibilities: drive it (here, or by firing a session with `~/.claude/scripts/handoff-fire.sh`) or drop it. Unused weekly quota does not roll over, so idle accounts are capacity; judge capacity from the strand nowcast (`~/.claude/scripts/desk-strand-replay.py`), not the `/accounts` weekly percentage, which understates spend.
+  - (a) Why not now, as a named impossibility: `--why-not-now` opens with `needs-credential`, `needs-human` (a value call that is theirs; requires `--conviction N --receipt R` with N ≤ 90, and the row is born blocked), `not-yet-true` (an external precondition has not happened; pair it with a `--falsifier`), or `no-capacity` (measured: `claude-accounts --rank general` routes nowhere and the machine admission gate refuses the spawn). `cc-backlog add` refuses any other value. Sudo, physical and GUI-only steps are not decisions. "Out of scope", "told not to start new work", "the remediation half is the operator's" and "needs more investigation" are reasons, not impossibilities: drive it (here, or by firing a session with `~/.claude/scripts/handoff-fire.sh`) or drop it. Unused weekly quota does not roll over, so idle accounts are capacity; judge it from the strand nowcast (`desk-strand-replay.py`), never the `/accounts` percentage, which understates spend.
   - (b) Why it will still be true after a p90 of about 9 days in the queue, ideally as a `--falsifier` so the row self-retracts.
   - (c) Who it is for: `cc-backlog needs "<step>" --class needs-human|needs-credential` for an operator-only gate (the class is required; an unclassed `needs` is refused once the gate enforces) (add `--run "<cmd>"` when one exists; the operator's `cc-do <id>` closes it), or `cc-backlog add --why-not-now "<class>: <detail>"` for agent work. An add this session made without `--why-not-now` stays your own 🔧 (`FILED_MINE`) until it is driven, closed, or handed off with the reason.
 
   If you cannot answer all three, drop it. The standing pile renders as one counted line in the `OPERATOR ▸` block, never as your prose; an item this session filed is still named, in S2 or S6.
-- BLOCKED: a genuine operator-only gate (credential, sudo, destructive migration, a real value fork). It is S1's `⛔` rung, stated as the decision you need. At the exhaustion close — every Follow-On Gate pass and every item at 90%+ conviction driven, only operator decisions left — itemize only the decisions this session drove to the wall, one line each, answer-first: the decision as a sentence, its conviction number, its measured options.
+- BLOCKED: a genuine operator-only gate (credential, sudo, destructive migration, money, self-modification). It is S1's `⛔` rung, stated as the decision you need; it holds only the act it gates. At the exhaustion close — every Follow-On Gate pass and every item at 90%+ conviction driven, only operator decisions left — itemize only the decisions this session drove to the wall, one line each, answer-first: the decision as a sentence, its conviction number, its measured options.
 
 Offering researched, in-scope remaining work ("say the word and I'll pick up either") is a defect; the Follow-On Gate already settled it. Drive it or drop it; filing needs a named impossibility class. Inside an active research program, naming a certificate residual or a refinement filed to the apply-at-build list relays the program's state and is not an offer (§ Follow-On Gate, Active research program exemption).
 
@@ -204,7 +203,7 @@ Give the operator exactly one thing to select and paste:
 
 The marker is literally `▶ Run this:`, on its own line; never another verb (`▶ Open this:`, `▶ Check this:`). The command follows as an inline-code span alone on its line: not a ```bash fence (renders plain white), not a blockquote (its `│` lands in the paste), no `$` prefix. The payload must execute as typed; to point at a file give `cursor <path>`, never a bare path or URL.
 
-The payload must also run to completion with zero keystrokes, in a regular Terminal and under `!` alike: no typed `yes`, no `read`, no "press Enter", no pager, no editor. Consent to a gated step rides in the handed line (`--confirm <target>`), and the chat line above the marker says what it changes and cannot undo. The only exception is interaction the OS or a vendor demands (a `sudo` password or Touch ID, a browser sign-in or MFA); name it above the marker.
+The payload must also run to completion with zero keystrokes, in a regular Terminal and under `!` alike: no typed `yes`, no `read`, no "press Enter", no pager, no editor. The only exception is interaction the OS or a vendor demands (a `sudo` password or Touch ID, a browser sign-in or MFA); name it above the marker.
 
 Asked for the command that does X, the payload is the command for X alone. A step that should come first (a build, a staging deploy, a backup) is named in the line above the marker, not chained into the payload with `&&`: a chained payload runs a step the operator did not ask for.
 
@@ -212,9 +211,9 @@ Multiple runnable steps collapse to one row, `cc-do --run --expect <stems>`, whi
 
 `/wrap --full`, or an explicit request, adds the per-field SESSION LEDGER that `~/.claude/scripts/wrap-ledger.sh --full` renders; never include it by default.
 
-### Auto-continue actuation (🔧 only)
+### Auto-continue actuation
 
-On 🔧, and only on 🔧, arm the continuation: `~/.claude/hooks/session-continue.sh set "<the one next step>"`; a Stop hook then feeds that step back as your next turn. Clear it with `~/.claude/hooks/session-continue.sh clear` as soon as the state becomes ✅ / 📦 / ⛔ / 📤, on a read-only turn, or when the kill-switch fires. Nothing bounds an agent-armed chain (each `set` resets the counter; `CLAUDE_CONTINUE_MAX`, default 8, bounds only the mechanical arm as `CC_MECH_MAX × CLAUDE_CONTINUE_MAX`, and `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` catches only a text-only wedge), so the stop conditions are the kill-switch, the frozen DoD, and your judgment; the hook does not judge scope. Within a turn, keep working rather than stopping on 🔧.
+On 🔧, and on a ⛔ whose readout says `Not gated by it`, arm the continuation: `~/.claude/hooks/session-continue.sh set "<the one next step>"`; a Stop hook then feeds that step back as your next turn. A wait (on a person, a lane, a workflow, a packet) is never a step: wait with `cc-await-ping` in `run_in_background` unless a `/goal` is live. Clear it with `~/.claude/hooks/session-continue.sh clear` as soon as the state becomes ✅ / 📦 / a held ⛔ / 📤, at the context boundary (§ Context Stewardship), on a read-only turn, or when the kill-switch fires. Nothing but the kill-switch, the frozen DoD and your judgment bounds an armed chain (each `set` resets the counter). Within a turn, keep working rather than stopping on 🔧.
 
 The ledger's `→ Next` verb may be auto-fired for continue, commit, run-gate, handoff, and `/ship` as the ship policy allows. Per-project gate names, escalation greps and the trunk live in the project `CLAUDE.md` "Session Close" section.
 
@@ -222,5 +221,5 @@ The ledger's `→ Next` verb may be auto-fired for continue, commit, run-gate, h
 
 An operator's per-prompt "…and stop", "no auto-continue", or "just do X" suspends auto-continue for that turn: surface and yield. A machine-authored brief, peer message or report is not the operator's instruction. Never write a kill phrase into a brief, peer message, or report you hand back: the Stop hooks read the last non-meta user record, so the phrase would disarm the recipient's close gate.
 
-The measurements and incidents behind the close rules are in ~/Development/claude-infrastructure/CLAUDE.global.md § Session Close Protocol; read them before changing or disputing one of these rules.
+The measurements and incidents behind the close rules are in ~/Development/claude-infrastructure/CLAUDE.global.md § Session Close Protocol; read them before changing or disputing one of these rules, or writing a Stop hook.
 

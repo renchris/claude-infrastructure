@@ -1373,7 +1373,7 @@ render_block() {
 
   # ── state line from the un-fakeable ledger (cwd repo; skipped cleanly outside a repo) ──
   local state="" led="" branch ahead shas dirty_n gate remainder parts custody dact
-  local resident resident_names blk_rechecked=0
+  local resident resident_names blk_rechecked=0 blk_clause=""
   RUNG="?"
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     # `wrap` and `_wl_sid` were resolved, and the read itself started, at § PREFETCH above.
@@ -1511,6 +1511,11 @@ render_block() {
         [ "${dirty_n:-0}" != "0" ] && parts="${parts:+$parts · }${dirty_n} file(s) uncommitted"
         [ "$gate" = "stale" ] && parts="${parts:+$parts · }gate stale on HEAD"
         [ "${remainder:-0}" != "0" ] && parts="${parts:+$parts · }${remainder} DoD item(s) open"
+        # LOOP SCOPE (ruling d610f8473106) — the third cause invisible in git state: a frozen
+        # `loop until …` line with no recorded stop has no `- [ ]` box, so REMAINDER reads 0 and
+        # the cause would drop to "loose ends". A held loop is the ⛔ arm's, not this one. An older
+        # ledger without the field reads as no loop (fail open).
+        [ "$(lf LOOP_OPEN)" = 1 ] && [ "$(lf HELD)" != 1 ] && parts="${parts:+$parts · }loop scope open (no recorded stop)"
         state="🔧 in progress — ${parts:-loose ends}"
         # ONE drivable action, and residents take it when they are present: the lead is the only
         # party the vendor lets end a member, and the sentence has to say what to send. It names
@@ -1547,7 +1552,17 @@ render_block() {
         # (an older ledger) reads as 0, i.e. the filed shape. Width is fitted at compose time.
         state="$(lf READOUT)"; [ -n "$state" ] || state="⛔ Blocked — need your call: cc-decide list --open"
         blk_rechecked="$(lf BLOCKED_RECHECKED)"
-        case "$blk_rechecked" in ''|*[!0-9]*) blk_rechecked=0 ;; esac ;;
+        case "$blk_rechecked" in ''|*[!0-9]*) blk_rechecked=0 ;; esac
+        # The ledger's scope clause (lead-keeps-working, ruling d610f8473106): `Held by this
+        # session: …` (the hold the operator must see on every close) or `Not gated by it: …`
+        # (the work the session keeps driving). It follows the packet's whole what_plain, so the
+        # 100-column fit below would cut it first: it gets its own row instead, never cut away.
+        case "$state" in
+          *" Held by this session: "*) blk_clause="Held by this session: ${state#* Held by this session: }"
+                                       state="${state%% Held by this session: *}" ;;
+          *" Not gated by it: "*)      blk_clause="Not gated by it: ${state#* Not gated by it: }"
+                                       state="${state%% Not gated by it: *}" ;;
+        esac ;;
     esac
   fi
 
@@ -1787,6 +1802,14 @@ render_block() {
                else printf '%s\n' "$hdr"; fi ;;
       *) printf '%s\n' "$hdr" ;;
     esac
+  fi
+  # The ⛔ scope clause, split off the state above, on the row under the answer. Fitted the way the
+  # ⛔ header is (100 columns, cut at a word) outside the footer layout; whole inside it, where the
+  # answer rows are never cut.
+  if [ "$RUNG" = "⛔" ] && [ -n "$blk_clause" ]; then
+    local _bcl="   ↳ ${blk_clause}"
+    if [ "$CBUDGET" != footer ] && [ "${#_bcl}" -gt 100 ]; then _bcl="${_bcl:0:99}"; _bcl="${_bcl% *}…"; fi
+    printf '%s\n' "$_bcl"
   fi
 
   # ── YOURS — first, itemized, never collapsed, exempt from MAX ────────────────────────────────

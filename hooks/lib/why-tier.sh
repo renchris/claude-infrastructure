@@ -265,8 +265,8 @@ WHY
 SENTINEL — the 🔧 continuation loop, and why scope-judgment stays with you.
 A Stop hook fired on its own is SCOPE-BLIND: a shell script cannot tell an in-scope loose end from a
 deliberate pause. So the AGENT arms and the hook is a dumb actuator.
-  ~/.claude/hooks/session-continue.sh set "<the ONE next step>"   # ONLY on 🔧
-  ~/.claude/hooks/session-continue.sh clear                       # on ✅/📦/⛔/📤 or read-only
+  ~/.claude/hooks/session-continue.sh set "<the ONE next step>"   # on 🔧, or ⛔ with `Not gated by it`
+  ~/.claude/hooks/session-continue.sh clear                       # on ✅/📦/held ⛔/📤 or read-only
   ~/.claude/hooks/session-continue.sh status                      # inspect
 Spell the path in full at every site: `command -v session-continue.sh` measures EMPTY, and custody
 prefixes are PREPENDED, so a bare fragment is read before the full spelling ever appears.
@@ -310,7 +310,7 @@ all until you resolve it yourself.
   dirty-tree-hold            soft   commit or park the tree.
   sequencer-state-hold:<x>   hard   a rebase/merge/cherry-pick is in progress — finish or abort it.
   open-decision-hold         hard   your own message names a genuine value fork — ANSWER it (file
-                                    it: `cc-decide open --class C …`), then recycle.
+                                    it by class: `cc-decide help`), then recycle.
   live-team-hold             hard   a teammate is still running. There is no command for this one:
                                     LET THE TEAMMATE FINISH, or shut it down with a structured
                                     shutdown_request. Do not clear it.

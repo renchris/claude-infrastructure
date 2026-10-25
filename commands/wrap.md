@@ -142,7 +142,11 @@ Two rungs outrank the rest:
 - **⛔ Blocked** — you need a decision (destructive migration / auth / nav / timeout) or information
   only the operator has. The ledger computes it from open class-C decision packets THIS session filed
   (`cc-decide open --class C …`); a decision you hold but have not filed is invisible to it, so file
-  it and the rung follows. Shape: `⛔ Blocked — need your call: <decision>.`
+  it and the rung follows. Shape: `⛔ Blocked — need your call: <decision>.` A ⛔ ends a turn only
+  when every remaining in-scope item waits on it: when the readout adds `Not gated by it: …`, keep
+  driving that work (its `→ Next` says `continue`). A judgment call with a status-quo course is class B
+  (`--default "<that course>"`), which keeps its course and is not this rung; class C names its
+  operator-only `--ceiling` (`cc-decide help`).
 - **📤 Handoff** — out of context with work remaining. The ledger cannot see this one, so you overlay
   it: `📤 Out of context — recycling / handing off.`
 

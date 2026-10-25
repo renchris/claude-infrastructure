@@ -2230,3 +2230,61 @@ R
   printf '%s\n' "$output" | tail -1 | grep -q '^ ◆ pile: 3 call' || { echo "$output"; false; }
   ! printf '%s\n' "$output" | grep -q 'decisions — your call' || false
 }
+
+# ── LOOP SCOPE on the 🔧 state line (lead-keeps-working, ruling d610f8473106, design §3.8/§7.6) ──────
+# A frozen `loop until …` line with no recorded stop has no `- [ ]` box, so the ledger's loop 🔧 arm
+# reaches this renderer with REMAINDER=0, DIRTY_N=0 and no custody — the same dropped-cause shape as
+# the custody block above. LOOP_OPEN=1 with HELD!=1 must name the loop; a held loop and an older
+# ledger without the field must not.
+@test "🔧 loop scope: an open loop with no recorded stop is NAMED, never 'loose ends'" {
+  w="$(mkrepo_landed loopopen)"
+  run custody_env "$(stub_ledger_over "🔧" "LOOP_OPEN=1" "HELD=0")" "$HOOK" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | grep -q '🔧 in progress — loop scope open (no recorded stop)' \
+    || { echo "the loop cause was dropped: $output"; false; }
+  ! printf '%s' "$output" | grep -q 'in progress — loose ends' || { echo "fallback still rendered: $output"; false; }
+}
+
+@test "🔧 loop scope composes after the incumbent causes; a HELD loop and an absent field add nothing" {
+  w="$(mkrepo_landed loopmixed)"
+  run custody_env "$(stub_ledger_over "🔧" "LOOP_OPEN=1" "HELD=0" "DIRTY_N=2")" "$HOOK" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | grep -q '2 file(s) uncommitted · loop scope open (no recorded stop)' \
+    || { echo "wrong partition or ordering: $output"; false; }
+  w2="$(mkrepo_landed loopheld)"
+  run custody_env "$(stub_ledger_over "🔧" "LOOP_OPEN=1" "HELD=1" "DIRTY_N=1")" "$HOOK" "$w2"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ! printf '%s' "$output" | grep -q 'loop scope open' || { echo "a held loop rendered as open: $output"; false; }
+  w3="$(mkrepo_landed loopabsent)"
+  run custody_env "$(stub_ledger_over "🔧" "DIRTY_N=1")" "$HOOK" "$w3"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | grep -q '🔧 in progress — 1 file(s) uncommitted' || { echo "$output"; false; }
+  ! printf '%s' "$output" | grep -q 'loop scope' || { echo "an absent field invented a loop: $output"; false; }
+}
+
+# The ⛔ header is fitted to 100 columns, and the ledger appends its scope clause AFTER the packet's
+# whole what_plain, so the fit cut exactly the clause the operator is meant to see (measured: line 1
+# ended "Held by this session: 0123456789ab —…"). The clause takes its own row, whole.
+@test "⛔ held clause: 'Held by this session' gets its own row under the answer, never cut by the fit" {
+  w="$(mkrepo_landed blkheld)"
+  run blk_env "$(stub_ledger "⛔" "BLOCKED=1" "HELD=1" \
+    "READOUT=⛔ Blocked — need your call: Approve the deploy. Held by this session: 0123456789ab — the deploy waits on it.")" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | head -1)" = "OPERATOR ▸ ⛔ Blocked — need your call: Approve the deploy." ] \
+    || { echo "line 1: $output"; false; }
+  printf '%s\n' "$output" | grep -qxF '   ↳ Held by this session: 0123456789ab — the deploy waits on it.' \
+    || { echo "the hold clause was dropped: $output"; false; }
+}
+
+@test "⛔ ungated clause: 'Not gated by it' gets its own row; a ⛔ with no clause adds no row (control)" {
+  w="$(mkrepo_landed blkungated)"
+  run blk_env "$(stub_ledger "⛔" "BLOCKED=1" "SCOPE_UNGATED=1" \
+    "READOUT=⛔ Blocked — need your call: Pick the reboot posture. Not gated by it: your loop scope — keep driving it.")" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qxF '   ↳ Not gated by it: your loop scope — keep driving it.' \
+    || { echo "the ungated clause was dropped: $output"; false; }
+  w2="$(mkrepo_landed blkplain)"
+  run blk_env "$(stub_ledger "⛔" "BLOCKED=1" "READOUT=⛔ Blocked — need your call: Decide the thing.")" "$w2"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ! printf '%s\n' "$output" | grep -qF '↳' || { echo "a clause row was invented: $output"; false; }
+}

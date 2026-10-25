@@ -135,6 +135,10 @@ two `─` rules are the canonical VISIBLE boundary; the fence is the invisible m
      worktree-keyed DoD file is fresh. A `--recycle` is an exit+relaunch, NOT a PreCompact, so the
      successor's SessionStart re-injection carries nothing unless this capture runs. If no
      `Scope (frozen):` line was stated this session, derive it from the plan / `/goal` and set it.
+     And name every open class-C decision id this session filed in the brief
+     (`cc-decide list --open --class C --json | jq -r --arg s "$CLAUDE_CODE_SESSION_ID" '.[]|select(.session_sid==$s)|.id'`):
+     a successor's ledger sees only its own packets, so it can neither relay nor `recheck` and hold one
+     it was not told of.
 
 3. **Write the bridge to `/tmp/<slug>-resume.md`** (UNIQUE `<slug>` per handoff — topic, not "the
    plan" — so several never clobber; ≤ ~30 lines, a POINTER not a copy):

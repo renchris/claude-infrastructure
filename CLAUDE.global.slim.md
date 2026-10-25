@@ -1,6 +1,6 @@
 <!-- instructions-variant: slim · derived-from CLAUDE.global.md sha256:cecd5a0c2fa35792 · audit: docs/research/token-efficiency-2026-09-23/audit/ -->
 This is the slim variant of CLAUDE.global.md, the machine's selected global instructions (`cc-instructions-variant status`).
-The full text, with the rationale and history for every section, is deployed to ~/.claude/CLAUDE.full.md (source: ~/Development/claude-infrastructure/CLAUDE.global.md); read the matching section there when a rule here seems to lack context.
+The full text, with the rationale and history for every section, is deployed to ~/.claude/CLAUDE.full.md; read the matching section there when a rule here seems to lack context.
 
 # Global Development Standards
 
@@ -113,7 +113,7 @@ Teammates:
 ## Research subagents (All Projects)
 
 - Research subagents are unnamed and fire-and-forget. There is no parallelism cap; the decomposition sets the count, default N=10 (band 8–12) for typical complex research.
-- Use the custom `deep-research` subagent (`~/.claude/agents/deep-research.md`) when depth is warranted. Nesting is off on purpose: `~/.zshrc:484` exports `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, so a subagent cannot spawn subagents. Keep it: since 2.1.224 removed the per-session spawn cap, depth is the only runaway bound.
+- Use the custom `deep-research` subagent (`~/.claude/agents/deep-research.md`) when depth is warranted. Nesting is off on purpose: `~/.zshrc:484` exports `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, so a subagent cannot spawn subagents. Keep it: depth is the only runaway bound.
 - A read-only fan-out of about 8 or more same-shaped, self-verifying units runs as a Dynamic Workflow (per-slot `effort`, skeptic/critic stages, schema'd returns; available in headless `-p` sessions, not in subagents). Give each read-only slot a self-contained brief and `agentType: 'workflow-lean'`, which loads no CLAUDE.md, rules, memory or skills (84% cheaper per slot at equal correctness, offline re-gate 2026-09-24); a slot that writes code, commits, lands, closes or needs a skill or MCP keeps the default agent. An implementation wave or phase stays a dispatched session.
 - Load the research-subagents skill before a research wave: decomposition artifact, task-category gate, 7-field briefs with the Delivery field, per-subagent depth (150-250K tokens, ceiling 500K), adversarial sampling (15-20%), OASIS stop, partial-failure and synthesis rules.
 
@@ -129,7 +129,7 @@ Teammates:
 
 ## Frontier Tier Routing
 
-Default model: Opus 5.5 at effort high (SSOT `~/.claude/model-config.yaml` `opus_latest`; the `claude()` launcher passes `--model claude-opus-5-5 --effort high`). Effort by use case, from `effort_defaults.opus55_*`: scoped coding medium; leads, agentic work and research high; hard reasoning, code review and long-horizon knowledge work xhigh; never low for research or reasoning. Those keys are advisory, so set the rung yourself: `--effort` on a fire (a teammate inherits its lead's), `effort:` on a Workflow slot.
+Default model: Opus 5.5 at effort high (SSOT `~/.claude/model-config.yaml` `opus_latest`). Effort by use case, from `effort_defaults.opus55_*`: scoped coding medium; leads, agentic work and research high; hard reasoning, code review and long-horizon knowledge work xhigh; never low for research or reasoning. Those keys are advisory, so set the rung yourself: `--effort` on a fire (a teammate inherits its lead's), `effort:` on a Workflow slot.
 
 The frontier tier (currently Fable 5.1, `frontier_access` in the SSOT) is for what the default model is blind to, never for routine or already-identified work. It is the third outcome of Follow-On Gate F2: before asking the operator about a decision still below 90% conviction, escalate the model. Fire the escalation ladder without asking when all three hold:
 - T-a: conviction is still below 90% after this session's exhaustive research, and what remains is a framing question, not a missing fact.
@@ -200,7 +200,7 @@ When work remains that involves the user (an interactive login, `sudo`, a classi
 - A file you hand over contains no permission grants, no `settings*.json` or allowlist edits and no credential writes. Ask for a permission in chat, as its own request.
 - Reading permission state is yours: run `cc-permission-audit` (reports redundant or shadowed allow rules; writes nothing without `CONFIRM=1`; `--prune` is a dry run by default) and hand over its findings. Applying them is the operator's.
 - Verdicts fail closed: success is an exit code, or a value read back by a different call than the one that made the change, never a grep for a phrase.
-- If what remains is a decision, there is no script; ask it as the `⛔` rung.
+- If what remains is a decision, there is no script; file it by class (§ The close message).
 
 Full rule → the **manual-command-delivery** skill.
 
