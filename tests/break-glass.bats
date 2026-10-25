@@ -7,6 +7,8 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   RS="$REPO/scripts/break-glass/rescue.sh"
   export BG_ROOT="$BATS_TEST_TMPDIR/bg" CC_LOCKWATCH_DIR="$BATS_TEST_TMPDIR/lw"
+  # a scan abandoned under fleet load is a correct refusal, but not the path these cases test
+  export RESCUE_SCAN_DL=60
   mkdir -p "$CC_LOCKWATCH_DIR"
   TREES=()
 }
@@ -62,7 +64,7 @@ ptymap() { printf '{"leaders":[{"pid":%s,"lstart":"x","pgid":%s,"tdev":"16/63","
   ptymap "$L"
   run /bin/bash "$RS" unpoison "$L" "Thu Jan  1 00:00:00 2026"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"REFUSED"*"pid reused"* ]] || false
+  [[ "$output" == *"REFUSED"*"pid reused"* ]] || { echo "got: $output"; false; }
   [ "$(alive_in_group "$L")" -eq 3 ]
   grep -q '"result":"refused","detail":"lstart-mismatch"' "$CC_LOCKWATCH_DIR/actions.jsonl"
 }
@@ -129,4 +131,25 @@ ptymap() { printf '{"leaders":[{"pid":%s,"lstart":"x","pgid":%s,"tdev":"16/63","
   printf '{"surface_unavailable_since":"2026-10-25T00:00:00Z","by":"dispatcher"}\n' > "$CC_BROWNOUT_FILE"
   run /bin/bash "$RS" brownout off
   [ -e "$CC_BROWNOUT_FILE" ]
+}
+
+@test "migration 0081: installs the links and the rendered profile, refuses a real file, undoes cleanly" {
+  M="$REPO/migrations/0081-break-glass-install.sh"
+  H="$BATS_TEST_TMPDIR/mh"; mkdir -p "$H"
+  P="$H/Library/Application Support/iTerm2/DynamicProfiles/break-glass-rescue.json"
+  HOME="$H" CC_MIGRATION_REPO="$REPO" CC_MIGRATION_NO_HS=1 run bash "$M"
+  [ "$status" -eq 0 ]
+  [ "$(readlink "$H/.claude/scripts/break-glass/rescue.sh")" = "$REPO/scripts/break-glass/rescue.sh" ]
+  jq -e --arg h "$H" '.Profiles[0] | .Guid == "cc-break-glass-rescue-0001" and .Name == "Rescue"
+        and (.Command == "/bin/bash --noprofile --rcfile \($h)/.claude/scripts/break-glass/rescue.bashrc -i")' "$P"
+  HOME="$H" run bash "$M" --verify
+  [ "$status" -eq 0 ]
+  HOME="$H" CC_MIGRATION_REPO="$REPO" CC_MIGRATION_NO_HS=1 run bash "$M"       # idempotent
+  [ "$status" -eq 0 ]
+  HOME="$H" CC_MIGRATION_NO_HS=1 run bash "$M" --undo
+  [ ! -e "$H/.claude/scripts/break-glass/rescue.sh" ] && [ ! -e "$P" ]
+  printf 'mine\n' > "$H/.claude/scripts/break-glass/rescue.sh"                 # a real file is never clobbered
+  HOME="$H" CC_MIGRATION_REPO="$REPO" CC_MIGRATION_NO_HS=1 run bash "$M"
+  [ "$status" -eq 1 ]
+  [ "$(cat "$H/.claude/scripts/break-glass/rescue.sh")" = mine ]
 }
