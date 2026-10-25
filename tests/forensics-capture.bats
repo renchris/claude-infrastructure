@@ -4,6 +4,8 @@
 # logs, sudo and the transcript scan are kept off the live machine. Runs under /bin/bash (3.2),
 # the interpreter the sentinel and lockprobe use.
 
+load helpers/cc-stub
+
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME"
@@ -28,13 +30,12 @@ setup() {
   # recorders: log argv, then run the real tool (sample is faked: it would take seconds per pid)
   for t in ps:/bin/ps sysctl:/usr/sbin/sysctl vm_stat:/usr/bin/vm_stat find:/usr/bin/find \
     memory_pressure:/usr/bin/memory_pressure cp:/bin/cp log:/usr/bin/log sudo:/usr/bin/sudo; do
-    printf '#!/bin/bash\nprintf "%%s\\t%%s\\n" "%s" "$*" >>"$CALLS"\nexec %s "$@"\n' "${t%%:*}" "${t#*:}" >"$STUB/${t%%:*}"
+    cc_stub "$STUB" "${t%%:*}" "$(printf '#!/bin/bash\nprintf "%%s\\t%%s\\n" "%s" "$*" >>"$CALLS"\nexec %s "$@"\n' "${t%%:*}" "${t#*:}")"
   done
-  printf '#!/bin/bash\nprintf "sample\\t%%s\\n" "$*" >>"$CALLS"\nf=""; while [ $# -gt 0 ]; do [ "$1" = -file ] && f="$2"; shift; done\nprintf "Sort by top of stack, same collapsed (when >= 5):\\n        __semwait_signal  (in libsystem_kernel.dylib)  5\\n" >"$f"\n' >"$STUB/sample"
+  cc_stub "$STUB" sample "$(printf '#!/bin/bash\nprintf "sample\\t%%s\\n" "$*" >>"$CALLS"\nf=""; while [ $# -gt 0 ]; do [ "$1" = -file ] && f="$2"; shift; done\nprintf "Sort by top of stack, same collapsed (when >= 5):\\n        __semwait_signal  (in libsystem_kernel.dylib)  5\\n" >"$f"\n')"
   for t in lsof pgrep zsh login ls tty; do
-    printf '#!/bin/bash\nprintf "%s\\t%%s\\n" "$*" >>"$CALLS"\n' "$t" >"$STUB/$t"
+    cc_stub "$STUB" "$t" "$(printf '#!/bin/bash\nprintf "%s\\t%%s\\n" "$*" >>"$CALLS"\n' "$t")"
   done
-  chmod +x "$STUB"/*
   export CC_FX_STUB_DIR="$STUB"
 }
 

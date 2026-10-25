@@ -3,6 +3,8 @@
 # $BATS_TEST_TMPDIR: report dirs, logs, lockwatch state and transcripts. No log collect runs
 # (CC_BC_NO_LOG=1); the fixtures are excerpts of the real converted stall reports.
 
+load helpers/cc-stub
+
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME"
@@ -23,9 +25,8 @@ setup() {
   cp -R "$FX/incident/transcripts" "$CC_FX_TRANSCRIPT_ROOTS"
   touch "$CC_FX_TRANSCRIPT_ROOTS"/*/*.jsonl
   # wtmp stub: the previous boot started 10-21 14:06 (hermetic; the real `last` reads this box)
-  printf '#!/bin/bash\necho "reboot time                                Sun Oct 25 13:16"\necho "reboot time                                Wed Oct 21 14:06"\n' >"$BATS_TEST_TMPDIR/last"
-  chmod +x "$BATS_TEST_TMPDIR/last"
-  export CC_BC_LAST="$BATS_TEST_TMPDIR/last"
+  cc_stub "$BATS_TEST_TMPDIR/bin" last "$(printf '#!/bin/bash\necho "reboot time                                Sun Oct 25 13:16"\necho "reboot time                                Wed Oct 21 14:06"\n')"
+  export CC_BC_LAST="$BATS_TEST_TMPDIR/bin/last"
   EPOCH=1792952212          # 2026-10-25 13:16:52 CDT, the boot after the incident
   RT=202610251315           # report mtime: 13:15 local, just before that boot
 }
