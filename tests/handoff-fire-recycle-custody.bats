@@ -431,6 +431,22 @@ wfagent() {
   [ "$output" = "live_subagents: 1" ] || { echo "$output"; false; }
 }
 
+# A run stopped with TaskStop writes no `result` for the agents it cut off, but the harness writes
+# <session>/workflows/<runId>.json when any run ends (pane 314, wf_53aa1dea-762, 2026-10-25: its idle
+# census read 2 agents in flight forever). Mutant: drop the run-file arm (d1, d2 count again).
+@test "3d agents of an ended (stopped) Workflow run are settled; a still-running run's agent counts" {
+  wfagent wf_s d1 live; wfagent wf_s d2 live; wfagent wf_r e1 live
+  printf '%s\n' '{"type":"launched"}' '{"type":"started","key":"v2:S1","agentId":"d1"}' \
+    '{"type":"started","key":"v2:S2","agentId":"d2"}' \
+    > "$CC_PROJECTS_DIRS/-some-repo/$SID/subagents/workflows/wf_s/journal.jsonl"
+  mkdir -p "$CC_PROJECTS_DIRS/-some-repo/$SID/workflows"
+  printf '{"runId":"wf_s","result":null,"error":"Error: Workflow aborted"}\n' \
+    > "$CC_PROJECTS_DIRS/-some-repo/$SID/workflows/wf_s.json"
+  run bash "$HF" --probe-live-subagents --source-session "$SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "live_subagents: 1" ] || { echo "$output"; false; }
+}
+
 @test "4 emit_recycle_event rows carry attempt, watcher_pid and watcher_lstart" {
   command -v jq >/dev/null 2>&1 || skip "row shape needs jq"
   FUNCS="$BATS_TEST_TMPDIR/ev-funcs.sh"

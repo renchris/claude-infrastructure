@@ -9843,8 +9843,17 @@ live_subagents_of() { # $1=transcript dir (…/projects/<slug>/<sid>) [$2=owner 
     # still counted in flight after the run ended. So an agent is settled when a `result`/`failed` row
     # names it OR names its slot key. Keys are bare top-level fields (a payload is an escaped string),
     # so neither match can be forged by content.
+    # …AND A RUN THAT HAS ENDED SETTLES ALL ITS AGENTS (2026-10-26). A run stopped with TaskStop (or
+    # aborted) never writes `result` rows for the agents it cut off, so they read IN FLIGHT forever and
+    # every idle census of the session says "subagents in flight": pane 314's own move never fired
+    # because run wf_53aa1dea-762, stopped 06:54Z, held two such agents. The harness writes
+    # <session>/workflows/<runId>.json only when a run ends — completed (durationMs) or aborted
+    # ("error":"Workflow aborted"); its mtime equals the end time — so its presence means nothing
+    # in that run is still executing.
     case "$_m" in
       */subagents/workflows/*)
+        _run="${_m%/*}"; _run="${_run##*/}"
+        [ -f "$_d/workflows/$_run.json" ] && continue
         LC_ALL=C awk -v id="$_id" '
           { a = ""; k = ""
             if (match($0, /"agentId":"[^"]*"/)) a = substr($0, RSTART + 11, RLENGTH - 12)
