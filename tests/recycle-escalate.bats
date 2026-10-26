@@ -12,6 +12,7 @@
 # each run against a scratch copy with that guard deleted and went red.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO_SRC="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   # shellcheck source=../scripts/lib/recycle-escalate.sh
   # shellcheck disable=SC1091  # runtime-resolved source; the land gate runs shellcheck without -x

@@ -16,6 +16,7 @@
 # reads a real transcript.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   unset CC_RECYCLE_CRON_CARRY
   T="$BATS_TEST_TMPDIR"
   TR="$T/t.jsonl"
