@@ -43,6 +43,9 @@ setup() {
   export CC_IDLE_KEEPALIVE_STATE="$BATS_TEST_TMPDIR/state"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mailbox"; mkdir -p "$CC_MAILBOX_DIR"
   export CC_IDLE_GAP_BOUND_S=120   # a loaded box can spend the default bound starting python
+  # (3) runs handoff-fire.sh's hf_d1_engage: pin its fire seams (absent paths fail open)
+  export CC_FIRE_CAPACITY_GATE=off HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep.json" \
+    CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-claude-accounts" CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
   unset CC_IDLE_KEEPALIVE CLAUDE_CODE_ENTRYPOINT CC_PANE_ID ITERM_SESSION_ID CC_KEEPALIVE_WAKE_S \
     CC_KEEPALIVE_MAX_WAKES CC_LEVER_ALL CC_LEVER_D1 CC_LEVER_D3 CC_LEVER_EXCLUDE CC_LEVER_LINEAGE \
     CC_LEVER_FLAGS CC_LEVER_HEARTBEAT CC_IRS CC_D1_K CC_D1_N_MIN CC_D1_IDLE_S CC_D1_RECYCLE_ID
