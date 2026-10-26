@@ -19,6 +19,8 @@
 # the 6 s bound; D2 — the first dialog check is at 15 s, past the bound, so nothing is answered; D3 —
 # kind `none` fails stop-if-watcher and the keep-work index '2' is sent; D5 — no incident record.
 
+load helpers/cc-stub
+
 setup() {
   REPO_SRC="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO_SRC/scripts/handoff-fire.sh"
@@ -35,13 +37,13 @@ setup() {
   export CC_RECYCLE_RETRY_DIR="$H/retry" CC_RECYCLE_INCIDENT_DIR="$H/incidents"
   export HF_TEAM_HOLD=off CC_RECYCLE_DEAD_SOURCE_STOP=off CC_RECYCLE_BGWORK_GOAL_CLEAR=off
   SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIM/osascript"; chmod +x "$SHIM/osascript"
+  cc_stub "$SHIM" osascript $'#!/usr/bin/env bash\nexit 0\n'
   export PATH="$SHIM:$PATH"
   export CC_NOTIFY_BIN="$H/.claude/bin/cc-notify"
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$CC_NOTIFY_BIN"; chmod +x "$CC_NOTIFY_BIN"
+  cc_stub "$H/.claude/bin" cc-notify $'#!/usr/bin/env bash\nexit 0\n'
   export STUB_PANE="SELF-PANE"
   : > "$H/composer"
-  cat > "$H/.claude/bin/it2" <<'SH'
+  cc_stub "$H/.claude/bin" it2 - <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$HOME/it2-calls.log"
 case "$1 $2" in
@@ -66,7 +68,6 @@ case "$1 $2" in
 esac
 exit 0
 SH
-  chmod +x "$H/.claude/bin/it2"
   CMDFILE="$BATS_TEST_TMPDIR/relaunch.cmd"; printf 'claude --permission-mode auto\n' > "$CMDFILE"
   export CMDFILE
   export HF_RECYCLE_SHELL_WAIT_S=6

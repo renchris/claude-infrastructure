@@ -11,6 +11,8 @@
 # RED-proof: the lib is new (1a0ee3658 has no incident record at all); the dedupe and cap cases were
 # each run against a scratch copy with that guard deleted and went red.
 
+load helpers/cc-stub
+
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO_SRC="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -19,9 +21,8 @@ setup() {
   . "$REPO_SRC/scripts/lib/recycle-escalate.sh"
   export CC_RECYCLE_INCIDENT_DIR="$BATS_TEST_TMPDIR/inc"
   export STUB_ARGV="$BATS_TEST_TMPDIR/fired.argv"
-  export CC_RECYCLE_ESCALATE_FIRE_BIN="$BATS_TEST_TMPDIR/fire-stub"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$STUB_ARGV" > "$CC_RECYCLE_ESCALATE_FIRE_BIN"
-  chmod +x "$CC_RECYCLE_ESCALATE_FIRE_BIN"
+  export CC_RECYCLE_ESCALATE_FIRE_BIN="$BATS_TEST_TMPDIR/bin/fire-stub"
+  cc_stub "$BATS_TEST_TMPDIR/bin" fire-stub "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$STUB_ARGV")"
   EV="$BATS_TEST_TMPDIR/watcher.log"; printf 'log\n' > "$EV"
 }
 
