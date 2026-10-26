@@ -14,6 +14,7 @@
 # transcript is none of them, which is why it exits non-zero with empty stdout.
 
 load helpers/pty-reap
+load helpers/cc-stub
 teardown() { pty_reap; } # no stub spawned on a pty outlives its test (tests/helpers/pty-reap.bash)
 
 setup() {
@@ -331,16 +332,24 @@ exp_setup() {
   STUB="$BATS_TEST_TMPDIR/stub"
   # Like the TUI, the stub takes the bracketed-paste frame the prompt arrives in as framing, not text
   # (lr-wake 2026-10-18; tests/lr-fire-resume-inject-atomic.bats pins the frame itself).
+  #
+  # THE STUB ENDS LIKE A SESSION WHOSE PANE CLOSED, with a status of its own (0aa0a3d0c). The program
+  # now exits with the SESSION's status: after `interact` returns on stdin's EOF it drains for
+  # LR_REAP_DRAIN_S, then `close`s the master, and the stub, which reads until its pty goes away,
+  # gets the hangup. Left at bash's default, the HUP kills it, the program reads a signal death as 1
+  # (by design, toward keeping the pane) and every arm saw `expect exited 1`. So HUP and EOF both
+  # end it with LR_STUB_RC (default 0), and the drain is 1 s, not the 60 s a live TUI gets.
   cat > "$STUB" <<'SH'
 #!/bin/bash
 [[ "$1" == "--version" ]] && { echo "stub 9.9.9"; exit 0; }
+trap 'exit "${LR_STUB_RC:-0}"' HUP
 echo "BOOTED"
 : > "$LR_TEST_GOT"
 while IFS= read -r line; do
   line="${line//$'\e[200~'/}"; line="${line//$'\e[201~'/}"
   printf 'GOT:[%s]\n' "$line" >> "$LR_TEST_GOT"
 done
-exit 0
+exit "${LR_STUB_RC:-0}"
 SH
   chmod +x "$STUB"
   export LR_TEST_GOT="$BATS_TEST_TMPDIR/got"
@@ -370,7 +379,7 @@ SH
          LR_RE_TRUST="$never" LR_RE_TRUST_RB="$never" LR_RE_FS="$never" LR_RE_FS_RB="$never" \
          LR_RE_OVERAGE="$never" LR_RE_READY="$never"
   # Seconds, not minutes: every bound the program reads is a seam for exactly this reason.
-  export LR_QUIET_S=1 LR_SUBMIT_POLL_S=2 RCY_ENGAGE_TIMEOUT=3
+  export LR_QUIET_S=1 LR_SUBMIT_POLL_S=2 RCY_ENGAGE_TIMEOUT=3 LR_REAP_DRAIN_S=1
   export LR_IT2="$IT2" LR_PANE=1
   # Assigned then exported, never `export X="$(…)"`: that form takes the EXPORT's status, so a
   # failed substitution reads as success (SC2155) — and these three are extractions whose failure
@@ -580,6 +589,18 @@ INNER
   grep -qF "GOT:[/limit-recover ingest /x $TOK]" "$LR_TEST_GOT" || { cat "$LR_TEST_GOT"; false; }
 }
 
+@test "RED-PROOF the 0 every executed arm asserts is the SESSION's status: a stub ending 7 exits the program 7" {
+  # lr_expect_run asserts 0. That is a claim about the stub only if a stub ending otherwise changes
+  # it: a launcher returning a constant 0 (the pre-0aa0a3d0c shape) passes there and fails here, and
+  # a stub that dies of the close's hangup instead of exiting reads 1 here, not 7.
+  exp_setup
+  screen 1 empty
+  export LR_STUB_RC=7
+  run pty_timeout 480 expect -f "$EXP" </dev/null
+  [ "$status" -eq 7 ] || { echo "rc=$status, want the stub's 7"; echo "$output" | tail -c 400; false; }
+  grep -qF "GOT:[/limit-recover ingest /x $TOK]" "$LR_TEST_GOT" || { cat "$LR_TEST_GOT"; false; }
+}
+
 @test "RED-PROOF quiet arm: a PARKED MENU is quiet too → NOTHING is sent, and it says so" {
   # A blind CR here takes the menu default — on the resume menu that is "resume from summary",
   # which spends usage and loses the goal. This is the one case a bare `timeout { send \"\\r\" }`
@@ -619,6 +640,7 @@ INNER
   cat > "$STUB" <<'SH'
 #!/bin/bash
 [[ "$1" == "--version" ]] && { echo "stub 9.9.9"; exit 0; }
+trap 'exit 0' HUP   # ends like exp_setup's stub when the program closes the master
 echo "BOOTED"
 : > "$LR_TEST_GOT"
 IFS= read -r line; printf 'GOT:[%s]\n' "$line" >> "$LR_TEST_GOT"
@@ -1205,8 +1227,11 @@ arm_over() { # $1 = launcher path — runs the REAL arming block and prints what
   # QUANTUM of `rcy_t`, the one number the recycle-engaged ledger row carries about how long
   # engagement took, and it is also the latency added to every recovery before the first look.
   #
-  # Asserted by COUNTING REAL POLLS, not by grepping the literal: a count is what the default MEANS,
-  # and it is load-invariant (a loop count, never a wall clock). The seam is `$0` — the probe is
+  # Asserted on the REAL LOOP, not by grepping the literal: the interval the loop actually sleeps
+  # between two polls, read off a `sleep` shim that logs into the same sequence as the probe stub.
+  # This used to COUNT polls in a 10 s window (>= 4), which is a wall clock after all: each poll pays
+  # its own scan, and at load/core ~23 (2026-10-26) the window held 2 polls at the 1 s default, red
+  # on trunk. The sleep's argument is the default itself and no load can change it. The seam is `$0` — the probe is
   # resolved as `$(dirname "$0")/limit-recover/lr-submit-probe.sh`, so invoking the real script
   # THROUGH A SYMLINK re-points that one sibling at a counting stub while HF_DIR (which resolves the
   # link) keeps every other sibling pointed at the real tree. Same mechanism as
@@ -1217,25 +1242,25 @@ arm_over() { # $1 = launcher path — runs the REAL arming block and prints what
   ln -s "$HF" "$HFLINK/handoff-fire.sh"
   ln -s "$REPO/scripts/lib" "$HFLINK/lib"
   ln -s "$REPO/scripts/limit-recover/lr-lib.sh" "$HFLINK/limit-recover/lr-lib.sh"
-  POLLS="$BATS_TEST_TMPDIR/probe-calls"
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nprintf "none\\n"\n' "$POLLS" \
+  POLLS="$BATS_TEST_TMPDIR/probe-calls" SEQ="$BATS_TEST_TMPDIR/poll-seq"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\necho poll >> "%s"\nprintf "none\\n"\n' "$POLLS" "$SEQ" \
     > "$HFLINK/limit-recover/lr-submit-probe.sh"
+  cc_stub "$SHIM" sleep "$(printf '#!/bin/bash\necho "sleep $*" >> "%s"\nexec /bin/sleep "$@"\n' "$SEQ")"
   chmod +x "$HFLINK/limit-recover/lr-submit-probe.sh"
 
   local -a argv; mapfile -t argv < <(watcher_argv "$TOK")
-  # RCY_ENGAGE_INTERVAL is UNSET here, deliberately — that is the whole subject of the case.
+  # RCY_ENGAGE_INTERVAL is UNSET here, deliberately — that is the whole subject of the case. The 20 s
+  # window only has to hold two polls: one iteration took ~5 s at load/core ~23.
   run env -u RCY_ENGAGE_INTERVAL HOME="$HOME" PATH="$SHIM:$PATH" IT2_BIN="$HOME/.claude/bin/it2" \
-      PS_DEAD_CALLS=2 RCY_ENGAGE_TIMEOUT=10 \
+      PS_DEAD_CALLS=2 RCY_ENGAGE_TIMEOUT=20 \
       RCY_BOOT_PANE_EVERY=1 RCY_BOOT_IVL_S=0.2 RCY_BOOT_WAIT_S=20 \
       bash "$HFLINK/handoff-fire.sh" "${argv[@]}"
   [ "$status" -eq 1 ] || { echo "$output"; false; }   # never engaged — the dead path, as intended
   [ -s "$POLLS" ] || { echo "the probe was never resolved through the symlinked \$0 — the seam is stale"; false; }
-  local n; n="$(wc -l < "$POLLS" | tr -d ' ')"
-  # The loop is bounded by WALL time (rcy_t), so each poll costs its interval PLUS its own scan:
-  # measured 2026-10-17, a 4 s window gave 3 polls even at 1.7 load/core, so `>= 4` in 4 s was red
-  # on trunk at any load. A 10 s window separates the two defaults with room for that scan cost:
-  # at five seconds a poll it is at most 3 (t=0, 5, 10); at one a second it is 4 or more.
-  [ "$n" -ge 4 ] || { echo "the 10s engagement window was polled $n time(s) — the default interval is coarser than 1s"; false; }
+  # The loop's `sleep "$RCY_ENGAGE_INTERVAL"` is the last sleep before every poll but the first.
+  local ivl; ivl="$(awk '/^sleep /{ last = $2 } /^poll$/{ if (n++ && last != "") print last; last = "" }' "$SEQ" | sort -u | tr '\n' ' ')"
+  [ -n "$ivl" ] || { echo "no sleep between two polls was measured:"; cat "$SEQ"; false; }
+  [ "$ivl" = "1 " ] || { echo "the loop slept [${ivl% }] between polls — the default interval is not 1s"; cat "$SEQ"; false; }
 }
 
 # ── deviation 3, executed: the re-Enter is gated on OUR draft, never on "a draft" ─────────────────
