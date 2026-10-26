@@ -7012,7 +7012,10 @@ pane_bgwork_key() { # $1=it2-bin $2=session-id → echoes the menu key to press,
 # WHAT THE DIALOG SAYS WILL STOP (D3, REPORT.md). The rows between "The following will stop when you
 # exit:" and the first menu row are one item each, `<kind> · <detail>`, wrapped onto indented rows at
 # narrow widths. Measured on 2.1.293 (/tmp probe 2026-10-26): a CronCreate task reads
-# `scheduled task · Every day at 3:13 AM · probe ping`, a Bash call `shell · bash wait45.sh`. This
+# `scheduled task · Every day at 3:13 AM · probe ping`, a Bash call `shell · bash wait45.sh`. In a
+# narrow kitty pane the list is TWO COLUMNS, each wrapped on its own and the kind cell padded:
+# `scheduled     · Every day at 4:07 AM · srv2 cron` then `task         ping` (live, pane 151) — so
+# the kind is trimmed, and a lone `scheduled` is the wrapped `scheduled task`. This
 # prints each item's kind once; nothing (rc 1) when the list cannot be found, so a caller treats an
 # unread list as "not only crons".
 hf_bgwork_dialog_kinds() { # stdin = a screen → stdout: the listed item kinds, one per line · rc 1 none read
@@ -7022,7 +7025,11 @@ hf_bgwork_dialog_kinds() { # stdin = a screen → stdout: the listed item kinds,
     on {
       line = $0; sub(/^[[:space:]]+/, "", line)
       if (line == "" || line == "exit:") next
-      if (match(line, /^[a-z][a-z ]* · /)) { k = substr(line, 1, RLENGTH - 4); if (!(k in seen)) { seen[k] = 1; print k; n++ } }
+      if (match(line, /^[a-z][a-z ]* · /)) {
+        k = substr(line, 1, RLENGTH - 4); sub(/ +$/, "", k); gsub(/ +/, " ", k)
+        if (k == "scheduled") k = "scheduled task"   # the kind cell wrapped: `task` is on the next row
+        if (!(k in seen)) { seen[k] = 1; print k; n++ }
+      }
     }
     END { exit (n > 0 ? 0 : 1) }'
 }
@@ -12669,7 +12676,13 @@ EOF
     case "$1" in *" shipland=yes "*) return 1 ;; none\ *|watcher\ *) ;; *) return 1 ;; esac
     scr="$(hf_bounded "$IT2" session read -s "$RSID" -n "${FIRE_TYPE_READLINES:-500}" 2>/dev/null || true)"
     RCY_DLG_KINDS="$(printf '%s\n' "$scr" | hf_bgwork_dialog_kinds | tr '\n' ',' | sed 's/,$//')" || RCY_DLG_KINDS=""
-    [ -n "$RCY_DLG_KINDS" ] || return 1
+    if [ -z "$RCY_DLG_KINDS" ]; then
+      # Say what was on screen: an unparsed list holds, and a hold nobody can read back is undiagnosable.
+      echo "→ bgwork: D3 could not read the dialog's item list; its rows were:"
+      printf '%s\n' "$scr" | LC_ALL=C awk '/Background work is/ { on = 1 } on { print "    | " $0; if (++n >= 14) exit }'
+      return 1
+    fi
+    echo "→ bgwork: D3 read the dialog's items as: $RCY_DLG_KINDS"
     while IFS= read -r k; do
       case "$k" in
         "scheduled task") has_cron=1 ;;

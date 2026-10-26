@@ -183,6 +183,10 @@ d3_setup() {
   run bash -c "$(sed -n '/^hf_bgwork_dialog_kinds() {/,/^}/p' "$HF"); printf '  The following will stop when you\n    exit:\n\n  scheduled task · Every day at\n    3:13 AM · probe ping\n  shell · cc-await-ping --timeout 3300\n\n  ❯ 1. Exit and stop tasks\n' | hf_bgwork_dialog_kinds"
   [ "$status" -eq 0 ]
   [ "$output" = $'scheduled task\nshell' ]
+  # the two-column layout of a narrow kitty pane, as the live watcher read it (pane 151, 2026-10-26)
+  run bash -c "$(sed -n '/^hf_bgwork_dialog_kinds() {/,/^}/p' "$HF"); printf '   Background work is running\n   The following will stop when you exit:\n\n   scheduled     · Every day at 4:07 AM · srv2 cron \n   task         ping\n\n   ❯ 1. Exit and stop tasks\n' | hf_bgwork_dialog_kinds"
+  [ "$status" -eq 0 ]
+  [ "$output" = "scheduled task" ]
   run bash -c "$(sed -n '/^hf_bgwork_dialog_kinds() {/,/^}/p' "$HF"); printf 'no dialog here\n' | hf_bgwork_dialog_kinds"
   [ "$status" -eq 1 ]
   [ -z "$output" ]
