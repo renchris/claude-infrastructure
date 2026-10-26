@@ -64,6 +64,7 @@ replay_summary() { # $1=library to source
   [ -f "$ROWS" ] || false
   run replay_summary "$LIB"
   [ "$status" -eq 0 ] || false
+  # shellcheck disable=SC2086  # deliberate: split the summary into its fields
   set -- $output
   [ "$1" = 1792879070 ] || { echo "first fire $1, want 1792879070 (21:57:50Z): $output"; false; }
   [ "$2" = 18 ] || { echo "10-24 hits $2, want 18: $output"; false; }
@@ -72,6 +73,7 @@ replay_summary() { # $1=library to source
 
 @test "02 (b) normal days: 10-15 and 10-23 refuse on 2% of their rows or fewer" {
   run replay_summary "$LIB"
+  # shellcheck disable=SC2086  # deliberate: split the summary into its fields
   set -- $output
   [ "$4" = 0/1366 ] || { echo "10-15: $4, want 0/1366"; false; }
   [ "$5" = 8/1011 ] || { echo "10-23: $5, want 8/1011"; false; }
