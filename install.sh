@@ -870,6 +870,26 @@ if [[ -d "$REPO_DIR/scripts/limit-recover" ]]; then
   done
 fi
 
+# scripts/{lockwatch,forensics}/ — incident 2026-10-25 lane A (lockprobe core, capture kit,
+# diagnosis, boot classifier). Same reason as limit-recover: the top-level loop globs scripts/*.sh
+# and scripts/*.py only, so these subdirectories landed but were never linked, and every caller that
+# uses the ~/.claude path (the sentinel's spawn line, rescue.sh's procscan re-verify, capture.sh from
+# lockprobe) found nothing. Per-file links into real dirs, like limit-recover.
+for sub in lockwatch forensics; do
+  [[ -d "$REPO_DIR/scripts/$sub" ]] || continue
+  echo ""
+  echo "$sub scripts → $CONFIG_DIR/scripts/$sub/"
+  ensure_real_dir "$CONFIG_DIR/scripts/$sub"
+  for f in "$REPO_DIR"/scripts/"$sub"/*; do
+    [[ -f "$f" ]] || continue
+    if $IS_GLOBAL; then
+      link_file "$f" "$CONFIG_DIR/scripts/$sub/$(basename "$f")"
+    else
+      copy_file "$f" "$CONFIG_DIR/scripts/$sub/$(basename "$f")"
+    fi
+  done
+done
+
 # Convenience symlink (global only)
 if $IS_GLOBAL && [[ ! -L "$HOME/bin/restore-file" ]]; then
   run ln -sf "$HOME/.claude/scripts/restore-file.sh" "$HOME/bin/restore-file"
