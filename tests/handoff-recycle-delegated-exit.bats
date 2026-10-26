@@ -102,7 +102,7 @@ cron_transcript() { # $1=sid → a transcript holding one live CronCreate job
   : > "$CMDFILE.exit-delegated"
   run drive "" "$CALLER"
   [ "$(cat "$H/exit-typed.log")" = "caller_alive=0" ] || { cat "$H/exit-typed.log"; false; }
-  grep -qx 'esc' "$H/keys.log" 2>/dev/null && { echo "an Esc was sent"; false; }
+! grep -qx 'esc' "$H/keys.log" 2>/dev/null || { echo "an Esc was sent"; false; }
   grep -c $'session send -s SELF-PANE \r' "$H/it2-calls.log" | grep -qx 1
   rows | grep -qx recycle-exit-delegated
   [[ "$output" == *"/exit typed by the watcher, read back, CR sent (delegated)"* ]]
@@ -126,7 +126,7 @@ cron_transcript() { # $1=sid → a transcript holding one live CronCreate job
   run drive "" ""
   [ "$status" -eq 1 ]
   grep -qx dels "$H/keys.log"
-  grep -q $'session send -s SELF-PANE \r' "$H/it2-calls.log" && { echo "a CR was sent over a draft"; false; }
+! grep -q $'session send -s SELF-PANE \r' "$H/it2-calls.log" || { echo "a CR was sent over a draft"; false; }
   rows | grep -qx recycle-held-exit-readback
 }
 
@@ -157,7 +157,7 @@ d3_setup() {
   run drive OLDSID-cron "$CALLER"
   [ "$(cat "$H/keys.log")" = 1 ] || { cat "$H/keys.log"; false; }
   rows | grep -qx recycle-bgwork-stopped-cron
-  rows | grep -qx recycle-bgcopy-stop && { echo "a background copy was made"; false; }
+! rows | grep -qx recycle-bgcopy-stop || { echo "a background copy was made"; false; }
   grep -qx '<!-- recycle-cron-carry v1 -->' "$HF_RCY_LAUNCH_PROMPT"
   grep -qF '"cron":"13 3 * * *"' "$HF_RCY_LAUNCH_PROMPT"
 }
@@ -167,7 +167,7 @@ d3_setup() {
   dialog_with 'scheduled task · Every day at 3:13 AM · probe ping' 'agent · research the cause' > "$H/dialog-on-exit"
   run drive OLDSID-cron "$CALLER"
   [ "$(cat "$H/keys.log")" = 2 ] || { cat "$H/keys.log"; false; }
-  rows | grep -qx recycle-bgwork-stopped-cron && { echo "real work was stopped"; false; }
+! rows | grep -qx recycle-bgwork-stopped-cron || { echo "real work was stopped"; false; }
   true
 }
 

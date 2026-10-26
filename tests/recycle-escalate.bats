@@ -36,7 +36,7 @@ rec() { jq -r "$1" "$CC_RECYCLE_INCIDENT_DIR/$2.json"; }
 @test "the first failure of a class fires one research session with the brief, worktree and goal; a second within 24 h is deduped" {
   run hf_recycle_escalate recycle-held-bgwork 7 sid-1 "dialog held" "$EV" "$BATS_TEST_TMPDIR/missing"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"recycle-held-bgwork count=1 fire=fired pid="* ]]
+  [[ "$output" == *"recycle-held-bgwork count=1 fire=fired pid="* ]] || false
   [ "$(fires 1)" = 1 ]
   d="$(date -u +%Y-%m-%d)"
   grep -qF -- "--prompt-file $CC_RECYCLE_INCIDENT_DIR/recycle-held-bgwork-$d.brief.md" "$STUB_ARGV"
@@ -45,7 +45,7 @@ rec() { jq -r "$1" "$CC_RECYCLE_INCIDENT_DIR/$2.json"; }
   grep -qF "$EV" "$CC_RECYCLE_INCIDENT_DIR/recycle-held-bgwork-$d.brief.md"
   [ "$(rec '.evidence | join(",")' recycle-held-bgwork)" = "$EV" ]
   run hf_recycle_escalate recycle-held-bgwork 8 sid-2 "dialog held again" "$EV"
-  [[ "$output" == *"count=2 fire=deduped-class"* ]]
+  [[ "$output" == *"count=2 fire=deduped-class"* ]] || false
   sleep 1
   [ "$(fires 1)" = 1 ]
   [ "$(rec '.count' recycle-held-bgwork)" = 2 ]
@@ -63,17 +63,17 @@ rec() { jq -r "$1" "$CC_RECYCLE_INCIDENT_DIR/$2.json"; }
 @test "three classes fire in a day, the fourth is capped; a fire older than a day does not count" {
   for c in recycle-dead recycle-unverified recycle-held-bgwork; do hf_recycle_escalate "$c" 7 s d >/dev/null; done
   run hf_recycle_escalate recycle-watcher-orphaned 7 s d
-  [[ "$output" == *"fire=day-cap"* ]]
+  [[ "$output" == *"fire=day-cap"* ]] || false
   [ "$(fires 3)" = 3 ]
   # age every logged fire past the window: the next class fires again
   awk '{ $1 = $1 - 90000; print }' "$CC_RECYCLE_INCIDENT_DIR/fires.log" > "$BATS_TEST_TMPDIR/f" && mv "$BATS_TEST_TMPDIR/f" "$CC_RECYCLE_INCIDENT_DIR/fires.log"
   run hf_recycle_escalate recycle-held-delegated 7 s d
-  [[ "$output" == *"fire=fired"* ]]
+  [[ "$output" == *"fire=fired"* ]] || false
 }
 
 @test "a designed hold (an operator draft) is counted and never fired" {
   run hf_recycle_escalate recycle-held-draft 7 s "operator text in the composer"
-  [[ "$output" == *"count=1 fire=skip-designed-hold"* ]]
+  [[ "$output" == *"count=1 fire=skip-designed-hold"* ]] || false
   sleep 1
   [ ! -e "$STUB_ARGV" ]
 }
@@ -81,16 +81,16 @@ rec() { jq -r "$1" "$CC_RECYCLE_INCIDENT_DIR/$2.json"; }
 @test "under bats with no fire bin set, nothing fires" {
   unset CC_RECYCLE_ESCALATE_FIRE_BIN
   run hf_recycle_escalate recycle-dead 7 s d
-  [[ "$output" == *"fire=suppressed-under-test"* ]]
+  [[ "$output" == *"fire=suppressed-under-test"* ]] || false
   [ "$(rec '.last_fire_ts' recycle-dead)" = 0 ]
 }
 
 @test "the kill switch writes nothing; an empty class after sanitising is ignored; rc is always 0" {
   CC_RECYCLE_ESCALATE=off run hf_recycle_escalate recycle-dead 7 s d
-  [ "$status" -eq 0 ] && [ -z "$output" ]
+  [ "$status" -eq 0 ] && [ -z "$output" ] || false
   [ ! -e "$CC_RECYCLE_INCIDENT_DIR" ]
   run hf_recycle_escalate '../../ETC' 7 s d
-  [ "$status" -eq 0 ] && [ -z "$output" ]
+  [ "$status" -eq 0 ] && [ -z "$output" ] || false
   run hf_recycle_escalate 'Recycle-Dead/x' 7 s d
   [[ "$output" == *"→ escalate: ecycle-eadx count=1"* ]]
 }
@@ -98,7 +98,7 @@ rec() { jq -r "$1" "$CC_RECYCLE_INCIDENT_DIR/$2.json"; }
 @test "a corrupt record is moved aside and counting restarts" {
   mkdir -p "$CC_RECYCLE_INCIDENT_DIR"; printf 'not json' > "$CC_RECYCLE_INCIDENT_DIR/recycle-dead.json"
   run hf_recycle_escalate recycle-dead 7 s d
-  [[ "$output" == *"count=1"* ]]
+  [[ "$output" == *"count=1"* ]] || false
   ls "$CC_RECYCLE_INCIDENT_DIR"/recycle-dead.json.corrupt.* >/dev/null
 }
 

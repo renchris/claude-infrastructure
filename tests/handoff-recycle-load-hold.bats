@@ -231,7 +231,7 @@ assert_proceeded() {
   echo "$RCY_CALLER_PID_ARG" > "$BATS_TEST_TMPDIR/subject.pid"
   commit_at 0.50
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ -e "$cmdfile.exit-committed" ] && [ -e "$cmdfile.exit-delegated" ]
+  [ -e "$cmdfile.exit-committed" ] && [ -e "$cmdfile.exit-delegated" ] || false
   [ "$(sends_exit)" = 0 ] || { cat "$CALLS"; false; }
   [[ "$output" == *"exit: DELEGATED to the watcher"* ]]
 }
