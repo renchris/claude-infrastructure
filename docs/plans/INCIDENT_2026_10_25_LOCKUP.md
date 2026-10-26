@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 # Incident 2026-10-25 — terminal/devfs lockup: lead plan
 
@@ -22,6 +22,8 @@ Working folder (untracked evidence): `~/incident-2026-10-25/` — CHANGELOG.md (
 | W6 lane F: root-cause code fix (cc-pane-runner SIG_IGN, cc-pane-verdict blocking open, pty test teardown) + kitty upstream issue + Apple Feedback draft | **S** pane 76, sid 914995eb, branch `lockwatch-lane-f` | default; added after the final RCA named our own code |
 | W7 lane F2: lane F's leftovers (expect-test teardown by process group; held runner exits on master loss, RCA R2b; `_husk_row` without `tty(1)`) | **S** pane 98, sid 00896c67, branch `lockwatch-lane-f2` | default; lane F self-closed before its follow-on arrived |
 | W8 lane C2: handoff-fire tdev rewrite + ~40 suites' `ps` stubs | **S** pane 101, sid 254f6b3a, branch `lockwatch-lane-c2-tdev` | default; fired by lane C, reports to the lead |
+| W10 boot-resume residuals (tombstones feed the recycle rung, outlived burst is no shutdown, resumed-this-boot stays down) | **S** pane 125, sid 8c12ad1c, branch `boot-resume-residuals` | default |
+| W11 lr-submit-red (13 `lr-fire-resume-submit` arms red on trunk, found by F2) | **S** pane 146, sid 8c79f41a, branch `lr-submit-red` | default |
 | W9 restore of the 15 RESUME-AT-REST rows | **L** lead, `cc-resume-layout --desktops --restore` | pane 23 landed the tool but handed the run back when the capacity probe refused; one command, no code |
 | lead | **L** this pane (kitty pane 1) | synthesis, custody, operator relay |
 
@@ -60,16 +62,30 @@ Still in flight: F2 (pane 98: expect-test teardown, runner exits on master loss,
 
 Operator: one script, `bash /tmp/incident-operator-steps.sh --confirm launchd --confirm tailspin` (0082, 0083, tailspin), filed as backlog rows; Pushover keys, one TCC click and the Apple Feedback filing as needs-human / needs-credential rows; decision `1cf14ed6e1c3` (add api.pushover.net to the agent-secrets egress allowlist).
 
+## Status: COMPLETE (2026-10-26 ~07:10 CDT, recycled lead b505115a)
+
+Every wave landed, each verified by content (`git ls-tree origin/main` on the commit's paths, empty diff against the lane tip):
+
+| Lane | Landed | Gate |
+|---|---|---|
+| F2 | 8c5330af7, 814b905bb, e7d92fdf2 | lockup §4 `1..11`, pty-reap `1..6` |
+| C2 tdev | 03e7a12d1 (29 files) | 40 suites green; load-timing reds re-run alone and A/B'd against trunk |
+| boot-resume residuals | dae8d9155, dd77219df, 0a8a4da9c | residuals `1..11` RED 5 → GREEN 11; boot-resume `1..97` |
+| lr-submit-red | c7f4e4b81 | `1..51` 0 not ok on the landed tree (13 before) |
+
+Close proof: `cc-panes` 48 panes, CLAUDE=42, TEAMMATE=6, SHELL=0; restore-plan-v2 49/49 accounted (25 live by resume argv, 3d1dc252 finished and closed, 23 OMIT); lockprobe `state.json level=0 verdict=ok kitty_rc=ok selftest=ok`, fresh each tick. Final report: `~/incident-2026-10-25/FINAL-REPORT.md`. Operator steps are one script plus filed rows (see the 00:55 update); they gate nothing in this scope.
+
 ## Open items
 
 1. ~~Collect W1 final RCA → copy RCA.md + DESIGN.md into `docs/research/incident-2026-10-25/`, commit, ship.~~ DONE (this commit).
-2. Custody: pane 23 + lanes A–D (`cc-custody`); verify each landing by content (`git ls-tree origin/main -- <paths>`).
-3. Pane 23 restores the 15 → verify with `bin/cc-panes` (SHELL=0, every plan row accounted).
-4. Operator Phase-0 items from DESIGN.md §8 (H5 Pushover credential, H7 two `--confirm` migration lines, H6 one TCC click) → file with `cc-backlog needs` once lanes land the migrations.
-5. Stop the temporary monitor (`pkill -f incident-2026-10-25/monitor.sh`) once lockprobe is live; log in CHANGELOG.md.
-6. FINAL-REPORT.md in the incident folder.
+2. ~~Custody: pane 23 + lanes A–D; verify each landing by content.~~ DONE (all lanes incl. F2, C2, residuals, lr-submit-red).
+3. ~~Restore the 15 → verify with `bin/cc-panes`.~~ DONE (SHELL=0, 49/49).
+4. ~~Operator items → `cc-backlog needs`.~~ DONE: `/tmp/incident-operator-steps.sh` + rows faf27bb0a451, 6fa39cae3d79, e1c4cbd96ef5, ec7bac81c929; decision 1cf14ed6e1c3.
+5. ~~Stop the temporary monitor.~~ DONE 23:04.
+6. ~~FINAL-REPORT.md.~~ DONE (status FINAL).
 
 ## Learnings
 
 - A restore that reports `launched=N` and "tree read back as recorded" proves layout, not content; verify every pane's occupant (census) before claiming done. `pgrep -x kitty` matches nothing on this kitty build — use `/tmp/kitty-<pid>` sockets.
 - `capacity-admit` refuses resumes at load > 2.0/core, which never clears at the 15–40/core design point; `CC_ADMIT_LOAD_TERM=off` drops only that term, and the refusal budget (3) admits on the next try.
+- Under load 100–250, a lane's own suites (not the land's smoke, which sheds) are the only behavioral gate; a lead waiting with a foreground poll must keep its bound well under the 600 s tool limit, since load stretches the loop and an overrun turns it into a background task that silences the /goal.
