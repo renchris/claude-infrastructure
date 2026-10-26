@@ -20867,7 +20867,8 @@ recycle_fire_commit() {
        # arm then repaired it with Esc and a second /exit 24-52 s later (34 of 47 self-recycles). So a
        # self-recycle writes `exit-delegated` and returns: the watcher waits for this call to end and
        # types the first /exit itself, through the same read-back. Every gate above has already run.
-       if hf_recycle_delegate_ok; then
+       # (a suite that extracts this function without the gate gets no delegation, as before it existed)
+       if command -v hf_recycle_delegate_ok >/dev/null 2>&1 && hf_recycle_delegate_ok; then
          if date +%s > "$cmdfile.exit-delegated" 2>/dev/null; then
            echo "→ exit: DELEGATED to the watcher — it types /exit once this tool call (pid $RCY_CALLER_PID_ARG) has returned, so no background-work dialog is raised. End this turn now."
            return 0
