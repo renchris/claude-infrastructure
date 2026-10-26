@@ -796,7 +796,7 @@ GHOST_ROW
       case "$started_ms" in ''|*[!0-9]*) continue ;; esac
       [ "$((started_ms / 1000))" -lt "$BOOT" ] || continue
       [ "$g_sid" != "$TSV_PAD" ] || continue
-      printf '%s\n' "$have" | grep -qxF -- "$g_sid" && continue
+      case $'\n'"$have"$'\n' in *$'\n'"$g_sid"$'\n'*) continue ;; esac   # no pipe: under pipefail grep -q can read a match as false
       mt="$(transcript_mtime "$(unpad "$g_acct")" "$(unpad "$g_sid")" "$(unpad "$g_cwd")")"
       { [ -n "$mt" ] && [ "$mt" -gt "$((BOOT - RECENCY_WINDOW))" ]; } || continue
       add_row "$g_acct" "$g_cwd" "$g_sid" "$g_name" "$TSV_PAD"; have="$have
@@ -831,7 +831,7 @@ for sid, cwd in out.items():
 ' "$hd/hb.kitty-ls.json" "$(printf '%s' "$have" | tr '\n' ' ')" 2>/dev/null)"
     while IFS=$'\t' read -r t_sid t_cwd; do
       [ -n "$t_sid" ] || continue
-      printf '%s\n' "$have" | grep -qxF -- "$t_sid" && continue
+      case $'\n'"$have"$'\n' in *$'\n'"$t_sid"$'\n'*) continue ;; esac   # no pipe: under pipefail grep -q can read a match as false
       # The account is the store holding its transcript; one with none is no session to resume.
       # At projects/<cwd slug>/<sid>.jsonl: a glob over every project dir is ~73,000 stats (R6).
       t_acct=""; t_slug="$(printf '%s' "$t_cwd" | tr -c 'A-Za-z0-9' '-')"
