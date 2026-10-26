@@ -117,13 +117,13 @@ field() { "$CLI" --sid "$1" --field "$2" "${@:3}"; }
   [ "$(field S1 identity)" = unknown ]
   row 200 S1 reverted next3 next4
   run "$CLI" --sid S1 --json
-  [ "$(jq -r '[.billing,.identity,(.identity_acct|tostring),.since]|join(" ")' <<<"$output")" = "next3 unknown null 200" ]
+  [ "$(jq -r '[.billing,.identity,(.identity_acct|tostring),(.since|floor|tostring)]|join(" ")' <<<"$output")" = "next3 unknown null 200" ]
 }
 
 @test "a re-home closes the identity mismatch" {
   export CC_BILLING=1
   reg 1 S1 claude-tertiary 1000
-  row 100 S1 committed next4 next3
+  row 100 S1 committed next4 next3 next3   # each row names the home it was written under
   row 300 S1 rehomed next4 next3 next4
   reg 2 S1 claude-quaternary 2000   # the relaunched process registers under its new store
   run "$CLI" --sid S1 --json

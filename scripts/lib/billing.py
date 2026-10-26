@@ -26,7 +26,8 @@ Ledger contract (written by wave W3's lr_lane/ledger.py, read only here): `<lane
 append-only, one JSON object per line:
   {t, lane, sid, pid, lstart, home, billing, prev_billing, cause, move_id, state, fp}
 `t` is epoch seconds, epoch milliseconds or ISO-8601. `home`/`billing`/`prev_billing` are account
-names (aliases and config dirs are folded). How each state moves billing(S,t):
+names (aliases and config dirs are folded); `home` is the store the session ran under when
+the row was written (identity at a past t is judged against it). How each state moves billing(S,t):
   committed, proved, unproven, reverted, rehomed   billing := row.billing from row.t on
   aborted                                          billing := row.prev_billing (if present)
   prepared, anything else                          no effect
@@ -354,17 +355,25 @@ class Attribution:
                 since=last["_t"],
             )
         # identity: home until a move put another account's bearer on the wire; a re-home closes it.
+        # Compared against the home AT each row (its own `home` key), not today's: a re-home after
+        # `at` has already moved today's home to the account that was billing then.
         tail = rows
         for i in range(len(rows) - 1, -1, -1):
             if rows[i].get("state") == "rehomed":
                 tail = rows[i + 1 :]
                 break
         moved = any(
-            r.get("state") in MOVED_STATES and self._acct(r.get("billing")) != h
+            r.get("state") in MOVED_STATES
+            and self._acct(r.get("billing")) != (self.accounts.norm(r.get("home")) or h)
             for r in tail
         )
         if moved or out["billing"] == UNKNOWN:
             out["identity"], out["identity_acct"] = UNKNOWN, None
+        else:
+            named = [self.accounts.norm(r.get("home")) for r in rows]
+            named = [n for n in named if n]
+            if named:
+                out["identity_acct"] = named[-1]
         return out
 
     def billing_of(

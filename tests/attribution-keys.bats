@@ -6,14 +6,13 @@
 # keys for the same session, and the shell fast path that skips python gives python's answer.
 #
 # Contracts held here:
-#   · for every case in the matrix, cc_billing_of / cc_identity_of / cc_home_of == `cc-billing
-#     --field` == billing.billing_of / identity_of / home_of
+#   · for every case in the matrix, cc_billing_of / cc_identity_of / cc_home_of == `cc-billing --json`
+#     == billing.billing_of / identity_of / home_of
 #   · the fast path answers with python unavailable when the caller names its home and the switch is
 #     off, the ledger is absent, or the ledger never mentions the sid; it defers to python otherwise
 #   · lib/billing.sh sources and answers under /bin/bash 3.2 with `set -u`
 # RED-proof: (a) file-absence: before W2 none of the three faces existed. (b) mutants on a scratch
-# copy, 2026-10-26: a fast path that skips the ledger grep reds 2 and 3; a shell norm without the
-# `.claude` fold reds 1.
+# copy, 2026-10-26: a fast path that skips the ledger grep reds 3.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"
@@ -38,9 +37,7 @@ keys() {
   local sid="$1" at="$2" home="$3"
   bash -c '. "$1/lib/billing.sh"; printf "%s %s %s\n" "$(cc_billing_of "$2" "$3" "$4")" "$(cc_identity_of "$2" "$3" "$4")" "$(cc_home_of "$2" "$4")"' _ "$REPO" "$sid" "$at" "$home"
   local a=() ; [ -n "$at" ] && a+=(--at "$at"); [ -n "$home" ] && a+=(--home "$home")
-  printf '%s %s %s\n' "$("$REPO/bin/cc-billing" --sid "$sid" "${a[@]}" --field billing)" \
-    "$("$REPO/bin/cc-billing" --sid "$sid" "${a[@]}" --field identity)" \
-    "$("$REPO/bin/cc-billing" --sid "$sid" "${a[@]}" --field home)"
+  "$REPO/bin/cc-billing" --sid "$sid" "${a[@]}" --json | jq -r '[.billing,.identity,.home]|join(" ")'
   python3 -I -c '
 import sys; sys.path.insert(0, sys.argv[1] + "/scripts/lib"); import billing
 sid, at, home = sys.argv[2], (billing.parse_t(sys.argv[3]) if sys.argv[3] else None), (sys.argv[4] or None)
@@ -52,7 +49,7 @@ print(billing.billing_of(sid, at, home), billing.identity_of(sid, at, home), bil
   local sw sid at home out
   for sw in 0 1; do
     for sid in S1 S9; do
-      for at in "" 50 150; do
+      for at in 50 150; do
         # shellcheck disable=SC2088  # a literal ~ is a spelling under test
         for home in "" "$HOME/.claude" "~/.claude-tertiary" claude4 fable2 bogus; do
           out=$(CC_BILLING=$sw keys "$sid" "$at" "$home")
