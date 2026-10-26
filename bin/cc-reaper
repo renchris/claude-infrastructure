@@ -742,7 +742,14 @@ _gs_escalation_alive() { # <pid> — did this pid survive the TERM? rc 0 = still
 # orphan-bash and a move was TERMed mid-flight. The load-harness arms run under
 # /tmp/lrh-<id>-cure/ and /tmp/lrh-<id>-red/, and their detached bash supervisor lives ~75 min;
 # the reaper TERMed /tmp/lr-rig processes on 2026-09-29. Both listed by their own argv token.
-GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|wt-tombstone|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|lr-upgrade[.]sh --drain|lr-move-batch[.]sh|lr-move-worker[.]sh|lr-recon-act|/tmp/lrh-[0-9A-Za-z]+-(cure|red)/|kitty|tmux|iTerm|launchd"
+# sevenrooms-bridge Mac app jobs (2026-10-24): refill.sh runs run.sh per venue for hours; its launching
+# session recycled, the job went to ppid 1, and at 07:24:41Z the arm TERMed `bash …/.worktrees/
+# macapp-extract/scripts/macapp/run.sh Mansion NightClub - Vancouver` at age 3426 s. The victim ran
+# from a WORKTREE, whose path carries no repo name, so the token admits the checkout
+# (`sevenrooms-bridge/`) or one `.worktrees/<name>/` level, then only these six scripts under
+# scripts/macapp/ (on 2026-10-25 every scripts/macapp/ on this box belonged to sevenrooms-bridge). Any
+# other run.sh is still reaped. Pinned as a fixture pair.
+GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|wt-tombstone|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|lr-upgrade[.]sh --drain|lr-move-batch[.]sh|lr-move-worker[.]sh|lr-recon-act|/tmp/lrh-[0-9A-Za-z]+-(cure|red)/|(sevenrooms-bridge|[.]worktrees/[^/ ]+)/scripts/macapp/(refill|incremental|sweep|closed|run|reopen)[.]sh|kitty|tmux|iTerm|launchd"
 _gs_argv_reread() { # <pid> → that pid's argv on stdout, "" when unreadable. Under the fixture seam it
                     # reads CC_REAPER_GARBAGE_PS_B2 (else PS_B again), never the live process table.
   local pid="$1" f

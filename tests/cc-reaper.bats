@@ -2092,6 +2092,35 @@ EOF
   [ "$got" = "90654 90655 " ]
 }
 
+# ── THE SEVENROOMS APP REFILL (2026-10-24). refill.sh and its per-venue run.sh outlived their recycled
+# session and were TERMed at age 3426 s; 90672 is the live argv verbatim, from a sevenrooms-bridge
+# worktree. Controls: another repo's run.sh, an unlisted macapp script, and a run.sh one directory
+# deeper under .worktrees are all still collected.
+@test "garbage: sevenrooms-bridge macapp jobs are never collected, and any other run.sh beside them still is" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90671 1 57:06 bash
+90672 1 57:06 bash
+90673 1 57:06 bash
+90674 1 57:06 bash
+90675 1 57:06 bash
+90676 1 57:06 bash
+EOF
+  cat > "$GB" <<'EOF'
+90671 bash /Users/x/Development/sevenrooms-bridge/scripts/macapp/refill.sh
+90672 bash /Users/x/Development/.worktrees/macapp-extract/scripts/macapp/run.sh Mansion NightClub - Vancouver
+90673 /bin/bash /Users/x/Development/other-repo/scripts/run.sh
+90674 /bin/bash /Users/x/Development/other-repo/scripts/macapp/run.sh
+90675 bash /Users/x/Development/sevenrooms-bridge/scripts/macapp/screen.sh
+90676 bash /Users/x/Development/.worktrees/a/b/scripts/macapp/run.sh
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # RED before the fix: 90671 and 90672 appear in this list too.
+  [ "$got" = "90673 90674 90675 90676 " ]
+}
+
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
 # orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
 # classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided
