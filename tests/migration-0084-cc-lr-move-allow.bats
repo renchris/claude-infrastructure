@@ -13,6 +13,10 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"
+  # hermeticity: the rule strings name handoff-fire.sh; nothing here runs it, but pin its gates and seams anyway
+  export CC_FIRE_CAPACITY_GATE=off CC_ADMIT_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/absent-sweep.json" CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-" CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/telemetry"
   mkdir -p "$HOME/.claude/bin" "$HOME/.claude-next"
   printf '#!/bin/sh\nexit 0\n' > "$HOME/.claude/bin/cc-lr"; chmod +x "$HOME/.claude/bin/cc-lr"
   jq -n '{
