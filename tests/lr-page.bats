@@ -199,12 +199,11 @@ EOF
 
 @test "no env and no file: the keys come from agent-secrets, into push-send's process only" {
   secrets_stub
-  # push-send's INERT contract: keys unset ⇒ exit 3
-  cc_stub "$STUB" push-send.sh - <<'EOF'
-#!/bin/bash
-[ -n "${PUSHOVER_TOKEN:-}" ] || exit 3
-printf '%s %s\n' "$PUSHOVER_TOKEN" "$PUSHOVER_USER" >"$BATS_TEST_TMPDIR/push.creds"
-EOF
+  # push-send's INERT contract: keys unset ⇒ exit 3. lr-page runs it as `bash <file>`, never by its
+  # `#!`, so the body is a plain file (a cc_stub shim link would hand bash the Mach-O).
+  rm -f "$STUB/push-send.sh"
+  printf '%s\n' '[ -n "${PUSHOVER_TOKEN:-}" ] || exit 3' \
+    'printf "%s %s\n" "$PUSHOVER_TOKEN" "$PUSHOVER_USER" >"$BATS_TEST_TMPDIR/push.creds"' >"$STUB/push-send.sh"
   SEC_KEYS=1 run bash "$PAGE" "held draft"
   [ "$status" -eq 0 ]
   [ "$output" = "lr-page: verdict=posted os=posted phone=sent" ]
