@@ -748,8 +748,11 @@ _gs_escalation_alive() { # <pid> — did this pid survive the TERM? rc 0 = still
 # from a WORKTREE, whose path carries no repo name, so the token admits the checkout
 # (`sevenrooms-bridge/`) or one `.worktrees/<name>/` level, then only these six scripts under
 # scripts/macapp/ (on 2026-10-25 every scripts/macapp/ on this box belonged to sevenrooms-bridge). Any
-# other run.sh is still reaped. Pinned as a fixture pair.
-GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|wt-tombstone|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|lr-upgrade[.]sh --drain|lr-move-batch[.]sh|lr-move-worker[.]sh|lr-recon-act|/tmp/lrh-[0-9A-Za-z]+-(cure|red)/|(sevenrooms-bridge|[.]worktrees/[^/ ]+)/scripts/macapp/(refill|incremental|sweep|closed|run|reopen)[.]sh|kitty|tmux|iTerm|launchd|lockwatch|forensics|break-glass|devfs-canary"
+# other run.sh is still reaped. Pinned as a fixture pair. weekly.sh added 2026-10-25: the weekly
+# LaunchAgent (com.reso.sevenrooms-macapp-weekly) runs it with launchd as its parent, so it is ppid 1
+# from its first second and lives 15-30 minutes; caffeinate -i in front of it does not help, because
+# caffeinate keeps the command in its own pid and forks the waiter.
+GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|wt-tombstone|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|lr-upgrade[.]sh --drain|lr-move-batch[.]sh|lr-move-worker[.]sh|lr-recon-act|/tmp/lrh-[0-9A-Za-z]+-(cure|red)/|(sevenrooms-bridge|[.]worktrees/[^/ ]+)/scripts/macapp/(refill|incremental|sweep|closed|run|reopen|weekly)[.]sh|kitty|tmux|iTerm|launchd|lockwatch|forensics|break-glass|devfs-canary"
 _gs_argv_reread() { # <pid> → that pid's argv on stdout, "" when unreadable. Under the fixture seam it
                     # reads CC_REAPER_GARBAGE_PS_B2 (else PS_B again), never the live process table.
   local pid="$1" f

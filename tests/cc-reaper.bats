@@ -2105,6 +2105,7 @@ EOF
 90674 1 57:06 bash
 90675 1 57:06 bash
 90676 1 57:06 bash
+90677 1 57:06 bash
 EOF
   cat > "$GB" <<'EOF'
 90671 bash /Users/x/Development/sevenrooms-bridge/scripts/macapp/refill.sh
@@ -2113,6 +2114,7 @@ EOF
 90674 /bin/bash /Users/x/Development/other-repo/scripts/macapp/run.sh
 90675 bash /Users/x/Development/sevenrooms-bridge/scripts/macapp/screen.sh
 90676 bash /Users/x/Development/.worktrees/a/b/scripts/macapp/run.sh
+90677 /opt/homebrew/bin/bash /Users/x/Development/sevenrooms-bridge/scripts/macapp/weekly.sh
 EOF
   run "$R" garbage --reap
   [ "$status" -eq 0 ]
