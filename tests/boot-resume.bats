@@ -25,7 +25,12 @@
 load helpers/cc-stub
 load helpers/boot-resume-env
 
-setup() { boot_resume_setup; }
+setup() {
+  # Fixtured here as well as in the helper: the hermeticity ratchet reads setup() itself.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_FIRE_CAPACITY_GATE=off
+  boot_resume_setup
+}
 
 
 # reg_entry <sid> <startedAt_ms> <account-config-basename> [cwd] [name]

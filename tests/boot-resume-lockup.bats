@@ -19,6 +19,8 @@ load helpers/cc-stub
 load helpers/boot-resume-env
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # also in the helper; the hermeticity ratchet reads setup() itself
+  export CC_FIRE_CAPACITY_GATE=off
   boot_resume_setup
   export CC_LOCKWATCH_DIR="$BATS_TEST_TMPDIR/lockwatch"; mkdir -p "$CC_LOCKWATCH_DIR"
   export CC_BOOT_RESUME_MODE=page

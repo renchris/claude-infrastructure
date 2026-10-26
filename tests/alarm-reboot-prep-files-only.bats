@@ -27,6 +27,8 @@ setup() {
   export CC_REBOOT_PREP_PS="$D/bin/ps" CC_REBOOT_PREP_SESSIONS="$D/bin/cc-sessions" CC_REBOOT_PREP_LSOF="$D/bin/lsof" \
          CC_REBOOT_PREP_KITTEN="$D/bin/kitten" CC_REBOOT_PREP_CC_HOMES="$D/cc/.claude"
   export CC_HEARTBEAT_DIR="$D/hb" CC_SHUTDOWN_TOMB_DIR="$D/tombs"
+  # never the live ones (the files-only mode reads none of them; a regression must not reach them)
+  export CC_REBOOT_PREP_CLAUDE_TMP="$D/no-ctmp" CC_REBOOT_PREP_KITTY_SOCK_PREFIX="$D/no-kitty-" CC_REBOOT_PREP_SOCKS_DIR="$D/no-socks"
   mkdir -p "$D/cc/.claude-quaternary/sessions" "$D/cc/.claude-next/sessions" "$CC_SHUTDOWN_TOMB_DIR"
   printf '{"pid":11,"sessionId":"s-pidfile","cwd":"/w/a","startedAt":1,"kind":"interactive"}\n' > "$D/cc/.claude-quaternary/sessions/11.json"
   printf '{"pid":12,"sessionId":"s-headless","cwd":"/w/h","startedAt":1,"kind":"print"}\n' > "$D/cc/.claude-next/sessions/12.json"
