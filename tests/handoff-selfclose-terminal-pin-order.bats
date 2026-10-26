@@ -62,6 +62,7 @@ FAKE
   x_kitty="$(sed -n '/^in_kitty() {/p' "$HF")";                  [ -n "$x_kitty" ]
   x_kid="$(sed -n '/^kitty_identity() {/p' "$HF")";              [ -n "$x_kid" ]
   x_ttyq="$(sed -n '/^_as_tty_query() {/,/^}/p' "$HF")";         [ -n "$x_ttyq" ]
+  x_tdev="$(sed -n '/^hf_tdev_name() {/,/^}/p;/^hf_ps_tty_of() {/,/^}/p' "$HF")"; [ -n "$x_tdev" ]
   # as_tty is now a state-DISCARDING wrapper over as_tty_classified, which owns the retry loop
   # (item 87a515ed087e). Extracted here for the same reason _as_tty_query already is: as_tty calls
   # it, so an extraction that omits it evals a function with an undefined callee.
@@ -70,7 +71,7 @@ FAKE
   x_pin="$(sed -n '/^pin_term_verdict_for_watcher() {/,/^}/p' "$HF")"; [ -n "$x_pin" ]
   # shellcheck source=../scripts/lib/cc-run.sh disable=SC1091  # the gate runs shellcheck without -x
   . "$REPO/scripts/lib/cc-run.sh"   # the pin runs cc-in-kitty through cc_run
-  eval "$x_kitty"; eval "$x_kid"; eval "$x_ttyq"; eval "$x_ttyc"; eval "$x_tty"; eval "$x_pin"
+  eval "$x_kitty"; eval "$x_kid"; eval "$x_ttyq"; eval "$x_tdev"; eval "$x_ttyc"; eval "$x_tty"; eval "$x_pin"
 
   unset CC_TERM IT2_WRAPPER_NO_KITTY
   export KITTY_WINDOW_ID=2          # the pollution: inherited into a genuinely-iTerm2 pane

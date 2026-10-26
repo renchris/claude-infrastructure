@@ -48,13 +48,15 @@ setup() {
   unset CLAUDE_CODE_SESSION_ID
 
   SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
-  # osascript: as_tty's query answers "TTY-<uuid>" for any pane.
+  # osascript: as_tty's query answers "ttysNNN" (NNN per uuid) for any pane.
   cat > "$SHIM/osascript" <<'SH'
 uuid=""
 while [ $# -gt 0 ]; do
   case "$1" in -e) shift 2 2>/dev/null || shift ;; -) shift ;; *) uuid="$1"; shift ;; esac
 done
-[ -n "$uuid" ] && printf '%s' "TTY-$uuid"
+# A real pty name, ttysNNN with NNN fixed per uuid (tty_for_uuid below): the tty reads are
+# devname-free (`ps -x -o tdev=` prints 16/NNN), and a made-up name has no minor to print.
+[ -n "$uuid" ] && printf 'ttys%d' "$(( $(printf '%s' "$uuid" | cksum | cut -d' ' -f1) % 900 + 100 ))"
 exit 0
 SH
   # git, per DIRECTORY: .GITCLEAN / .GITDIRTY make a work tree; .GITAHEAD holds commits ahead of
@@ -75,14 +77,14 @@ case "${1:-}" in
 esac
 exit 0
 SH
-  # ps: PS_TTY_OUT answers `ps -o tty= -p …` (own_ancestry_ttys) — which is what makes the CALLER's
-  # pane read `mine` to pane_ownership. Everything else answers empty (no teammates, no subagents).
+  # ps: PS_TTY_OUT answers `ps -x -o tdev= -p …` (own_ancestry_ttys) as 16/NNN — which is what makes
+  # the CALLER's pane read `mine` to pane_ownership. Everything else answers empty (no teammates, no subagents).
   cat > "$SHIM/ps" <<'SH'
 want=""
 while [ $# -gt 0 ]; do
-  case "$1" in -o) case "${2:-}" in tty=) want=tty ;; esac; shift 2 ;; *) shift ;; esac
+  case "$1" in -o) case "${2:-}" in tdev=) want=tdev ;; esac; shift 2 ;; *) shift ;; esac
 done
-[ "$want" = tty ] && [ -n "${PS_TTY_OUT:-}" ] && printf '%s\n' "$PS_TTY_OUT"
+[ "$want" = tdev ] && [ -n "${PS_TTY_OUT:-}" ] && printf '16/%d\n' "$((10#${PS_TTY_OUT#ttys}))"
 exit 0
 SH
   chmod +x "$SHIM/osascript" "$SHIM/git" "$SHIM/ps"
@@ -288,8 +290,10 @@ peer_stamp() { # [firedBy] [extra-json]
     '{paneUUID:$p, cwd:$c, firedBy:$by, firedAt:"2026-09-28T05:53:01Z", selfRetire:true, schema:2, marker:$m, closedAt:null} + $x' \
     > "$CC_FIRED_DIR/$PEER.json"
 }
+tty_for_uuid() { printf 'ttys%d' "$(( $(printf '%s' "$1" | cksum | cut -d' ' -f1) % 900 + 100 ))"; }   # = the osascript stub's
 as_firer() { # the CALLER is pane $FIRER, and its identity is PROVEN (ancestry tty = its pane's tty)
-  export ITERM_SESSION_ID="w0t0p0:$FIRER" PS_TTY_OUT="TTY-$FIRER" CC_CLOSE_LEDGER_GUARD=0
+  PS_TTY_OUT="$(tty_for_uuid "$FIRER")"
+  export ITERM_SESSION_ID="w0t0p0:$FIRER" PS_TTY_OUT CC_CLOSE_LEDGER_GUARD=0
   FIRER_WT="$BATS_TEST_TMPDIR/firer-wt"; mkdir -p "$FIRER_WT"; cd "$FIRER_WT" || return 1
 }
 peer_ready() { peer_stamp; row "$PEER" "$SID_NOW" "$PEER_WT"; transcript "$SID_NOW" "$(recycle_brief)" "2026-09-28T07:20:03.850Z"; }

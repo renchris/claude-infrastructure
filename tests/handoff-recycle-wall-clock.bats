@@ -33,12 +33,13 @@ setup() {
 
   SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIM/osascript"
-  # pane_cc_state's ROOT query is the slow read; it answers no processes, so the pane reads
-  # `unknown` and the loop never leaves. Every other ps form is the real one.
+  # pane_cc_state's ROOT query (`-axo tdev=,pid=`, the devname-free form) is the slow read; its one
+  # row is on no terminal, so the pane's tty (ttys998) has no processes, the pane reads `unknown` and
+  # the loop never leaves. Every other ps form is the real one.
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
-  *"-o pid= -t"*) date +%s >> "$HOME/ps-roots.log"; /bin/sleep "${PS_SLOW_S:-3}"; exit 0 ;;
+  "-axo tdev=,pid=") date +%s >> "$HOME/ps-roots.log"; /bin/sleep "${PS_SLOW_S:-3}"; printf '   ??     1\n'; exit 0 ;;
 esac
 exec /bin/ps "$@"
 SH
@@ -72,7 +73,7 @@ SH
 }
 
 @test "[RED] shell wait: 'bgwork@<N>s' is at least the wall seconds since the loop's first read when each read is slow" {
-  run bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR"
+  run bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/ttys998" "$CMDFILE" "$BATS_TEST_TMPDIR"
   local n first read slack=3
   n="$(printf '%s\n' "$output" | grep -o 'bgwork@[0-9]*s' | head -1 | tr -dc '0-9')"
   first="$(head -1 "$H/ps-roots.log" 2>/dev/null)"
@@ -92,7 +93,7 @@ SH
   # which comes after the loop: the watcher re-reads the pane twice on the way out (the at_shell
   # re-check and the dead verdict), so the allowance is the in-flight iteration plus those reads,
   # four reads in all. The sleep-sum code spans ~42 s here; the wall-clock code ~15 s.
-  run bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR"
+  run bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/ttys998" "$CMDFILE" "$BATS_TEST_TMPDIR"
   local first last bound=9 iter=$(( 4 * ${PS_SLOW_S:-3} + 1 ))
   first="$(head -1 "$H/ps-roots.log" 2>/dev/null)"
   last="$(tail -1 "$H/ps-roots.log" 2>/dev/null)"

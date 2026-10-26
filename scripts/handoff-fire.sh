@@ -1232,6 +1232,42 @@ in_kitty() { { [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}"
 # documented CC_TERM seam — the same seam pin_term_verdict_for_watcher already hands to the detached
 # watcher, and for the same reason: resolve it where the walk is valid, then pass it down. Unpinned,
 # this is in_kitty() exactly, so every caller that never pins keeps today's behaviour byte-for-byte.
+# ── A TTY WITHOUT devname (lockup incident 2026-10-25, DESIGN C4; mac-forensics.md §8) ─────────────
+# `ps -o tty=` and `ps -t <tty>` turn a device number into a NAME by walking /dev (ttyname → devname_r
+# → lstat), and that walk is exactly where 17 `login` and 23 `ps` slept for 9 h on 10-25 once one pty
+# node was poisoned. `tdev` prints the raw major/minor with no lookup. A pty slave is major 16 and
+# ttysNNN is minor NNN (verified live 2026-10-25: tdev 16/1 ⇔ tty ttys001).
+# FALLBACK, and only on an UNRECOGNISABLE reading: a ps with no `tdev` keyword (GNU procps) or a
+# fixture ps that does not speak it gets the old argv, so the old answer, never an empty one. A real
+# macOS ps always answers `N/N` or `??`, so on this box the fallback never runs.
+hf_tdev_name() { # $1=tdev ("16/20") → ttys020 · ?? for anything that is not a pty slave
+  local m
+  case "${1:-}" in
+    16/*) m="${1#16/}"; case "$m" in ''|*[!0-9]*) printf '??' ;; *) printf 'ttys%03d' "$((10#$m))" ;; esac ;;
+    *) printf '??' ;;
+  esac
+}
+hf_ps_tty_of() { # $1=pid, or a comma list → one short tty name per process, as `ps -o tty= -p` printed
+  local out d
+  out="$(ps -x -o tdev= -p "$1" 2>/dev/null)" || true
+  if [ -n "$out" ] && ! printf '%s\n' "$out" | grep -vE '^[[:space:]]*([0-9]+/[0-9]+|\?\?)[[:space:]]*$' >/dev/null; then
+    printf '%s\n' "$out" | while read -r d; do hf_tdev_name "$d"; printf '\n'; done
+    return 0
+  fi
+  # Empty is a gone pid here (nothing to name, so no /dev walk), or a ps that did not speak tdev.
+  ps -o tty= -p "$1" 2>/dev/null || true
+}
+hf_ps_on_tty() { # $1=tty (ttys020 or /dev/ttys020) $2=ps -o list ("pid=", "pid=,ppid=,comm=") → the rows `ps -t <tty> -o <list>` printed
+  local t="${1##*/}" n out
+  case "$t" in ttys[0-9]*) n="${t#ttys}" ;; *) n="" ;; esac
+  case "$n" in ''|*[!0-9]*) ps -t "$t" -o "$2" 2>/dev/null || true; return 0 ;; esac
+  out="$(ps -axo "tdev=,$2" 2>/dev/null)" || true
+  if printf '%s\n' "$out" | grep -E '^[[:space:]]*([0-9]+/[0-9]+|\?\?)[[:space:]]' >/dev/null; then
+    printf '%s\n' "$out" | awk -v want="16/$((10#$n))" '$1 == want { sub(/^[ \t]*[^ \t]+[ \t]?/, ""); print }'
+    return 0
+  fi
+  ps -t "$t" -o "$2" 2>/dev/null || true
+}
 kitty_identity() { case "${CC_TERM:-}" in kitty) return 0 ;; ?*) return 1 ;; esac; in_kitty; }
 
 # ── KITTY OFF THE PRE-COMMIT PATH: THE SWITCH (W12, B5a §5.1; reviews R-3, S3, S14) ────────────────
@@ -2204,7 +2240,7 @@ _as_tty_query() { # $1=session-uuid → tty on stdout; non-zero when the query i
     local kpid ktty
     kpid="$(kt_window_field "$1" pid)" || return 1
     [ -n "$kpid" ] || return 0
-    ktty="$(ps -o tty= -p "$kpid" 2>/dev/null | tr -d '[:space:]')" || ktty=""
+    ktty="$(hf_ps_tty_of "$kpid" | tr -d '[:space:]')" || ktty=""
     # `??` is ps's own "no controlling terminal" — an answer, not a failure: exit 0, print nothing.
     [ -n "$ktty" ] && [ "$ktty" != "??" ] || return 0
     printf '/dev/%s' "$ktty"
@@ -2531,7 +2567,7 @@ hf_self_kitty_tty() { # → /dev/<tty> | empty
   while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ] && [ "$n" -lt 32 ]; do
     pp="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]')" || pp=""
     if [ "$pp" = "$kp" ]; then
-      t="$(ps -o tty= -p "$p" 2>/dev/null | tr -d '[:space:]')" || t=""
+      t="$(hf_ps_tty_of "$p" | tr -d '[:space:]')" || t=""
       case "$t" in ''|'??') return 0 ;; esac
       printf '/dev/%s' "${t#/dev/}"
       return 0
@@ -2549,7 +2585,7 @@ own_ancestry_ttys() { # → the DISTINCT ttys owned anywhere in this ancestry, a
   [ -n "$csv" ] || return 0
   # ONE ps over the whole comma-list (BSD ps accepts it), then awk — not a grep chain. A grep that
   # filters everything out exits 1, and under `set -o pipefail` that becomes the function's status.
-  ps -o tty= -p "$csv" 2>/dev/null | awk 'NF && $1 != "??" { s[$1] = 1 } END { for (t in s) print t }' || true
+  hf_ps_tty_of "$csv" | awk 'NF && $1 != "??" { s[$1] = 1 } END { for (t in s) print t }' || true
 }
 
 _it2_pane_tty_listing() { # → "<pane-id><TAB><tty>" per live iTerm2 session · empty when unreadable
@@ -2717,7 +2753,7 @@ hf_self_headless() { # → 0 iff this process runs under a claude with no termin
   local cp t
   cp="$(own_claude_pid)"
   if [ -n "$cp" ]; then
-    t="$(ps -o tty= -p "$cp" 2>/dev/null | tr -d '[:space:]')" || t=""
+    t="$(hf_ps_tty_of "$cp" | tr -d '[:space:]')" || t=""
     [ "$t" = '??' ]
     return
   fi
@@ -3239,7 +3275,7 @@ hf_remote_source_pin() { # $1=pane $2=row pid $3=mode → 0 the row's process is
   fi
   p="$pid"
   while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ] && [ "$n" -lt 12 ]; do
-    t="$(ps -o tty= -p "$p" 2>/dev/null | tr -d '[:space:]' || true)"
+    t="$(hf_ps_tty_of "$p" | tr -d '[:space:]' || true)"
     [ "${t##*/}" = "${ptty##*/}" ] && return 0
     p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]' || true)"; n=$((n + 1))
   done
@@ -4511,7 +4547,7 @@ hf_exit_signal_pin() { # $1=pane tty $2=session id → 0 one pinned (HF_EXIT_SIG
   local ptty="${1##*/}" want="${2:-}" roots closure f p s pids="" n=0
   HF_EXIT_SIG_PID="" HF_EXIT_SIG_LSTART=""
   if [ -z "$ptty" ] || [ -z "$want" ]; then HF_EXIT_SIG_WHY="no pane tty or no session id to pin a claude by"; return 1; fi
-  roots="$(ps -o pid= -t "$ptty" 2>/dev/null | tr -d ' ' | tr '\n' ' ' || true)"
+  roots="$(hf_ps_on_tty "$ptty" pid= | tr -d ' ' | tr '\n' ' ' || true)"
   [ -n "$roots" ] || { HF_EXIT_SIG_WHY="no process on $ptty"; return 1; }
   closure="$(ps -axo pid=,ppid= 2>/dev/null | awk -v roots="$roots" '
     BEGIN { n = split(roots, a, " "); for (i = 1; i <= n; i++) if (a[i] != "") sel[a[i]] = 1 }
@@ -5600,7 +5636,7 @@ composer_owned() { # $1=pane-uuid → 0 PROVEN a live CC session owns it / 1 NOT
     [ -n "$pid" ] || continue
     pid_is_cc "$pid" && return 0
   done <<EOF
-$(ps -t "$(basename "$ptty")" -o pid= 2>/dev/null | tr -d ' ' || true)
+$(hf_ps_on_tty "$ptty" pid= | tr -d ' ' || true)
 EOF
   return 1
 }
@@ -7614,7 +7650,7 @@ pin_still_live() { # $1="<sid> <pid>" $2=pane-tty → 0 live / 1 gone
   [ -n "$ptty" ] || return 0            # no pane tty to compare → pid-liveness is all we can pin
   p="$pid"
   while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ] && [ "$n" -lt 12 ]; do
-    t="$(ps -o tty= -p "$p" 2>/dev/null | tr -d '[:space:]' || true)"
+    t="$(hf_ps_tty_of "$p" | tr -d '[:space:]' || true)"
     [ "${t##*/}" = "${ptty##*/}" ] && return 0
     p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]' || true)"; n=$((n + 1))
   done
@@ -7664,7 +7700,7 @@ cc_headless_on_tty() { # $1=tty path → 0 + "pid <pid> fd 1 is <TYPE> <name>" w
     printf 'pid %s fd 1 is %s %s' "$pid" "${t:-?}" "$n"
     return 0
   done <<EOF
-$(ps -t "${tty##*/}" -o pid= 2>/dev/null || true)
+$(hf_ps_on_tty "$tty" pid= || true)
 EOF
   return 1
 }
@@ -8065,8 +8101,8 @@ pane_cc_state() { # $1=pane tty (path or basename) → prints cc|shell|unknown �
   # "newline in string" on an embedded newline, and it dies SILENTLY into stderr while the
   # substitution still succeeds — measured 2026-08-06, it turned every multi-process pane into
   # `unknown` (fail-safe, so no alarm) while single-process panes kept answering correctly.
-  roots="$(ps -o pid= -t "$ptty" 2>/dev/null | tr -d ' ' | tr '\n' ' ' || true)"
-  fg="$(ps -o tpgid= -t "$ptty" 2>/dev/null | awk 'NF { gsub(/ /, "", $0); print; exit }' || true)"
+  roots="$(hf_ps_on_tty "$ptty" pid= | tr -d ' ' | tr '\n' ' ' || true)"
+  fg="$(hf_ps_on_tty "$ptty" tpgid= | awk 'NF { gsub(/ /, "", $0); print; exit }' || true)"
   # A tty with NO processes is not an empty prompt — it is a tty we cannot read (a pane that is
   # gone, a stub, a bridge hiccup). Believing it "shell-only" is the fail-dangerous default itself.
   [ -n "$roots" ] || { printf 'unknown'; return 0; }
@@ -8167,7 +8203,7 @@ pane_shell_root() { # $1=pane tty (path or basename) → prints yes|no|unknown �
   local ptty="${1:-}" rows onttys shells=0 seen=0 pid ppid comm kids
   [ -n "$ptty" ] || { printf 'unknown'; return 0; }
   ptty="${ptty##*/}"
-  rows="$(ps -o pid=,ppid=,comm= -t "$ptty" 2>/dev/null || true)"
+  rows="$(hf_ps_on_tty "$ptty" pid=,ppid=,comm= || true)"
   [ -n "$rows" ] || { printf 'unknown'; return 0; }
   # SPACE-separated, never newline-separated: BSD awk dies SILENTLY on an embedded newline in -v
   # (the 2026-08-06 measurement recorded above pane_cc_state's own ps read).
@@ -10132,7 +10168,7 @@ sc_verified_successor_evidence() { # $1=this pane $2=successor pane $3=mailbox d
 agent_id_on_tty() { # $1=tty basename → "<name>@session-<sid>" or empty
   local t="${1:-}"
   [ -n "$t" ] || return 0
-  ps -t "$t" -o command= 2>/dev/null \
+  hf_ps_on_tty "$t" command= \
     | awk '{for (i=1; i<NF; i++) if ($i == "--agent-id") { print $(i+1); exit }}' 2>/dev/null || true
   return 0
 }
@@ -13690,7 +13726,7 @@ EOF
   fi
   rcy_typed_at_iso="$(date -u -r "$rcy_typed_at" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
 
-  cc_up_cheap() { ps -o comm= -t "${TTY_PATH##*/}" 2>/dev/null | grep -E '^-?(claude|node)' >/dev/null; }
+  cc_up_cheap() { hf_ps_on_tty "$TTY_PATH" comm= | grep -E '^-?(claude|node)' >/dev/null; }
   rcy_boot_rc_read() { # → the rc lr-fire-resume wrote FOR THIS ATTEMPT, or nothing
     local f mt
     [ -n "${RCY_RUN_DIR:-}" ] || return 0

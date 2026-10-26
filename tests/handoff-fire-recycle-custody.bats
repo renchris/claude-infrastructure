@@ -214,6 +214,7 @@ intent_file() { # [jq filter that breaks the valid file] → its path (pane 901,
   local frag="$BATS_TEST_TMPDIR/probe-shellroot.sh"
   {
     sed -n '/^pane_shell_root() {/,/^}/p' "$HF"
+    sed -n '/^hf_tdev_name() {/,/^}/p;/^hf_ps_on_tty() {/,/^}/p' "$HF"
     echo '[ -z "${STUB_ROOT:-}" ] || pane_shell_root() { printf "%s" "$STUB_ROOT"; }'
     sed -n '/CAN THIS PANE TAKE A RELAUNCH AFTER ITS/,/echo "window_id: /p' "$HF"
   } > "$frag"
@@ -490,7 +491,7 @@ load_tail_funcs() {
              hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit \
              composer_residue_dir composer_residue_record \
              pid_is_cc hf_succ_ours_staged write_teardown_marker hf_exit_signal_pin hf_exit_signal \
-             hf_exit_signal_grace; do
+             hf_exit_signal_grace hf_tdev_name hf_ps_on_tty; do
       sed -n "/^$f() {/,/^}/p" "$HF"
     done
   } > "$FUNCS"
@@ -1203,6 +1204,11 @@ watcher_world() {
   cat > "$W/shim/ps" <<'SH'
 #!/usr/bin/env bash
 args="$*"
+# The devname-free tty read, `ps -axo tdev=,<fields>`: every process as `<major/minor> <fields>`. This
+# world has one pane, ttys999 (16/999), so its rows are this stub's own `-o <fields> -t ttys999` answer.
+case "$args" in
+  "-axo tdev=,"*) "$0" -o "${args#-axo tdev=,}" -t ttys999 | sed 's|^|16/999 |'; exit 0 ;;
+esac
 cc=0; [ "$(date +%s)" -lt "$(cat "$HOME/shell-at" 2>/dev/null || echo 0)" ] && cc=1
 case "$args" in *pgid=*) printf '4242\n'; exit 0 ;; esac
 # RELATIVE CLOCK: with $HOME/shell-after-first holding N, claude stays up for N s counted from the

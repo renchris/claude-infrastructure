@@ -45,6 +45,11 @@ setup() {
   export FLICKER_AT="${FLICKER_AT:-2}"
   cat > "$SHIM/ps" <<'PS'
 #!/usr/bin/env bash
+# The devname-free tty read, `ps -axo tdev=,<fields>`: every process as `<major/minor> <fields>`. The
+# one pane is ttys999 (16/999), so its rows are this stub's own `-o <fields> -t ttys999` answer.
+case "$*" in
+  "-axo tdev=,"*) a="$*"; "$0" -o "${a#-axo tdev=,}" -t ttys999 | sed 's|^|16/999 |'; exit 0 ;;
+esac
 case " $* " in
   *" -g "*)
     printf 'x' >> "$PS_COUNT"; n="$(wc -c < "$PS_COUNT" | tr -d ' ')"
@@ -97,6 +102,11 @@ drive() { bash "$HF" __recycle "$STUB_PANE" /dev/ttys999 "$CMDFILE" "$BATS_TEST_
   # Every foreground-group read carries the helper, so no probe ever certifies a shell.
   cat > "$SHIM/ps" <<'PS'
 #!/usr/bin/env bash
+# The devname-free tty read, `ps -axo tdev=,<fields>`: every process as `<major/minor> <fields>`. The
+# one pane is ttys999 (16/999), so its rows are this stub's own `-o <fields> -t ttys999` answer.
+case "$*" in
+  "-axo tdev=,"*) a="$*"; "$0" -o "${a#-axo tdev=,}" -t ttys999 | sed 's|^|16/999 |'; exit 0 ;;
+esac
 case " $* " in
   *" -g "*) printf '4100 /bin/zsh\n4101 git\n'; exit 0 ;;
   *" -axo "*|*" -Ao "*) printf '4100 1\n'; exit 0 ;;
@@ -115,6 +125,11 @@ PS
 @test "[RED] a recycle-dead row claims the background-work dialog ONLY when a dialog was actually seen" {
   cat > "$SHIM/ps" <<'PS'
 #!/usr/bin/env bash
+# The devname-free tty read, `ps -axo tdev=,<fields>`: every process as `<major/minor> <fields>`. The
+# one pane is ttys999 (16/999), so its rows are this stub's own `-o <fields> -t ttys999` answer.
+case "$*" in
+  "-axo tdev=,"*) a="$*"; "$0" -o "${a#-axo tdev=,}" -t ttys999 | sed 's|^|16/999 |'; exit 0 ;;
+esac
 case " $* " in
   *" -g "*) printf '4100 /bin/zsh\n4101 git\n'; exit 0 ;;
   *" -axo "*|*" -Ao "*) printf '4100 1\n'; exit 0 ;;

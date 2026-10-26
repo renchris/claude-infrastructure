@@ -26,6 +26,9 @@
 # the watcher path, and sed-extracted functions for the unit-level predicates. The ps shim is
 # EXTENDED here to answer `-p <pid>` for comm/tty/args, because that is the form the pin uses.
 
+# = the osascript shim's tty for pane $1 (keep the two in lockstep)
+tty_for_uuid() { printf 'ttys%d' "$(( $(printf '%s' "$1" | cksum | cut -d' ' -f1) % 800 + 100 ))"; }
+
 setup() {
   # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
   # capacity_gate reads the box's live loadavg AND (M10) its memory headroom, exiting 9 when either is
@@ -70,7 +73,7 @@ setup() {
   PS_PID_DIR="$BATS_TEST_TMPDIR/pids";   mkdir -p "$PS_PID_DIR"
   export OSA_GONE_DIR PS_DEAD_DIR PS_PID_DIR
 
-  # as_tty: `osascript - <uuid>` → TTY-<uuid>, or empty when a gone-marker exists.
+  # as_tty: `osascript - <uuid>` → ttysNNN (per uuid), or empty when a gone-marker exists.
   cat > "$SHIM/osascript" <<'SH'
 #!/usr/bin/env bash
 uuid=""
@@ -83,7 +86,12 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$uuid" ] || exit 0
 [ -n "${OSA_GONE_DIR:-}" ] && [ -e "$OSA_GONE_DIR/$uuid" ] && exit 0
-printf '%s' "TTY-$uuid"
+# A pane's tty is a REAL pty name (the tty reads are devname-free: `ps -o tdev=` prints 16/NNN, and a
+# made-up name has no minor), fixed per uuid as tty_for_uuid computes it, and it is REGISTERED: a
+# pane that resolves has a shell on its tty, so the ps shim's process table must list it.
+t="ttys$(( $(printf '%s' "$uuid" | cksum | cut -d' ' -f1) % 800 + 100 ))"
+[ -z "${PS_TTY_REG:-}" ] || grep -qxF -- "$t" "$PS_TTY_REG" 2>/dev/null || printf '%s\n' "$t" >> "$PS_TTY_REG"
+printf '%s' "$t"
 exit 0
 SH
 
@@ -105,6 +113,16 @@ SH
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
 reg="${PS_TTY_REG:-/nonexistent}"
+# The devname-free tty read, `ps -axo tdev=,<fields>`: every process as `<major/minor> <fields>`, so
+# every registered pane's rows, each answered as this shim's own `-o <fields> -t <tty>`.
+case "$*" in
+  "-axo tdev=,"*)
+    a="$*"
+    while IFS= read -r t; do
+      case "$t" in ttys[0-9]*) "$0" -o "${a#-axo tdev=,}" -t "$t" </dev/null | sed "s|^|16/$((10#${t#ttys})) |" ;; esac
+    done < "$reg"
+    exit 0 ;;
+esac
 root_pid() {                     # $1=tty → that pane's root pid, stable across invocations
   local t="$1" n
   n="$(grep -nxF -- "$t" "$reg" 2>/dev/null | head -1 | cut -d: -f1)"
@@ -138,18 +156,20 @@ if [ -n "$pid" ]; then
   if [ -f "$f" ]; then                     # the PIN's fixture wins
     case "$want" in
       *comm*) sed -n 1p "$f" ;;
-      *tty*)  sed -n 2p "$f" ;;
+      *tdev*) t="$(sed -n 2p "$f")"; printf '16/%d\n' "$((10#${t#ttys}))" ;;
       *args*) sed -n 3p "$f" ;;
     esac
     exit 0
   fi
+  case "$pid" in *[!0-9]*|'') exit 0 ;; esac   # a pid list or no pid: no synthetic pane pid matches
+  [ "$pid" -ge 700000 ] || exit 0          # a real pid (the caller's ancestry): never a pane's, so no row
   while IFS= read -r t; do                 # else a synthetic pane pid, for pid_is_cc over the closure
     [ -n "$t" ] || continue
     p="$(root_pid "$t")"
     if   [ "$pid" = "$p" ];                          then c=zsh;    a=-zsh
     elif [ "$pid" = "$((p + 1))" ] && tty_live "$t"; then c=claude; a=/opt/cc/bin/claude
     else continue; fi
-    case "$want" in *comm*) printf '%s\n' "$c" ;; *tty*) printf '%s\n' "$t" ;; *args*) printf '%s\n' "$a" ;; esac
+    case "$want" in *comm*) printf '%s\n' "$c" ;; *tdev*) printf '16/%d\n' "$((10#${t#ttys}))" ;; *args*) printf '%s\n' "$a" ;; esac
     exit 0
   done < "$reg"
   exit 0                                   # reaped pid → no line at all
@@ -186,7 +206,7 @@ exit 0
 SH
   chmod +x "$SHIM/osascript" "$SHIM/ps" "$SHIM/git"
   export PATH="$SHIM:$PATH"
-  export PS_TTY_REG="$BATS_TEST_TMPDIR/ps-tty-reg"; : > "$PS_TTY_REG"
+  export PS_TTY_REG="$BATS_TEST_TMPDIR/ps-tty-reg"; printf 'ttys901\nttys902\nttys903\n' > "$PS_TTY_REG"   # the panes tests name directly
 
   REGDIR="$BATS_TEST_TMPDIR/reg";   mkdir -p "$REGDIR"
   PROJDIR="$BATS_TEST_TMPDIR/proj"; mkdir -p "$PROJDIR"
@@ -221,7 +241,7 @@ succ_row() {
 live_pid() {
   printf '%s\n%s\n%s\n' \
     "/Users/chrisren/.claude-219/node_modules/.bin/claude" \
-    "${2:-TTY-$SUCC}" \
+    "${2:-$(tty_for_uuid "$SUCC")}" \
     "/Users/chrisren/.claude-219/node_modules/.bin/claude --continue" > "$PS_PID_DIR/$1"
 }
 
@@ -288,7 +308,7 @@ SH
 @test "RED-PROOF pin DEAD: pid alive but RECYCLED onto another pane's tty → exit 3" {
   # A bare kill -0 / pid-exists check cannot express this: the pid runs, it just is not this pane's
   # session any more. The tty leg of the pin is what catches it.
-  succ_row 4242; live_pid 4242 "TTY-SOME-OTHER-PANE"
+  succ_row 4242; live_pid 4242 "ttys905"
   run bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC"
   [ "$status" -eq 3 ]
   [[ "$output" == *"no longer owns tty"* ]] || false
@@ -315,7 +335,7 @@ SH
 
 @test "UNPINNABLE + nothing on the tty → still ABORTS (the fallback keeps enforcing)" {
   succ_row ""
-  : > "$PS_DEAD_DIR/TTY-$SUCC"
+  : > "$PS_DEAD_DIR/$(tty_for_uuid "$SUCC")"
   run bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC"
   [ "$status" -eq 3 ]
   [[ "$output" == *"no live claude on successor"* ]] || false
@@ -325,11 +345,11 @@ SH
 
 @test "RED-PROOF watcher T-0: pinned session died mid-window while a node holds the tty → no close" {
   # The 180s hole. Pre-fix the watcher re-ran the tty check, which a leftover node satisfies — so a
-  # successor that died after arming was closed onto anyway. No dead-marker for TTY-B here: the tty
+  # successor that died after arming was closed onto anyway. No dead-marker for ttys902 here: the tty
   # check WOULD pass; only the pin convicts.
   H="$BATS_TEST_TMPDIR/home-t0"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"                       # predecessor already exited → skip the wait loop
-  run env HOME="$H" bash "$HF" __selfclose PREDSID TTY-A SUCC-B TTY-B "succ-sess-0 4242"
+  : > "$PS_DEAD_DIR/ttys901"                       # predecessor already exited → skip the wait loop
+  run env HOME="$H" bash "$HF" __selfclose PREDSID ttys901 SUCC-B ttys902 "succ-sess-0 4242"
   [ "$status" -ne 0 ]
   [[ "$output" == *"close-instant pin check FAILED"* ]] || false
   [[ "$output" == *"ABORTED at close-instant"* ]] || false
@@ -342,9 +362,9 @@ SH
 
 @test "watcher T-0: pinned session still alive on its tty → closes predecessor, focuses successor" {
   H="$BATS_TEST_TMPDIR/home-t0-ok"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"
-  live_pid 4242 "TTY-B"
-  run env HOME="$H" bash "$HF" __selfclose PREDSID TTY-A SUCC-B TTY-B "succ-sess-0 4242"
+  : > "$PS_DEAD_DIR/ttys901"
+  live_pid 4242 "ttys902"
+  run env HOME="$H" bash "$HF" __selfclose PREDSID ttys901 SUCC-B ttys902 "succ-sess-0 4242"
   [ "$status" -eq 0 ]
   grep -q "session close -f -s PREDSID" "$H/it2-calls.log"
   grep -q "session focus SUCC-B" "$H/it2-calls.log"
@@ -355,10 +375,10 @@ SH
   # If the watcher re-read the row instead of re-checking the handed-over pin, a DIFFERENT session
   # launched into that pane during the window would satisfy a gate that proved the OLD one engaged.
   H="$BATS_TEST_TMPDIR/home-t0-newsess"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"
+  : > "$PS_DEAD_DIR/ttys901"
   printf '{"paneUUID":"SUCC-B","session_id":"a-brand-new-session","pid":9999}\n' > "$REGDIR/SUCC-B.json"
-  live_pid 9999 "TTY-B"                          # the NEW session is alive on that tty…
-  run env HOME="$H" bash "$HF" __selfclose PREDSID TTY-A SUCC-B TTY-B "succ-sess-0 4242"
+  live_pid 9999 "ttys902"                          # the NEW session is alive on that tty…
+  run env HOME="$H" bash "$HF" __selfclose PREDSID ttys901 SUCC-B ttys902 "succ-sess-0 4242"
   [ "$status" -ne 0 ]                            # …but pid 4242 — the one we verified — is gone
   [[ "$output" == *"close-instant pin check FAILED"* ]] || false
   ! grep -q "session close" "$H/it2-calls.log" 2>/dev/null || false  # predecessor left alive
@@ -399,7 +419,7 @@ SH
   # node|claude substring truncated clean off (memory actuator-must-see-the-target-population).
   # comm alone would convict a healthy session; argv[0] is never truncated.
   eval "$(sed -n '/^pid_is_cc() {/,/^}/p' "$HF")"
-  printf '%s\n%s\n%s\n' "/Users/chrisren/" "TTY-X" \
+  printf '%s\n%s\n%s\n' "/Users/chrisren/" "ttys904" \
     "/Users/chrisren/.claude-219/node_modules/@anthropic-ai/claude-code/bin/claude.exe --continue" \
     > "$PS_PID_DIR/7777"
   run pid_is_cc 7777
@@ -410,7 +430,7 @@ SH
   # A fired session's argv carries its whole brief, which routinely says "claude". Only argv[0] may
   # be consulted, else the predicate matches any process that merely MENTIONS claude.
   eval "$(sed -n '/^pid_is_cc() {/,/^}/p' "$HF")"
-  printf '%s\n%s\n%s\n' "/bin/zsh" "TTY-X" \
+  printf '%s\n%s\n%s\n' "/bin/zsh" "ttys904" \
     "/bin/zsh -lc drive the claude-infrastructure backlog item to done" > "$PS_PID_DIR/8888"
   run pid_is_cc 8888
   [ "$status" -eq 1 ]

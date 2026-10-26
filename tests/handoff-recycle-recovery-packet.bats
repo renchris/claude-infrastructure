@@ -55,6 +55,11 @@ watcher_world() {
   WSHIM="$BATS_TEST_TMPDIR/wshim"; mkdir -p "$WSHIM"
   cat > "$WSHIM/ps" <<'SH'
 #!/usr/bin/env bash
+# The devname-free tty read, `ps -axo tdev=,<fields>`: every process as `<major/minor> <fields>`. The
+# one pane is ttys999 (16/999), so its rows are this stub's own `-o <fields> -t ttys999` answer.
+case "$*" in
+  "-axo tdev=,"*) a="$*"; "$0" -o "${a#-axo tdev=,}" -t ttys999 | sed 's|^|16/999 |'; exit 0 ;;
+esac
 args="$*"
 cc=0; [ -f "$HOME/pane-cc" ] && cc=1
 case "$args" in *pgid=*) printf '4242\n'; exit 0 ;; esac

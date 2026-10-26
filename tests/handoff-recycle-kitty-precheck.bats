@@ -114,7 +114,7 @@ row_of() { jq -c --arg c "$1" 'select(.class == $c)' "$LOG" | tail -1; }
 load_units() {
   # hf_kitty_queue_depth moved to scripts/lib/kitty-queue.sh (W3 P5); the subject sources it from there.
   . "$REPO_SRC/scripts/lib/kitty-queue.sh"
-  eval "$(sed -n '/^hf_recycle_kitty_precheck() {/,/^}/p;/^hf_recycle_kitty_probe() {/,/^}/p;/^hf_self_kitty_tty() {/,/^}/p;/^hf_phase() {/,/^}/p;/^hf_kprobe_connect_say() {/,/^}/p;/^hf_kprobe_detail() {/,/^}/p;/^kitty_socket_accepting() {/,/^}/p;/^hf_bounded_s() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^hf_recycle_kitty_precheck() {/,/^}/p;/^hf_recycle_kitty_probe() {/,/^}/p;/^hf_self_kitty_tty() {/,/^}/p;/^hf_phase() {/,/^}/p;/^hf_kprobe_connect_say() {/,/^}/p;/^hf_kprobe_detail() {/,/^}/p;/^kitty_socket_accepting() {/,/^}/p;/^hf_bounded_s() {/,/^}/p;/^hf_tdev_name() {/,/^}/p;/^hf_ps_tty_of() {/,/^}/p' "$HF")"
   export HF_TIMEOUT_BIN=""
 }
 
@@ -405,14 +405,15 @@ probe() { # $@=extra env
 @test "a: the self tty is the tty of the ancestor whose parent is \$KITTY_PID, not the caller's" {
   load_units
   shim="$BATS_TEST_TMPDIR/psbin"; mkdir -p "$shim"
-  # ancestry: $$ → 900 (claude, ttys030 under expect) → 800 (window root, ttys016) → kitty 700
+  # ancestry: $$ → 900 (claude, ttys030 under expect) → 800 (window root, ttys016) → kitty 700. The
+  # tty is read devname-free, `ps -x -o tdev= -p <pid>`: ttys030 is 16/30, ttys016 is 16/16.
   cat > "$shim/ps" <<SH
 #!/bin/bash
 pid="" want=""
 while [ \$# -gt 0 ]; do case "\$1" in -p) pid="\$2"; shift 2 ;; -o) want="\$2"; shift 2 ;; *) shift ;; esac; done
 case "\$want:\$pid" in
   ppid=:$$) echo 900 ;; ppid=:900) echo 800 ;; ppid=:800) echo 700 ;;
-  tty=:900) echo ttys030 ;; tty=:800) echo ttys016 ;;
+  tdev=:900) echo 16/30 ;; tdev=:800) echo 16/16 ;;
 esac
 SH
   chmod +x "$shim/ps"

@@ -54,26 +54,33 @@ while [ $# -gt 0 ]; do
     *)  uuid="$1"; shift ;;
   esac
 done
-[ -n "$uuid" ] && printf '%s' "TTY-$uuid"
+# A pane's tty is a REAL pty name, ttysNNN with NNN fixed per uuid (tty_for_uuid below), because the
+# tty reads are devname-free (`ps -x -o tdev=` prints 16/NNN) and a made-up name has no minor.
+[ -n "$uuid" ] && printf 'ttys%d' "$(( $(printf '%s' "$uuid" | cksum | cut -d' ' -f1) % 900 + 100 ))"
 exit 0
 SH
+  tty_for_uuid() { printf 'ttys%d' "$(( $(printf '%s' "$1" | cksum | cut -d' ' -f1) % 900 + 100 ))"; }
   cat > "$SHIM/git" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
-  # ps: `-o tty= -p <pid>` answers PS_TTY_OUT (the row pid's tty); `-o ppid=` answers nothing, so the
-  # ancestry walk in hf_remote_source_pin stops after one hop; `-o lstart=` answers one fixed start
-  # time, so the watcher's launch lock (W2b) can stamp its holder; everything else answers nothing.
+  # ps: `-x -o tdev= -p <pid>` answers PS_TTY_OUT (the row pid's tty) as its major/minor; `-o ppid=`
+  # answers nothing, so the ancestry walk in hf_remote_source_pin stops after one hop; `-o lstart=`
+  # answers one fixed start time, so the watcher's launch lock (W2b) can stamp its holder; everything
+  # else answers nothing.
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
 want=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    -o) case "${2:-}" in tty=) want=tty ;; comm=) want=comm ;; lstart=) want=lstart ;; esac; shift 2 ;;
+    -o) case "${2:-}" in tdev=) want=tdev ;; comm=) want=comm ;; lstart=) want=lstart ;; esac; shift 2 ;;
     *) shift ;;
   esac
 done
-[ "$want" = tty ] && [ -n "${PS_TTY_OUT:-}" ] && printf '%s\n' "$PS_TTY_OUT"
+# `-x -o tdev= -p <pid>` is the devname-free tty read: ttysNNN is 16/NNN, no terminal is `??`.
+if [ "$want" = tdev ] && [ -n "${PS_TTY_OUT:-}" ]; then
+  case "$PS_TTY_OUT" in ttys*) printf '16/%d\n' "$((10#${PS_TTY_OUT#ttys}))" ;; *) printf '%s\n' "$PS_TTY_OUT" ;; esac
+fi
 [ "$want" = lstart ] && printf 'Tue Sep 29 10:00:00 2026\n'
 exit 0
 SH
@@ -93,7 +100,7 @@ SH
   LAUNCHER="$BATS_TEST_TMPDIR/lr-launch-abcd1234-XXXXXX.sh"
   printf '#!/bin/bash\nexec /bin/echo resume\n' > "$LAUNCHER"; chmod +x "$LAUNCHER"
   CWD_DIR="$BATS_TEST_TMPDIR/wt"; mkdir -p "$CWD_DIR"
-  export PS_TTY_OUT="TTY-$SRC_PANE"          # the row's process sits on the pane's own tty
+  PS_TTY_OUT="$(tty_for_uuid "$SRC_PANE")"; export PS_TTY_OUT   # the row's process sits on the pane's own tty
 }
 
 mk_transplant() { # $1 (optional) = override for .handed_off_to
@@ -328,7 +335,7 @@ recycle_self() { # the SELF form: --transplanted-source with NO --source-pane/--
 
 @test "the row's pid is alive but on ANOTHER tty — REFUSED: the row is STALE" {
   mk_transplant; src_row
-  export PS_TTY_OUT="TTY-somebody-else"
+  export PS_TTY_OUT="ttys098"                 # below every tty_for_uuid minor, so never the pane's
   recycle
   [ "$status" -eq 2 ]
   [[ "$output" == *"has no ancestor on tty"* ]] || { echo "$output"; false; }
@@ -422,7 +429,7 @@ recycle_self() { # the SELF form: --transplanted-source with NO --source-pane/--
 @test "CONTROL: the LOCAL recycle form still runs the self-identity gate on a pane that is not ours" {
   # No remote flags: an explicit --session-id that no ancestor owns is exactly what c5f80b8b was.
   pf="$BATS_TEST_TMPDIR/brief.md"; printf 'hello\n' > "$pf"
-  export PS_TTY_OUT="TTY-the-driver"          # our own ancestry sits elsewhere
+  export PS_TTY_OUT="ttys097"                 # our own ancestry sits elsewhere
   run bash "$HF" --recycle --dry-run --session-id "$SRC_PANE" --prompt-file "$pf"
   [ "$status" -eq 2 ]
   [[ "$output" == *"is NOT this session's pane"* ]] || { echo "$output"; false; }
@@ -577,6 +584,11 @@ STUB
   # Phase-aware ps, pinned in the `shell` phase forever (PS_DEAD_CALLS is never reached).
   cat > "$WSHIM/ps" <<'SH'
 #!/usr/bin/env bash
+# The devname-free tty read, `ps -axo tdev=,<fields>`: every process as `<major/minor> <fields>`. The
+# one pane is ttys999 (16/999), so its rows are this stub's own `-o <fields> -t ttys999` answer.
+case "$*" in
+  "-axo tdev=,"*) a="$*"; "$0" -o "${a#-axo tdev=,}" -t ttys999 | sed 's|^|16/999 |'; exit 0 ;;
+esac
 args="$*"
 case "$args" in *pgid=*) printf '%s\n' "4242"; exit 0 ;; esac
 # One fixed start time, so the watcher's launch lock (W2b) can stamp its holder.

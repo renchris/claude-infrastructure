@@ -46,6 +46,11 @@ setup() {
   # timing depends on the distinction; only the post-close DIAGNOSIS does, and H2 asserts it.
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
+# The devname-free tty read, `ps -axo tdev=,<fields>`: every process as `<major/minor> <fields>`. The
+# pane is ttys022 (16/22), so its rows are this stub's own `-o <fields> -t ttys022` answer.
+case "$*" in
+  "-axo tdev=,"*) a="$*"; "$0" -o "${a#-axo tdev=,}" -t ttys022 | sed 's|^|16/22 |'; exit 0 ;;
+esac
 case "$*" in
   *"-Ao"*) cat "${PSTAB:-/dev/null}" ;;
   *"-t"*)  [ "${PS_CC_ALIVE:-0}" = 1 ] && echo claude ;;

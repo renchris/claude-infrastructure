@@ -54,7 +54,7 @@ setup() {
              hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit \
              composer_residue_dir composer_residue_record pid_is_cc hf_succ_mode hf_succ_ours_staged \
              hf_succ_lib_load hf_succ_stage \
-             write_teardown_marker hf_exit_signal_pin hf_exit_signal hf_exit_signal_grace \
+             write_teardown_marker hf_exit_signal_pin hf_exit_signal hf_exit_signal_grace hf_tdev_name hf_ps_on_tty \
              hf_load_per_core hf_recycle_load_bound hf_recycle_load_gate \
              hf_typed_relaunch_hold_mode hf_terminal_responsive hf_succ_stage_retry hf_kitty_band \
              hf_recycle_subject_pin hf_recycle_subject_gone hf_recycle_subject_yield; do
@@ -92,6 +92,12 @@ SH
   cat > "$STUB/ps" <<'SH'
 #!/usr/bin/env bash
 printf 'ps %s\n' "$*" >> "$CALLS"
+# The devname-free per-tty read, `-axo tdev=,<field>`: this world's one process is kitty (pid 610),
+# on no terminal, so no pane tty holds anything.
+case "$*" in
+  "-axo tdev=,comm="|"-axo tdev=,command=") printf '?? /Applications/kitty.app/Contents/MacOS/kitty\n'; exit 0 ;;
+  "-axo tdev=,"*) printf '?? 610\n'; exit 0 ;;
+esac
 printf 'USER   PID   TT  %%CPU STAT PRI     STIME     UTIME COMMAND\n'
 printf 'chris  610   ??   1.0 S    %sT  0:01.00   0:02.00 /Applications/kitty.app/Contents/MacOS/kitty\n' "$(cat "$STUB/band" 2>/dev/null || echo 47)"
 SH

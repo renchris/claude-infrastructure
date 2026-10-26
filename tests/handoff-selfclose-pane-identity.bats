@@ -92,7 +92,8 @@ setup() {
   # which link owns the pane's tty; every other link answers `??`, exactly as a process with no
   # controlling terminal does. Default 9003 — the DEEPEST link — so the ordinary case is the one
   # that would break a "compare my own tty" implementation.
-  # ONLY the two `-o ppid= -p` / `-o tty= -p` forms are intercepted; everything else delegates to
+  # ONLY the two `-o ppid= -p` / `-x -o tdev= -p` forms are intercepted (tdev is the devname-free
+  # major/minor: the pane's ttys101 is 16/101); everything else delegates to
   # the real ps, because the gates downstream of the subject use ps for their own purposes and a
   # shim that answered those would be testing the fixture rather than the script.
   cat > "$SHIM/ps" <<'SH'
@@ -115,10 +116,10 @@ if [ "$seen_p" = 1 ] && [ "$fmt" = "ppid=" ]; then
   esac
   exit 0
 fi
-if [ "$seen_p" = 1 ] && [ "$fmt" = "tty=" ]; then
+if [ "$seen_p" = 1 ] && [ "$fmt" = "tdev=" ]; then
   IFS=, read -r -a ps_list <<< "$pid"
   for p in "${ps_list[@]}"; do
-    if [ "$p" = "${ANC_TTY_ON:-9003}" ]; then printf '%s\n' "${ANC_TTY:-ttysMINE}"; else printf '??\n'; fi
+    if [ "$p" = "${ANC_TTY_ON:-9003}" ]; then printf '16/101\n'; else printf '??\n'; fi
   done
   exit 0
 fi
@@ -162,8 +163,8 @@ SH
   export PATH="$SHIM:$PATH"
 
   # The default world: two live panes. PANE-MINE sits on this ancestry's tty; PANE-OTHER does not.
-  export PANE_TTYS="PANE-MINE /dev/ttysMINE
-PANE-OTHER /dev/ttysOTHER"
+  export PANE_TTYS="PANE-MINE /dev/ttys101
+PANE-OTHER /dev/ttys202"
 
   WORK="$BATS_TEST_TMPDIR/work"; mkdir -p "$WORK"
   # $WORK must NOT sit inside a git repo: the dirty-tree gate runs BEFORE the dry-run branch, so a
@@ -190,6 +191,7 @@ PANE-OTHER /dev/ttysOTHER"
   eval "$(sed -n '/^_it2_pane_tty_listing() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^own_ancestry_pids() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^own_ancestry_ttys() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^hf_tdev_name() {/,/^}/p;/^hf_ps_tty_of() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^pane_ownership() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^own_pane_id() {/,/^}/p' "$HF")"
 }
@@ -258,7 +260,7 @@ stamp() { # $1=pane id → a fired-peer stamp so the origin gate lets the close 
 }
 
 @test "own_pane_id: empty when no enumerated pane matches this ancestry (never a guess)" {
-  export PANE_TTYS="PANE-OTHER /dev/ttysOTHER"
+  export PANE_TTYS="PANE-OTHER /dev/ttys202"
   [ -z "$(own_pane_id)" ]
 }
 
@@ -288,7 +290,7 @@ stamp() { # $1=pane id → a fired-peer stamp so the origin gate lets the close 
 
 @test "gate: not-ours AND unrepairable → REFUSES; nothing typed, nothing closed" {
   # No enumerated pane sits on this ancestry, so there is no safe pane to retire in its place.
-  export PANE_TTYS="PANE-OTHER /dev/ttysOTHER"
+  export PANE_TTYS="PANE-OTHER /dev/ttys202"
   sc "w0t0p0:PANE-OTHER"
   [ "$status" -eq 2 ]
   printf '%s\n' "$output" | grep -qF 'this session stays alive' || false
@@ -337,7 +339,7 @@ rc() { # $1=ITERM_SESSION_ID value  $2…=extra args
 }
 
 @test "recycle: not-ours and unrepairable → REFUSED, and it names the worse consequence" {
-  export PANE_TTYS="PANE-OTHER /dev/ttysOTHER"
+  export PANE_TTYS="PANE-OTHER /dev/ttys202"
   rc "w0t0p0:PANE-OTHER"
   [ "$status" -eq 2 ]
   printf '%s\n' "$output" | grep -qF -e '--recycle REFUSED' || false   # -e: the pattern starts with --

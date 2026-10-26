@@ -15,6 +15,9 @@
 #
 # Technique and shims are tests/handoff-selfclose-transplanted-source.bats's: PATH shims, --dry-run
 # so the gate runs but nothing is armed or closed, the whole script invoked.
+# = the osascript shim's tty for pane $1 (keep the two in lockstep)
+tty_for_uuid() { printf 'ttys%d' "$(( $(printf '%s' "$1" | cksum | cut -d' ' -f1) % 800 + 100 ))"; }
+
 setup() {
   # M11 — pin the machine-capacity gates: unpinned, this suite goes red because the box is busy.
   export CC_FIRE_CAPACITY_GATE=off
@@ -43,7 +46,7 @@ setup() {
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
 
   SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
-  # as_tty's query: `osascript - <uuid>` → "TTY-<uuid>". Enough for the successor gate to resolve a
+  # as_tty's query: `osascript - <uuid>` → "ttysNNN" (per uuid). Enough for the successor gate to resolve a
   # pane; this suite asserts on the ORIGIN gate, which runs strictly earlier.
   cat > "$SHIM/osascript" <<'SH'
 #!/usr/bin/env bash
@@ -55,7 +58,9 @@ while [ $# -gt 0 ]; do
     *)  uuid="$1"; shift ;;
   esac
 done
-[ -n "$uuid" ] && printf '%s' "TTY-$uuid"
+# A pane's tty is a REAL pty name, fixed per uuid (tty_for_uuid computes the same): the tty reads are
+# devname-free (`ps -o tdev=` prints 16/NNN), and a made-up name has no minor to print.
+[ -n "$uuid" ] && printf 'ttys%d' "$(( $(printf '%s' "$uuid" | cksum | cut -d' ' -f1) % 800 + 100 ))"
 exit 0
 SH
   # git, per DIRECTORY. The default answer is still "not a work tree", so the dirty-tree guard is
@@ -91,11 +96,19 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -t) tty="${2:-}"; shift 2 ;;
     -p) pid="${2:-}"; shift 2 ;;
-    -o) case "${2:-}" in command=) want=argv ;; comm=) want=comm ;; tty=) want=tty ;; pid=) want=pidlist ;; esac; shift 2 ;;
-    -axo) want=ptree; shift 2 ;;
+    -o) case "${2:-}" in command=) want=argv ;; comm=) want=comm ;; tdev=) want=tdev ;; pid=) want=pidlist ;; esac; shift 2 ;;
+    -axo) case "${2:-}" in tdev=,command=) want=tdev_argv ;; tdev=,pid=) want=tdev_pids ;; tdev=,*) want=tdev_none ;; *) want=ptree ;; esac; shift 2 ;;
     *)  shift ;;
   esac
 done
+if [ "$want" = tdev_argv ] || [ "$want" = tdev_pids ]; then
+  # `ps -axo tdev=,command=` / `tdev=,pid=` — the devname-free tty read: every pane's rows, as
+  # `16/NNN <field>`, from the per-tty fixture files (ttysNNN is minor NNN).
+  d="$PS_ARGV_DIR"; [ "$want" = tdev_pids ] && d="$PS_PIDS_DIR"
+  for f in "$d"/ttys*; do [ -f "$f" ] || continue; m="${f##*/ttys}"; sed "s|^|16/$((10#$m)) |" "$f"; done
+  exit 0
+fi
+[ "$want" = tdev_none ] && exit 0          # a tdev= column no fixture models: no rows, as before
 if [ "$want" = argv ] && [ -n "$tty" ]; then
   [ -f "$PS_ARGV_DIR/$tty" ] && cat "$PS_ARGV_DIR/$tty"
   exit 0
@@ -111,11 +124,12 @@ if [ "$want" = ptree ]; then
   [ -n "${PS_PTREE:-}" ] && printf '%s\n' "$PS_PTREE"
   exit 0
 fi
-if [ "$want" = tty ]; then
-  # `ps -o tty= -p <pids>` — what own_ancestry_ttys reads to decide whether a pane is THIS
-  # session's. Silent unless a test opts in, so the default posture stays pane_ownership=unknown
-  # (which verify_self_pane deliberately does not refuse) exactly as before this arm existed.
-  [ -n "${PS_TTY_OUT:-}" ] && printf '%s\n' "$PS_TTY_OUT"
+if [ "$want" = tdev ]; then
+  # `ps -x -o tdev= -p <pids>` — what own_ancestry_ttys reads (devname-free: ttysNNN is 16/NNN) to
+  # decide whether a pane is THIS session's. Silent unless a test opts in, so the default posture
+  # stays pane_ownership=unknown (which verify_self_pane deliberately does not refuse) exactly as
+  # before this arm existed.
+  [ -n "${PS_TTY_OUT:-}" ] && printf '16/%d\n' "$((10#${PS_TTY_OUT#ttys}))"
   exit 0
 fi
 if [ "$want" = comm ] && [ -n "$pid" ]; then

@@ -22,6 +22,9 @@
 # for the inventory unit checks. `bash "$HF" __selfclose …` runs the watcher body in the foreground —
 # no detach, no real panes.
 
+# = the osascript shim's tty for pane $1 (keep the two in lockstep)
+tty_for_uuid() { printf 'ttys%d' "$(( $(printf '%s' "$1" | cksum | cut -d' ' -f1) % 800 + 100 ))"; }
+
 setup() {
   # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
   # capacity_gate reads the box's live loadavg AND (M10) its memory headroom, exiting 9 when either is
@@ -69,7 +72,7 @@ setup() {
   PS_BLIND_DIR="$BATS_TEST_TMPDIR/blind"; mkdir -p "$PS_BLIND_DIR"
   export OSA_GONE_DIR PS_DEAD_DIR PS_BLIND_DIR
 
-  # as_tty's query: `osascript - <uuid>` → print TTY-<uuid>, or empty when a gone-marker exists.
+  # as_tty's query: `osascript - <uuid>` → print ttysNNN (per uuid), or empty when a gone-marker exists.
   cat > "$SHIM/osascript" <<'SH'
 #!/usr/bin/env bash
 uuid=""
@@ -82,7 +85,12 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$uuid" ] || exit 0
 [ -n "${OSA_GONE_DIR:-}" ] && [ -e "$OSA_GONE_DIR/$uuid" ] && exit 0   # pane absent → empty tty
-printf '%s' "TTY-$uuid"
+# A pane's tty is a REAL pty name (the tty reads are devname-free: `ps -o tdev=` prints 16/NNN, and a
+# made-up name has no minor), fixed per uuid as tty_for_uuid computes it, and it is REGISTERED: a
+# pane that resolves has a shell on its tty, so the ps shim's process table must list it.
+t="ttys$(( $(printf '%s' "$uuid" | cksum | cut -d' ' -f1) % 800 + 100 ))"
+[ -z "${PS_TTY_REG:-}" ] || grep -qxF -- "$t" "$PS_TTY_REG" 2>/dev/null || printf '%s\n' "$t" >> "$PS_TTY_REG"
+printf '%s' "$t"
 exit 0
 SH
 
@@ -100,6 +108,16 @@ SH
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
 reg="${PS_TTY_REG:-/nonexistent}"
+# The devname-free tty read, `ps -axo tdev=,<fields>`: every process as `<major/minor> <fields>`, so
+# every registered pane's rows, each answered as this shim's own `-o <fields> -t <tty>`.
+case "$*" in
+  "-axo tdev=,"*)
+    a="$*"
+    while IFS= read -r t; do
+      case "$t" in ttys[0-9]*) "$0" -o "${a#-axo tdev=,}" -t "$t" </dev/null | sed "s|^|16/$((10#${t#ttys})) |" ;; esac
+    done < "$reg"
+    exit 0 ;;
+esac
 root_pid() {                     # $1=tty → that pane's root pid, stable across invocations
   local t="$1" n
   n="$(grep -nxF -- "$t" "$reg" 2>/dev/null | head -1 | cut -d: -f1)"
@@ -134,13 +152,15 @@ if [ "$all" = 1 ]; then                    # the closure: every registered pane,
   exit 0
 fi
 if [ -n "$pid" ]; then                     # per-pid identity, for pid_is_cc over the closure
+  case "$pid" in *[!0-9]*|'') exit 0 ;; esac   # a pid list or no pid: no synthetic pane pid matches
+  [ "$pid" -ge 700000 ] || exit 0          # a real pid (the caller's ancestry): never a pane's, so no row
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     p="$(root_pid "$t")"
     if   [ "$pid" = "$p" ];                              then c=zsh;    a=-zsh
     elif [ "$pid" = "$((p + 1))" ] && tty_live "$t";     then c=claude; a=/opt/cc/bin/claude
     else continue; fi
-    case "$fmt" in *comm*) printf '%s\n' "$c" ;; *tty*) printf '%s\n' "$t" ;; *args*) printf '%s\n' "$a" ;; esac
+    case "$fmt" in *comm*) printf '%s\n' "$c" ;; *tdev*) printf '16/%d\n' "$((10#${t#ttys}))" ;; *args*) printf '%s\n' "$a" ;; esac
     exit 0
   done < "$reg"
   exit 0                                   # unknown pid → no line, as ps does for a reaped one
@@ -179,7 +199,7 @@ exit 0
 SH
   chmod +x "$SHIM/osascript" "$SHIM/ps" "$SHIM/git"
   export PATH="$SHIM:$PATH"
-  export PS_TTY_REG="$BATS_TEST_TMPDIR/ps-tty-reg"; : > "$PS_TTY_REG"
+  export PS_TTY_REG="$BATS_TEST_TMPDIR/ps-tty-reg"; printf 'ttys901\nttys902\nttys903\n' > "$PS_TTY_REG"   # the panes tests name directly
 
   REGDIR="$BATS_TEST_TMPDIR/reg";  mkdir -p "$REGDIR"
   PROJDIR="$BATS_TEST_TMPDIR/proj"; mkdir -p "$PROJDIR"
@@ -267,7 +287,7 @@ SH
 }
 
 @test "gate: --successor-assume-engaged still ENFORCES liveness (dead successor → exit 3)" {
-  : > "$PS_DEAD_DIR/TTY-$SUCC"                          # pane resolves but no claude on its tty
+  : > "$PS_DEAD_DIR/$(tty_for_uuid "$SUCC")"                          # pane resolves but no claude on its tty
   run bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC" --successor-assume-engaged
   [ "$status" -eq 3 ]
   [[ "$output" == *"no live claude on successor"* ]]   # liveness half is NOT skipped by the flag
@@ -449,9 +469,9 @@ SH
 
 @test "watcher: successor DEAD at close-instant → no close, desk paged, predecessor left alive" {
   H="$BATS_TEST_TMPDIR/home-abort"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"                              # predecessor already exited → skip wait loop
-  : > "$PS_DEAD_DIR/TTY-B"                              # successor DIED before the close instant
-  run env HOME="$H" bash "$HF" __selfclose PREDSID TTY-A SUCC-B TTY-B
+  : > "$PS_DEAD_DIR/ttys901"                              # predecessor already exited → skip wait loop
+  : > "$PS_DEAD_DIR/ttys902"                              # successor DIED before the close instant
+  run env HOME="$H" bash "$HF" __selfclose PREDSID ttys901 SUCC-B ttys902
   [ "$status" -ne 0 ]
   [[ "$output" == *"ABORTED at close-instant"* ]] || false
   [[ "$output" == *"NO LONGER ALIVE"* ]] || false
@@ -465,9 +485,9 @@ SH
 
 @test "watcher: successor ALIVE at close-instant → closes predecessor + focuses successor, no page" {
   H="$BATS_TEST_TMPDIR/home-ok"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"                              # predecessor exited → skip wait loop
-  # (no dead-marker for TTY-B → successor alive at the close instant)
-  run env HOME="$H" bash "$HF" __selfclose PREDSID TTY-A SUCC-B TTY-B
+  : > "$PS_DEAD_DIR/ttys901"                              # predecessor exited → skip wait loop
+  # (no dead-marker for ttys902 → successor alive at the close instant)
+  run env HOME="$H" bash "$HF" __selfclose PREDSID ttys901 SUCC-B ttys902
   [ "$status" -eq 0 ]
   grep -q "session close -f -s PREDSID" "$H/it2-calls.log"
   grep -q "session focus SUCC-B" "$H/it2-calls.log"
@@ -492,8 +512,8 @@ SH
 
 @test "close fails + CC CONFIRMED GONE → the husk wording, and it may say the session is gone" {
   H="$BATS_TEST_TMPDIR/home-husk"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"                              # CC exited → pane_cc_state(TTY-A)=shell
-  run env HOME="$H" IT2_CLOSE_FAIL=1 bash "$HF" __selfclose PREDSID TTY-A
+  : > "$PS_DEAD_DIR/ttys901"                              # CC exited → pane_cc_state(ttys901)=shell
+  run env HOME="$H" IT2_CLOSE_FAIL=1 bash "$HF" __selfclose PREDSID ttys901
   [[ "$output" == *"is a HUSK"* ]] || false
   [[ "$output" == *"claude confirmed gone"* ]] || false
   [[ "$output" == *"the session is already gone"* ]] || false
@@ -506,12 +526,12 @@ SH
   # "failed 4/4" with no cause. it2-kitty now exits 70 for refused-fs only; hf_close_pane returns 3;
   # the loop stops on it and the record names the cause and the remedy.
   H="$BATS_TEST_TMPDIR/home-huskfs"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"                              # CC exited → pane_cc_state(TTY-A)=shell
+  : > "$PS_DEAD_DIR/ttys901"                              # CC exited → pane_cc_state(ttys901)=shell
   local pagelog="$BATS_TEST_TMPDIR/lr-page.log"
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\necho os=posted\n' "$pagelog" > "$BATS_TEST_TMPDIR/lr-page"
   chmod +x "$BATS_TEST_TMPDIR/lr-page"
   run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_ALARM_LR_PAGE_BIN="$BATS_TEST_TMPDIR/lr-page" \
-      bash "$HF" __selfclose PREDSID TTY-A
+      bash "$HF" __selfclose PREDSID ttys901
   [ "$(grep -c 'session close' "$H/it2-calls.log")" -eq 1 ] || { cat "$H/it2-calls.log"; false; }
   [[ "$output" == *"REFUSED by the fullscreen guard"* ]] || { echo "$output"; false; }
   [[ "$output" != *"retrying in 2s"* ]] || { echo "$output"; false; }
@@ -527,8 +547,8 @@ SH
 
 @test "close fails with a NON-fs code (rc 1) + CC gone → still 4 attempts and husk-pane (control for rc 70)" {
   H="$BATS_TEST_TMPDIR/home-husk1"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"
-  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=1 bash "$HF" __selfclose PREDSID TTY-A
+  : > "$PS_DEAD_DIR/ttys901"
+  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=1 bash "$HF" __selfclose PREDSID ttys901
   [ "$(grep -c 'session close' "$H/it2-calls.log")" -eq 4 ] || { cat "$H/it2-calls.log"; false; }
   [ "$(jq -r .class "$(ls "$H"/.claude/handoff-alarms/alarm-*.json)")" = husk-pane ]
 }
@@ -537,15 +557,15 @@ SH
   # husk-panes-2026-10-22 F3: pane 42's self-close failed 4/4, paged, and wrote no row, so nothing
   # retried when kitty answered at 04:28Z. RED before B7: no husk row.
   H="$BATS_TEST_TMPDIR/home-huskrow"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"
-  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=1 bash "$HF" __selfclose PREDSID TTY-A
+  : > "$PS_DEAD_DIR/ttys901"
+  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=1 bash "$HF" __selfclose PREDSID ttys901
   [ "$(jq -r .reason "$H/.claude/state/pane-close-queue/husk-PREDSID.json")" = self-close-failed ] || { echo "$output"; false; }
   H="$BATS_TEST_TMPDIR/home-huskrow-fs"; mk_home "$H"
-  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 bash "$HF" __selfclose PREDSID TTY-A
+  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 bash "$HF" __selfclose PREDSID ttys901
   [ "$(jq -r .reason "$H/.claude/state/pane-close-queue/husk-PREDSID.json")" = guard-fullscreen ] || { echo "$output"; false; }
   # CONTROL: claude still running in the pane is not a husk — no row
-  H="$BATS_TEST_TMPDIR/home-huskrow-live"; mk_home "$H"; rm -f "$PS_DEAD_DIR/TTY-A"
-  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=1 bash "$HF" __selfclose PREDSID TTY-A
+  H="$BATS_TEST_TMPDIR/home-huskrow-live"; mk_home "$H"; rm -f "$PS_DEAD_DIR/ttys901"
+  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=1 bash "$HF" __selfclose PREDSID ttys901
   [ ! -e "$H/.claude/state/pane-close-queue/husk-PREDSID.json" ]
 }
 
@@ -560,10 +580,10 @@ runner_rec() { # $1=dir $2=ts $3=tail ('' = no tail key); also lists pane 289 fo
 
 @test "A2: the runner owns pane 289 and holds it (tail hold:fs) → no session close, no alarm, no husk row" {
   H="$BATS_TEST_TMPDIR/home-a2"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"
+  : > "$PS_DEAD_DIR/ttys901"
   runner_rec "$BATS_TEST_TMPDIR/px" "$(( $(date +%s) + 3600 ))" hold:fs
   run env HOME="$H" CC_PANE_EXIT_DIR="$BATS_TEST_TMPDIR/px" CC_PANE_RUNNER_OWNS_CLOSE=289 \
-      IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_PANE_EXIT_TAIL_MAXS=2 bash "$HF" __selfclose 289 TTY-A
+      IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_PANE_EXIT_TAIL_MAXS=2 bash "$HF" __selfclose 289 ttys901
   [[ "$output" == *"belongs to its cc-pane-runner (hold:fs)"* ]] || { echo "$output"; false; }
   [ ! -e "$H/.claude/state/pane-close-queue/husk-289.json" ]
   [ -z "$(ls "$H"/.claude/handoff-alarms/alarm-*.json 2>/dev/null)" ]
@@ -573,12 +593,12 @@ runner_rec() { # $1=dir $2=ts $3=tail ('' = no tail key); also lists pane 289 fo
 
 @test "A2d: the tail arrives 3 s after the watcher starts (the record precedes the decision) → still stands down" {
   H="$BATS_TEST_TMPDIR/home-a2d"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"
+  : > "$PS_DEAD_DIR/ttys901"
   local now; now="$(( $(date +%s) + 3600 ))"
   runner_rec "$BATS_TEST_TMPDIR/px" "$now" ""                 # this launch's record, no decision yet
   ( sleep 3; runner_rec "$BATS_TEST_TMPDIR/px" "$now" closed ) &
   run env HOME="$H" CC_PANE_EXIT_DIR="$BATS_TEST_TMPDIR/px" CC_PANE_RUNNER_OWNS_CLOSE=289 \
-      IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_PANE_EXIT_TAIL_MAXS=15 bash "$HF" __selfclose 289 TTY-A
+      IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_PANE_EXIT_TAIL_MAXS=15 bash "$HF" __selfclose 289 ttys901
   wait
   [[ "$output" == *"belongs to its cc-pane-runner (closed)"* ]] || { echo "$output"; false; }
   [ -z "$(ls "$H"/.claude/handoff-alarms/alarm-*.json 2>/dev/null)" ]
@@ -588,20 +608,20 @@ runner_rec() { # $1=dir $2=ts $3=tail ('' = no tail key); also lists pane 289 fo
 
 @test "A2s: a stale record, another pane's ownership, or a keep tail → today's close path runs" {
   H="$BATS_TEST_TMPDIR/home-a2s"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"
+  : > "$PS_DEAD_DIR/ttys901"
   runner_rec "$BATS_TEST_TMPDIR/px" 1000 hold:fs              # an earlier launch's record (kitty reuses ids)
   run env HOME="$H" CC_PANE_EXIT_DIR="$BATS_TEST_TMPDIR/px" CC_PANE_RUNNER_OWNS_CLOSE=289 \
-      HF_PANE_EXIT_TAIL_MAXS=1 bash "$HF" __selfclose 289 TTY-A
+      HF_PANE_EXIT_TAIL_MAXS=1 bash "$HF" __selfclose 289 ttys901
   grep -q 'session close' "$H/it2-calls.log" || { echo "$output"; false; }
   H="$BATS_TEST_TMPDIR/home-a2s-own"; mk_home "$H"
   runner_rec "$BATS_TEST_TMPDIR/px" "$(( $(date +%s) + 3600 ))" hold:fs
   run env HOME="$H" CC_PANE_EXIT_DIR="$BATS_TEST_TMPDIR/px" CC_PANE_RUNNER_OWNS_CLOSE=1 \
-      HF_PANE_EXIT_TAIL_MAXS=1 bash "$HF" __selfclose 289 TTY-A
+      HF_PANE_EXIT_TAIL_MAXS=1 bash "$HF" __selfclose 289 ttys901
   grep -q 'session close' "$H/it2-calls.log" || { echo "$output"; false; }
   H="$BATS_TEST_TMPDIR/home-a2s-keep"; mk_home "$H"
   runner_rec "$BATS_TEST_TMPDIR/px" "$(( $(date +%s) + 3600 ))" keep:crash
   run env HOME="$H" CC_PANE_EXIT_DIR="$BATS_TEST_TMPDIR/px" CC_PANE_RUNNER_OWNS_CLOSE=289 \
-      HF_PANE_EXIT_TAIL_MAXS=1 bash "$HF" __selfclose 289 TTY-A
+      HF_PANE_EXIT_TAIL_MAXS=1 bash "$HF" __selfclose 289 ttys901
   grep -q 'session close' "$H/it2-calls.log"
 }
 
@@ -613,9 +633,9 @@ runner_rec() { # $1=dir $2=ts $3=tail ('' = no tail key); also lists pane 289 fo
   local pagelog="$BATS_TEST_TMPDIR/lr-page.log"
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\necho os=posted\n' "$pagelog" > "$BATS_TEST_TMPDIR/lr-page"
   chmod +x "$BATS_TEST_TMPDIR/lr-page"
-  # no dead-marker for TTY-A → CC alive throughout
+  # no dead-marker for ttys901 → CC alive throughout
   run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_SELFCLOSE_GRACE_S=1 HF_SELFCLOSE_GRACE_STEP_S=1 \
-      HF_ALARM_LR_PAGE_BIN="$BATS_TEST_TMPDIR/lr-page" bash "$HF" __selfclose PREDSID TTY-A
+      HF_ALARM_LR_PAGE_BIN="$BATS_TEST_TMPDIR/lr-page" bash "$HF" __selfclose PREDSID ttys901
   [ "$(grep -c 'session close' "$H/it2-calls.log")" -eq 1 ] || { cat "$H/it2-calls.log"; false; }
   [[ "$output" == *"STILL RUNNING"* ]] || { echo "$output"; false; }
   [[ "$output" == *"after 1 attempt(s)"* ]] || { echo "$output"; false; }
@@ -629,9 +649,9 @@ runner_rec() { # $1=dir $2=ts $3=tail ('' = no tail key); also lists pane 289 fo
 
 @test "close REFUSED by the fullscreen guard (rc 70) + tty UNREADABLE → ONE attempt, close-failed-unknown naming the guard" {
   H="$BATS_TEST_TMPDIR/home-unk-fs"; mk_home "$H"
-  : > "$PS_BLIND_DIR/TTY-A"                             # tty readable by nobody → unknown
+  : > "$PS_BLIND_DIR/ttys901"                             # tty readable by nobody → unknown
   run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_SELFCLOSE_GRACE_S=1 HF_SELFCLOSE_GRACE_STEP_S=1 \
-      bash "$HF" __selfclose PREDSID TTY-A
+      bash "$HF" __selfclose PREDSID ttys901
   [ "$(grep -c 'session close' "$H/it2-calls.log")" -eq 1 ] || { cat "$H/it2-calls.log"; false; }
   [[ "$output" == *"is UNKNOWN"* ]] || { echo "$output"; false; }
   local rec; rec="$(ls "$H"/.claude/handoff-alarms/alarm-*.json)"
@@ -676,9 +696,9 @@ runner_rec() { # $1=dir $2=ts $3=tail ('' = no tail key); also lists pane 289 fo
   # paged "session is gone" over a session that was still answering. The grace seam is what makes
   # the branch reachable at all: it is only entered after the wait loop gives up on a LIVE CC.
   H="$BATS_TEST_TMPDIR/home-live"; mk_home "$H"
-  # no dead-marker for TTY-A → CC alive throughout, so the loop expires rather than breaking
+  # no dead-marker for ttys901 → CC alive throughout, so the loop expires rather than breaking
   run env HOME="$H" IT2_CLOSE_FAIL=1 HF_SELFCLOSE_GRACE_S=1 HF_SELFCLOSE_GRACE_STEP_S=1 \
-      bash "$HF" __selfclose PREDSID TTY-A
+      bash "$HF" __selfclose PREDSID ttys901
   [[ "$output" == *"CC still alive"* ]] || false        # the loop's own verdict, unchanged
   [[ "$output" == *"the session is NOT gone"* ]] || false
   [[ "$output" == *"STILL RUNNING"* ]] || false
@@ -694,9 +714,9 @@ runner_rec() { # $1=dir $2=ts $3=tail ('' = no tail key); also lists pane 289 fo
   # The third state, and the one an over-eager fix would collapse into "husk" (its neighbour on the
   # fail-safe side) — which is how the original defect was written in the first place.
   H="$BATS_TEST_TMPDIR/home-unk"; mk_home "$H"
-  : > "$PS_BLIND_DIR/TTY-A"                             # tty readable by nobody → unknown
+  : > "$PS_BLIND_DIR/ttys901"                             # tty readable by nobody → unknown
   run env HOME="$H" IT2_CLOSE_FAIL=1 HF_SELFCLOSE_GRACE_S=1 HF_SELFCLOSE_GRACE_STEP_S=1 \
-      bash "$HF" __selfclose PREDSID TTY-A
+      bash "$HF" __selfclose PREDSID ttys901
   [[ "$output" == *"is UNKNOWN"* ]] || false
   ! [[ "$output" == *"the session is already gone"* ]] || false
   ! [[ "$output" == *"STILL RUNNING"* ]] || false
@@ -776,7 +796,8 @@ inv_setup() {
   inv_setup
   eval "$(sed -n '/^pid_is_cc() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^pane_cc_state() {/,/^}/p' "$HF")"
-  as_tty() { echo "TTY-LIVEPEER"; }                    # resolves, and that pane HAS a live CC
+  eval "$(sed -n '/^hf_tdev_name() {/,/^}/p;/^hf_ps_on_tty() {/,/^}/p' "$HF")"
+  as_tty() { echo "ttys903"; }                    # resolves, and that pane HAS a live CC
   printf '{"paneUUID":"LIVEPEER","firedBy":"MYSID","firedBySid":"MY-SESSION"}\n' > "$FIRED_DIR/LIVEPEER.json"
   run selfclose_inventory_warn "MYSID" "" "MY-SESSION"
   [ "$status" -eq 0 ]

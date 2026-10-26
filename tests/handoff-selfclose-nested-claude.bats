@@ -73,11 +73,21 @@ if [ "$seen_p" = 1 ] && [ "$fmt" = "ppid=" ]; then
   esac
   exit 0
 fi
-if [ "$seen_p" = 1 ] && [ "$fmt" = "tty=" ]; then
+if [ "$seen_p" = 1 ] && [ "$fmt" = "tdev=" ]; then   # devname-free: ttysNNN is 16/NNN
   IFS=, read -r -a l <<< "$pid"
   for p in "${l[@]}"; do
-    case "$p" in "$LEADPID") echo ttysMINE ;; 9002) echo "${CHILD_TTY:-??}" ;; *) echo '??' ;; esac
+    case "$p" in
+      "$LEADPID") echo 16/101 ;;
+      9002) case "${CHILD_TTY:-??}" in ttys*) echo "16/$((10#${CHILD_TTY#ttys}))" ;; *) echo '??' ;; esac ;;
+      *) echo '??' ;;
+    esac
   done
+  exit 0
+fi
+if [ "${args[0]:-}" = -axo ] && [ "${args[1]#tdev=,}" != "${args[1]:-}" ]; then
+  # The devname-free per-tty read, `-axo tdev=,<fields>`. No pane tty these tests name holds a
+  # modelled process (the ancestry is read per pid, above), so the table lists the tty-less links.
+  printf '?? 9001\n?? 9003\n'
   exit 0
 fi
 if [ "$seen_p" = 1 ] && [ "$fmt" = "comm=" ]; then
@@ -95,8 +105,8 @@ SH
 #!/usr/bin/env bash
 uuid=""
 while [ $# -gt 0 ]; do case "$1" in -e) shift 2 2>/dev/null || shift ;; -) shift ;; *) uuid="$1"; shift ;; esac; done
-if [ -n "$uuid" ]; then [ "$uuid" = PANE16 ] && printf '/dev/ttysMINE'; exit 0; fi
-printf 'PANE16\t/dev/ttysMINE\n'
+if [ -n "$uuid" ]; then [ "$uuid" = PANE16 ] && printf '/dev/ttys101'; exit 0; fi
+printf 'PANE16\t/dev/ttys101\n'
 SH
   cc_stub "$SHIM" git $'#!/usr/bin/env bash\n[ "${1:-}" = rev-parse ] && exit 1\nexit 0'
   export PATH="$SHIM:$PATH"
@@ -126,7 +136,8 @@ units() {
   hf_bounded() { "$@"; }
   export REG_DIR="$CC_REGISTRY_DIR"   # read by the extracted units, not by this body
   local f
-  for f in own_ancestry_pids own_claude_pid pane_nested_holder pane_tenant_mismatch hf_self_headless; do
+  for f in own_ancestry_pids own_claude_pid pane_nested_holder pane_tenant_mismatch hf_self_headless \
+           hf_tdev_name hf_ps_tty_of; do
     eval "$(sed -n "/^$f() {/,/^}/p" "$HF")"
   done
 }
@@ -226,13 +237,13 @@ units() {
 
 @test "A3: the watcher does NOT close a pane that now holds a different live session" {
   run env HF_SC_EXPECT_SID="$CHILD" HF_SC_EXPECT_PID=9002 HF_SELFCLOSE_GRACE_S=0 \
-      /bin/bash "$HF" __selfclose PANE16 /dev/ttysNOSUCH "" "" ""
+      /bin/bash "$HF" __selfclose PANE16 /dev/ttys998 "" "" ""
   printf '%s\n' "$output" | grep -qF "pane PANE16 now holds session $LEAD" || { echo "$output"; false; }
   ! grep -q 'close' "$IT2LOG" 2>/dev/null || { echo "pre-fix the watcher closed it:"; cat "$IT2LOG"; false; }
 }
 
 @test "A3 CONTROL: the watcher still closes when the tenant is the session the close was for" {
   run env HF_SC_EXPECT_SID="$LEAD" HF_SC_EXPECT_PID="$LEADPID" HF_SELFCLOSE_GRACE_S=0 \
-      /bin/bash "$HF" __selfclose PANE16 /dev/ttysNOSUCH "" "" ""
+      /bin/bash "$HF" __selfclose PANE16 /dev/ttys998 "" "" ""
   grep -q 'session close' "$IT2LOG" || { echo "$output"; false; }
 }

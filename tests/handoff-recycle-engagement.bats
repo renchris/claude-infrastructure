@@ -312,6 +312,11 @@ watcher_setup() {
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
 args="$*"
+# The devname-free tty read, `ps -axo tdev=,<fields>`: every process as `<major/minor> <fields>`. The
+# one pane is ttys999 (16/999), so its rows are this stub's own `-o <fields> -t ttys999` answer.
+case "$args" in
+  "-axo tdev=,"*) "$0" -o "${args#-axo tdev=,}" -t ttys999 | sed 's|^|16/999 |'; exit 0 ;;
+esac
 case "$args" in *pgid=*) printf '%s\n' "4242"; exit 0 ;; esac   # armed banner — never a phase read
 c="${PS_COUNT_FILE:?}"
 if [ "${args#*-o pid= -t}" != "$args" ]; then
@@ -506,11 +511,14 @@ SH
 @test "cc_headless_on_tty: a claude on the tty whose fd 1 is a PIPE → named; fd 1 on the tty → silent" {
   eval "$(sed -n '/^pid_is_cc() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^cc_headless_on_tty() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^hf_tdev_name() {/,/^}/p;/^hf_ps_on_tty() {/,/^}/p' "$HF")"
   SHIM="$BATS_TEST_TMPDIR/hshim"; mkdir -p "$SHIM"
+  # The tty's processes come from the devname-free `-axo tdev=,pid=`: 100 and 200 on ttys999 (16/999),
+  # and a claude on another tty (16/5) that must never be read as this one's.
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
-  *"-t "*)       printf '100\n200\n' ;;
+  '-axo tdev=,pid=') printf '16/999 100\n16/999 200\n16/5 300\n' ;;
   *"comm= -p 200"*) printf 'claude\n' ;;
   *"comm= -p 100"*) printf -- '-zsh\n' ;;
   *"args= -p 100"*) printf -- '-zsh\n' ;;

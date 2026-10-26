@@ -73,6 +73,7 @@ setup() {
   # TSV: pid<TAB>ppid<TAB>pgid<TAB>tpgid<TAB>tty<TAB>comm<TAB>args
   # One table, every query form the subject makes — a stub answering only the forms the CURRENT
   # implementation happens to call would silently pass a rewrite that asked a different question.
+  # tdev is the devname-free major/minor the tty reads ask for (`-axo tdev=,<fields>`): ttysNNN is 16/NNN.
   PSTABLE="$BATS_TEST_TMPDIR/pstable.tsv"; export PSTABLE
   STUB="$BATS_TEST_TMPDIR/bin"; mkdir -p "$STUB"
   cat > "$STUB/ps" <<'FAKEPS'
@@ -99,7 +100,8 @@ awk -F'\t' -v fmt="$fmt" -v sel="$sel" -v val="$val" '
     for (i = 1; i <= n; i++) {
       gsub(/=/, "", f[i])
       v = (f[i] == "pid") ? $1 : (f[i] == "ppid") ? $2 : (f[i] == "pgid") ? $3 \
-        : (f[i] == "tpgid") ? $4 : (f[i] == "tty") ? $5 : (f[i] == "comm") ? $6 : $7
+        : (f[i] == "tpgid") ? $4 : (f[i] == "tty") ? $5 : (f[i] == "comm") ? $6 \
+        : (f[i] == "tdev") ? ($5 ~ /^ttys[0-9]+$/ ? "16/" (substr($5, 5) + 0) : "??") : $7
       out = (out == "") ? v : out " " v
     }
     print out
@@ -112,6 +114,7 @@ FAKEPS
   eval "$(sed -n '/^pane_cc_state() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^pane_shell_root() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^pane_enumerated() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^hf_tdev_name() {/,/^}/p;/^hf_ps_on_tty() {/,/^}/p' "$HF")"
 }
 
 # ── fixtures, each transcribed from a measured pane ──────────────────────────────────────────────

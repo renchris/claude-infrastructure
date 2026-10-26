@@ -117,10 +117,15 @@ FAKE
   chmod +x "$STUB/osascript"
 
   # ps: _as_tty_query maps kitty's window pid → tty through it. Stubbed so the verdict does not
-  # depend on whether the bats runner happens to own a controlling terminal.
+  # depend on whether the bats runner happens to own a controlling terminal. It answers only the
+  # devname-free read, `ps -x -o tdev= -p <pid>`: ttysNNN is `16/NNN`, no terminal is `??`.
   cat > "$STUB/ps" <<'FAKE'
 #!/bin/sh
-printf '%s\n' "${KFAKE_TTY-ttys042}"
+t="${KFAKE_TTY-ttys042}"
+case "$*" in
+  '-x -o tdev= -p '*)
+    case "$t" in ttys*) printf '16/%s\n' "$(expr "${t#ttys}" + 0)" ;; *) printf '%s\n' "$t" ;; esac ;;
+esac
 FAKE
   chmod +x "$STUB/ps"
   export PATH="$STUB:$PATH"
@@ -175,6 +180,7 @@ FAKE
   x_field="$(sed -n '/^kt_window_field() {/,/^}/p' "$HF")";        [ -n "$x_field" ]
   x_write="$(sed -n '/^as_write() {/,/^}/p' "$HF")";               [ -n "$x_write" ]
   x_ttyq="$(sed -n '/^_as_tty_query() {/,/^}/p' "$HF")";           [ -n "$x_ttyq" ]
+  x_tdev="$(sed -n '/^hf_tdev_name() {/,/^}/p;/^hf_ps_tty_of() {/,/^}/p' "$HF")"; [ -n "$x_tdev" ]
   x_tab="$(sed -n '/^as_tab() {/,/^}/p' "$HF")";                   [ -n "$x_tab" ]
   x_sfm="$(sed -n '/^spawn_frontmost() {/,/^}/p' "$HF")";          [ -n "$x_sfm" ]
   x_py="$(sed -n '/^it2py() {/,/^}/p' "$HF")";                     [ -n "$x_py" ]
@@ -185,7 +191,7 @@ FAKE
   export CC_PANE_PLACEMENT_LIB="$REPO/scripts/lib/pane-placement.sh" CC_PLACE_LOAD_PER_CORE=0
   export CC_SPAWN_LOG_FILE="$BATS_TEST_TMPDIR/spawns.jsonl"
   eval "$x_kitty"; eval "$x_kid"; eval "$x_kt"; eval "$x_ktl"; eval "$x_field"
-  eval "$x_write"; eval "$x_ttyq"; eval "$x_tab"; eval "$x_sfm"; eval "$x_py"; eval "$x_place"
+  eval "$x_write"; eval "$x_ttyq"; eval "$x_tdev"; eval "$x_tab"; eval "$x_sfm"; eval "$x_py"; eval "$x_place"
 
   pin_iterm2
 }

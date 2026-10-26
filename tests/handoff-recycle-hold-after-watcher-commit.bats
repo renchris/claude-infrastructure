@@ -43,7 +43,7 @@ setup() {
              hf_recycle_lock_release hf_recycle_lock_acquire hf_recycle_watcher_committed hf_recycle_disarm \
              hf_wake_guard hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback \
              recycle_fire_commit composer_residue_dir composer_residue_record pid_is_cc hf_succ_mode \
-             hf_succ_ours_staged write_teardown_marker hf_exit_signal_pin hf_exit_signal hf_exit_signal_grace \
+             hf_succ_ours_staged write_teardown_marker hf_exit_signal_pin hf_exit_signal hf_exit_signal_grace hf_tdev_name hf_ps_on_tty \
              hf_load_per_core hf_recycle_load_bound hf_recycle_load_gate \
              hf_recycle_subject_pin hf_recycle_subject_gone hf_recycle_subject_yield; do
       sed -n "/^$f() {/,/^}/p" "$HF"

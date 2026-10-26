@@ -39,13 +39,23 @@ setup() {
 
   SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
   export PS_DEAD_DIR="$BATS_TEST_TMPDIR/dead"; mkdir -p "$PS_DEAD_DIR"
-  export PS_TTY_REG="$BATS_TEST_TMPDIR/ps-tty-reg"; : > "$PS_TTY_REG"
+  export PS_TTY_REG="$BATS_TEST_TMPDIR/ps-tty-reg"; printf 'ttys901\n' > "$PS_TTY_REG"   # the pane the tests name directly
   # The liveness model of tests/handoff-selfclose.bats, reduced to what the watcher asks: a tty's
   # root shell, claude as its DESCENDANT (the expect shape), and the foreground group. A dead-marked
   # tty keeps its shell and loses claude, so pane_cc_state reads `shell`.
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
 reg="$PS_TTY_REG"
+# The devname-free tty read, `ps -axo tdev=,<fields>`: every process as `<major/minor> <fields>`, so
+# every registered pane's rows, each answered as this shim's own `-o <fields> -t <tty>`.
+case "$*" in
+  "-axo tdev=,"*)
+    a="$*"
+    while IFS= read -r t; do
+      case "$t" in ttys[0-9]*) "$0" -o "${a#-axo tdev=,}" -t "$t" </dev/null | sed "s|^|16/$((10#${t#ttys})) |" ;; esac
+    done < "$reg"
+    exit 0 ;;
+esac
 root_pid() { local n; n="$(grep -nxF -- "$1" "$reg" | head -1 | cut -d: -f1)"
   if [ -z "$n" ]; then printf '%s\n' "$1" >> "$reg"; n="$(wc -l < "$reg" | tr -d ' ')"; fi
   printf '%s' "$(( 700000 + n * 10 ))"; }
@@ -59,11 +69,13 @@ if [ "$all" = 1 ]; then
   while IFS= read -r t; do [ -n "$t" ] || continue; p="$(root_pid "$t")"; printf '%s 1\n' "$p"
     tty_live "$t" && printf '%s %s\n' "$((p + 1))" "$p"; done < "$reg"; exit 0; fi
 if [ -n "$pid" ]; then
+  case "$pid" in *[!0-9]*|'') exit 0 ;; esac   # a pid list or no pid: no synthetic pane pid matches
+  [ "$pid" -ge 700000 ] || exit 0          # a real pid (the caller's ancestry): never a pane's, so no row
   while IFS= read -r t; do [ -n "$t" ] || continue; p="$(root_pid "$t")"
     if [ "$pid" = "$p" ]; then c=zsh; a=-zsh
     elif [ "$pid" = "$((p + 1))" ] && tty_live "$t"; then c=claude; a=/opt/cc/bin/claude
     else continue; fi
-    case "$fmt" in *comm*) echo "$c" ;; *tty*) echo "$t" ;; *args*) echo "$a" ;; esac; exit 0
+    case "$fmt" in *comm*) echo "$c" ;; *tdev*) printf '16/%d\n' "$((10#${t#ttys}))" ;; *args*) echo "$a" ;; esac; exit 0
   done < "$reg"; exit 0; fi
 if [ -n "$pgid" ]; then
   while IFS= read -r t; do [ -n "$t" ] || continue; p="$(root_pid "$t")"; [ "$pgid" = "$p" ] || continue
@@ -93,14 +105,14 @@ case "${1:-} ${2:-}" in
   "session close")
     printf 'close\n' >> "$HOME/keys.log"
     # bin/it2-kitty's composer guard: a pane still running claude behind a dialog is refused.
-    [ -e "$PS_DEAD_DIR/TTY-A" ] && exit 0
+    [ -e "$PS_DEAD_DIR/ttys901" ] && exit 0
     exit 67 ;;
   "session send")
     shift 2; [ "${1:-}" = -s ] && shift 2
     k="$*"
     case "$k" in $'\r') n=CR ;; $'\x1b') n=ESC ;; *) n="TEXT:$k" ;; esac
     printf '%s@%s\n' "$n" "$st" >> "$HOME/keys.log"
-    gone() { : > "$PS_DEAD_DIR/TTY-A"; echo shell > "$HOME/state"; }
+    gone() { : > "$PS_DEAD_DIR/ttys901"; echo shell > "$HOME/state"; }
     case "$st:$n" in
       nudge:CR)           echo panel-list > "$HOME/state" ;;
       panel-list:ESC)     echo bgwork > "$HOME/state" ;;
@@ -139,7 +151,7 @@ SH
 watch() { # $1 = initial screen; remaining = extra env
   printf '%s\n' "$1" > "$H/state"; shift
   run env HOME="$H" HF_SELFCLOSE_GRACE_S=180 HF_SELFCLOSE_GRACE_STEP_S=5 "$@" \
-      bash "$HF" __selfclose PREDSID TTY-A
+      bash "$HF" __selfclose PREDSID ttys901
 }
 keys() { cat "$H/keys.log" 2>/dev/null; }
 

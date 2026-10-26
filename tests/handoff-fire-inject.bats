@@ -386,6 +386,7 @@ readback_of() {  # $1 = payload → the space-stripped composer content CC would
 # synthetic process table — the shapes are the ones measured live on this box.
 setup_oracle() {
   eval "$(sed -n '/^composer_owned() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^hf_tdev_name() {/,/^}/p;/^hf_ps_tty_of() {/,/^}/p;/^hf_ps_on_tty() {/,/^}/p' "$HF")"
   # NON-VACUITY GUARD. Every "NOT proven" assertion below is `[ "$status" -ne 0 ]`, and a MISSING
   # function also exits non-zero (127) — so without this, the fail-closed tests would pass on a tree
   # where the oracle had been deleted, i.e. they would certify the very hole they exist to close
@@ -393,9 +394,13 @@ setup_oracle() {
   [ -n "$(declare -F composer_owned)" ]
   PSDIR="$BATS_TEST_TMPDIR/psbin"; mkdir -p "$PSDIR"
   PSTABLE="$BATS_TEST_TMPDIR/pstable"; : > "$PSTABLE"
+  # The tty leg reads `ps -axo tdev=,pid=` (no devname walk): every row is `<major/minor> <pid>`, the
+  # table's pids on ttys002 (16/2), plus one process on another tty that must never be counted.
   cat > "$PSDIR/ps" <<SH
 #!/usr/bin/env bash
-cat '$PSTABLE'
+case "\$*" in
+  '-axo tdev=,pid=') sed 's|^|16/2 |' '$PSTABLE'; printf '16/9 99999\n' ;;
+esac
 SH
   chmod +x "$PSDIR/ps"
   PATH="$PSDIR:$PATH"

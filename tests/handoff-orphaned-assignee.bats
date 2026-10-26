@@ -23,6 +23,9 @@
 # Technique mirrors tests/handoff-selfclose.bats: PATH shims for osascript/ps/git, --dry-run so the
 # gate runs but nothing is armed or closed, sed-extracted units for the oracles.
 
+# = the osascript shim's tty for pane $1 (keep the two in lockstep)
+tty_for_uuid() { printf 'ttys%d' "$(( $(printf '%s' "$1" | cksum | cut -d' ' -f1) % 800 + 100 ))"; }
+
 setup() {
   # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
   # capacity_gate reads the box's live loadavg AND (M10) its memory headroom, exiting 9 when either is
@@ -62,7 +65,7 @@ setup() {
   OSA_GONE_DIR="$BATS_TEST_TMPDIR/gone"; mkdir -p "$OSA_GONE_DIR"
   export PS_ARGV_DIR PS_COMM_DIR OSA_GONE_DIR
 
-  # as_tty's query: `osascript - <uuid>` → "TTY-<uuid>", or empty when a gone-marker exists.
+  # as_tty's query: `osascript - <uuid>` → "ttysNNN" (per uuid), or empty when a gone-marker exists.
   cat > "$SHIM/osascript" <<'SH'
 #!/usr/bin/env bash
 uuid=""
@@ -75,12 +78,14 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$uuid" ] || exit 0
 [ -n "${OSA_GONE_DIR:-}" ] && [ -e "$OSA_GONE_DIR/$uuid" ] && exit 0
-printf '%s' "TTY-$uuid"
+# A pane's tty is a REAL pty name, fixed per uuid (tty_for_uuid computes the same): the tty reads are
+# devname-free (`ps -o tdev=` prints 16/NNN), and a made-up name has no minor to print.
+printf 'ttys%d' "$(( $(printf '%s' "$uuid" | cksum | cut -d' ' -f1) % 800 + 100 ))"
 exit 0
 SH
 
   # TWO distinct ps forms are used and the shim must not conflate them:
-  #   ps -t <tty> -o command=   → full argv    (agent_id_on_tty, the assignee oracle)
+  #   ps -axo tdev=,command=    → full argv per tty, devname-free (agent_id_on_tty, the assignee oracle)
   #   ps -o comm= -p <pid>      → command NAME (originator_liveness's recycled-pid discriminator)
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
@@ -90,9 +95,16 @@ while [ $# -gt 0 ]; do
     -t) tty="${2:-}"; shift 2 ;;
     -p) pid="${2:-}"; shift 2 ;;
     -o) case "${2:-}" in command=) want=argv ;; comm=) want=comm ;; esac; shift 2 ;;
+    -axo) case "${2:-}" in tdev=,command=) want=tdev_argv ;; esac; shift 2 ;;
     *)  shift ;;
   esac
 done
+if [ "$want" = tdev_argv ]; then
+  # `ps -axo tdev=,command=` — the devname-free tty read: every pane's argv rows as `16/NNN <argv>`,
+  # from the per-tty fixture files (ttysNNN is minor NNN).
+  for f in "$PS_ARGV_DIR"/ttys*; do [ -f "$f" ] || continue; m="${f##*/ttys}"; sed "s|^|16/$((10#$m)) |" "$f"; done
+  exit 0
+fi
 if [ "$want" = argv ] && [ -n "$tty" ]; then
   [ -f "$PS_ARGV_DIR/$tty" ] && cat "$PS_ARGV_DIR/$tty"
   exit 0
@@ -126,6 +138,7 @@ SH
   # that fails all 15 tests identically — which reads as 15 bugs and is one extraction fault.)
   {
     sed -n '/^agent_id_on_tty() {/,/^}/p'      "$HF"
+    sed -n '/^hf_tdev_name() {/,/^}/p;/^hf_ps_tty_of() {/,/^}/p;/^hf_ps_on_tty() {/,/^}/p' "$HF"
     sed -n '/^session_of_agent_id() {/,/^}/p'  "$HF"
     sed -n '/^originator_liveness() {/,/^}/p'  "$HF"
   } > "$BATS_TEST_TMPDIR/units.sh"
@@ -160,8 +173,8 @@ reg_row() { # $1=pane $2=sid $3=pid
 # ── 1. the assignee oracle — POSITION-matched, never a substring ────────────────────────────────
 
 @test "agent_id_on_tty reads the agent-id from argv at the COMMAND POSITION" {
-  argv_assignee "TTY-X" "gu5-decide@session-$LEAD_SID"
-  run agent_id_on_tty "TTY-X"
+  argv_assignee "ttys904" "gu5-decide@session-$LEAD_SID"
+  run agent_id_on_tty "ttys904"
   [ "$status" -eq 0 ]
   [ "$output" = "gu5-decide@session-$LEAD_SID" ]
 }
@@ -174,14 +187,14 @@ reg_row() { # $1=pane $2=sid $3=pid
   # classified an ordinary lead as an assignee of a nonexistent originator.
   printf '%s\n' \
     "/usr/local/bin/node /opt/claude/cli.js --model claude-opus-5 A resume never restores the TEAM CHANNEL — assignees are keyed --agent-id <name>@session-<sid> to the PROCESS that died" \
-    > "$PS_ARGV_DIR/TTY-LEAD"
-  run session_of_agent_id "$(agent_id_on_tty TTY-LEAD)"
+    > "$PS_ARGV_DIR/ttys906"
+  run session_of_agent_id "$(agent_id_on_tty ttys906)"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
   # POSITIVE CONTROL: the real assignee argv on the same code path DOES parse — so the rejection
   # above is the validator discriminating, not a function that always returns empty.
-  argv_assignee "TTY-REAL" "gu5-decide@session-$LEAD_SID"
-  run session_of_agent_id "$(agent_id_on_tty TTY-REAL)"
+  argv_assignee "ttys907" "gu5-decide@session-$LEAD_SID"
+  run session_of_agent_id "$(agent_id_on_tty ttys907)"
   [ "$output" = "$LEAD_SID" ]
 }
 
@@ -205,8 +218,8 @@ reg_row() { # $1=pane $2=sid $3=pid
   # is refused. Two independent walls, which is why neither has to be flawless.
   printf '%s\n' \
     "/usr/local/bin/node /opt/claude/cli.js do not send to --agent-id ghost-worker@session-deadbeef12345678 any more" \
-    > "$PS_ARGV_DIR/TTY-$ASSIGNEE"
-  run session_of_agent_id "$(agent_id_on_tty "TTY-$ASSIGNEE")"
+    > "$PS_ARGV_DIR/$(tty_for_uuid "$ASSIGNEE")"
+  run session_of_agent_id "$(agent_id_on_tty "$(tty_for_uuid "$ASSIGNEE")")"
   [ "$output" = "deadbeef12345678" ]                # shape-valid: wall 1 passes
   run bash "$HF" self-close --orphaned-assignee --terminal --session-id "$ASSIGNEE" --dry-run
   [ "$status" -eq 2 ]                               # wall 2 holds
@@ -214,7 +227,7 @@ reg_row() { # $1=pane $2=sid $3=pid
 }
 
 @test "agent_id_on_tty on a tty with no processes yields empty, and never fails" {
-  run agent_id_on_tty "TTY-EMPTY"
+  run agent_id_on_tty "ttys908"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
@@ -272,7 +285,7 @@ reg_row() { # $1=pane $2=sid $3=pid
 
 @test "ALLOWED: assignee whose lead is provably dead closes, and its close is LEGIBLE" {
   DP="$(dead_pid)"
-  argv_assignee "TTY-$ASSIGNEE" "gu5-decide@session-$LEAD_SID"
+  argv_assignee "$(tty_for_uuid "$ASSIGNEE")" "gu5-decide@session-$LEAD_SID"
   reg_row "LEADPANE" "$LEAD_SID" "$DP"
   run bash "$HF" self-close --orphaned-assignee --terminal --session-id "$ASSIGNEE" --dry-run
   [ "$status" -eq 0 ]
@@ -292,7 +305,7 @@ reg_row() { # $1=pane $2=sid $3=pid
 
 @test "REFUSED: assignee whose lead is ALIVE — finish and be harvested, do not self-close" {
   printf 'claude\n' > "$PS_COMM_DIR/$$"
-  argv_assignee "TTY-$ASSIGNEE" "gu5-decide@session-$LEAD_SID"
+  argv_assignee "$(tty_for_uuid "$ASSIGNEE")" "gu5-decide@session-$LEAD_SID"
   reg_row "LEADPANE" "$LEAD_SID" "$$"
   run bash "$HF" self-close --orphaned-assignee --terminal --session-id "$ASSIGNEE" --dry-run
   [ "$status" -eq 2 ]
@@ -300,7 +313,7 @@ reg_row() { # $1=pane $2=sid $3=pid
 }
 
 @test "REFUSED on UNKNOWN: R1 — a stall is not a death, so no-evidence never authorizes a close" {
-  argv_assignee "TTY-$ASSIGNEE" "gu5-decide@session-$LEAD_SID"      # no registry row for the lead
+  argv_assignee "$(tty_for_uuid "$ASSIGNEE")" "gu5-decide@session-$LEAD_SID"      # no registry row for the lead
   run bash "$HF" self-close --orphaned-assignee --terminal --session-id "$ASSIGNEE" --dry-run
   [ "$status" -eq 2 ]
   [[ "$output" == *"cannot PROVE"* ]] || false
@@ -310,7 +323,7 @@ reg_row() { # $1=pane $2=sid $3=pid
 @test "the ORIGIN GATE is untouched: a bare self-close on the same pane is still refused" {
   # The new path must not widen the old gate. Same pane, same absent stamp, no --orphaned-assignee.
   DP="$(dead_pid)"
-  argv_assignee "TTY-$ASSIGNEE" "gu5-decide@session-$LEAD_SID"
+  argv_assignee "$(tty_for_uuid "$ASSIGNEE")" "gu5-decide@session-$LEAD_SID"
   reg_row "LEADPANE" "$LEAD_SID" "$DP"
   run bash "$HF" self-close --terminal --session-id "$ASSIGNEE" --dry-run
   [ "$status" -eq 2 ]
@@ -319,7 +332,7 @@ reg_row() { # $1=pane $2=sid $3=pid
 
 @test "A11 kill switch: CC_ORPHAN_ASSIGNEE_CLOSE=0 falls back to the origin refusal" {
   DP="$(dead_pid)"
-  argv_assignee "TTY-$ASSIGNEE" "gu5-decide@session-$LEAD_SID"
+  argv_assignee "$(tty_for_uuid "$ASSIGNEE")" "gu5-decide@session-$LEAD_SID"
   reg_row "LEADPANE" "$LEAD_SID" "$DP"
   run env CC_ORPHAN_ASSIGNEE_CLOSE=0 bash "$HF" self-close --orphaned-assignee --terminal \
     --session-id "$ASSIGNEE" --dry-run

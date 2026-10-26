@@ -721,6 +721,7 @@ _tp_marker() {
 _icp() { # $1 = "own" | "other" → prints "CALL=<tool-call shell pid> ANS=<answer|none> TTY=<tty>"
   local fn="$BATS_TEST_TMPDIR/icp-funcs.sh"
   { sed -n '/^pin_still_live() {/,/^}/p' "$HF"; sed -n '/^pid_is_cc() {/,/^}/p' "$HF"
+    sed -n '/^hf_tdev_name() {/,/^}/p;/^hf_ps_tty_of() {/,/^}/p' "$HF"
     sed -n '/^hf_invoking_call_pid() {/,/^}/p' "$HF"; } > "$fn"
   mkdir -p "$BATS_TEST_TMPDIR/fakebin"
   # argv[0] = "claude", which is what pid_is_cc reads — the session process on the pane's pty.
@@ -729,7 +730,7 @@ _icp() { # $1 = "own" | "other" → prints "CALL=<tool-call shell pid> ANS=<answ
   # The "tool call" is the `bash -c` the fake claude forks; the script it runs is two levels down.
   # shellcheck disable=SC2016  # expanded by the inner shells
   script -q /dev/null "$BATS_TEST_TMPDIR/fakebin/claude" -c '
-    t="$(ps -o tty= -p $$ | tr -d " ")"; [ "$2" = other ] && t=ttys999
+    t="$(ps -x -o tdev= -p $$ | tr -d " ")"; t="ttys$(printf %03d "${t#16/}")"; [ "$2" = other ] && t=ttys999
     bash -c "bash -c \". \\\"\$1\\\"; a=\\\$(hf_invoking_call_pid \$2); echo CALL=\$\$ ANS=\\\${a:-none} TTY=\$2\"" _ "$1" "$t"
   ' _ "$fn" "$1" | tr -d '\r'
 }

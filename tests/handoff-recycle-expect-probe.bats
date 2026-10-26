@@ -73,6 +73,7 @@ setup() {
 # fixture-driven ps. Forms answered:
 #   -o pid= -t TTY | -o tpgid= -t TTY | -o comm= -t TTY | -axo pid=,ppid=
 #   -o pid=,comm= -g PGID | -o comm= -p PID | -o args= -p PID | -o tty= -p PID
+#   -axo tdev=,<fields> | -x -o tdev= -p PID — tdev is the devname-free major/minor: ttysNNN is 16/NNN
 fmt=""; sel=""; val=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -95,7 +96,8 @@ awk -F'\t' -v fmt="$fmt" -v sel="$sel" -v val="$val" '
     for (i = 1; i <= n; i++) {
       gsub(/=/, "", f[i])
       v = (f[i] == "pid") ? $1 : (f[i] == "ppid") ? $2 : (f[i] == "pgid") ? $3 \
-        : (f[i] == "tpgid") ? $4 : (f[i] == "tty") ? $5 : (f[i] == "comm") ? $6 : $7
+        : (f[i] == "tpgid") ? $4 : (f[i] == "tty") ? $5 : (f[i] == "comm") ? $6 \
+        : (f[i] == "tdev") ? ($5 ~ /^ttys[0-9]+$/ ? "16/" (substr($5, 5) + 0) : "??") : $7
       out = (out == "") ? v : out " " v
     }
     print out
@@ -113,6 +115,7 @@ FAKEPS
 
   eval "$(sed -n '/^pid_is_cc() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^pane_cc_state() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^hf_tdev_name() {/,/^}/p;/^hf_ps_on_tty() {/,/^}/p' "$HF")"
 }
 
 # ── fixtures, each transcribed from a measured pane ──────────────────────────────────────────────
