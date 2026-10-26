@@ -5,7 +5,8 @@
 #   cc-proctable --lstart <pid>           ps LSTART of one pid (UTC, C names), root rows included
 #   cc-proctable --holders <sid>          live holders of a session: --resume argv + live registry rows
 #   cc-proctable --parity [--min N]       fold recon/shadow/ps-free.jsonl; exit 0 = ready for "on"
-#   cc-proctable --mode                   the LR_RECON_PSFREE mode the reconciler reads now
+#   cc-proctable --mode                   the mode the reconciler reads now: recon/ps-free.off > env
+#                                         LR_RECON_PSFREE > recon/ps-free.mode > off
 #
 # WHY. /bin/ps is setuid root and walks every task's memory map and threads, so under 15-40/core
 # load it wedges: 15 blind reconciler passes at 42 s a call (2026-10-24), and multi-pid

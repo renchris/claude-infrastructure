@@ -428,6 +428,21 @@ class Mode(Base):
         open(self.paths.p(P.OFF_FILE), "w").close()
         self.assertEqual(P.mode(self.paths, {"LR_RECON_PSFREE": "on"}), "off")
 
+    def test_mode_file_sits_below_the_env_and_below_the_off_file(self) -> None:
+        os.makedirs(self.paths.root)
+        with open(self.paths.p(P.MODE_FILE), "w") as fh:
+            fh.write("shadow\n")
+        self.assertEqual(P.mode(self.paths, {}), "shadow")
+        self.assertEqual(P.mode(self.paths, {"LR_RECON_PSFREE": "off"}), "off")
+        self.assertEqual(P.mode(self.paths, {"LR_RECON_PSFREE": "bogus"}), "shadow")
+        with open(self.paths.p(P.MODE_FILE), "w") as fh:
+            fh.write("sideways")
+        self.assertEqual(P.mode(self.paths, {}), "off")
+        with open(self.paths.p(P.MODE_FILE), "w") as fh:
+            fh.write("on")
+        open(self.paths.p(P.OFF_FILE), "w").close()
+        self.assertEqual(P.mode(self.paths, {}), "off")
+
     def test_no_paths_resolves_the_tree_from_env(self) -> None:
         env = {"HOME": self.dir, "LR_STATE_DIR": self.dir, "LR_RECON_PSFREE": "on"}
         self.assertEqual(P.mode(None, env), "on")

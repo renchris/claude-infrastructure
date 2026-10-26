@@ -58,6 +58,7 @@ from lr_recon import types as T
 MODES = ("off", "shadow", "on")
 MODE_ENV = "LR_RECON_PSFREE"
 OFF_FILE = "ps-free.off"  # under recon/
+MODE_FILE = "ps-free.mode"  # under recon/: off | shadow | on, below the env value
 SHADOW_LOG = "ps-free.jsonl"  # under recon/shadow/
 SHADOW_LOG_MAX_BYTES = 8 * 1024 * 1024  # then rotated once to .1
 
@@ -104,17 +105,30 @@ class KRow(NamedTuple):
 def mode(
     paths: Optional[T.Paths] = None, env: Optional[Mapping[str, str]] = None
 ) -> str:
-    """off | shadow | on. ``recon/ps-free.off`` wins (re-read on every call); then the env value;
-    anything else is off, so the default is today's ps path."""
+    """off | shadow | on, re-read on every call. ``recon/ps-free.off`` wins; then a valid env
+    value; then ``recon/ps-free.mode`` (one word, so an operator turns shadow on with one write and
+    no plist edit or daemon restart); anything else is off, so the default is today's ps path."""
     e: Mapping[str, str] = os.environ if env is None else env
+    p: Optional[T.Paths] = None
     try:
         p = paths if paths is not None else T.Paths.from_env(env=dict(e))
         if os.path.exists(p.p(OFF_FILE)):
             return "off"
     except Exception:  # noqa: BLE001 — an unresolvable tree has no off file to read
-        pass
+        p = None
     v = (e.get(MODE_ENV) or "").strip().lower()
-    return v if v in MODES else "off"
+    if v in MODES:
+        return v
+    if p is not None:
+        try:
+            with open(p.p(MODE_FILE), "rb") as fh:
+                raw = fh.read(16)
+        except OSError:
+            return "off"
+        w = "".join(c for c in raw.decode("ascii", "replace") if "a" <= c <= "z")
+        if w in MODES:
+            return w
+    return "off"
 
 
 # ── libc seams ───────────────────────────────────────────────────────────────────────────────────
