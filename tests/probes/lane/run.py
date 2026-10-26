@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Lane certification suite (wave W0): run the probes against one Claude Code binary and write
+~/.reso/lanes/cert/<version>.json, which `LR_LANE_CERT_REQUIRED` consumes before any lane is armed.
+
+  python3 -I tests/probes/lane/run.py --all [--binary <path>] [--anchors-only] [--only P-P1,P-S1]
+
+Prints one PASS/FAIL/SKIP/INCONCLUSIVE line per probe, with fingerprints only. Exit 0 when every gating
+probe PASSes, 1 when any FAILs or is inconclusive, 2 on a harness error. Every probe drives throwaway
+sessions in fresh /tmp dirs; nothing here points a live session at a lane or writes a token.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import traceback
+from pathlib import Path
+
+sys.path.insert(
+    0, str(Path(__file__).resolve().parent)
+)  # -I drops the script dir; these modules are ours
+
+import anchors  # noqa: E402
+import lib  # noqa: E402
+
+# order matters: P-S1 reads P-P1's run; P-L1 runs only when P-P1 fails (REPORT §12 W0)
+PROBES = ["P-P1", "P-S1", "P-R1", "P-L4", "P-L2", "P-L1"]
+GATING = {
+    "P-P1",
+    "P-S1",
+    "P-R1",
+    "P-L4",
+}  # P-L2 is recorded, not gating (SYNTHESIS AC14)
+
+
+def load(name: str):
+    mod = {
+        "P-P1": "p_p1_pointer",
+        "P-S1": "p_s1_measure",
+        "P-R1": "p_r1_retrofit",
+        "P-L4": "p_l4_rehome_identity",
+        "P-L2": "p_l2_two_lanes",
+        "P-L1": "p_l1_keychain_primary",
+    }[name]
+    return __import__(mod)
+
+
+def cert_path(version: str) -> Path:
+    return Path(os.environ.get("LANE_CERT_DIR") or lib.CERT_DIR) / f"{version}.json"
+
+
+def write_cert(path: Path, doc: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(doc, indent=2, default=str) + "\n")
+    tmp.replace(path)
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--all", action="store_true")
+    ap.add_argument("--only", default="")
+    ap.add_argument("--binary")
+    ap.add_argument("--anchors-only", action="store_true")
+    o = ap.parse_args(argv)
+    binary = lib.resolve_binary(o.binary)
+    if not binary.exists():
+        print(f"✗ binary not found: {binary}", file=sys.stderr)
+        return 2
+    version = lib.binary_version(binary)
+    path = cert_path(version)
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError):
+        doc = {}
+    doc.update(
+        {
+            "version": version,
+            "binary": str(binary),
+            "binary_sha256": lib.binary_sha256(binary),
+        }
+    )
+    doc.setdefault("probes", {})
+
+    an = anchors.scan(binary)
+    doc["anchors"] = an
+    print(f"{'PASS' if an['ok'] else 'FAIL'} anchors — {an['summary']}")
+    if o.anchors_only or not an["ok"]:
+        doc["verdict"] = "FAIL" if not an["ok"] else doc.get("verdict", "UNCERTIFIED")
+        doc["updated_at"] = time.time()
+        write_cert(path, doc)
+        print(f"cert: {path}")
+        return 0 if an["ok"] else 1
+
+    wanted = PROBES if o.all else [x.strip() for x in o.only.split(",") if x.strip()]
+    ctx: dict = {}
+    for name in wanted:
+        if name == "P-L1" and doc["probes"].get("P-P1", {}).get("verdict") == "PASS":
+            res = lib.verdict(
+                "P-L1",
+                "SKIP",
+                "P-P1 passed: pointer lanes ship, the copy-lane keychain form is moot",
+            )
+        else:
+            try:
+                res = load(name).run(binary, ctx)
+            except (
+                Exception
+            ) as e:  # a crashing probe is a FAIL with its trace, never a silent pass
+                res = lib.verdict(
+                    name,
+                    "FAIL",
+                    f"probe crashed: {type(e).__name__}: {e}",
+                    trace=traceback.format_exc()[-2000:],
+                )
+        doc["probes"][name] = res
+        print(f"{res['verdict']} {name} — {res['summary']}", flush=True)
+        doc["updated_at"] = time.time()
+        write_cert(path, doc)
+
+    gating = {k: doc["probes"].get(k, {}).get("verdict") for k in GATING}
+    doc["gating"] = gating
+    doc["verdict"] = (
+        "CERTIFIED" if all(v == "PASS" for v in gating.values()) else "UNCERTIFIED"
+    )
+    doc["pointer_lane"] = doc["probes"].get("P-P1", {}).get("verdict")
+    doc["updated_at"] = time.time()
+    write_cert(path, doc)
+    print(
+        f"{doc['verdict']} {version} — gating {json.dumps(gating)}; pointer lane (P-P1): {doc['pointer_lane']}"
+    )
+    print(f"cert: {path}")
+    return 0 if doc["verdict"] == "CERTIFIED" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

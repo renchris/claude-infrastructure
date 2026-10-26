@@ -46,7 +46,7 @@ When the new model is the lead model, that set has one member. When it is not (a
 release), the whole fleet's lead still moves binary with it, and a run under the new id alone never
 tests the lead on the new binary. Record every run in the ledger.
 
-## The 17 checks
+## The 18 checks
 
 Each is one file `lib/cc-upgrade-gate/check*.sh` defining a `check_NN`, auto-discovered — adding a
 probe is a new FILE, never an edit to the orchestrator.
@@ -70,8 +70,9 @@ probe is a new FILE, never an edit to the orchestrator.
 | 15 | depth-effect | the binary still REFUSES a spawn at depth ≥ max (effect): reads the candidate's own depth gate, where an inclusive `>=` is a flat topology and an exclusive `>` is GH #84974. #6 proves delivery; only #15 proves containment. |
 | 16 | agent-budget-switch | `CLAUDE_CODE_RIPPLING_TULIP=0` in a settings env still removes a per-agent token budget FORCED on in the shell (effect: the parent's Agent tool description loses its "budget of N tokens" sentence), and the evidence names any `tengu_rippling_tulip` / `tengu_streamed_bumblebee` flag cached in an account's `.claude.json`. FAIL = migration 0060 went inert on this binary; a control that shows no budget is SKIP (cannot tell). Decision D6: `docs/research/haiku55-upgrade-2026-10-07/decisions/D6-agent-budget-switch.md`. |
 | 17 | rm-preempt † | unattended work survives Claude Code's TIMED dangerous-removal dialog (120 s, then deny; no allow rule clears it): `scripts/rm-preempt-probe.sh` runs the candidate in two real interactive auto-mode sessions (main thread + a Workflow slot) and PASS needs `hooks/rm-prompt-preempt.sh`'s own deny in the transcript within 30 s. NOTRIGGER (the candidate no longer raises the dialog for the trap shape) is SKIP and is news: re-check whether the hook is still needed. Research: `docs/research/autodeny-prompts-2026-10-11/`. |
+| 18 | lane-cert † | the credential-lane design behind the zero-restart account move still holds on the candidate: `tests/probes/lane/run.py --all --binary <candidate>` finds its anchors by regex, then drives throwaway sessions only (pointer move mid-turn, retrofit by mod reload, re-home identity, the `session.measure` sensor, two lanes on one account) and writes `~/.reso/lanes/cert/<version>.json`, which the lane broker requires before arming. While lanes are not live an uncertified candidate is SKIP and news; `GATE_LANES_GATING=1` (set at lane activation) makes it FAIL. Research: `docs/research/midturn-account-move-2026-10-25/`. |
 
-† #7 / #8 / #9 / #17 are the spawn probes gated by `GATE_SPAWN`. #17 starts interactive sessions
+† #7 / #8 / #9 / #17 / #18 are the spawn probes gated by `GATE_SPAWN`. #17 starts interactive sessions
 in detached tmux; if the auto-mode classifier refuses the gate run for that, hand the gate line to the
 operator rather than re-running it another way.
 

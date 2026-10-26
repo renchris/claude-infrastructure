@@ -119,8 +119,8 @@ check_stubs() {  # <root>
   fresh; printf 'pinned at 2.1.284 (historical)\n' >>"$S/skills/cc-upgrade/gate.md"
   check_perishable "$S"   # a tagged historical line stays legal
 
-  fresh; cp "$S/lib/cc-upgrade-gate/check17_rm_preempt.sh" "$S/lib/cc-upgrade-gate/check18_new.sh"
-  run check_gate_count "$S"; [ "$status" -eq 1 ]; [[ "$output" == *"heading says '17'"* ]] || false
+  fresh; cp "$S/lib/cc-upgrade-gate/check17_rm_preempt.sh" "$S/lib/cc-upgrade-gate/check99_new.sh"
+  run check_gate_count "$S"; [ "$status" -eq 1 ]; [[ "$output" == *"heading says '"*"files:"*" 99"* ]] || false
   fresh; sed -i.bak '/^| 17 |/d' "$S/skills/cc-upgrade/gate.md"
   run check_gate_count "$S"; [ "$status" -eq 1 ]; [[ "$output" == *"table rows"* ]] || false
 
