@@ -87,6 +87,11 @@ Usage:
       nothing else, so it needs no keychain, no sweep and no accounts.json. THE POINT IS THAT IT
       CAN COME OUT BADLY: the score it replaces evaluated the projector at the horizon's close,
       where the arithmetic has already converged to the truth, and duly scored 8/8.
+  claude-accounts --rebal-band [--json] [--facts DIR] [--bias live|static]  the rebalancer's
+      landing band, CACHE-ONLY: per account, the weekly landing at the fast pace, the strand left
+      at the reset (raw, and net of --strand-score's measured bias at that horizon) and a verdict
+      sink|donor-7d|donor-5h|neutral|walled|unknown:*. Read-only: it ranks where real work should
+      land and moves nothing.
   claude-accounts --route general|fable|interactive   best account name (bare, on stdout)
       general      dispatch lane: headroom/T**2, deadline-DOMINANT — spend quota before it strands.
       interactive  a HUMAN's long-lived desk: a TWO-KEY rule — among 5h-safe accounts, take the
@@ -7229,6 +7234,162 @@ def cmd_shed_band(args, cfg):
     return 0
 
 
+# ── the rebalancer's LANDING band (C1, docs/research/account-rotation-100p-2026-10-24/REPORT.md §4):
+# which accounts will strand weekly quota at their reset (SINKS, where real work should land) and
+# which are on a wall trajectory (DONORS). Read-only and cache-only; nothing moves on it. Filler
+# sessions stay vetoed (decision 8f9618059700): the band ranks destinations for EXISTING work. ────
+REBAL_TARGET_PCT = 97.0      # aim each week's landing here, never at the 100 % wall
+REBAL_HORIZON_H = 96.0       # a sink may open this far out: next3's 54 h strand is invisible at 12 h
+REBAL_BIAS_MIN_N = 5         # a live --strand-score bucket below this many windows is not used
+# --strand-score's bias (projected minus realised strand, pp) per hours-before-reset, measured
+# 2026-10-24 (REPORT [R23]). The FALLBACK only: the live table is read each call, because a bias
+# restated here goes stale with the fleet's habits while the scoring harness re-measures it.
+REBAL_BIAS_STATIC = ((6.0, 3.39), (12.0, 5.52), (24.0, 8.45), (48.0, 15.25))
+
+
+def rebal_bias_table(score=None):
+    """[(h, bias_pp)] ascending, with a "src" per point: the live strand_score bucket where it has
+    REBAL_BIAS_MIN_N windows, else the static R23 point. A live-only horizon (96 h) is used when
+    measured and omitted when not."""
+    live = {}
+    for b in (score or {}).get("buckets", []):
+        if (b.get("n") or 0) >= REBAL_BIAS_MIN_N and _shed_finite(b.get("bias")):
+            live[float(b["h"])] = b["bias"]
+    pts = {h: (v, "static") for h, v in REBAL_BIAS_STATIC}
+    pts.update({h: (v, "live") for h, v in live.items()})
+    return [(h, v, s) for h, (v, s) in sorted(pts.items())]
+
+
+def rebal_bias_at(h, table):
+    """Linear in hours-before-reset, anchored at (0, 0): at the reset the nowcast IS the realised
+    strand. Flat past the widest measured horizon. An empty table is no correction (0)."""
+    prev_h, prev_v = 0.0, 0.0
+    for th, tv, _s in table:
+        if h <= th:
+            return prev_v + (tv - prev_v) * (h - prev_h) / (th - prev_h)
+        prev_h, prev_v = th, tv
+    return prev_v
+
+
+def rebal_band_row(r, R, bias_table, facts=None, now=None):
+    """C1 -> (token, facts). PURE apart from the clock, like shed_band_row, whose walled and
+    unknown arms it mirrors so the two bands never disagree about blindness.
+       walled          used >= 100 %, the server or a live fact rejects the 5h/7d window
+       unknown:<why>   level-stale | no-reset | pace-unknown | pace-stale: opens and closes nothing
+       donor-7d        the fast pace walls the week before its reset
+       donor-5h        the 5h window projects to its wall (_su_projected): more work there walls it
+       sink            reset <= REBAL_HORIZON_H away and the strand net of the measured bias is
+                       >= STRAND_SCORE_FLOOR pp (sink_cap_pph is the room left under REBAL_TARGET_PCT)
+       neutral         anything else, including extra usage on (an overshoot there is money)
+    The landing uses the FAST pace (max of the EWMA and the flat pace) and the bias is subtracted
+    from the strand, so every error leans toward NOT calling a sink: a missed sink strands quota,
+    an overfilled one walls live sessions."""
+    now = time.time() if now is None else now
+    used = weekly_used_frac(r)
+    ra = r.get("weekly_reset_at")
+    key = {"reset_at": ra, "reset_key": _reset_key(ra)}
+    walled = (_shed_finite(used) and used >= 1.0) or wire_rejects(r, "7d") \
+        or wire_rejects(r, "5h") or any(str(f.get("scope")) in ("5h", "7d")
+                                        and _place_fact_live(f, r, now) for f in (facts or []))
+    if walled:
+        return "walled", dict(key, used_pct=round(100.0 * used, 2) if _shed_finite(used) else None)
+    if r.get("stale_quota") or r.get("error"):
+        return "unknown:level-stale", key
+    wrh = _until(r, "weekly_reset_at", "weekly_reset_h")
+    if not _shed_finite(used) or not _shed_finite(wrh) or not (0 < wrh <= WEEK_H):
+        return "unknown:no-reset", key
+    ewma, flat = r.get("burn_wk_ewma_ph"), r.get("burn_wk_flat_ph")
+    if not _shed_finite(ewma):
+        return "unknown:pace-unknown", key
+    if not _shed_finite(flat):
+        return "unknown:pace-stale", key
+    hi, lo = max(ewma, flat, 0.0), max(min(ewma, flat), 0.0)
+    pct = 100.0 * used
+    landing = pct + hi * wrh
+    strand = max(0.0, 100.0 - landing)
+    bias = rebal_bias_at(wrh, bias_table)
+    landing_net = landing + bias        # the ONE site the bias enters; a live bias may be negative
+    strand_net = max(0.0, 100.0 - landing_net)
+    su = _su_projected(r, R)
+    out = dict(key, used_pct=round(pct, 2), reset_h=round(wrh, 2), pace_hi=round(hi, 4),
+               pace_lo=round(lo, 4), landing_pct=round(landing, 2),
+               landing_lo_pct=round(pct + lo * wrh, 2), strand_pp=round(strand, 2),
+               bias_pp=round(bias, 2), strand_net_pp=round(strand_net, 2),
+               landing_net_pct=round(landing_net, 2),
+               sink_cap_pph=round(max(0.0, REBAL_TARGET_PCT - landing_net) / wrh, 4),
+               five_h_pct=r.get("session_pct"),
+               five_h_landing_pct=round(100.0 * su, 2) if _shed_finite(su) else None)
+    if landing >= 100.0:
+        out["ttw_hi_h"] = round(max(0.0, 100.0 - pct) / hi, 2) if hi > 0 else None
+        return "donor-7d", out
+    if _shed_finite(su) and su >= 1.0:
+        return "donor-5h", out
+    if r.get("credits_on"):
+        return "neutral", dict(out, why="credits-on")
+    if wrh <= REBAL_HORIZON_H and strand_net >= STRAND_SCORE_FLOOR:
+        return "sink", out
+    return "neutral", out
+
+
+def cmd_rebal_band(args, cfg):
+    """--rebal-band [--json] [--facts DIR] [--bias live|static]: rebal_band_row per account, the
+    sinks ranked soonest reset first (the quota that dies first is filled first), and the donors
+    by soonest wall. CACHE-ONLY (max_wait 0) under --shed-band's grace, dispatched before the
+    get_data anchor, so it never sweeps; the bias read is the utilization series alone (~2 s at
+    load 190, measured 2026-10-26). exit 0 answered · 3 WAIT_DATA · 64 bad --bias."""
+    mode = "live"
+    if "--bias" in args:
+        i = args.index("--bias")
+        mode = args[i + 1] if i + 1 < len(args) else None
+        if mode not in ("live", "static"):
+            print(f"claude-accounts: --bias takes live|static (got {mode!r})", file=sys.stderr)
+            return PLACE_EXIT_BAD_ARGS
+    max_age = _cliff_env("CC_SHED_BAND_MAX_AGE_S", SHED_BAND_MAX_AGE_S)
+    try:
+        rows, _wj, _c, _p = get_data(cfg, max_wait=0, max_age=max_age)
+    except CacheOnlyUnavailable:
+        print(json.dumps({"v": 1, "wait_data": True}))
+        return PLACE_EXIT_WAIT_DATA
+    facts = {}
+    if "--facts" in args and args.index("--facts") + 1 < len(args):
+        fd = args[args.index("--facts") + 1]
+        facts = _place_read_facts(fd) if os.path.isdir(fd) else {}
+    score = strand_score(_util_tail(hours=STRAND_SCORE_LOOKBACK_H)[0]) if mode == "live" else None
+    table = rebal_bias_table(score)
+    now = time.time()
+    samples = _util_tail(hours=PLACE_BURN_LOOKBACK_H)[0]
+    apply_burn(rows, cfg, samples=samples)
+    accts = []
+    for r in rows:
+        if r.get("acct") in (None, "none"):
+            continue
+        tok, f = rebal_band_row(r, cfg["router"], table, facts.get(r["acct"]), now)
+        accts.append(dict(f, acct=r["acct"], verdict=tok))
+    sinks = sorted((a for a in accts if a["verdict"] == "sink"),
+                   key=lambda a: (a["reset_h"], -a["strand_net_pp"]))
+    donors = sorted((a for a in accts if a["verdict"] in ("donor-7d", "donor-5h")),
+                    key=lambda a: (a["verdict"] != "donor-7d", a.get("ttw_hi_h") or math.inf))
+    doc = {"v": 1, "ts": now, "accounts": accts,
+           "sinks": [a["acct"] for a in sinks], "donors": [a["acct"] for a in donors],
+           "bias": {"mode": mode, "table": [{"h": h, "bias_pp": round(v, 2), "src": s}
+                                            for h, v, s in table]},
+           "knobs": {"target_pct": REBAL_TARGET_PCT, "horizon_h": REBAL_HORIZON_H,
+                     "floor_pp": STRAND_SCORE_FLOOR}}
+    if "--json" in args:
+        print(json.dumps(doc, sort_keys=True))
+        return 0
+    print(f"{'acct':<6} {'verdict':<20} {'used':>6} {'reset_h':>8} {'landing':>8} "
+          f"{'strand':>7} {'net':>6} {'cap pp/h':>9}")
+    for a in accts:
+        cells = [a.get(k) for k in ("used_pct", "reset_h", "landing_pct", "strand_pp",
+                                    "strand_net_pp", "sink_cap_pph")]
+        cells = ["-" if c is None else f"{c:g}" for c in cells]
+        print(f"{a['acct']:<6} {a['verdict']:<20} {cells[0]:>6} {cells[1]:>8} {cells[2]:>8} "
+              f"{cells[3]:>7} {cells[4]:>6} {cells[5]:>9}")
+    print(f"sinks: {', '.join(doc['sinks']) or 'none'} · donors: {', '.join(doc['donors']) or 'none'}")
+    return 0
+
+
 def dispatch_claim_ttl_min(R):
     return _dispatch_knob("CC_ROUTE_DISPATCH_CLAIM_TTL_MIN", R, "DISPATCH_CLAIM_TTL_MIN",
                           DISPATCH_CLAIM_TTL_MIN_DEFAULT)
@@ -12745,6 +12906,9 @@ def main():
     # D2b (W16): the late-band verdict, cache-only for the same reason.
     if "--shed-band" in args:
         sys.exit(cmd_shed_band(args, cfg))
+    # C1: the rebalancer's landing band, cache-only for the same reason.
+    if "--rebal-band" in args:
+        sys.exit(cmd_rebal_band(args, cfg))
 
     # M7: record a fire-time assignment and exit — a WRITE, deliberately dispatched BEFORE the
     # get_data anchor below so telling the router about a fire can never itself trigger a sweep
