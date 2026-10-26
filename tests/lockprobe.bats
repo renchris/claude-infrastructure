@@ -51,7 +51,7 @@ for l in open(sys.argv[1]):
   [ -n "${BGPID:-}" ] && kill -TERM "$BGPID" 2>/dev/null || true
 }
 
-lp() { perl -e 'alarm 90; exec @ARGV' -- "$PY" -I "$LW/lockprobe.py" "$@"; }
+lp() { perl -e 'alarm 300; exec @ARGV' -- "$PY" -I "$LW/lockprobe.py" "$@"; }
 jget() { "$PY" -I -c 'import json,sys
 d=json.load(open(sys.argv[1]))
 for k in sys.argv[2].split("."):
@@ -65,7 +65,7 @@ print(json.dumps(d) if isinstance(d,(dict,list)) else d)' "$1" "$2"; }
   [ "$(jget "$CC_LOCKWATCH_DIR/state.json" verdict)" = blind ]
   # control: the real offsets pass, and the pidfile then carries the kernel lstart
   rm -f "$CC_LOCKWATCH_DIR/state.json"
-  run lp run --max-ticks 40
+  run lp run --max-ticks 200        # budgets are wide: the box runs at 15-30/core
   [ "$status" -eq 0 ]
   [ "$(jget "$CC_LOCKWATCH_DIR/state.json" selftest)" = ok ]
   read -r pid lst boot <"$CC_LOCKWATCH_DIR/lockprobe.pid"
@@ -78,7 +78,7 @@ print(json.dumps(d) if isinstance(d,(dict,list)) else d)' "$1" "$2"; }
   printf '%s\n' 'printf "started %s\nkinfo_all %s\n" "$(date +%s)" "$(date +%s)"; exec /bin/sleep 60' >"$S/hang.sh"
   export CC_LOCKWATCH_PROBE_PROCSCAN="/bin/bash $S/hang.sh" CC_LOCKWATCH_PROBE_WALK="/bin/bash $S/hang.sh"
   export CC_LOCKWATCH_P11_FLOOR_S=0.6 CC_LOCKWATCH_EVERY_PROCSCAN=0.1 CC_LOCKWATCH_EVERY_WALK=0.1
-  run lp run --max-ticks 45
+  run lp run --max-ticks 150
   [ "$status" -eq 0 ]
   st="$CC_LOCKWATCH_DIR/state.json"
   [ "$(jget "$st" probes_stuck.procscan)" = 2 ]
@@ -177,7 +177,7 @@ EOF
 }
 
 @test "5: seq strictly increases, every state.json read parses (atomic rename), a second instance exits 0 on the lease" {
-  lp run --max-ticks 80 &
+  lp run --max-ticks 3000 &          # outlives every check below; ended explicitly
   BGPID=$!
   for _ in $(seq 1 300); do [ -f "$CC_LOCKWATCH_DIR/state.json" ] && [ -f "$CC_LOCKWATCH_DIR/hb" ] && break; sleep 0.1; done
   run "$PY" -I - "$CC_LOCKWATCH_DIR" <<'EOF'
@@ -209,7 +209,8 @@ EOF
   [[ "$output" == *"lease held"* ]] || false
   read -r pid_after _ <"$CC_LOCKWATCH_DIR/lockprobe.pid"
   [ "$pid_after" = "$first_pid" ]
-  wait "$BGPID"
+  kill -TERM "$first_pid"             # the lockprobe core (from its pidfile): no ctty, not a pty leader
+  wait "$BGPID" || true
   BGPID=""
 }
 
@@ -230,7 +231,7 @@ EOF
   unset CC_FX
   export CC_LOCKWATCH_ACTION_CAPTURE="/bin/bash $S/capture.sh"
   touch "$FX/incident/transcripts/-Users-chrisren-Development--worktrees-t1-runner/"*.jsonl 2>/dev/null || true
-  run lp run --max-ticks 70
+  run lp run --max-ticks 200
   [ "$status" -eq 0 ]
   st="$CC_LOCKWATCH_DIR/state.json"
   [ "$(jget "$st" level)" = 2 ]
@@ -317,13 +318,13 @@ EOF
 @test "9: getppid()==1 (host gone) -> verdict host_dead and exit" {
   unset CC_LOCKWATCH_STANDALONE
   ( perl -e 'alarm 60; exec @ARGV' -- "$PY" -I "$LW/lockprobe.py" run --max-ticks 2000 >"$BATS_TEST_TMPDIR/orphan.out" 2>&1 & )
-  for _ in $(seq 1 150); do
+  for _ in $(seq 1 600); do
     [ -f "$CC_LOCKWATCH_DIR/state.json" ] && [ "$(jget "$CC_LOCKWATCH_DIR/state.json" verdict)" = host_dead ] && break
     sleep 0.1
   done
   [ "$(jget "$CC_LOCKWATCH_DIR/state.json" verdict)" = host_dead ]
   read -r pid _ <"$CC_LOCKWATCH_DIR/lockprobe.pid"
-  for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  for _ in $(seq 1 300); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
   run kill -0 "$pid"
   [ "$status" -ne 0 ]
 }
