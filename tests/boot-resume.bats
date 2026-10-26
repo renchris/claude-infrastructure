@@ -1666,10 +1666,11 @@ inc_label() { grep -o 'source: [^"]*' "$CC_NOTIFY_BIN.log" | head -1; }
   kp="$(dead_pid)"
   hbeat UUID-PREV "$kp" 1784804000 '[]'
   jq -n --arg s e1 --argjson k "$kp" '{session_id:$s,account:"claude-next",cwd:"/x/e1",name:"T-e1",endedAt:1784804300,kitty_pid:$k}' > "$CC_SHUTDOWN_TOMB_DIR/e1.json"
+  jq -n --arg s e2 --argjson k "$kp" '{session_id:$s,account:"claude-next",cwd:"/x/e2",name:"T-e2",endedAt:1784804302,kitty_pid:$k}' > "$CC_SHUTDOWN_TOMB_DIR/e2.json"
   jq -n --arg s other '{session_id:$s,account:"claude-next",cwd:"/x/o",name:"T-other",endedAt:1784804400,kitty_pid:1}' > "$CC_SHUTDOWN_TOMB_DIR/other.json"
   run /bin/bash "$SCRIPT" --event 1784805000 --kind crash --kitty-pid "$kp" --plan-only
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | awk -F'\t' '{ for (i = 1; i <= NF; i++) if ($i == "e1") n++ } END { print n + 0 }')" -ge 1 ]
   [ "$(printf '%s\n' "$output" | awk -F'\t' '{ for (i = 1; i <= NF; i++) if ($i == "other") n++ } END { print n + 0 }')" -eq 0 ]   # another kitty's tombstone is not this kitty's fleet
-  grep -q '"tomb_joined":1' "$CC_IDL"
+  grep -q '"tomb_joined":2' "$CC_IDL"
 }

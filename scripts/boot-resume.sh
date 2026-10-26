@@ -750,10 +750,15 @@ if [ -n "$SOURCE" ] && { [ -z "$EVENT" ] || [ "$EVENT_PREV_BOOT" = 1 ]; } && [ -
               | select(.endedAt > $lo and .endedAt <= $hi)
               | select($k == "" or ((.kitty_pid // "") | tostring) == $k) ]
         | (if any(.[]; .hostShutdown == true) then map(select(.hostShutdown == true)) else . end)
-        | if length == 0 then empty else
-            (map(.endedAt) | max) as $last
-            | map(select(.endedAt >= $last - $burst)) | group_by(.session_id) | map(max_by(.endedAt))[]
-            | select(.session_id as $s | $have | index($s) | not)
+        # The shutdown moment: when the snapshot'"'"'s OWN sessions died, if any left a tombstone; a pane
+        # closed minutes later is not that shutdown. With none of them, the last burst before the
+        # boot, and only one of at least two sessions: a lone stamp is a closed pane.
+        | (map(select(.session_id as $s | $have | index($s))) | map(.endedAt) | max) as $own
+        | (if $own != null then map(select(.endedAt >= $own - $burst and .endedAt <= $own + $burst))
+           elif length == 0 then .
+           else (map(.endedAt) | max) as $last | map(select(.endedAt >= $last - $burst)) end)
+        | map(select(.session_id as $s | $have | index($s) | not)) | group_by(.session_id) | map(max_by(.endedAt))
+        | if ($own == null and length < 2) then empty else .[]
             | [(.account|cell), (.cwd|cell), (.session_id|cell), (.name|cell), (.branch|cell),
                (.endedAt|tostring)] | @tsv
           end' 2>/dev/null)"
@@ -818,8 +823,8 @@ for o in data if isinstance(data, list) else []:
                 for i, x in enumerate(a):
                     prev = a[i - 1] if i else ""
                     if U.match(x) and x not in have and (launcher or prev in ("--resume", "-r", "--parent-session-id")):
-                        # a launcher argv is: <launcher> <account> <cwd> <sid>; else the pane cwd
-                        cwd = a[i - 1] if launcher and i >= 2 and a[i - 1].startswith("/") else (p.get("cwd") or w.get("cwd") or "")
+                        # the process cwd (a resume launcher runs in the session worktree), else its argv cwd
+                        cwd = p.get("cwd") or (a[i - 1] if launcher and i >= 3 and a[i - 1].startswith("/") else "") or w.get("cwd") or ""
                         out.setdefault(x, cwd)
 for sid, cwd in out.items():
     print("%s\t%s" % (sid, cwd))
