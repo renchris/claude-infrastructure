@@ -56,6 +56,25 @@ four briefs `/tmp/fire-zh-{Z1,W1,W2,W0}.txt` one at a time; if /tmp is gone, reb
 plan's wave rows and the mid-turn REPORT §12). Branches `feat/zh-*` and their worktrees exist, kept by the
 UNKNOWN-outcome cleanup; no session ever ran in them.
 
+**First batch DONE (2026-10-26 07:35 CDT), all landed off, content-verified and live.** The kitty relaunch
+cleared the terminal blocker; briefs now live in `~/.reso/zero-hitl-2026-10-25/briefs/` (a reboot wiped /tmp).
+- Z1 (pane 129): `6fdd12b32` migration **0084** (0079-0083 were taken) + test, `5c80ad5ad` run-cc-lr-alone rule
+  in `commands/limit-recover.md` (the skill file the brief named does not exist) and the never-ask sentence.
+  Operator step `86df376a8d6e`: run 0084 `--confirm settings.json` (7 rules).
+- W1 (pane 130): `45de9dd6d` + `cfaed9d73` ps-free census, shadow behind `recon/ps-free.mode`; 1,942-row parity
+  vs ps, 0 mismatches. Operator step `e6c53dd64680` (reconciler reload). Left for W7b: `act.py:809` still uses ps.
+- W2 (pane 131): `bf61ef0f6` (+ fixups `d4f0ced10`, `61662b193`) three-key attribution API, `CC_BILLING` off.
+  Ledger contract for W3 is in the `scripts/lib/billing.py` docstring.
+- W0 (pane 132): `407da1095` + `9597ea91c`; 2.1.293 CERTIFIED (`~/.reso/lanes/cert/2.1.293.json`). P-P1 pointer lane
+  PASS (next2 to next mid-turn, adopted 22.7 s after the flip, 0 x 401, no token file), P-S1, P-R1, P-L4 PASS;
+  P-L2 has not yet spanned a real refresh (`LANE_PL2_MAX_WAIT_S`). W9 must set `GATE_LANES_GATING=1`.
+- Lead fixes: `b02a03703` settles the agents of an ended workflow run in `live_subagents_of` (the root cause
+  of pane 314's own move never firing, found by W1) and repairs trunk's red census case 25.
+- Learned: a dispatched wave stalled 4 h on a PreToolUse `rm -r` confirmation no one could answer; the shared
+  brief now bans prompting commands by name.
+- Next: W3-W8 wait on `69c31338d082` (recommend build-with-switches-off, 65%) and `be5c5e83800f` (pointer
+  lanes, 88% after P-P1). A and B (rebalancer landing band, burn meter) are ungated and fire next.
+
 ## 1. Why this shape
 
 - **Allow rules, not hooks, are the permission fix.** Verified in the 2.1.293 binary: a narrow
