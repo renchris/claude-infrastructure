@@ -209,7 +209,7 @@ replay_summary() { # $1=library to source
   done
   # still running after two refusals: it slept and asked again rather than exiting (75 or otherwise)
   kill -0 "$pid" 2>/dev/null || { wait "$pid"; echo "the runner EXITED rc=$? after $n refusal(s)"; cat "$BATS_TEST_TMPDIR/warm.err"; false; }
-  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
   [ "${n:-0}" -ge 2 ] || { cat "$BATS_TEST_TMPDIR/warm.err"; false; }
 }
 
@@ -227,9 +227,9 @@ replay_summary() { # $1=library to source
       /usr/bin/python3 "$REPO/scripts/research-kit/classifier-warm.py" serve 2> "$BATS_TEST_TMPDIR/serve-$1.err" &
     pid=$!
     for i in $(seq 1 300); do grep -q 'serving on' "$BATS_TEST_TMPDIR/serve-$1.err" 2>/dev/null && break; sleep 0.1; done
-    grep -q 'serving on' "$BATS_TEST_TMPDIR/serve-$1.err" || { kill "$pid" 2>/dev/null; echo "serve never started"; return 1; }
+    grep -q 'serving on' "$BATS_TEST_TMPDIR/serve-$1.err" || { kill "$pid" 2>/dev/null || true; echo "serve never started"; return 1; }
     for i in $(seq 1 $(( $2 * 10 ))); do [ "$1" = off ] && [ -n "$(ls "$seen")" ] && break; sleep 0.1; done
-    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
   }
   serve_arm on 4
   [ -z "$(ls "$seen")" ] || { echo "a worker spawned under brownout: $(ls "$seen")"; false; }
