@@ -111,25 +111,8 @@ SH
   export CC_HB_PS_BIN="$BATS_TEST_DIRNAME/fixtures/hb-kitty-ps" CC_HB_LSOF_BIN=/usr/bin/true
   export CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/stub-ksock"
   cc_stub "$BATS_TEST_TMPDIR" stub-ksock "$(printf '#!/bin/bash\necho unix:/tmp/kitty-test\n')"
-  # classifier stub: append a verdict per row — the sid's line in .verdicts, else INTERRUPTED — and
-  # log its argv. A test that wants it to fail writes .fail.
+  # The classifier stub is each suite's own (its text matters to boot-resume.bats; see there).
   export CC_RESUME_CLASSIFY_BIN="$BATS_TEST_TMPDIR/stub-classify"
-  # A plain #! file, not cc_stub: boot-resume greps this file's TEXT for --owner (boot-resume.sh, the
-  # CL_ARGS block), and under the shim the path is a link to the Mach-O, which has no such text.
-  cat > "$CC_RESUME_CLASSIFY_BIN" <<'SH'
-#!/bin/bash
-# Like the real classifier this stub takes --owner (boot-resume passes it only to one that does).
-printf '%s\n' "$*" >> "$0.log"
-ls "${CC_MAILBOX_DIR:-/nonexistent}" > "$0.mbox-seen" 2>/dev/null   # what mail existed when it ran
-[ -f "$0.fail" ] && exit 3
-while IFS= read -r row; do
-  [ -n "$row" ] || continue
-  sid="$(printf '%s' "$row" | cut -f2)"
-  v="$(awk -v s="$sid" '$1 == s { print $2 }' "$0.verdicts" 2>/dev/null)"
-  printf '%s\t%s\n' "$row" "${v:-INTERRUPTED}"
-done
-SH
-  chmod +x "$CC_RESUME_CLASSIFY_BIN"
 
   # stub lr-select (session-sprawl consolidation seam, 2026-07-21). Default = identity pass-through:
   # every --candidate becomes a winner, so the launcher-wiring tests stay about boot-resume's seam

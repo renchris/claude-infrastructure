@@ -30,6 +30,24 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_FIRE_CAPACITY_GATE=off
   boot_resume_setup
+  # classifier stub: append a verdict per row — the sid's line in .verdicts, else INTERRUPTED — and
+  # log its argv. A test that wants it to fail writes .fail.
+  # A plain #! file, not cc_stub: boot-resume greps this file's TEXT for --owner (boot-resume.sh, the
+  # CL_ARGS block), and under the shim the path is a link to the Mach-O, which has no such text.
+  cat > "$CC_RESUME_CLASSIFY_BIN" <<'SH'
+#!/bin/bash
+# Like the real classifier this stub takes --owner (boot-resume passes it only to one that does).
+printf '%s\n' "$*" >> "$0.log"
+ls "${CC_MAILBOX_DIR:-/nonexistent}" > "$0.mbox-seen" 2>/dev/null   # what mail existed when it ran
+[ -f "$0.fail" ] && exit 3
+while IFS= read -r row; do
+  [ -n "$row" ] || continue
+  sid="$(printf '%s' "$row" | cut -f2)"
+  v="$(awk -v s="$sid" '$1 == s { print $2 }' "$0.verdicts" 2>/dev/null)"
+  printf '%s\t%s\n' "$row" "${v:-INTERRUPTED}"
+done
+SH
+  chmod +x "$CC_RESUME_CLASSIFY_BIN"
 }
 
 

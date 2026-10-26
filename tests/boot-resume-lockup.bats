@@ -22,6 +22,8 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # also in the helper; the hermeticity ratchet reads setup() itself
   export CC_FIRE_CAPACITY_GATE=off
   boot_resume_setup
+  # every row INTERRUPTED (a shim stub: this suite never needs the --owner text boot-resume greps for)
+  cc_stub_self "$CC_RESUME_CLASSIFY_BIN" "$(printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$self.log"\nwhile IFS= read -r row; do [ -n "$row" ] && printf "%%s\\tINTERRUPTED\\n" "$row"; done\n')"
   export CC_LOCKWATCH_DIR="$BATS_TEST_TMPDIR/lockwatch"; mkdir -p "$CC_LOCKWATCH_DIR"
   export CC_BOOT_RESUME_MODE=page
   # the empty heartbeat, taken after the alarm roster below, with a kitty tree written at its tick
