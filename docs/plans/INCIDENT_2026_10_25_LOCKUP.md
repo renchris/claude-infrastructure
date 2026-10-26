@@ -20,6 +20,9 @@ Working folder (untracked evidence): `~/incident-2026-10-25/` — CHANGELOG.md (
 | W4 resume-layout determinism + restore of the remaining 15 + design lane E | **S** pane 23, sid c7887188, branch `resume-layout-determinism` | default |
 | W5 design lanes A–D | **S** 4 sessions, branches `lockwatch-lane-{a,b,c,d}` — panes 72 (A, sid 4b4a3a7b), 73 (B, d41b1e89), 74 (C, 7d370dfb), 75 (D) | default |
 | W6 lane F: root-cause code fix (cc-pane-runner SIG_IGN, cc-pane-verdict blocking open, pty test teardown) + kitty upstream issue + Apple Feedback draft | **S** pane 76, sid 914995eb, branch `lockwatch-lane-f` | default; added after the final RCA named our own code |
+| W7 lane F2: lane F's leftovers (expect-test teardown by process group; held runner exits on master loss, RCA R2b; `_husk_row` without `tty(1)`) | **S** pane 98, sid 00896c67, branch `lockwatch-lane-f2` | default; lane F self-closed before its follow-on arrived |
+| W8 lane C2: handoff-fire tdev rewrite + ~40 suites' `ps` stubs | **S** pane 101, sid 254f6b3a, branch `lockwatch-lane-c2-tdev` | default; fired by lane C, reports to the lead |
+| W9 restore of the 15 RESUME-AT-REST rows | **L** lead, `cc-resume-layout --desktops --restore` | pane 23 landed the tool but handed the run back when the capacity probe refused; one command, no code |
 | lead | **L** this pane (kitty pane 1) | synthesis, custody, operator relay |
 
 Lead context budget: recycle at the first idle seam ≥35%; everything needed is on disk (this file + the folder above). Succession: `handoff-fire.sh --recycle` in pane 1 (fired lanes notify pane 1, so the pane must stay).
@@ -37,6 +40,25 @@ Lead context budget: recycle at the first idle seam ≥35%; everything needed is
 - Design: `docs/research/incident-2026-10-25/DESIGN.md` (with the 0082/0083 renumbering and the lane-A unpoison-target-set amendment).
 - Plan commit landed `e6dfb51f7`.
 - Decision filed: `888ad4830b80` (refuse autonomous launches above 50/core sustained? default observe-only; revisit 2026-11-01).
+
+## Status update (2026-10-26 ~00:55 CDT, recycled lead 0ec4b497)
+
+Every lane landed, each verified by content (`git ls-tree origin/main` per path plus an empty diff against the lane tip):
+
+| Lane | Landed | Live evidence |
+|---|---|---|
+| F root cause | effd3f4b2, 6c3ce71d4 | `tests/lockup-2026-10-25-preconditions.bats` RED 8/8 pre-fix, GREEN 8/8 |
+| A lockprobe/forensics/classifier | 61df27073..2827c8669, 1bceb92c0 (install links) | lockprobe under the sentinel: `state.json level=0 verdict=ok seq=166 kitty_rc=ok selftest=ok` (04:04Z); classifier on the real stall report: `LOCKUP_DEVFS high, 40 sleepers, zombie leader 68298` |
+| B sentinel host, guards, bounded ps | c50816a1f..a52299a61 | sentinel self-restarted and spawned lockprobe; capacity-alarm reads ptys from lockwatch (`argv_blind:false`) |
+| C governor | abda1d5a1, ef8b545be, 0de93a544 | brownout + 50/core band observe-only, RC breaker live; `rcy_pane_paint` opens the tty non-blocking |
+| D break-glass, guards, lint | 1d830d1cc, d6cc1641c; hammerspoon-config 8f795b7 | 0081 `--verify` rc 0, rescue selftest PASS |
+| pane 23 restore + lane E | de0877dbe (and parents) | `bin/cc-panes` live |
+| lead | 20ade159c | `lr-page` reads Pushover keys from agent-secrets |
+| kitty upstream | kovidgoyal/kitty#10742 merged (57ce71929); note 1ec01e6f6 | — |
+
+Still in flight: F2 (pane 98: expect-test teardown, runner exits on master loss, `_husk_row` without `tty(1)`), C2 (pane 101: handoff-fire tdev rewrite). The 15-row restore runs from the lead (`restore-15-run.log`); 92fc4fbe's reso worktree was recreated first. Temporary monitor stopped 23:04 once lockprobe was live.
+
+Operator: one script, `bash /tmp/incident-operator-steps.sh --confirm launchd --confirm tailspin` (0082, 0083, tailspin), filed as backlog rows; Pushover keys, one TCC click and the Apple Feedback filing as needs-human / needs-credential rows; decision `1cf14ed6e1c3` (add api.pushover.net to the agent-secrets egress allowlist).
 
 ## Open items
 
