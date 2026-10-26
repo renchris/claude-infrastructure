@@ -17,6 +17,8 @@
 
 bats_require_minimum_version 1.5.0
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
@@ -292,15 +294,16 @@ SH
   # The census (bin/cc-panes) is its own suite (tests/cc-panes.bats); here it answers "all live",
   # logging what it was asked, unless $BATS_TEST_TMPDIR/census.rc names another exit.
   export CC_PANES_BIN="$BATS_TEST_TMPDIR/cc-panes"
-  cat > "$CC_PANES_BIN" <<'SH'
-#!/bin/bash
-printf '%s\n' "$*" >> "$0.log"
-rc="$(cat "$0.rc" 2>/dev/null || echo 0)"
+  cc_stub "$BATS_TEST_TMPDIR" cc-panes "#!/bin/bash
+self='$CC_PANES_BIN'
+$(cat <<'SH'
+printf '%s\n' "$*" >> "$self.log"
+rc="$(cat "$self.rc" 2>/dev/null || echo 0)"
 [ "$rc" = 0 ] || echo "cc-panes: expect wid=101 sid=x state=shell — pane 101 is SHELL, not Claude"
 echo "cc-panes: expect ok=0 bad=$([ "$rc" = 0 ] && echo 0 || echo 1)"
 exit "$rc"
 SH
-  chmod +x "$CC_PANES_BIN"
+)"
   unset CC_ADMIT_RESTORE_R CC_ADMIT_ACTIVE_CEILING CC_RESTORE_DEADLINE CC_RESTORE_KITTY_PID KITTY_PID
 }
 restore() { run --separate-stderr bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS"; }

@@ -17,13 +17,15 @@
 
 bats_require_minimum_version 1.5.0
 
+load helpers/cc-stub
+
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   PANES="$REPO/bin/cc-panes"
   export K="$BATS_TEST_TMPDIR/k"
   export CC_TERM_KITTY="$BATS_TEST_TMPDIR/kitty"
-  cat > "$CC_TERM_KITTY" <<'SH'
+  cc_stub "$BATS_TEST_TMPDIR" kitty - <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "$K.log"
 case " $* " in
@@ -31,7 +33,6 @@ case " $* " in
   *" get-text --match id:"*) for a; do :; done; cat "$K.text.${a#id:}" 2>/dev/null ;;
 esac
 SH
-  chmod +x "$CC_TERM_KITTY"
   export CC_DEFAULTS_BIN=""             # no Spaces read
   S1=11111111-1111-4111-8111-111111111111; S2=22222222-2222-4222-8222-222222222222
   cat > "$K.ls" <<JSON

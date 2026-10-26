@@ -28,7 +28,8 @@ tests/bats-shellcheck-lint.bats	8
 tests/bats-shim-parity-lint.bats	2
 tests/boot-resume-launch.bats	12
 tests/boot-resume-skip-retired.bats	1
-tests/boot-resume.bats	1
+tests/boot-resume.bats	0
+tests/helpers/boot-resume-env.bash	1
 tests/boundary-handoff.bats	1
 tests/branch-adjudicate.bats	1
 tests/browser-spin-guard.bats	8

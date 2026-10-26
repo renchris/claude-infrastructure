@@ -13,6 +13,8 @@
 
 bats_require_minimum_version 1.5.0
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd -P)"
   S="$REPO/scripts/alarm-reboot-prep.sh"
@@ -21,7 +23,7 @@ setup() {
   export CC_REBOOT_PREP_DIR="$D/autonomy" CC_REBOOT_PREP_DATE=2020-01-01
   mkdir -p "$D/bin" "$CC_REBOOT_PREP_DIR"
   for b in ps cc-sessions kitten kitty lsof; do
-    printf '#!/bin/sh\necho "%s $*" >> "%s/calls.log"\nexit 0\n' "$b" "$D" > "$D/bin/$b"; chmod +x "$D/bin/$b"
+    cc_stub "$D/bin" "$b" "$(printf '#!/bin/sh\necho "%s $*" >> "%s/calls.log"\nexit 0\n' "$b" "$D")"
   done
   export PATH="$D/bin:$PATH"
   export CC_REBOOT_PREP_PS="$D/bin/ps" CC_REBOOT_PREP_SESSIONS="$D/bin/cc-sessions" CC_REBOOT_PREP_LSOF="$D/bin/lsof" \

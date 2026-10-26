@@ -47,6 +47,8 @@
 
 bats_require_minimum_version 1.5.0
 
+load helpers/cc-stub
+
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   FIXD="$BATS_TEST_DIRNAME/fixtures/kitty-crash-2026-10-15"
@@ -105,7 +107,7 @@ SH
   export CC_RESTORE_WAIT=0 CC_RESTORE_K_BACKOFF=0 CC_RESTORE_FS_GAP=0 CC_RESTORE_MAYBE_S=0
   export CC_RESTORE_MAYBE_POLL=0 CC_RESTORE_FS_VERIFY=0 CC_RESTORE_APPLY_SETTLE=0 CC_RESTORE_FS_FIRST=0
   export CC_PANES_BIN="$BATS_TEST_TMPDIR/cc-panes"     # the census answers "all live" (its own suite: cc-panes.bats)
-  printf '#!/bin/bash\necho "cc-panes: expect ok=1 bad=0"\n' > "$CC_PANES_BIN"; chmod +x "$CC_PANES_BIN"
+  cc_stub "$BATS_TEST_TMPDIR" cc-panes "$(printf '#!/bin/bash\necho "cc-panes: expect ok=1 bad=0"\n')"
   unset KITTY_WINDOW_ID KITTY_PID CC_TERM_KITTY_TO CC_RESTORE_KITTY_PID CC_RESTORE_TREE \
         CC_KITTY_APPLY_LAYOUT_KITTEN CC_KITTY_EQUALIZE_KITTEN CC_ADMIT_RESTORE_R CC_RESTORE_DEADLINE
   ROWS="$BATS_TEST_TMPDIR/rows.tsv"

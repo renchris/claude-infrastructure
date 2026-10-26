@@ -15,6 +15,8 @@
 
 bats_require_minimum_version 1.5.0
 
+load helpers/cc-stub
+
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
@@ -23,14 +25,13 @@ setup() {
   BIN="$BATS_TEST_TMPDIR/bin"; mkdir -p "$BIN"
   ENVFILE="$BATS_TEST_TMPDIR/gc.env"
   export CC_WTGC_INFRA_GC="$BIN/gc-stub.sh" CC_WTGC_GIT="$BIN/git" CC_WTGC_INFRA_FETCH_BACKOFF=0
-  printf '#!/bin/bash\nexit 0\n' > "$BIN/git"
+  cc_stub "$BIN" git "$(printf '#!/bin/bash\nexit 0\n')"
+  # the wrapper runs its janitor as `bash "$GC_SH"`, so this stub is a script body, never exec'd
   cat > "$CC_WTGC_INFRA_GC" <<EOF
-#!/bin/bash
 printf 'EXCLUDE=%s\n' "\$CC_WTGC_EXCLUDE" >> "$ENVFILE"
 echo 'worktree-gc: removed 0 worktree(s) · disposed 0 abandoned · 0 landed-dirt · kept 2 · deleted 0 branch(es) · 0 refusal(s)'
 echo 'worktree-gc: counts removed=0 disposed=0 landed_dirt=0 kept=2 branches_deleted=0 refusals=0 elapsed=1s lock_staleness_window=3600s dry_run=0'
 EOF
-  chmod +x "$BIN/git" "$CC_WTGC_INFRA_GC"
   A="$BATS_TEST_TMPDIR/autonomy"; export CC_WTGC_AUTONOMY_DIR="$A" CC_WTGC_BOOTTIME=1784800000
   export CC_SHUTDOWN_TOMB_DIR="$A/shutdown-tombstones" CC_HEARTBEAT_DIR="$A/heartbeat" \
          CC_LOCKWATCH_DIR="$A/lockwatch" CC_BOOT_RESUME_STATE_DIR="$A/boot-resume"
