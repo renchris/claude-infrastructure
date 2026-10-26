@@ -189,6 +189,13 @@ replay_summary() { # $1=library to source
   CC_ADMIT_BROWNOUT_BOOTTIME="$(( $(date +%s) + 100 ))" CC_ADMIT_BROWNOUT_NOW="$(( $(date +%s) + 200 ))" \
     run /bin/bash "$LIB" --brownout-check discretionary dl-sweep
   [ "$status" -eq 0 ] || false
+  # the REAL kern.boottime shape, through the sysctl the library resolves (no BOOTTIME seam): its
+  # `usec = ` must not be read as the seconds, or every uptime is ~1.8e9 s and V5 never votes
+  cc_stub "$BATS_TEST_TMPDIR" sysctl "$(printf '#!/bin/bash\necho "{ sec = %s, usec = 982543 } Sun Oct 25 13:19:00 2026"\n' "$(( $(date +%s) - 120 ))")"
+  CC_ADMIT_SYSCTL="$BATS_TEST_TMPDIR/sysctl" CC_ADMIT_BROWNOUT_NOW="$(date +%s)" \
+    run /bin/bash "$LIB" --brownout-check discretionary dl-sweep
+  [ "$status" -eq 75 ] || { echo "the real boottime shape lost V5: $output"; false; }
+  [[ "$output" == *"v5:class=LOCKUP_DEVFS,uptime=1"[0-9][0-9]"s"* ]] || { echo "$output"; false; }
   # a usage error is not a refusal
   run /bin/bash "$LIB" --bogus
   [ "$status" -eq 64 ] || false

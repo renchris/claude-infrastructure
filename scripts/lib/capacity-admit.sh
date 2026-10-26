@@ -1450,7 +1450,9 @@ EOF
     bt="${CC_ADMIT_BROWNOUT_BOOTTIME:-}"
     if [ -z "$bt" ]; then
       sysctl_bin="$(cc_hw_resolve_sysctl "${CC_ADMIT_SYSCTL:-}")"
-      bt="$("$sysctl_bin" -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9][0-9]*\).*/\1/p')"
+      # ANCHORED on `{ sec = `: a greedy `.*sec = ` matches `usec = ` and reads the microseconds
+      # (memory greedy-anchor-matches-the-longer-token), which made every uptime ~1.8e9 s.
+      bt="$("$sysctl_bin" -n kern.boottime 2>/dev/null | sed -n 's/^{ *sec = \([0-9][0-9]*\),.*/\1/p')"
     fi
     bt="$(_cc_bo_int "$bt" 0)"
     f="$(_cc_admit_mtime "$boot")"; f="$(_cc_bo_int "$f" 0)"
