@@ -224,3 +224,39 @@ fire() {
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "repo:" || false
 }
+
+# ── 11-12: the fallback is never SILENT (2026-10-25) ────────────────────────────────────────────
+# S6b, S9 and S10 were fired --worktree from ~/.claude/hillclimb/_briefs (not a git repo); all three
+# got worktrees in DEFAULT_REPO with nothing on screen saying so. Case 4 pins the fallback itself;
+# these pin that it is announced, and only where $REPO is actually read.
+# RED-proof: case 11 fails on the pre-change script (no "is not a git repo" line on stderr).
+
+@test "11 a fire that FALLS BACK warns on stderr — cwd, fallback repo, --repo — and still fires" {
+  nogit="$BATS_TEST_TMPDIR/nogit"; mkdir -p "$nogit"
+  want="⚠ handoff-fire: cwd $nogit is not a git repo — targeting the fallback $DEFAULT_REPO; pass --repo <path> to choose"
+  fire "$nogit" --worktree wt-x
+  [ "$status" -eq 0 ]                                # a warning, never a refusal
+  echo "$output" | grep -qxF "$want" || false
+  # stderr, not the readout: the same fire with stderr dropped carries no such line
+  run bash -c "cd '$nogit' && env -u ITERM_SESSION_ID HANDOFF_ACCOUNT_SWEEP=off bash '$HF' --prompt-file '$PAYLOAD' --dry-run --session-id 'w0t0p0:FIX' --worktree wt-x 2>/dev/null"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -qF "is not a git repo —" || false
+  # a self-routing fire (no --worktree, no --cwd) lands in $REPO itself, so it warns too
+  fire "$nogit"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qxF "$want" || false
+}
+
+@test "12 NO warning when the fallback is not taken or not read: inside a repo, --repo, --cwd" {
+  nogit="$BATS_TEST_TMPDIR/nogit"; mkdir -p "$nogit"
+  fire "$OTHER_REPO" --worktree wt-x
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -qF "is not a git repo —" || false
+  fire "$nogit" --worktree wt-x --repo "$OTHER_REPO"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -qF "is not a git repo —" || false
+  # a --cwd fire never reads $REPO, so a warning about it would be an alarm about nothing
+  fire "$nogit" --cwd "$OTHER_REPO"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -qF "is not a git repo —" || false
+}

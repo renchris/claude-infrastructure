@@ -53,6 +53,8 @@ setup() {
   unset SESSION_ID FIRING_SID FIRE_GOAL WANT_SELF_RETIRE SPAWNED_PANE CHOSEN 2>/dev/null || true
   # The pick's four inputs to the account_via / ranked keys (section 5): every case sets its own.
   unset ACCOUNT_VIA RANKED LAUNCHER ACCOUNT 2>/dev/null || true
+  # The target-repo keys (section 6) likewise: a caller's REPO must never label a row.
+  unset REPO REPO_SRC 2>/dev/null || true
   FUNCS="$BATS_TEST_TMPDIR/funcs.sh"
   {
     grep '^_iso_now() {' "$HF" || true
@@ -399,7 +401,7 @@ setup() {
 
 RANKED_FIXTURE="$(printf 'next4 0.000517\nnext 0.000294\nnext3 0.000149\nnext2 0.000477\nnext5 0.000001')"
 
-@test "an AUTO fire records account_via:auto and the ranking, in the recycle-repick join, LAST" {
+@test "an AUTO fire records account_via:auto and the ranking, in the recycle-repick join, after every older key" {
   command -v jq >/dev/null 2>&1 || skip "row shape needs jq"
   RANKED="$RANKED_FIXTURE" CHOSEN="next4" SPAWNED_PANE="pane-V" emit_handoff_telemetry 1
   run jq -r '.account_via' "$LOG"
@@ -408,8 +410,9 @@ RANKED_FIXTURE="$(printf 'next4 0.000517\nnext 0.000294\nnext3 0.000149\nnext2 0
   # larger than the one before it (next2), which is the whole reason the scores are kept.
   run jq -r '.ranked' "$LOG"
   [ "$output" = "next4 0.000517 > next 0.000294 > next3 0.000149 > next2 0.000477" ]
-  run jq -c 'keys_unsorted[-2:]' "$LOG"
-  [ "$output" = '["account_via","ranked"]' ]
+  # Appended keys never move an older one: account_via/ranked sit just ahead of section 6's pair.
+  run jq -c 'keys_unsorted[-4:]' "$LOG"
+  [ "$output" = '["account_via","ranked","repo","repo_src"]' ]
 }
 
 @test "an EXPLICIT or LAUNCHER pick records ranked:null even with a ranking in scope" {
@@ -532,4 +535,25 @@ STUB
       bash -c ". '$MUT'; emit_handoff_telemetry 1; jq -r 'has(\"ranked\")' '$LOG'"
   [ "$status" -eq 0 ]
   [ "$output" = "false" ]
+}
+
+# ── 6 · WHICH REPO THE FIRE TARGETED (repo / repo_src, 2026-10-26) ─────────────────────────────
+#
+# 2026-10-25: three --worktree fires from a non-repo cwd fell back to $DEFAULT_REPO (a customer
+# repo) and no row in this ledger could say so. RED-proof: on the pre-change emitter both keys are
+# absent, so the jq arm reads null/null and the fallback row reads null/null too.
+
+@test "a fire row records the target repo and how it was decided, in both arms" {
+  command -v jq >/dev/null 2>&1 || skip "row shape needs jq"
+  REPO="/x/reso" REPO_SRC="default (cwd is not a git repo)" CHOSEN="next" emit_handoff_telemetry 1
+  nojq="$BATS_TEST_TMPDIR/nojq"; mkdir -p "$nojq"
+  for b in bash mkdir date ps cat; do ln -sf "$(command -v "$b")" "$nojq/$b"; done
+  # A quote and a backslash in the path: the fallback hand-escapes it, or the row is invalid JSON
+  # and every slurp of this ledger reads nothing.
+  run env PATH="$nojq" REPO='/x/we"ird\repo' REPO_SRC="explicit --repo" CHOSEN="next2" \
+      bash -c ". '$FUNCS'; command -v jq >/dev/null 2>&1 && exit 9; emit_handoff_telemetry 1"
+  [ "$status" -eq 0 ]
+  run jq -rs 'map([.repo, .repo_src]|join(" / "))|join(" | ")' "$LOG"
+  [ "$status" -eq 0 ]
+  [ "$output" = '/x/reso / default (cwd is not a git repo) | /x/we"ird\repo / explicit --repo' ]
 }

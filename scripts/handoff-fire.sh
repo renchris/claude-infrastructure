@@ -16803,6 +16803,16 @@ if [ "$REPO_EXPLICIT" = 0 ]; then
     fi
   fi
 fi
+# The fallback stands, but never SILENTLY (2026-10-25: S6b, S9 and S10 were fired --worktree from
+# ~/.claude/hillclimb/_briefs and all three got worktrees in $DEFAULT_REPO, a customer repo, with
+# nothing on screen saying so). Warn, never refuse — launchd/headless fires from $HOME rely on it.
+# Only where $REPO is load-bearing: a --worktree fire, or a fresh fire with no --cwd that lands in
+# $REPO itself. A --cwd fire, a same-dir recycle and a resume never read it, so a warning there is
+# an alarm about nothing.
+if [ "$REPO_EXPLICIT" = 0 ] && [ "$REPO_SRC" = "default (cwd is not a git repo)" ] \
+   && { [ -n "$WORKTREE" ] || { [ -z "$CWD" ] && [ "$RECYCLE" = 0 ] && [ -z "$RESUME_LAUNCHER" ]; }; }; then
+  echo "⚠ handoff-fire: cwd $PWD is not a git repo — targeting the fallback $REPO; pass --repo <path> to choose" >&2
+fi
 REPO_GITDIR="$(hf_git_owner "$REPO")"
 
 # ---- C1 (no-focus-steal): autonomous surface ----------------------------------------------
@@ -21663,6 +21673,9 @@ else
     # is null unless account_via is auto: an explicit pick was chosen from no ranking, and printing
     # one would claim it had been. Pure bash, no awk — the jq-less arm below runs it too, and a
     # helper would be an unresolved 127 in the suites that extract this unit alone (see above).
+    # repo / repo_src (2026-10-26) — WHICH repo the fire targeted and how it was decided, appended
+    # after ranked. Three 2026-10-25 fires fell back to $DEFAULT_REPO and no row could say so:
+    #   jq -c 'select(.repo_src=="default (cwd is not a git repo)") | [.ts, .repo]' handoffs.jsonl
     local _hf_via="${ACCOUNT_VIA:-}" _hf_rk="" _hf_ra _hf_rs _hf_rn=0
     if [ -z "$_hf_via" ]; then
       if [ "${CHOSEN:-}" = "(explicit launcher)" ]; then _hf_via=launcher
@@ -21688,6 +21701,7 @@ else
         --argjson ut "$_hf_ut" \
         --arg pf "$(_resolved_prompt_file 2>/dev/null || true)" \
         --arg av "$_hf_via" --arg rk "$_hf_rk" \
+        --arg rp "${REPO:-}" --arg rq "${REPO_SRC:-}" \
         '{ts:$ts, class:$cl, engaged:$en, target_pane:$tp}
          + {goal_requested:  $gr}
          + {prompt_file:     (if $pf == "" then null else $pf end)}
@@ -21703,7 +21717,9 @@ else
          + {engage_proof:    (if $pr == "" then null else $pr end)}
          + {engage_latency_s:(if $la == "" then null else ($la|tonumber) end)}
          + {account_via:     $av}
-         + {ranked:          (if $rk == "" then null else $rk end)}' 2>/dev/null) || _hf_json=''
+         + {ranked:          (if $rk == "" then null else $rk end)}
+         + {repo:            (if $rp == "" then null else $rp end)}
+         + {repo_src:        (if $rq == "" then null else $rq end)}' 2>/dev/null) || _hf_json=''
     fi
     if [ -n "$_hf_json" ] && [ "$_hf_json" != '{}' ]; then
       printf '%s\n' "$_hf_json" >> "$_hf_log" 2>/dev/null || true
@@ -21741,7 +21757,7 @@ else
       # account_via and ranked ride this path too, LAST as in the jq arm. account_via is one of three
       # literals; ranked is router output ("acct score" tokens) and gets the same two escapes as the
       # path above, backslash first, because one malformed line poisons every slurp of this ledger.
-      printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s,"goal_requested":%s,"prompt_file":%s,"account_via":"%s","ranked":%s}\n' \
+      printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s,"goal_requested":%s,"prompt_file":%s,"account_via":"%s","ranked":%s,"repo":%s,"repo_src":"%s"}\n' \
         "$_hf_ts" "${FIRING_SID:-?}" "$_hf_class" "${1:-0}" "${SPAWNED_PANE:-}" "${CHOSEN:-?}" "${_hf_rss:-0}" \
         "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
         "$(_hf_pf="$(_resolved_prompt_file 2>/dev/null || true)"
@@ -21759,6 +21775,12 @@ else
              _hf_rk="${_hf_rk//\"/\\\"}"
              printf '"%s"' "$_hf_rk"
            else printf null; fi)" \
+        "$(if [ -n "${REPO:-}" ]; then
+             _hf_rp="${REPO//\\/\\\\}"
+             _hf_rp="${_hf_rp//\"/\\\"}"
+             printf '"%s"' "$_hf_rp"
+           else printf null; fi)" \
+        "${REPO_SRC:-}" \
         >> "$_hf_log" 2>/dev/null || true
     fi
     # RETENTION IS THE DENOMINATOR'S WINDOW. Bounds raised 600/500 → 1200/1000 the day the capacity
@@ -22013,7 +22035,10 @@ else
   DEST="${CWD:-$REPO (self-routing)}"; [ -n "$WORKTREE" ] && DEST="$WT ($WT_SETUP)"
   RSUM=""; [ -n "$SURFACE_REASON" ] && RSUM=", reason: $SURFACE_REASON"
   if [ "$FOLLOW" = 1 ]; then FSUM=", --follow (raised)"; else FSUM=", background (operator focus preserved)"; fi
-  echo "→ fired: $LAUNCHER @ $DEST  (surface: $SURFACE$FSUM, account: $CHOSEN, prompt: $PROMPT_FILE$RSUM)"
+  # A worktree path does not name its repo ($WTROOT is shared by every repo on this box), so the
+  # summary names it for a --worktree fire (a self-routing DEST already is $REPO).
+  RPSUM=""; [ -n "$WORKTREE" ] && RPSUM=", repo: $REPO ($REPO_SRC)"
+  echo "→ fired: $LAUNCHER @ $DEST  (surface: $SURFACE$FSUM, account: $CHOSEN$RPSUM, prompt: $PROMPT_FILE$RSUM)"
   # NB: an `if` block, NOT `[ -n … ] && echo` — a trailing &&-list whose test is false returns 1,
   # which would become the script's exit status on the common (no-stranded-account) path.
   if [ -n "$ACCOUNT_SWEEP_BRIDGE" ]; then
