@@ -16,6 +16,22 @@ every gotcha, and the exact API details are in **`REFERENCE.md`** (read it if a 
 Account → config dir: `next`→`.claude-next` · `next2`→`.claude-secondary` · `next3`→`.claude-tertiary` ·
 `next4`→`.claude-quaternary`. `.claude` and `.claude-next` are the SAME account (mirror).
 
+## One session by id: open it yourself, never hand the operator a resume line
+
+```
+cc-resume-open <sid or 8+ char prefix>            # prints verdict=resumed|live|deferred|failed
+cc-resume-open <sid> --dry-run                    # the resolved account, cwd, branch and window command
+```
+
+It resolves the account, the recorded cwd and the branch (`cc-resume-resolve`), refuses a session
+that is already live, opens a new kitty OS window (never a tab, never a fifth pane), re-asks through
+capacity refusals (rc 9; the per-session budget admits after its third), and proves the resume by the
+sid in the window's Claude footer. The session comes back at rest; nudging is Phase 3's call.
+**Never write `claudeN --resume <sid>` for the operator to run** (operator, 2026-10-26: "Why does that
+command need me to run it for you"). The `claudeN` launchers are interactive-shell functions: run
+through `!` or a Bash tool call they die at `command not found: _cc_sync_account`. A killed pane sitting
+at a bare shell is `cc-husk-sweep --resume --yes` instead.
+
 ---
 
 ## Phase 0 — kitty crashed or was restarted: bring back the RECORDED arrangement (do this first)
