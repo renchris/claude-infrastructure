@@ -39,6 +39,14 @@
 #   So never pass -s/--sandbox, --dangerously-*, --add-dir or --approve-for-me here: each widens or
 #   overrides the profile.
 #
+# MOVED BINARY — why codex is run by its realpath (measured 2026-10-26 on codex-cli 0.164.0, the standalone
+# package that turned ~/.local/bin/codex into a symlink into ~/.codex/packages/standalone/releases/<v>/):
+#   codex re-executes itself inside the profile's seatbelt to read AGENTS.md, by the path it was launched
+#   as. Launched via the symlink, every exec failed before any model call: "sandbox-exec: execvp() of
+#   '~/.local/bin/codex' failed: Operation not permitted" (exit 71). Launched by its realpath, it runs, its
+#   bundled rg runs, and with the profile unchanged a file under ~/.codex outside the release dir is still
+#   denied. So the fix adds nothing to the read set: no package dir, no ~/.codex, no $HOME.
+#
 # TWO SIDE EFFECTS of the temp CODEX_HOME, both carried back so the envelope costs the operator nothing:
 #   - codex may refresh the OAuth token into <temp>/auth.json. A rotated refresh token lost with the temp
 #     dir would log the operator out, so a changed, valid, SAME-account auth.json is copied back
@@ -49,7 +57,7 @@
 # Usage: xvendor-review.sh --meter
 #          → prints used_percent=<n> window_minutes=<m> source=<file>; rc 0, rc 4 if unreadable
 #        xvendor-review.sh <repo> <prompt-file|-> [--rev <rev>] [--model <m>]
-# Exit:  0 ok · 2 usage / bad rev / bad exclude path · 3 not a ChatGPT login · 4 meter unreadable (or its
+# Exit:  0 ok · 2 usage / bad rev / bad exclude path · 3 not a ChatGPT login, or no codex · 4 meter unreadable (or its
 #        lock held past CC_XVR_LOCK_WAIT_S) · 5 meter >= stop · 6 read confinement unproven · otherwise
 #        codex's own rc (124 = CC_XVR_TIMEOUT_S hit)
 # Env:   CC_XVR_METER_STOP (80)    percent at or above which no call is made
@@ -240,12 +248,15 @@ case "$m" in
   *) say "meter: rollouts exist but none holds a readable rate_limits: refusing (fail closed)"; exit 4 ;;
 esac
 
-# 3. a temp CODEX_HOME holding only the auth copy, and a ChatGPT login read through it
+# 3. codex by its resolved path (header, MOVED BINARY), a temp CODEX_HOME holding only the auth copy, and
+#    a ChatGPT login read through it
+CODEX_BIN="$(command -v codex)" && CODEX_BIN="$(realpath "$CODEX_BIN" 2>/dev/null)" && [ -x "$CODEX_BIN" ] \
+  || { say "codex not found on PATH or its path does not resolve"; exit 3; }
 CH="$(mktemp -d "$TMPD/xvr-home.XXXXXX")" && CH="$(cd "$CH" && pwd -P)" || { say "mktemp failed"; exit 2; }
 if [ ! -f "$CODEX_REAL/auth.json" ]; then say "no $CODEX_REAL/auth.json: not logged in"; exit 3; fi
 (umask 077 && cp "$CODEX_REAL/auth.json" "$CH/auth.json") && chmod 600 "$CH/auth.json" || exit 3
 AUTH_SUM="$(cksum < "$CH/auth.json")"
-login="$(env -u OPENAI_API_KEY -u OPENAI_BASE_URL HOME="$CH" CODEX_HOME="$CH" codex login status 2>&1)"
+login="$(env -u OPENAI_API_KEY -u OPENAI_BASE_URL HOME="$CH" CODEX_HOME="$CH" "$CODEX_BIN" login status 2>&1)"
 case "$login" in
   *"Logged in using ChatGPT"*) ;;
   *) say "codex login status is not a ChatGPT login (got: ${login:0:80}): refusing"; exit 3 ;;
@@ -285,7 +296,7 @@ CANARY="$HOME_REAL/.cache/xvr-canary.$$"
 token="xvr-canary-$$-$RANDOM$RANDOM-$(date +%s)"
 (umask 077 && printf '%s\n' "$token" > "$CANARY") || { say "cannot write the canary"; exit 6; }
 probe="$(env -u OPENAI_API_KEY -u OPENAI_BASE_URL HOME="$CH" CODEX_HOME="$CH" \
-         codex sandbox -P "$PROFILE" -C "$EXP" -- cat "$CANARY" 2>&1 </dev/null)"; prc=$?
+         "$CODEX_BIN" sandbox -P "$PROFILE" -C "$EXP" -- cat "$CANARY" 2>&1 </dev/null)"; prc=$?
 rm -f "$CANARY"; CANARY=""
 case "$probe" in *"$token"*)
   say "read confinement FAILED: the canary under \$HOME was readable through profile $PROFILE: no review"; exit 6 ;;
@@ -307,7 +318,7 @@ else BOUND=(/usr/bin/perl -e 'alarm shift; exec @ARGV or exit 127' "${CC_XVR_TIM
 ARGS=(exec --skip-git-repo-check -C "$EXP")
 [ -n "$MODEL" ] && ARGS+=(-m "$MODEL")
 ARGS+=("$PROMPT")
-env -u OPENAI_API_KEY -u OPENAI_BASE_URL HOME="$CH" CODEX_HOME="$CH" "${BOUND[@]}" codex "${ARGS[@]}" </dev/null &
+env -u OPENAI_API_KEY -u OPENAI_BASE_URL HOME="$CH" CODEX_HOME="$CH" "${BOUND[@]}" "$CODEX_BIN" "${ARGS[@]}" </dev/null &
 cpid=$!
 lock_release
 wait "$cpid"

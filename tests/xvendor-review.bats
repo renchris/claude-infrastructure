@@ -35,7 +35,9 @@ setup() {
   git -C "$T/repo" add -A && git -C "$T/repo" commit -qm base
   echo DIRTY > "$T/repo/a.txt"; echo wip > "$T/repo/untracked.txt"
 
-  cc_stub "$T/bin" codex - <<'EOF'
+  # A plain file, never the cc-shim link: the wrapper runs codex by its realpath (MOVED BINARY), and the
+  # realpath of a shim link is the shared shim binary, which then cannot find this body.
+  CC_SHIM='' cc_stub "$T/bin" codex - <<'EOF'
 #!/bin/bash
 # Stub codex. Logs argv and env, then emulates the measured permission-profile semantics.
 log="$XVR_STUB_DIR/calls.log"
@@ -70,6 +72,12 @@ case "$1" in
     allowed "$last" && exec "$@"
     echo "$1: $last: Operation not permitted" >&2; exit 1 ;;
   exec)
+    # codex-cli 0.164.0 re-executes itself in the seatbelt by the path it was launched as; launched via a
+    # symlink, that exec is denied before any model call (scripts/xvendor-review.sh header, MOVED BINARY).
+    if [ "$0" != "$(realpath "$0")" ]; then
+      echo "Error: failed to load AGENTS.md instructions: sandbox-exec: execvp() of '$0' failed: Operation not permitted" >&2
+      exit 1
+    fi
     shift; sflag=0; dir=""
     while [ $# -gt 0 ]; do
       case "$1" in -s|--sandbox|-s*|--sandbox=*) sflag=1 ;; -C) dir="$2"; shift ;; esac
@@ -196,6 +204,17 @@ exec_called() { grep -q '^argv: \[exec\]' "$XVR_STUB_DIR/calls.log" 2>/dev/null;
   grep -qx '":minimal" = "read"' "$XVR_STUB_DIR/config.seen"
   grep -qxF "\"$exp\" = \"read\"" "$XVR_STUB_DIR/config.seen"
   [ "$exp" = "$(cd "$exp" 2>/dev/null && pwd -P || echo "$exp")" ]
+}
+
+@test "codex on PATH as a symlink into a package dir: run by its realpath, read set unchanged" {
+  mkdir -p "$T/pkg/releases/1.0/bin"
+  mv "$T/bin/codex" "$T/pkg/releases/1.0/bin/codex"
+  ln -s ../pkg/releases/1.0/bin/codex "$T/bin/codex"
+  review
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"REVIEW: stub review of"* ]] || false
+  [ "$(grep -c '= "read"$' "$XVR_STUB_DIR/config.seen")" -eq 2 ]
+  ! grep -q "$T/pkg" "$XVR_STUB_DIR/config.seen" || false
 }
 
 @test "read confinement: the model's cat of \$HOME/secret does not reach the output" {
