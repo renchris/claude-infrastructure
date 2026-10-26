@@ -44,6 +44,7 @@ setup() {
     sed -n '/^check_slash_head() {/,/^}/p'    "$HF"
     sed -n '/^goal_armed_for_pane() {/,/^}/p' "$HF"
     sed -n '/^goal_live_for_sid() {/,/^}/p'   "$HF"
+    sed -n '/^goal_sid_transcripts() {/,/^}/p' "$HF"   # the transcript list both goal readers share (D4)
     sed -n '/^inherit_recycle_goal() {/,/^}/p' "$HF"
     sed -n '/^arm_goal() {/,/^}/p'            "$HF"
   } > "$BATS_TEST_TMPDIR/units.sh"
