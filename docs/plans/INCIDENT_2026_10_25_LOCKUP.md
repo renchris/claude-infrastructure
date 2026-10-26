@@ -52,7 +52,7 @@ Every lane landed, each verified by content (`git ls-tree origin/main` per path 
 | F root cause | effd3f4b2, 6c3ce71d4 | `tests/lockup-2026-10-25-preconditions.bats` RED 8/8 pre-fix, GREEN 8/8 |
 | A lockprobe/forensics/classifier | 61df27073..2827c8669, 1bceb92c0 (install links) | lockprobe under the sentinel: `state.json level=0 verdict=ok seq=166 kitty_rc=ok selftest=ok` (04:04Z); classifier on the real stall report: `LOCKUP_DEVFS high, 40 sleepers, zombie leader 68298` |
 | B sentinel host, guards, bounded ps | c50816a1f..a52299a61 | sentinel self-restarted and spawned lockprobe; capacity-alarm reads ptys from lockwatch (`argv_blind:false`) |
-| C governor | abda1d5a1, ef8b545be, 0de93a544 | brownout + 50/core band observe-only, RC breaker live; `rcy_pane_paint` opens the tty non-blocking |
+| C governor | f2f5749ca, a71cae2c7, 31906849e (0083); tests d2934fa47, 9c59aa622, fd46adef7, abda1d5a1; ef8b545be, 0de93a544 | brownout + 50/core band observe-only, RC breaker live; `rcy_pane_paint` opens the tty non-blocking |
 | D break-glass, guards, lint | 1d830d1cc, d6cc1641c; hammerspoon-config 8f795b7 | 0081 `--verify` rc 0, rescue selftest PASS |
 | pane 23 restore + lane E | de0877dbe (and parents) | `bin/cc-panes` live |
 | lead | 20ade159c | `lr-page` reads Pushover keys from agent-secrets |
