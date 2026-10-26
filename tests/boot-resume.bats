@@ -1397,7 +1397,9 @@ mtime_at() { touch -t "$(date -r "$2" +%Y%m%d%H%M.%S)" "$1"; }   # <file> <epoch
   hbeat UUID-PREV 4001 1784799000 "[$(prow h1 30 HB-ONE)]"
   unset CC_TRANSCRIPT_MTIME_BIN
   txn claude-next h1 202601010000 "$ASST"; mtime_at "$HOME/.claude-next/projects/-x-h1/h1.jsonl" 1784799600
-  txn claude-tertiary h1 202601010000 "$ASST"; mtime_at "$HOME/.claude-tertiary/projects/-x-h1/h1.jsonl" 1784800500
+  # Its last conversational record predates the boot: a user/assistant record AFTER the boot would be
+  # a session resumed this boot, which the retired filter takes out (tests/boot-resume-residuals.bats).
+  txn claude-tertiary h1 202601010000 "${ASST/2026-10-04T10:00:00Z/2026-07-23T09:40:00Z}"; mtime_at "$HOME/.claude-tertiary/projects/-x-h1/h1.jsonl" 1784800500
   stub_layout "$SUM_OK2"
   run /bin/bash "$SCRIPT"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
