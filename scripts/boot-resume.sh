@@ -778,8 +778,10 @@ if [ -n "$SOURCE" ] && { [ -z "$EVENT" ] || [ "$EVENT_PREV_BOOT" = 1 ]; } && [ -
   if [ -n "$late_rows" ]; then
     TOMB_JOINED="$(printf '%s\n' "$late_rows" | grep -c .)"
     read_rows "$late_rows"
-    SRC_FILES="${SRC_FILES}$(tomb_files "$late_rows")
-"
+    # One path per line: the roster branch sets SRC_FILES with no trailing newline.
+    SRC_FILES="${SRC_FILES:+${SRC_FILES%
+}
+}$(tomb_files "$late_rows")"
     # The sessions died at the shutdown, not at the snapshot: that is the classifier's anchor.
     t_last="$(printf '%s\n' "$late_rows" | awk -F'\t' '$6 > m { m = $6 } END { print m + 0 }')"
     [ "$t_last" -gt "$ANCHOR" ] && ANCHOR="$t_last"
