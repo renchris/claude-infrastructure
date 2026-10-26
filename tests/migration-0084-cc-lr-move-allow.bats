@@ -10,6 +10,8 @@
 #
 # Hermetic: scratch HOME with a stub ~/.claude/bin/cc-lr; nothing here runs cc-lr.
 
+load helpers/cc-stub   # stubs the kernel never execs as #! (kalloc leak)
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"
@@ -18,7 +20,7 @@ setup() {
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/absent-sweep.json" CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-" CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/telemetry"
   mkdir -p "$HOME/.claude/bin" "$HOME/.claude-next"
-  printf '#!/bin/sh\nexit 0\n' > "$HOME/.claude/bin/cc-lr"; chmod +x "$HOME/.claude/bin/cc-lr"
+  cc_stub "$HOME/.claude/bin" cc-lr $'#!/bin/sh\nexit 0\n'
   jq -n '{
     autoMode: {soft_deny: ["x"]},
     permissions: {allow: ["Bash(git add:*)", "Bash(~/.claude/bin/cc-lr switch:*)", "Bash(cc-lr:*)"],
