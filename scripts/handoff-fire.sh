@@ -12973,7 +12973,6 @@ EOF
       fi
       if [ "$rcy_bg_up" = 1 ]; then
         rcy_bgwork_seen=1
-        rcy_old_transcript   # D4: once, before any goal or transcript read below
         # CANCEL (cc-lr upgrade's team procedure, 2026-09-23): for an Agent-Team lead or member
         # neither exit is safe — "Move to background" hands the conversation to a background
         # worker by session id (a second live copy beside the --resume this rail types next), and
@@ -13188,6 +13187,9 @@ EOF
           exit 1
         fi
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; then
+          # D4: the transcript once, before the goal and transcript reads below (HF_GOAL_TX). Not
+          # earlier: the selfcall and stop-if-watcher arms above answer without it.
+          rcy_old_transcript
           # Once per watcher, and only while the predecessor provably holds a live goal: a pane
           # without one answers exactly as before, with no extra keystroke.
           if [ "$rcy_goal_clear_tried" = 0 ] && [ -z "${RCY_RESUME_SID:-}" ] \
