@@ -1555,7 +1555,8 @@ for wid, pid in post.items():
       if [ -x "$PANES_BIN" ]; then
         crc=0
         # cc-panes bounds itself: every kitty call it makes, and the whole wait.
-        cout="$("$PANES_BIN" ${SOCK:+--to "$SOCK"} --expect "$exp" \
+        cc_argv "$PANES_BIN"   # through its interpreter, never by path (scripts/lib/cc-run.sh)
+        cout="$("${CC_ARGV[@]}" ${SOCK:+--to "$SOCK"} --expect "$exp" \
                 --wait "${CC_RESTORE_CENSUS_S:-240}" --poll "${CC_RESTORE_CENSUS_POLL:-10}" 2>&1)" || crc=$?
         printf '%s\n' "$cout" | grep -v '^cc-panes: expect ok=' | sed 's/^/  /' >&2
         census_bad="$(printf '%s\n' "$cout" | sed -n 's/^cc-panes: expect ok=[0-9]* bad=\([0-9]*\).*/\1/p' | tail -1)"
