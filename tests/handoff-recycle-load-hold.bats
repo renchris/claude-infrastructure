@@ -45,7 +45,7 @@ setup() {
              recycle_composer_gate hf_lr_script hf_recycle_fenced hf_recycle_lock_dir _hf_lstart \
              _hf_lock_raw _hf_lock_field _hf_lock_holder_alive hf_recycle_lock_write hf_recycle_lock_take \
              hf_recycle_lock_release hf_recycle_lock_acquire hf_recycle_watcher_committed hf_recycle_disarm hf_wake_guard \
-             hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit \
+             hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback hf_recycle_delegate_ok recycle_fire_commit \
              composer_residue_dir composer_residue_record pid_is_cc hf_succ_mode hf_succ_ours_staged \
              write_teardown_marker hf_exit_signal_pin hf_exit_signal hf_exit_signal_grace \
              hf_load_per_core hf_recycle_load_bound hf_recycle_load_gate \
@@ -218,3 +218,38 @@ assert_proceeded() {
   ! grep -q '^send' "$CALLS" || { echo "a keystroke was sent:"; cat "$CALLS"; false; }
   kill -0 "$WATCHER_PID" 2>/dev/null || { echo "the watcher was killed"; false; }
 }
+
+# D1, THE DELEGATED FIRST /exit (docs/research/selfrecycle-latency-2026-10-26/REPORT.md). The same
+# self-form commit world, now with the two inputs a real self-recycle has: the command file the
+# watcher reads its markers beside, and the tool call this recycle runs inside (a live process).
+# The foreground then writes exit-delegated beside exit-committed and types NOTHING; the watcher's
+# half is tests/handoff-recycle-delegated-exit.bats. RED-proof: on 1a0ee3658 the first case reaches
+# `send /exit` and writes no exit-delegated.
+@test "D1: a self-recycle whose own call is alive writes exit-committed and exit-delegated and types nothing" {
+  # shellcheck disable=SC2034  # recycle_fire's local and the detach's global, read by recycle_fire_commit
+  cmdfile="$BATS_TEST_TMPDIR/relaunch.cmd"; sleep 300 >/dev/null 2>&1 3>&- & RCY_CALLER_PID_ARG=$!
+  echo "$RCY_CALLER_PID_ARG" > "$BATS_TEST_TMPDIR/subject.pid"
+  commit_at 0.50
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -e "$cmdfile.exit-committed" ] && [ -e "$cmdfile.exit-delegated" ]
+  [ "$(sends_exit)" = 0 ] || { cat "$CALLS"; false; }
+  [[ "$output" == *"exit: DELEGATED to the watcher"* ]]
+}
+
+@test "D1: CC_RECYCLE_DELEGATE_EXIT=off, or a remote recycle, types /exit here as before" {
+  # shellcheck disable=SC2034  # recycle_fire's local and the detach's global, read by recycle_fire_commit
+  cmdfile="$BATS_TEST_TMPDIR/relaunch.cmd"; sleep 300 >/dev/null 2>&1 3>&- & RCY_CALLER_PID_ARG=$!
+  echo "$RCY_CALLER_PID_ARG" > "$BATS_TEST_TMPDIR/subject.pid"
+  CC_RECYCLE_DELEGATE_EXIT=off commit_at 0.50
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$cmdfile.exit-delegated" ]
+  [ "$(sends_exit)" = 1 ] || { cat "$CALLS"; false; }
+  setup
+  # shellcheck disable=SC2034  # globals read by hf_recycle_delegate_ok
+  { cmdfile="$BATS_TEST_TMPDIR/relaunch2.cmd"; RCY_REMOTE=1; }
+  sleep 300 >/dev/null 2>&1 3>&- & RCY_CALLER_PID_ARG=$!
+  echo "$RCY_CALLER_PID_ARG" > "$BATS_TEST_TMPDIR/subject.pid"
+  run hf_recycle_delegate_ok
+  [ "$status" -eq 1 ]
+}
+
