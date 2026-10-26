@@ -176,6 +176,9 @@ wake_row() { jq -r "select(.kind==\"wake\") | $1" "$CC_IDLE_KEEPALIVE_LOG" | tai
   printf '{"type":"user","timestamp":"%s","message":{"content":"<task-notification>\\n<task-id>mx1q2w3e4</task-id>\\n<status>completed</status>\\n</task-notification>"}}\n' "$(iso $((now - 9)))" >> "$TX"
   tool_use $((now - 8)) tu_w Bash '{"command":"cc-await-ping abc --timeout 14340","run_in_background":true}'
   tool_result $((now - 7)) tu_w "Command running in background with ID: bw1q2w3e4"
+  # a FOREGROUND stand-down ran and ended in its turn: it is no 30-min watcher (S12; red before it)
+  tool_use $((now - 6)) tu_s Bash '{"command":"cc-await-ping --stand-down"}'
+  tool_result $((now - 5)) tu_s "cc-await-ping: verdict=stood-down n=1"
   tracker
   timer
   [ "$status" -eq 0 ]

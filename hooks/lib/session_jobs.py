@@ -9,7 +9,8 @@ in hooks/boundary-handoff.sh. It decides nothing; it only reports.
 BUSY (G1) is classified by the tool that LAUNCHED the job, never by the text of its notice:
   busy     a background Bash (not a watcher), a background Agent, a Workflow, or a foreground Bash the
            harness moved to the background (its tool_result carries toolUseResult.backgroundTaskId)
-  watcher  a Monitor, or a background Bash running cc-await-ping. Not busy: it waits on others.
+  watcher  a Monitor, or a background Bash running cc-await-ping (never its --stand-down, and a
+           foreground one only once the harness moved it). Not busy: it waits on others.
 A job ends at the first <task-notification> that carries a <status> and names its tool-use id or
 task id, or at a TaskStop/KillShell naming its task id. A launch whose result is an error or a
 denial never ran. A job with no end in the transcript is still running (an upper bound: a job
@@ -141,8 +142,17 @@ def jobs(recs):
                     continue
                 bg = bool(inp.get("run_in_background"))
                 cmd = str(inp.get("command", ""))
-                if name == "Monitor" or (name == "Bash" and "cc-await-ping" in cmd):
+                if name == "Monitor":
                     kind = "watcher"
+                elif (
+                    name == "Bash"
+                    and "cc-await-ping" in cmd
+                    and "--stand-down" not in cmd
+                ):
+                    # a FOREGROUND watcher ran and ended inside its turn; it waits on others in a
+                    # gap only once the harness moved it to the background (S12; a foreground
+                    # `cc-await-ping --stand-down` read as a 30-min watcher and skipped D3 wakes)
+                    kind = "watcher" if bg else "fg-watcher"
                 elif name == "Bash":
                     kind = (
                         "bash" if bg else "fg"
@@ -180,10 +190,10 @@ def jobs(recs):
         tid, bad, moved = result.get(tu, (None, False, False))
         if bad:
             continue
-        if kind == "fg":
+        if kind in ("fg", "fg-watcher"):
             if not moved:
                 continue
-            kind = "moved-bash"
+            kind = "moved-bash" if kind == "fg" else "watcher"
         ends = [
             e
             for e in (ended_tu.get(tu), ended_tid.get(tid), stops.get(tid))
