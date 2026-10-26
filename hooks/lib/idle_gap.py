@@ -14,7 +14,7 @@ row per idle gap so the keepalive can be judged before it is ever allowed to wak
               opens the next one with the context size at the gap start. Writes kind=gap rows.
   would-wake  (hooks/idle-keepalive.sh, the timer) records the moment the keepalive would have
               woken an idle session, with the context size and whether a mailbox watcher was armed
-              at that moment. Writes kind=wake rows. It never wakes. Since W6 the row also says
+              at that moment. Writes kind=wake rows; it wakes only in treatment (S12). Since W6 the row also says
               whether the session's own background job was running at that moment (busy, by the
               launching tool) and whether a watcher already running would fire on its own before
               the cache expires (watcher_fires_before_ttl): the busy-scoped redesign wakes only
@@ -33,6 +33,14 @@ behaviour; readers of v1 gap / v2 wake rows keep working because only fields are
            by the timer at the due time), eligible = busy and not watcher_fires_before_ttl (D3's
            busy-scoped rule with watcher skip; null when the jobs are unreadable), fired = false.
   The wake decision is also kept in the gap's state file (state["wake"]) for the gap row above.
+
+W7+ S12 (plan § W7+ §2 D1 and D3) — the treatment, reachable only at pct > 0 (see verdict() below):
+  wake v3 adds pct_eff, headless and why_not (the first guard that held it), and fired = true only
+           when D3 acts; would-wake then prints "wake" and the hook exits 2 (the asyncRewake wake).
+  d1-due   (the timer, 15 idle min in, at >= 200k) writes kind=would_recycle with the IRS v2 field
+           names in both arms; in treatment also the brief, kind=d1_recycle (the lever guard's row
+           contract, plan §3 "Auto-rollback") and the treated D1 event in the IRS log, and prints
+           the recycle for the hook to fire. One wake per gap across both levers (claim_wake).
 
 COST MODEL (weekly-meter pp per Mtok; reads are charged, round 3):
   a keepalive wake = one cache read of the context + a short turn (~300 written, ~150 output tokens)
@@ -405,28 +413,103 @@ def _session_jobs():
 
 
 def jobs_at_wake(transcript, t, gap_start):
-    """Busy and watcher state at the wake moment; {} when the transcript cannot be read."""
+    """→ (busy and watcher state at the wake moment, headless): ({}, None) when the transcript cannot
+    be read. Headless is the transcript's own entrypoint (sdk-cli), as the lever guard's state_at
+    reads it, so a streaming SDK session the hook's argv test lets through still never wakes."""
     if not transcript:
-        return {}
+        return {}, None
     try:
         sj = _session_jobs()
-        return sj.running_at(
-            sj.jobs(sj.records(transcript, TAIL_BYTES)), t, ttl_end=gap_start + TTL_S
+        recs = sj.records(transcript, TAIL_BYTES)
+        eps = [
+            r.get("entrypoint") for r in recs if isinstance(r.get("entrypoint"), str)
+        ]
+        return (
+            sj.running_at(sj.jobs(recs), t, ttl_end=gap_start + TTL_S),
+            (sj.HEADLESS_ENTRYPOINT in eps) if eps else None,
         )
     except Exception:
-        return {}
+        return {}, None
 
 
-def parse_arm(s):
+def parse_arm(s, lever="D3"):
     """The timer's lf_arm_json object (hooks/lib/lever-flags.sh), or {} when absent or malformed."""
     try:
         a = json.loads(s) if s else {}
     except ValueError:
         return {}
-    return a if isinstance(a, dict) and a.get("lever") == "D3" else {}
+    return a if isinstance(a, dict) and a.get("lever") == lever else {}
 
 
-def cmd_would_wake(sid, launch, watcher, n, arm_json=""):
+# ── treatment (W7+ S12; docs/plans/USAGE_LEVERS.md § W7+ §2 D1 and D3) ─────────────────────────────
+# A lever ACTS only when the arm the timer computed at its due time is treat at pct_eff > 0 (which
+# lever-flags.sh gives only to a live lever with a fresh guard heartbeat and no un-acked trip, so at
+# S0 / pct 0 nothing here can act), every guard holds, and the gap's ONE wake is still unspent. The
+# wake is claimed with O_EXCL on <state>/wakes/<sid>.<gap start> (gap_key), shared by D1 and D3, so a second
+# wake in one gap is impossible from any process (never tunable, plan §3). The kill switches are
+# re-checked here although lf_arm already lowered the arm for them: they must win on every path.
+KILL = {
+    "D1": ("CC_IDLE_KEEPALIVE", "CC_IRS"),
+    "D3": ("CC_IDLE_KEEPALIVE",),
+}
+
+
+def lever_off(lever):
+    if any(os.environ.get(v, "") == "off" for v in KILL.get(lever, ())):
+        return True
+    return any(
+        os.environ.get(v, "") in ("off", "control")
+        for v in ("CC_LEVER_ALL", "CC_LEVER_" + lever)
+    )
+
+
+def verdict(lever, a, guards):
+    """→ (act, why_not): the arm and kill switches first, then each (name, holds) guard in order."""
+    if lever_off(lever):
+        return False, "kill-switch"
+    if a.get("arm") != "treat":
+        return False, "arm-%s" % (a.get("arm") or "none")
+    pe = a.get("pct_eff")
+    if isinstance(pe, bool) or not isinstance(pe, (int, float)) or pe <= 0:
+        return False, "pct0"
+    for name, holds in guards:
+        if holds is not True:
+            return False, name
+    return True, None
+
+
+def gap_key(st, launch):
+    """The gap's identity for its one wake: the gap state's own start (the Stop that opened it, the
+    same for every timer of that gap) when the state is this gap's, else the timer's launch."""
+    s = st.get("start")
+    return (
+        s
+        if isinstance(s, (int, float)) and abs(s - float(launch)) <= 300
+        else float(launch)
+    )
+
+
+def claim_wake(sid, key):
+    """True once per (sid, gap): the gap's one wake, for whichever lever takes it first."""
+    p = os.path.join(STATE_DIR, "wakes", "%s.%d" % (sid, int(float(key))))
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        os.close(os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except OSError:
+        return False
+    lo = (
+        time.time() - 2 * 86400
+    )  # the markers of gaps two days gone can never be claimed again
+    try:
+        for e in os.scandir(os.path.dirname(p)):
+            if e.stat().st_mtime < lo:
+                os.unlink(e.path)
+    except OSError:
+        pass
+    return True
+
+
+def cmd_would_wake(sid, launch, watcher, n, arm_json="", headless="false"):
     if not SID_RX.match(sid):
         return
     t = now()
@@ -434,12 +517,25 @@ def cmd_would_wake(sid, launch, watcher, n, arm_json=""):
     ctx = int(st.get("ctx") or 0)
     wk = sorted(round(wake_cost(ctx, r), 6) for r in READ_PP)
     a = parse_arm(arm_json)
-    jobs = jobs_at_wake(st.get("transcript"), t, float(launch))
+    jobs, tx_hl = jobs_at_wake(st.get("transcript"), t, float(launch))
     eligible = (
         bool(jobs["busy"]) and not jobs.get("watcher_fires_before_ttl")
         if "busy" in jobs
         else None
     )
+    hl = headless == "true" or tx_hl is True
+    # D3: busy-scoped with watcher skip, never headless, one wake per gap (claimed last)
+    fire, why_not = verdict(
+        "D3",
+        a,
+        [
+            ("busy", jobs.get("busy")),
+            ("watcher-fires", eligible),
+            ("headless", not hl),
+        ],
+    )
+    if fire and not claim_wake(sid, gap_key(st, launch)):
+        fire, why_not = False, "wake-spent"
     row = dict(
         kind="wake",
         v=3,
@@ -453,15 +549,18 @@ def cmd_would_wake(sid, launch, watcher, n, arm_json=""):
         model=st.get("model"),
         watcher_armed={"true": True, "false": False}.get(watcher),
         wake_pp=wk,
-        mode="shadow",
+        mode="live" if fire else "shadow",
         lever="D3",
         arm=a.get("arm"),
         variant=a.get("variant"),
         unit_id=a.get("unit"),
         flag_src=a.get("flag_src"),
         u=a.get("u"),
+        pct_eff=a.get("pct_eff"),
+        headless=hl,
         eligible=eligible,
-        fired=False,  # no branch here wakes anything; the treatment wake is wave S12's
+        fired=fire,  # the hook wakes (exit 2) only on the "wake" this prints, after the row is written
+        why_not=why_not,
     )
     row.update(jobs)
     append(row)
@@ -472,14 +571,214 @@ def cmd_would_wake(sid, launch, watcher, n, arm_json=""):
         and abs(st["start"] - float(launch)) <= 300
     ):
         st["wake"] = dict(
-            {k: row.get(k) for k in WAKE_FIELDS}, n=int(n), at=t, fired=False
+            {k: row.get(k) for k in WAKE_FIELDS}, n=int(n), at=t, fired=fire
         )
         save_state(sid, st)
+    if fire:
+        sys.stdout.write("wake\n")
+
+
+def _brief_lib():
+    """scripts/lib/idle_recycle_brief.py beside this file's REAL path (wave S9's production brief)."""
+    import importlib.util
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+    sys.path.insert(
+        0, os.path.dirname(os.path.realpath(__file__))
+    )  # its `import session_jobs`
+    p = os.path.join(root, "scripts", "lib", "idle_recycle_brief.py")
+    spec = importlib.util.spec_from_file_location("idle_recycle_brief", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _capped(row, drop):
+    """The row as one ≤ 2 KB line, dropping the `drop` keys in order until it fits; None if it never does."""
+    for k in [None] + list(drop):
+        if k:
+            row.pop(k, None)
+        s = json.dumps(row, separators=(",", ":"))
+        if len(s.encode()) <= 2047:
+            return row
+    return None
+
+
+def cmd_d1_due(sid, launch, arm_json, lineage_src, k, n_min, headless="false"):
+    """D1 at its due time (n_min idle minutes into the gap, context >= k thousand): one kind=would_recycle
+    row with the IRS v2 field names in BOTH arms; in treatment, with G1 (nothing busy, by the launching
+    tool) and G4 (no pending question) holding and the gap's wake unspent, also the brief (G3/G5, S9's
+    idle_recycle_brief.py), the kind=d1_recycle row of the S6b contract, and the treated D1 event in
+    the IRS log with turn_start = the due time (lever_chain.py scores it), then prints
+    "recycle<TAB>brief path<TAB>recycle_id" for the hook to fire handoff-fire.sh --recycle with."""
+    if not SID_RX.match(sid):
+        return
+    launch, k, n = float(launch), int(k), int(n_min)
+    st = load_state(sid) or {}
+    if not isinstance(st.get("start"), (int, float)) or abs(st["start"] - launch) > 300:
+        return  # not this gap's state: a Stop since launch opened a newer one
+    ctx = int(st.get("ctx") or 0)
+    if ctx < k * 1000:
+        return
+    t = now()
+    tp = st.get("transcript")
+    sj = _session_jobs()
+    recs = sj.records(tp, TAIL_BYTES) if tp else []
+    idle = [
+        _ts(r)
+        for r in recs
+        if r.get("type") == "assistant" and (_ts(r) or 0) <= launch + 1
+    ]
+    idle_start = max([x for x in idle if x is not None] or [launch])
+    gap_s = int(t - idle_start)
+    run = sj.running_at(sj.jobs(recs), t) if recs else {}
+    pq, why = sj.pending_question(recs, idle_start) if recs else (None, None)
+    eps = [r.get("entrypoint") for r in recs if isinstance(r.get("entrypoint"), str)]
+    hl = headless == "true" or "sdk-cli" in eps
+    a = parse_arm(arm_json, "D1")
+    k1 = int(os.environ.get("CC_IRS_K", "150") or 150)
+    would = gap_s >= n * 60 and ctx >= k1 * 1000
+    would_k2 = gap_s >= n * 60 and ctx >= k * 1000
+    ok = None if not recs else (run.get("busy") is False and pq is False)
+    irs = dict(
+        schema=2,
+        v="ok",
+        sid=sid,
+        config_dir=os.environ.get("CLAUDE_CONFIG_DIR") or "",
+        k_thousand=k1,
+        n_min=n,
+        k2_thousand=k,
+        idle_start=int(idle_start),
+        turn_start=int(t),
+        gap_s=gap_s,
+        ctx_at_idle=ctx,
+        would_advise=would,
+        would_advise_k2=would_k2,
+        prompt_head=None,  # the prompt that ENDS this gap has not arrived: the timer cannot know it
+        prompt_sha=None,
+        busy_tool=run.get("busy"),
+        busy_kinds=run.get("busy_kinds"),
+        busy_oldest_s=run.get("busy_oldest_s"),
+        watcher_running=run.get("watcher_running"),
+        pending_question=pq,
+        pq_why=why,
+        guarded=None if ok is None else would and ok,
+        guarded_k2=None if ok is None else would_k2 and ok,
+        lever="D1",
+        arm=a.get("arm"),
+        variant=a.get("variant"),
+        lineage=a.get("unit") or sid,
+        lineage_src=lineage_src or None,
+        d1={
+            k_: v
+            for k_, v in a.items()
+            if k_ not in ("lever", "decision", "unit", "arm", "variant")
+        },
+    )
+    fire, why_not = verdict(
+        "D1",
+        a,
+        [
+            ("unreadable", bool(recs) or None),
+            ("not-due", would_k2),
+            ("busy", run.get("busy") is False),
+            ("pending-question", pq is False),
+            ("headless", not hl),
+        ],
+    )
+    brief = meta = None
+    if fire:
+        try:
+            brief, meta = _brief_lib().build(dict(irs, transcript=tp), recs, None, tp)
+        except Exception as e:  # no brief, no recycle: G3/G5 travel only through it
+            fire, why_not = False, "brief-error:%s" % type(e).__name__
+    if fire and not claim_wake(sid, gap_key(st, launch)):
+        fire, why_not = False, "wake-spent"
+    rid = "%s-%d-%s" % (sid[:8], int(t), os.urandom(4).hex()) if fire else None
+    path = None
+    if fire:
+        path = os.path.join(STATE_DIR, "d1-briefs", rid + ".md")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(brief)
+    row = _capped(
+        dict(
+            irs,
+            kind="would_recycle",
+            ts=iso(t),
+            acct=st.get("acct") or acct(),
+            gap_start=iso(launch),
+            headless=hl,
+            fired=fire,
+            why_not=why_not,
+            recycle_id=rid,
+        ),
+        ("busy_kinds", "d1"),
+    )
+    if row:
+        append(row)
+    if not fire:
+        return
+    rec = _capped(
+        dict(
+            kind="d1_recycle",
+            v=1,
+            ts=iso(t),
+            sid=sid,
+            acct=st.get("acct") or acct(),
+            lineage=irs["lineage"],
+            gap_start=iso(launch),
+            recycle_id=rid,
+            fired=True,
+            arm=a,
+            busy=run.get("busy"),
+            pending_question=pq,
+            g1_kill=run.get("busy") is True,
+            g4_violation=pq is True,
+            headless=hl,
+            idle_start=irs["idle_start"],
+            turn_start=irs["turn_start"],
+            gap_s=gap_s,
+            ctx_at_idle=ctx,
+            brief=path,
+            brief_meta={
+                x: (meta or {}).get(x) for x in ("n_questions", "n_steps", "n_watchers")
+            },
+        ),
+        ("brief_meta", "brief"),
+    )
+    if rec is None:
+        return  # the contract row could not be written: no recycle without it
+    append(rec)
+    ev = _capped(
+        dict(
+            irs,
+            ts=int(t),
+            ts_z=iso(t),
+            src="idle-keepalive",
+            fired=True,
+            recycle_id=rid,
+        ),
+        ("busy_kinds",),
+    )
+    irs_log = os.environ.get("CC_IRS_LOG") or os.path.join(
+        HOME, ".claude/logs/idle-recycle-shadow.jsonl"
+    )
+    try:
+        os.makedirs(os.path.dirname(irs_log), exist_ok=True)
+        with open(irs_log, "a") as fh:
+            fh.write(json.dumps(ev, separators=(",", ":")) + "\n")
+    except (OSError, TypeError):
+        pass
+    sys.stdout.write("recycle\t%s\t%s\n" % (path, rid))
 
 
 def main(argv):
     signal.signal(signal.SIGALRM, lambda *_: os._exit(0))
-    signal.alarm(int(os.environ.get("CC_IDLE_GAP_BOUND_S", "4") or 4))
+    # d1-due reads the whole tail and builds a brief, so it gets a longer bound; a timeout drops its
+    # rows and its recycle together (it prints nothing until both rows are written)
+    dflt = "30" if argv[:1] == ["d1-due"] else "4"
+    signal.alarm(int(os.environ.get("CC_IDLE_GAP_BOUND_S", dflt) or dflt))
     try:
         if argv[:1] == ["stop"]:
             try:
@@ -488,12 +787,15 @@ def main(argv):
                 return 0
             if isinstance(payload, dict):
                 cmd_stop(payload)
-        elif argv[:1] == ["would-wake"] and len(argv) in (5, 6):
+        elif argv[:1] == ["would-wake"] and len(argv) in (5, 6, 7):
             cmd_would_wake(*argv[1:])
+        elif argv[:1] == ["d1-due"] and len(argv) in (7, 8):
+            cmd_d1_due(*argv[1:])
         else:
             sys.stderr.write(
                 "usage: idle_gap.py stop < payload"
-                " | would-wake <sid> <launch> <watcher> <n> [<arm json>]\n"
+                " | would-wake <sid> <launch> <watcher> <n> [<arm json> [<headless>]]"
+                " | d1-due <sid> <launch> <arm json> <lineage src> <k> <n_min> [<headless>]\n"
             )
             return 2
     except Exception as e:  # fail-open: a hook must never die on its ledger

@@ -990,8 +990,30 @@ emit_gate_admit() { # $1=gate $2=basis $3=detail → always 0 — a gate decisio
 # census of TMPDIR watcher logs on a SELF-DELETING 2-day window, verdict 1-of-7 — into a query.
 # The class names `recycle-unverified` / `recycle-dead` are kept verbatim: consumers and tests count
 # those strings, and renaming them would be a migration for no gain.
+# D1 IDLE RECYCLE ENGAGED (W7+ S12, docs/plans/USAGE_LEVERS.md § W7+ §3 row "Auto-rollback"). A
+# treated D1 recycle is fired by hooks/idle-keepalive.sh with CC_D1_RECYCLE_ID / CC_D1_RECYCLE_SID in
+# its env, which the detached __recycle watcher inherits. When that watcher confirms the successor
+# engaged, this writes the kind=d1_engage row beside the timer's kind=d1_recycle one; the lever
+# guard trips D1 on a recycle with no d1_engage within 600 s. A recycle without the id writes nothing.
+hf_d1_engage() { # $1=pane → always 0
+  local rid="${CC_D1_RECYCLE_ID:-}" log succ line
+  [ -n "$rid" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  log="${CC_IDLE_KEEPALIVE_LOG:-$HOME/.claude/logs/idle-keepalive.jsonl}"
+  succ="$(cc_sid_for_pane "${1:-}" 2>/dev/null || true)"
+  [ "$succ" != "${CC_D1_RECYCLE_SID:-}" ] || succ=""
+  line="$(jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg r "$rid" --arg s "${CC_D1_RECYCLE_SID:-}" \
+    --arg n "$succ" '{kind:"d1_engage", v:1, ts:$ts, recycle_id:$r, sid:(if $s == "" then null else $s end),
+                      successor_sid:(if $n == "" then null else $n end)}' 2>/dev/null)" || return 0
+  mkdir -p "${log%/*}" 2>/dev/null || true
+  printf '%s\n' "$line" >> "$log" 2>/dev/null || true
+  return 0
+}
+
 emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → always 0
   local log="$HOME/.claude/logs/handoffs.jsonl" line en="${2:-}"
+  # (suites that extract this function alone have no hf_d1_engage: absent means nothing to write)
+  [ "${1:-}" != recycle-engaged ] || ! command -v hf_d1_engage >/dev/null 2>&1 || hf_d1_engage "${3:-}"
   [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
   command -v jq >/dev/null 2>&1 || return 0

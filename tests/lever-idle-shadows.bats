@@ -108,8 +108,9 @@ u6() { /usr/bin/python3 -I "$REPO/hooks/lib/lever_flags.py" hash "$1" "$2" | cut
   b_row="$(rows wake | jq -c 'del(.ts,.late_s,.gap_start,.v)')"
   : > "$CC_IDLE_KEEPALIVE_LOG"
   timer; [ "$status" -eq "$b_rc" ]; [ "$output" = "$b_out" ]; [ -z "$output" ]
-  [ "$(rows wake | jq -c 'del(.ts,.late_s,.gap_start,.v,.lever,.arm,.variant,.unit_id,.flag_src,.u,.eligible,.fired)')" = "$b_row" ]
-  # live at 100% with a fresh guard heartbeat: the arm says treat, and still nothing wakes
+  [ "$(rows wake | jq -c 'del(.ts,.late_s,.gap_start,.v,.lever,.arm,.variant,.unit_id,.flag_src,.u,.eligible,.fired,.pct_eff,.headless,.why_not)')" = "$b_row" ]
+  # live at 100% with a fresh guard heartbeat: the arm says treat, and with no job busy nothing wakes
+  # (the treatment wake itself is tests/lever-d1-d3-treatment.bats')
   flags 4 live 100; touch "$CC_LEVER_STATE_DIR/guard.heartbeat"
   : > "$CC_IDLE_KEEPALIVE_LOG"
   timer
