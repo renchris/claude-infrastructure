@@ -126,3 +126,85 @@ background copy, crons re-created by the successor.
    watcher-start → claimed from the ledger and whether any dialog was drawn (screen reads in the
    watcher log). Pass: zero dialogs on the plain runs, median ≤ 20 s, cron runs with no
    `recycle-bgcopy-stop` row and the cron present in the successor.
+
+## Results (2026-10-26)
+
+**Pass on every criterion.** Plain self-recycles: 5 of 5 with no dialog, median 18 s from watcher
+start to claimed. Cron self-recycles: 2 of 2 answered "Exit and stop tasks" within 2 s of the /exit,
+no background copy, and the successor re-created the cron. D1-D5 landed in `505c3b39a`; the narrow-pane
+fix to D3 found by this verification landed in `ca6b2f6d2`. Both are converged live.
+
+### Live runs (kitty, Claude Code 2.1.293, load 90-250 on 10 cores)
+
+One fired test pane ran a chain of self-recycles, each step a fresh session running
+`~/.claude/scripts/handoff-fire.sh --recycle` from its own Bash call (briefs `/tmp/srv/b*.md`).
+Latency is the watcher process start (`watcher_lstart`) to its `recycle-successor-claimed` row in
+`~/.claude/logs/handoffs.jsonl`; "dialog" is any `recycle-bgwork-*` row or `bgwork@` line in the
+watcher log.
+
+| run | kind | watcher pid | live layer | watcher start → claimed | dialog drawn | how it ended |
+|---|---|---|---|---|---|---|
+| 1 | plain | 67006 | `505c3b39a` | 24 s | no | delegated /exit |
+| 2 | plain | 53689 | `505c3b39a` | 16 s | no | delegated /exit |
+| 3 | plain | 37326 | `505c3b39a` | 12 s | no | delegated /exit |
+| 4 | plain | 42653 | `505c3b39a` | 29 s | no | delegated /exit |
+| 5 | plain | 97577 | `505c3b39a` | 18 s | no | delegated /exit |
+| 6 | cron | 27845 | `ca6b2f6d2` | 19 s | yes, answered '1' at 2 s | `recycle-bgwork-stopped-cron`, no copy; successor re-created the cron |
+| 7 | cron | 8854 | `ca6b2f6d2` | 18 s | yes, answered '1' at 1 s | `recycle-bgwork-stopped-cron`, no copy; successor re-created the cron |
+
+Plain median 18 s, against 24-52 s (median ~37 s) for the SELFCALL path before. The cron runs took
+19 s and 18 s, against 76-110 s for SELFCALL + KEEPWORK.
+
+**Superseded cron runs.** The first two cron runs on `505c3b39a` (watchers 41260 and 97387; 30 s and
+34 s) carried the cron but still answered keep-work and stopped a background copy. In a narrow kitty
+pane the dialog lists its items in two wrapped columns, `scheduled     · Every day at 4:07 AM · srv2
+cron` over `task         ping`, so D3 read the kind as `scheduled` and held. The PTY probe ran 110
+columns wide and never showed this. `ca6b2f6d2` trims the kind cell and reads a lone `scheduled` as
+the wrapped `scheduled task`; the watcher now logs the kinds it read, and the dialog rows when it
+reads none. Probe run on the fix: pane 152, answered at 1 s, predecessor exited in 7 s.
+
+**Chain artifact, not a defect.** A successor that re-runs `--recycle` within about a minute of its
+own start is refused, because its predecessor's watcher still holds the pane lock while it confirms
+engagement. Steps 2 and 3 met this until the briefs added a 30 s retry. D5 recorded these refusals
+as `recycle-held-locked` (count 4, `skip-designed-hold`): counted, no research session fired.
+
+### D1's open measurement
+
+An /exit typed the moment the recycle's tool-call process ends **interrupts** the model's closing
+text; it does not wait for it. PTY probe, 2.1.293: the session exited 1.8 s after the call returned,
+no dialog drawn, and the transcript has no assistant record after the tool result. The foreground
+prints "End this turn now", so nothing of value is cut.
+
+### D3 dialog label (PTY probe, 2.1.293)
+
+A session CronCreate task raises the dialog and lists itself as
+`scheduled task · Every day at 3:13 AM · probe ping`; a Bash call lists as `shell · <command>`.
+
+### D4 profile (detection → answer)
+
+The Otto pane's dialog path, replayed on the watcher with `PS4='+ ${EPOCHREALTIME} ${LINENO} '`:
+real `ps`, the real projects dirs read-only, the predecessor transcript of the Otto session, temp
+HOME.
+
+| tree | load | detection → answer | where the time went |
+|---|---|---|---|
+| `1a0ee3658` (before) | ~94 | 58.4 s | 45.2 s `goal_live_for_sid` recursive find over every projects dir; 9.2 s `transcript_for_sid` find |
+| depth-2 glob only | ~125 | 6.5 s | 3.9 s glob across the projects dirs |
+| `505c3b39a` (registry path, glob fallback) | ~125 | 1.6 s | no single cost above 0.6 s |
+
+The watcher resolves the predecessor transcript once, from the registry row's cwd and account, and
+hands it to the goal readers (`HF_GOAL_TX`). `goal_live_for_sid`, its sibling goal reader and
+`transcript_for_sid` use a `<dir>/*/<sid>.jsonl` glob; the recursive find stays only as the fallback
+when no dir has a depth-2 hit.
+
+### Suites
+
+New: `tests/handoff-recycle-delegated-exit.bats` (D1 watcher, D2, D3, D5 integration),
+`tests/recycle-cron-carry.bats`, `tests/recycle-escalate.bats`, and two D1 foreground cases in
+`tests/handoff-recycle-load-hold.bats`. 25 existing suites that reach the changed code re-run
+(492 tests). Failures were checked against `1a0ee3658` at the same load. One was a regression of this change: the
+`handoff-goal-arm` extraction missed the new helper, now fixed. A second was an extracted context
+without the delegate gate (`handoff-pane-proof-only`), now guarded. The rest failed identically on
+the pre-fix tree or passed on re-run: `handoff-recycle-bgwork-dialog` 28/31/34/62,
+`handoff-recycle-turn-wait` 4/6, and 13 `lr-fire-resume-submit` expect cases that timed out at 8-13
+load per core (one A/B'd: red on the pre-fix tree, green on this one; the other 12 were not re-run).
