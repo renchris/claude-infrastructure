@@ -1010,8 +1010,23 @@ hf_d1_engage() { # $1=pane → always 0
   return 0
 }
 
+# D5's evidence for one failure row: the watcher log, the ledger, and the hold's screen witness when a
+# hold took one (HF_HOLD_SNAP is a path or "none (why)"; the lib keeps only paths that exist).
+# Its one line goes to stderr, which the watcher log captures and no caller's $( ) does.
+hf_recycle_escalate_row() { # $1=class $2=pane $3=detail → always 0
+  command -v hf_recycle_escalate >/dev/null 2>&1 || return 0
+  hf_recycle_escalate "$1" "${2:-}" "${RCY_OLD_SID:-${rcy_old_sid:-}}" "${3:-}" \
+    "${HF_RCY_WATCHER_LOG:-}" "$HOME/.claude/logs/handoffs.jsonl" "${HF_HOLD_SNAP:-}" >&2 2>/dev/null || true
+  return 0
+}
 emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → always 0
   local log="$HOME/.claude/logs/handoffs.jsonl" line en="${2:-}"
+  # D5 (REPORT.md): every terminal failure arm writes its row through here, so this one line is
+  # where each failure also lands in its incident record (and may fire its one research session).
+  case "${1:-}" in
+    recycle-held-*|recycle-dead|recycle-unverified|recycle-watcher-orphaned)
+      ! command -v hf_recycle_escalate_row >/dev/null 2>&1 || hf_recycle_escalate_row "$1" "${3:-}" "${4:-}" ;;
+  esac
   # (suites that extract this function alone have no hf_d1_engage: absent means nothing to write)
   [ "${1:-}" != recycle-engaged ] || ! command -v hf_d1_engage >/dev/null 2>&1 || hf_d1_engage "${3:-}"
   [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
@@ -1573,6 +1588,15 @@ hf_kprobe_connect_say() { # $1=kitty_socket_accepting's rc → that rc in words
 # shellcheck source=lib/kitty-queue.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$HF_DIR/lib/kitty-queue.sh" 2>/dev/null || . "$HOME/.claude/scripts/lib/kitty-queue.sh" 2>/dev/null || true
+# The self-recycle latency libs (docs/research/selfrecycle-latency-2026-10-26/REPORT.md D3, D5): the
+# session-cron carry and the failure escalation. Every call site guards with `command -v`, so a live
+# layer older than this script degrades to today's behaviour.
+# shellcheck source=lib/recycle-cron-carry.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "$HF_DIR/lib/recycle-cron-carry.sh" 2>/dev/null || . "$HOME/.claude/scripts/lib/recycle-cron-carry.sh" 2>/dev/null || true
+# shellcheck source=lib/recycle-escalate.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "$HF_DIR/lib/recycle-escalate.sh" 2>/dev/null || . "$HOME/.claude/scripts/lib/recycle-escalate.sh" 2>/dev/null || true
 # The raw readings stay beside the verdict (HF_KPROBE_CONNECT_RC, HF_KPROBE_LS_RC, HF_KPROBE_QUEUE), so a
 # held row says which failure it was: on 2026-10-18 the row read "did not accept a connection (0
 # queued)", and the 0 was a netstat that may never have answered (lib/kitty-queue.sh prints `?` now).
@@ -6949,6 +6973,23 @@ pane_bgwork_key() { # $1=it2-bin $2=session-id → echoes the menu key to press,
 # screen, through the same anchored recognizer, so the caller can cancel it with Esc. It never
 # yields a key: in that shape index 2 means Stay and the cursor rests on Exit-and-stop, so any digit
 # or Enter is the wrong keystroke.
+# WHAT THE DIALOG SAYS WILL STOP (D3, REPORT.md). The rows between "The following will stop when you
+# exit:" and the first menu row are one item each, `<kind> · <detail>`, wrapped onto indented rows at
+# narrow widths. Measured on 2.1.293 (/tmp probe 2026-10-26): a CronCreate task reads
+# `scheduled task · Every day at 3:13 AM · probe ping`, a Bash call `shell · bash wait45.sh`. This
+# prints each item's kind once; nothing (rc 1) when the list cannot be found, so a caller treats an
+# unread list as "not only crons".
+hf_bgwork_dialog_kinds() { # stdin = a screen → stdout: the listed item kinds, one per line · rc 1 none read
+  LC_ALL=C awk '
+    /The following will stop when you/ { on = 1; next }
+    on && /^[[:space:]]*(❯[[:space:]]*)?1\.[[:space:]]/ { exit }
+    on {
+      line = $0; sub(/^[[:space:]]+/, "", line)
+      if (line == "" || line == "exit:") next
+      if (match(line, /^[a-z][a-z ]* · /)) { k = substr(line, 1, RLENGTH - 4); if (!(k in seen)) { seen[k] = 1; print k; n++ } }
+    }
+    END { exit (n > 0 ? 0 : 1) }'
+}
 pane_bgwork_seen() { # $1=it2-bin $2=session-id → 0 the dialog is on screen (any shape) / 1 not, or unreadable
   local it2="$1" id="$2" screen
   [ -n "$it2" ] && [ -n "$id" ] || return 1
@@ -9174,11 +9215,15 @@ transcript_for_sid() { # $1=session-id → echoes path or nothing
   for pdir in $CC_PROJECTS_DIRS; do
     [ -f "$pdir/$sid.jsonl" ] && { printf '%s' "$pdir/$sid.jsonl"; return 0; }
   done
+  # D4 (docs/research/selfrecycle-latency-2026-10-26/): a GLOB, not `find -mindepth 2 -maxdepth 2`.
+  # Same set of paths, but find readdirs every project dir's thousands of files; the glob stats one
+  # path per project. Measured at load ~94: the find alone was 9.2 s of a 58 s dialog answer.
   # shellcheck disable=SC2086
   for pdir in $CC_PROJECTS_DIRS; do
     [ -d "$pdir" ] || continue
-    f="$(find "$pdir" -mindepth 2 -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1 || true)"
-    [ -n "$f" ] && { printf '%s' "$f"; return 0; }
+    for f in "$pdir"/*/"$sid.jsonl"; do
+      [ -f "$f" ] && { printf '%s' "$f"; return 0; }
+    done
   done
   return 0
 }
@@ -10749,16 +10794,13 @@ goal_armed_for_pane() { # $1=pane $2=condition → 0 goal is live / 1 not proven
   # replayed the wrong artifact (memory control-must-replay-the-real-artifact). engagement_seen
   # already resolves a sid this way; the test fixture now uses the real nesting too.
   # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
-  for pdir in $CC_PROJECTS_DIRS; do
-    [ -d "$pdir" ] || continue
-    while IFS= read -r hit; do
-      [ -n "$hit" ] || continue
-      jq -e --arg c "$cond" 'select(.attachment.type=="goal_status" and .attachment.met==false and .attachment.condition==$c)' \
-         "$hit" >/dev/null 2>&1 && return 0
-    done <<EOF
-$(find "$pdir" -name "$sid.jsonl" -type f 2>/dev/null)
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    jq -e --arg c "$cond" 'select(.attachment.type=="goal_status" and .attachment.met==false and .attachment.condition==$c)' \
+       "$hit" >/dev/null 2>&1 && return 0
+  done <<EOF
+$(goal_sid_transcripts "$sid")
 EOF
-  done
   return 1
 }
 
@@ -10770,29 +10812,51 @@ EOF
 # path is a worse trade than 15 mirrored lines. grep narrows first (a bare jq over a multi-MB
 # transcript per recycle is real money); type=="attachment" then drops the assistant's own PROSE
 # about goals (measured: 6 grep hits where the truth was 1).
+# Every transcript of one sid, for the goal readers. D4 (docs/research/selfrecycle-latency-2026-10-26/,
+# R4): those readers used a recursive `find` over every projects dir, 45 s of a 58 s dialog answer at
+# load ~94. A session transcript sits at <dir>/<project>/<sid>.jsonl, so: the caller's known path
+# first (HF_GOAL_TX, when it names this sid), then that depth-2 glob across every dir, and the
+# recursive find only when no dir has a depth-2 hit (a transcript at a dir's root, as fixtures do).
+goal_sid_transcripts() { # $1=sid → one path per line, in CC_PROJECTS_DIRS order
+  local sid="$1" pdir f n=0
+  if [ -n "${HF_GOAL_TX:-}" ] && [ "${HF_GOAL_TX##*/}" = "$sid.jsonl" ] && [ -f "$HF_GOAL_TX" ]; then
+    printf '%s\n' "$HF_GOAL_TX"; return 0
+  fi
+  # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
+  for pdir in $CC_PROJECTS_DIRS; do
+    [ -d "$pdir" ] || continue
+    for f in "$pdir"/*/"$sid.jsonl"; do
+      [ -f "$f" ] || continue
+      printf '%s\n' "$f"; n=$((n + 1))
+    done
+  done
+  [ "$n" = 0 ] || return 0
+  # shellcheck disable=SC2086
+  for pdir in $CC_PROJECTS_DIRS; do
+    [ -d "$pdir" ] && find "$pdir" -name "$sid.jsonl" -type f 2>/dev/null
+  done
+  return 0
+}
 goal_live_for_sid() { # $1=sid → prints the LIVE condition; rc 1 = none (or terminal, or unreadable)
   local sid="${1:-}" pdir hit rec
   [ -n "$sid" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
   # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
-  for pdir in $CC_PROJECTS_DIRS; do
-    [ -d "$pdir" ] || continue
-    while IFS= read -r hit; do
-      [ -n "$hit" ] || continue
-      rec="$(grep -a 'goal_status' "$hit" 2>/dev/null | jq -rc --slurp '
-        [ .[] | select(.type=="attachment") | .attachment | select(.type=="goal_status") ] | last // empty' 2>/dev/null)" || continue
-      [ -n "$rec" ] || continue
-      # LAST record wins in both directions: a terminal goal (met/failed/cleared) inherits nothing,
-      # and this transcript IS the answer — stop searching other dirs either way.
-      if [ "$(printf '%s' "$rec" | jq -r '(.met // false) or (.failed // false)' 2>/dev/null)" = "false" ]; then
-        printf '%s' "$rec" | jq -r '.condition // ""'
-        return 0
-      fi
-      return 1
-    done <<EOF
-$(find "$pdir" -name "$sid.jsonl" -type f 2>/dev/null)
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    rec="$(grep -a 'goal_status' "$hit" 2>/dev/null | jq -rc --slurp '
+      [ .[] | select(.type=="attachment") | .attachment | select(.type=="goal_status") ] | last // empty' 2>/dev/null)" || continue
+    [ -n "$rec" ] || continue
+    # LAST record wins in both directions: a terminal goal (met/failed/cleared) inherits nothing,
+    # and this transcript IS the answer — stop searching other dirs either way.
+    if [ "$(printf '%s' "$rec" | jq -r '(.met // false) or (.failed // false)' 2>/dev/null)" = "false" ]; then
+      printf '%s' "$rec" | jq -r '.condition // ""'
+      return 0
+    fi
+    return 1
+  done <<EOF
+$(goal_sid_transcripts "$sid")
 EOF
-  done
   return 1
 }
 
@@ -12484,23 +12548,20 @@ while data and time.time() < end:
   # limited account cannot take a goal turn anyway. Paused = the newest of those two records is the
   # pause, or the pane's own screen shows it. The successor inherits the condition either way ($8).
   rcy_goal_paused() { # → 0 the predecessor's live goal reads paused by a usage limit · 1 not shown
-    local pdir hit last scr
+    local hit last scr
     if [ -n "${RCY_OLD_SID:-}" ] && command -v jq >/dev/null 2>&1; then
-      # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
-      for pdir in $CC_PROJECTS_DIRS; do
-        [ -d "$pdir" ] || continue
-        while IFS= read -r hit; do
-          [ -n "$hit" ] || continue
-          last="$(grep -a -e '"goal_status"' -e 'Goal paused' "$hit" 2>/dev/null | jq -rs '
-            [ .[] | select((.type == "attachment" and .attachment.type == "goal_status")
-                           or (.type == "system" and ((.content // "") | test("^Goal paused")) and ((.content // "") | test("usage limit")))) ]
-            | last | if . == null then "" elif .type == "system" then "paused" else "status" end' 2>/dev/null)" || last=""
-          [ "$last" = paused ] && return 0
-          [ -n "$last" ] && return 1
-        done <<EOF
-$(find "$pdir" -name "$RCY_OLD_SID.jsonl" -type f 2>/dev/null)
+      # D4: the same transcript list the goal readers use (cached path first), not a recursive find.
+      while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        last="$(grep -a -e '"goal_status"' -e 'Goal paused' "$hit" 2>/dev/null | jq -rs '
+          [ .[] | select((.type == "attachment" and .attachment.type == "goal_status")
+                         or (.type == "system" and ((.content // "") | test("^Goal paused")) and ((.content // "") | test("usage limit")))) ]
+          | last | if . == null then "" elif .type == "system" then "paused" else "status" end' 2>/dev/null)" || last=""
+        [ "$last" = paused ] && return 0
+        [ -n "$last" ] && return 1
+      done <<EOF
+$(goal_sid_transcripts "$RCY_OLD_SID")
 EOF
-      done
     fi
     scr="$(hf_bounded "$IT2" session read -s "$RSID" -n "${HF_SELFCLOSE_READLINES:-40}" 2>/dev/null || true)"
     printf '%s\n' "$scr" | grep -iE 'goal paused.*usage limit' >/dev/null && return 0
@@ -12534,6 +12595,134 @@ EOF
     it2_paste_submit_verified "$IT2" "$RSID" "/exit" "$pre" >/dev/null || return 2
   }
   rcy_selfcall_tried=0; RCY_SELFCALL=none
+  # D3, SESSION CRONS RIDE INTO THE SUCCESSOR (REPORT.md D3). A CronCreate task lives in the session's
+  # memory and dies with it, whichever exit the dialog takes, so the jobs the predecessor's transcript
+  # still holds are appended to the prompt the staged launcher `cat`s (HF_RCY_LAUNCH_PROMPT, the copy,
+  # not the caller's file) as a "re-create these" block. Once per watcher; the lib refuses a second
+  # block in one file. Fresh self-recycles only: a resume relaunches the same transcript.
+  # Kill switch CC_RECYCLE_CRON_CARRY=off. rc 0 jobs were carried · 1 none, or not carried.
+  rcy_cron_done=0 RCY_CRON_N=0
+  rcy_cron_carry() { # $1=when (log text)
+    local tr out rc=0
+    [ "$rcy_cron_done" = 0 ] || { [ "$RCY_CRON_N" -gt 0 ]; return; }
+    rcy_cron_done=1
+    [ "${CC_RECYCLE_CRON_CARRY:-on}" != off ] && [ -z "${RCY_RESUME_SID:-}" ] || return 1
+    [ -n "${HF_RCY_LAUNCH_PROMPT:-}" ] && [ -f "$HF_RCY_LAUNCH_PROMPT" ] || return 1
+    command -v hf_cron_carry_append >/dev/null 2>&1 || return 1
+    rcy_old_transcript; tr="$RCY_OLD_TX"; [ -f "$tr" ] || return 1
+    out="$(hf_cron_carry_append "$tr" "$HF_RCY_LAUNCH_PROMPT" 2>&1)" || rc=$?
+    case "$rc" in
+      0) RCY_CRON_N="$(printf '%s' "$out" | sed -n 's/.*cron-carry: \([0-9][0-9]*\) job.*/\1/p')"
+         case "$RCY_CRON_N" in ''|*[!0-9]*) RCY_CRON_N=1 ;; esac
+         echo "→ cron-carry ($1): $RCY_CRON_N session cron job(s) appended to the successor's prompt"
+         emit_recycle_event recycle-cron-carry "" "$RSID" "$RCY_CRON_N session CronCreate job(s) carried into $HF_RCY_LAUNCH_PROMPT ($1)" || true
+         return 0 ;;
+      2) RCY_CRON_N=1; return 0 ;;
+    esac
+    return 1
+  }
+  # D3's answer: a self-recycle's dialog whose listed items are only session scheduled tasks, plus the
+  # mailbox watcher's shell when hf_bg_work_kind reads `watcher`, is answered "Exit and stop tasks"
+  # like a watcher-only one. Real work (a work pid, a ship-land, an agent or any other item) keeps
+  # today's answer. RCY_DLG_KINDS is the list as read, for the row. rc 0 crons/watcher only · 1 not.
+  RCY_DLG_KINDS=""
+  rcy_siw_cron_only() { # $1=hf_bg_work_kind verdict
+    local scr k has_cron=0
+    RCY_DLG_KINDS=""
+    [ "${CC_RECYCLE_CRON_CARRY:-on}" != off ] || return 1
+    case "$1" in *" shipland=yes "*) return 1 ;; none\ *|watcher\ *) ;; *) return 1 ;; esac
+    scr="$(hf_bounded "$IT2" session read -s "$RSID" -n "${FIRE_TYPE_READLINES:-500}" 2>/dev/null || true)"
+    RCY_DLG_KINDS="$(printf '%s\n' "$scr" | hf_bgwork_dialog_kinds | tr '\n' ',' | sed 's/,$//')" || RCY_DLG_KINDS=""
+    [ -n "$RCY_DLG_KINDS" ] || return 1
+    while IFS= read -r k; do
+      case "$k" in
+        "scheduled task") has_cron=1 ;;
+        shell) case "$1" in watcher\ *) ;; *) return 1 ;; esac ;;
+        *) return 1 ;;
+      esac
+    done <<EOF
+$(printf '%s' "$RCY_DLG_KINDS" | tr ',' '\n')
+EOF
+    [ "$has_cron" = 1 ]
+  }
+  # D4: the predecessor's transcript, resolved ONCE per watcher into RCY_OLD_TX (call it bare, never
+  # in $( ), or the cache dies with the subshell). The pane's registry row names the session's start
+  # cwd and account, which is the transcript's own path (<cfg>/projects/<cwd, non-alphanumerics as ->/
+  # <sid>.jsonl): a few stats. The search across every projects dir is the fallback, and its answer is
+  # handed to the goal readers as HF_GOAL_TX, so goal_live_for_sid stops walking the dirs per call.
+  RCY_OLD_TX="" rcy_old_tx_done=0
+  rcy_old_transcript() {
+    local row cwd acct slug pdir
+    [ "$rcy_old_tx_done" = 0 ] && [ -n "${RCY_OLD_SID:-}" ] || return 0
+    rcy_old_tx_done=1
+    row="$REG_DIR/$RSID.json"
+    if [ -f "$row" ] && [ "$(jq -r '.session_id // empty' "$row" 2>/dev/null)" = "$RCY_OLD_SID" ]; then
+      cwd="$(jq -r '.cwd // empty' "$row" 2>/dev/null)"; acct="$(jq -r '.account // empty' "$row" 2>/dev/null)"
+      if [ -n "$cwd" ]; then
+        slug="$(printf '%s' "$cwd" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+        case "$acct" in claude*) [ -f "$HOME/.$acct/projects/$slug/$RCY_OLD_SID.jsonl" ] && RCY_OLD_TX="$HOME/.$acct/projects/$slug/$RCY_OLD_SID.jsonl" ;; esac
+        if [ -z "$RCY_OLD_TX" ]; then
+          # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
+          for pdir in $CC_PROJECTS_DIRS; do
+            [ -f "$pdir/$slug/$RCY_OLD_SID.jsonl" ] && { RCY_OLD_TX="$pdir/$slug/$RCY_OLD_SID.jsonl"; break; }
+          done
+        fi
+      fi
+    fi
+    [ -n "$RCY_OLD_TX" ] || RCY_OLD_TX="$(transcript_for_sid "$RCY_OLD_SID" 2>/dev/null || true)"
+    [ -z "$RCY_OLD_TX" ] || HF_GOAL_TX="$RCY_OLD_TX"
+    return 0
+  }
+  # D1, THE DELEGATED FIRST /exit (REPORT.md D1). The foreground ran every gate, wrote exit-committed
+  # and exit-delegated, and returned WITHOUT typing, because an /exit typed inside its own tool call
+  # raises the background-work dialog over that call. Here: wait for that call (RCY_CALLER_PID) to end,
+  # polled at CC_RECYCLE_DELEGATE_POLL_S, bounded by CC_RECYCLE_SELFCALL_WAIT_S; then type /exit through
+  # hf_exit_readback (read back, CR only on an exact /exit). A call that outlives the bound holds with
+  # nothing typed and the retry ticket, as the selfcall arm's hold does. The loop's clocks restart at
+  # this /exit, so the dialog check, the nudges and the 600 s bound count from the keystroke.
+  rcy_deleg=0
+  rcy_delegated_exit() {
+    local t0 el=0 wmax="${CC_RECYCLE_SELFCALL_WAIT_S:-60}" ivl="${CC_RECYCLE_DELEGATE_POLL_S:-0.25}"
+    rcy_deleg=1
+    case "$wmax" in ''|*[!0-9]*) wmax=60 ;; esac
+    case "$ivl" in 0.[1-9]|0.[1-9][0-9]|1) ;; *) ivl=0.25 ;; esac
+    t0="$(date +%s)"
+    while [ -n "$RCY_CALLER_PID" ] && kill -0 "$RCY_CALLER_PID" 2>/dev/null; do
+      el=$(( $(date +%s) - t0 )); [ "$el" -lt "$wmax" ] || break
+      /bin/sleep "$ivl"
+    done
+    el=$(( $(date +%s) - t0 ))
+    if [ -n "$RCY_CALLER_PID" ] && kill -0 "$RCY_CALLER_PID" 2>/dev/null; then
+      rcy_bgwork_unconfirm
+      echo "!! recycle HELD: the /exit was delegated to this watcher, but the tool call it runs inside (pid $RCY_CALLER_PID) has not returned after ${el}s — nothing typed, the session in $RSID is untouched ($RCY_BG_UNCONFIRM). Re-run the recycle." >&2
+      [ -z "${RCY_DEBT_SID:-}" ] || _hf_resume_debt abandon --sid "$RCY_DEBT_SID" --why "delegated /exit never typed: tool call pid $RCY_CALLER_PID still running after ${el}s; session alive" >/dev/null 2>&1 || true
+      rcy_retry_ticket "the recycle's own tool call did not return within ${wmax}s, so its /exit was never typed" - || true
+      emit_recycle_event recycle-held-delegated "" "$RSID" "tool call pid $RCY_CALLER_PID still running ${el}s after exit-delegated; nothing typed; $RCY_BG_UNCONFIRM" || true
+      exit 1
+    fi
+    at_shell && return 0     # the session exited by itself meanwhile: the loop relaunches it
+    rcy_cron_carry "before the delegated /exit" || true
+    if RCY_IT2="$IT2" hf_exit_readback "$RSID"; then
+      echo "→ exit: the tool call returned after ${el}s — /exit typed by the watcher, read back, CR sent (delegated)"
+      emit_recycle_event recycle-exit-delegated "" "$RSID" "tool call pid ${RCY_CALLER_PID:-none} returned after ${el}s; /exit typed by the watcher, read back exactly, CR sent" || true
+    elif [ "$HF_EXIT_RB_TEXT" = "<unreadable>" ]; then
+      # Nothing proven either way: the 60 s nudge reads the box again and submits only an exact /exit.
+      echo "→ exit: delegated /exit typed after ${el}s but the composer could not be read back — no CR; the 60 s nudge decides"
+      emit_recycle_event recycle-exit-delegated "" "$RSID" "tool call returned after ${el}s; /exit typed, composer unreadable, no CR; left to the nudge" || true
+    else
+      rcy_bgwork_unconfirm
+      echo "!! recycle HELD: the delegated /exit read back as '$HF_EXIT_RB_TEXT', not '/exit' — no CR; ${HF_EXIT_RB_UNDO:-no DELs sent}. The session in $RSID is alive ($RCY_BG_UNCONFIRM). Re-run the recycle." >&2
+      [ -z "${RCY_DEBT_SID:-}" ] || _hf_resume_debt abandon --sid "$RCY_DEBT_SID" --why "delegated /exit read back '$HF_EXIT_RB_TEXT'; never submitted; session alive" >/dev/null 2>&1 || true
+      rcy_retry_ticket "the delegated /exit read back as '$HF_EXIT_RB_TEXT'" - || true
+      emit_recycle_event recycle-held-exit-readback "" "$RSID" "delegated /exit read back '$HF_EXIT_RB_TEXT'; no CR; ${HF_EXIT_RB_UNDO:-no DELs sent}; $RCY_BG_UNCONFIRM" || true
+      exit 1
+    fi
+    # The call has returned, so a dialog from here on is work the recycle did not start.
+    rcy_selfcall_tried=1
+    rcy_wait_t0="$(date +%s)"; waited=0
+    rcy_vanish_next=15; rcy_bgwork_next="$rcy_bgwork_first"; rcy_nudge_left="60 150 300"
+    return 0
+  }
   # A HELD SELF-RECYCLE LEAVES A RETRY TICKET (2026-10-05, reso pane 254). The hold used to end in a
   # sentence, "Re-run once its background work has ended", written to a log in TMPDIR that the held
   # session never reads: session d425afab then sat idle at 46% for nine hours. The ticket is the same
@@ -12636,6 +12825,14 @@ EOF
   rcy_bgwork_every="${CC_RECYCLE_BGWORK_EVERY_S:-15}"
   case "$rcy_bgwork_every" in ''|*[!0-9]*) rcy_bgwork_every=15 ;; esac
   [ "$rcy_bgwork_every" -ge 3 ] || rcy_bgwork_every=3
+  # D2, FAST DETECTION (REPORT.md D2): the dialog is up within ~1 s of the /exit, and at the 15 s
+  # cadence it sat on screen for 15-21 s before the first look (all 34 selfcall rows). So the first
+  # CC_RECYCLE_BGWORK_FAST_S (default 30) seconds after the commit are read every second, then the
+  # 15 s cadence resumes. Each check is one screen read; CC_RECYCLE_BGWORK_MAX still bounds the keys.
+  # CC_RECYCLE_BGWORK_FAST_S=0 restores the 15 s cadence from the start.
+  rcy_bgwork_fast="${CC_RECYCLE_BGWORK_FAST_S:-30}"
+  case "$rcy_bgwork_fast" in ''|*[!0-9]*) rcy_bgwork_fast=30 ;; esac
+  rcy_bgwork_first="$rcy_bgwork_every"; [ "$rcy_bgwork_fast" = 0 ] || rcy_bgwork_first=1
   # THE LOOP'S OWN VERDICT IS KEPT, NEVER RE-ASKED (2026-09-26, pane 780). This loop used to exit on
   # `! at_shell` and the refusal below re-probed with a second `! at_shell`. Right after claude exits,
   # zsh runs its precmd, and a prompt helper sitting in the foreground process group makes
@@ -12651,7 +12848,7 @@ EOF
   # are LATCHES now (`-ge` the next due point), so a step of 2 or 3 fires each one exactly once too.
   rcy_poll="${HF_RECYCLE_SHELL_POLL_S:-1}"
   case "$rcy_poll" in 1|2|3) ;; *) rcy_poll=1 ;; esac
-  rcy_vanish_next=15; rcy_bgwork_next="$rcy_bgwork_every"; rcy_nudge_left="60 150 300"
+  rcy_vanish_next=15; rcy_bgwork_next="$rcy_bgwork_first"; rcy_nudge_left="60 150 300"
   # WALL SECONDS, NOT A SUM OF SLEEPS (pane 434, 2026-10-14). `waited` used to add rcy_poll per
   # round, blind to the ps/jq/it2 forks each round runs: at ~31/core the "first dialog check at 15s"
   # came 2 min 40 s after arming, and the 600 s bound stretched by the same factor. Every cadence
@@ -12686,7 +12883,7 @@ EOF
   }
   rcy_k1_start() { # $1=committed|yielded $2=the marker → the loop's clocks restart at it
     rcy_k1="$1"; rcy_wait_t0="$(date +%s)"; waited=0
-    rcy_vanish_next=15; rcy_bgwork_next="$rcy_bgwork_every"; rcy_nudge_left="60 150 300"
+    rcy_vanish_next=15; rcy_bgwork_next="$rcy_bgwork_first"; rcy_nudge_left="60 150 300"
     [ "$1" = committed ] || rcy_nudge_left=""
     echo "→ commit: the foreground wrote ${2##*.} after $(( rcy_wait_t0 - rcy_pre_t0 ))s — the watcher's clock starts here"
   }
@@ -12725,6 +12922,10 @@ EOF
     if [ "$rcy_succ_lib" = 1 ] && hf_succ_claim_epoch "$TTY_PATH" "$rcy_w_t0" >/dev/null; then rcy_shell_ok=1; break; fi
     sleep "$rcy_poll"
     if [ "$rcy_k1" = precommit ] && rcy_precommit; then continue; fi
+    # D1: the foreground delegated the first /exit to this watcher (exit-delegated beside the commit).
+    if [ "$rcy_k1" = committed ] && [ "$rcy_deleg" = 0 ] && [ -e "$CMDFILE.exit-delegated" ]; then
+      rcy_delegated_exit; continue
+    fi
     waited=$(( $(date +%s) - rcy_wait_t0 ))
     # The nudge checkpoint due THIS round, consumed here — before the bgwork arm's `continue` — so a
     # round that answers the dialog skips its nudge exactly as the %-cadence did.
@@ -12762,7 +12963,8 @@ EOF
     # K1: only once our /exit exists — a dialog before the commit was not raised by this recycle, and
     # an answer to it would stop or move work the foreground has not decided to touch.
     if [ "$rcy_k1" = committed ] && [ "$waited" -ge "$rcy_bgwork_next" ] && [ "$rcy_bgwork_sent" -lt "$rcy_bgwork_max" ]; then
-      rcy_bgwork_next=$(( (waited / rcy_bgwork_every + 1) * rcy_bgwork_every ))
+      if [ "$waited" -lt "$rcy_bgwork_fast" ]; then rcy_bgwork_next=$((waited + 1))
+      else rcy_bgwork_next=$(( (waited / rcy_bgwork_every + 1) * rcy_bgwork_every )); fi
       bgk="" rcy_bg_up=0
       if bgk="$(pane_bgwork_key "$IT2" "$RSID")" && [ -n "$bgk" ]; then
         rcy_bg_up=1
@@ -12771,6 +12973,7 @@ EOF
       fi
       if [ "$rcy_bg_up" = 1 ]; then
         rcy_bgwork_seen=1
+        rcy_old_transcript   # D4: once, before any goal or transcript read below
         # CANCEL (cc-lr upgrade's team procedure, 2026-09-23): for an Agent-Team lead or member
         # neither exit is safe — "Move to background" hands the conversation to a background
         # worker by session id (a second live copy beside the --resume this rail types next), and
@@ -12886,7 +13089,7 @@ EOF
         # answered exactly as `cancel`: Esc, the session untouched, the move held. It never sends
         # the keep-work index. Kill switch CC_RECYCLE_STOP_IF_WATCHER=off: the value means cancel.
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = stop-if-watcher ]; then
-          rcy_siw_why="" rcy_siw_key=""
+          rcy_siw_why="" rcy_siw_key="" rcy_siw_cron=0
           if [ "${CC_RECYCLE_STOP_IF_WATCHER:-on}" = off ]; then
             rcy_siw_why="CC_RECYCLE_STOP_IF_WATCHER=off"
           elif [ "$rcy_team_rc" != 1 ]; then
@@ -12904,7 +13107,8 @@ EOF
                    case "$rcy_siw_kind" in
                      watcher\ *) ;;
                      *) rcy_siw_why="its background jobs are not watcher-only (${rcy_siw_kind:-unread})"
-                        if [ "$rcy_dead_siw" = 1 ]; then
+                        if [ "$rcy_self_siw" = 1 ] && rcy_siw_cron_only "$rcy_siw_kind"; then rcy_siw_why="" rcy_siw_cron=1; fi
+                        if [ -n "$rcy_siw_why" ] && [ "$rcy_dead_siw" = 1 ]; then
                           case "$rcy_siw_kind" in
                             *" shipland=yes "*) rcy_siw_why="a ship-land job is running ($rcy_siw_kind), which no lane stops" ;;
                             work\ *|none\ *) rcy_siw_why="" ;;   # `none`: the dialog itself says a task exists
@@ -12929,6 +13133,8 @@ EOF
             rcy_siw_key=""; rcy_siw_why="its background jobs could not be recorded for the successor"
           fi
           if [ -n "$rcy_siw_key" ]; then
+            # D3: the session's crons die with this answer, so they go into the successor's prompt first.
+            [ "$rcy_self_siw" != 1 ] || rcy_cron_carry "before the stop-tasks answer" || true
             # typed-send-lint:allow — a single menu digit read off the dialog on screen, never a command line; no shell ever sees it
             hf_bounded "$IT2" session send -s "$RSID" "$rcy_siw_key" >/dev/null 2>&1 || true
             rcy_bgwork_sent=$((rcy_bgwork_sent + 1)); rcy_bg_digit="$rcy_siw_key" rcy_bg_digit_at="$waited"
@@ -12936,6 +13142,11 @@ EOF
               RCY_JOBS_WHY="$rcy_dead_src"
               echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; answered '$rcy_siw_key' (Exit and stop tasks) — the source account is rejected ($rcy_dead_src), so Stay would keep the session where it cannot take a turn; ${RCY_JOBS_N:-0} job(s) recorded in ${RCY_JOBS_FILE:-nothing} for the successor ($rcy_siw_kind)"
               emit_recycle_event recycle-bgwork-stopped-dead-source "" "$RSID" "background-work dialog at ${waited}s answered with the stop-tasks index '$rcy_siw_key'; source rejected ($rcy_dead_src); jobs=$rcy_siw_kind; recorded=${RCY_JOBS_N:-0} in ${RCY_JOBS_FILE:-none}" || true
+              continue
+            fi
+            if [ "$rcy_siw_cron" = 1 ]; then
+              echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; answered '$rcy_siw_key' (Exit and stop tasks) — it lists only session scheduled tasks ($RCY_DLG_KINDS; $rcy_siw_kind); ${RCY_CRON_N:-0} cron job(s) carried into the successor's prompt"
+              emit_recycle_event recycle-bgwork-stopped-cron "" "$RSID" "background-work dialog at ${waited}s answered with the stop-tasks index '$rcy_siw_key'; items=$RCY_DLG_KINDS; jobs=$rcy_siw_kind; carried=${RCY_CRON_N:-0}" || true
               continue
             fi
             echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; stop-if-watcher answered '$rcy_siw_key' (Exit and stop tasks) — the only background job is the mailbox watcher ($rcy_siw_kind)"
@@ -13022,7 +13233,7 @@ EOF
           # everything in a re-created stub was written after the rename.
           rcy_bg_tr="" rcy_bg_off=0 rcy_bg_cfg=""
           [ -n "${RCY_RESUME_SID:-}" ] && rcy_bg_tr="${RCY_SRC_TX:-}"
-          [ -n "$rcy_bg_tr" ] || rcy_bg_tr="$(transcript_for_sid "${RCY_OLD_SID:-}")"
+          [ -n "$rcy_bg_tr" ] || { rcy_old_transcript; rcy_bg_tr="$RCY_OLD_TX"; }
           [ -f "$rcy_bg_tr" ] && rcy_bg_off="$(wc -c < "$rcy_bg_tr" | tr -d ' ')"
           [ -n "$rcy_bg_tr" ] && rcy_bg_cfg="${rcy_bg_tr%/projects/*}"
           # typed-send-lint:allow — a single menu digit read off the dialog on screen, never a command line; no shell ever sees it
@@ -20423,6 +20634,18 @@ spawn() {
 # THE IRREVERSIBLE TAIL of recycle_fire, entered with the watcher armed (heartbeat + pane proof) and
 # the pre-confirm reads passed. ORDER: confirm → last read → debt → /exit. Returns 0 once /exit is
 # submitted; every refusal exits 1 with nothing submitted. $1 = the pane's pre-recycle session id.
+# D1's scope: a self-recycle (the tool call it runs inside was named at the detach) that is not a
+# remote, resume, transplanted or turn-end-deferred recycle, with the read-back the watcher types
+# through left on. Kill switch CC_RECYCLE_DELEGATE_EXIT=off restores the foreground's own /exit.
+hf_recycle_delegate_ok() { # → 0 the watcher types the first /exit · 1 this process types it
+  [ "${CC_RECYCLE_DELEGATE_EXIT:-on}" != off ] || return 1
+  [ -n "${RCY_CALLER_PID_ARG:-}" ] && [ -n "${cmdfile:-}" ] || return 1
+  [ -z "${RESUME_LAUNCHER:-}" ] && [ "${RCY_REMOTE:-0}" != 1 ] || return 1
+  [ "${RCY_TRANSPLANTED_SOURCE:-0}" != 1 ] && [ "${RCY_DEFERRED:-0}" != 1 ] || return 1
+  [ "${HF_EXIT_READBACK:-on}" != off ] || return 1
+  kill -0 "$RCY_CALLER_PID_ARG" 2>/dev/null
+}
+
 recycle_fire_commit() {
   local rcy_old_sid="${1:-}" rcy_tp="" rcy_tp_rc=0 rcy_debt_sid rcy_debt_cwd wrote rcy_sig_rc=0 rcy_load_rc=0
   RCY_CONFIRM_RAN=0
@@ -20598,6 +20821,19 @@ recycle_fire_commit() {
          [ -n "$rcy_debt_sid" ] && _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "pane probe unanswered and the signal exit declined ($HF_EXIT_SIG_WHY); nothing typed, session alive"
          hf_recycle_hold unreachable "pane probe unanswered and the signal exit declined ($HF_EXIT_SIG_WHY)" \
            "the terminal did not answer and the exit would have to be typed"
+       fi
+       # D1, THE DELEGATED FIRST /exit (docs/research/selfrecycle-latency-2026-10-26/REPORT.md). Typed
+       # from here, the /exit lands while this very Bash call is alive, Claude Code counts the call as
+       # background work and draws "Background work is running" over the pane; the watcher's selfcall
+       # arm then repaired it with Esc and a second /exit 24-52 s later (34 of 47 self-recycles). So a
+       # self-recycle writes `exit-delegated` and returns: the watcher waits for this call to end and
+       # types the first /exit itself, through the same read-back. Every gate above has already run.
+       if hf_recycle_delegate_ok; then
+         if date +%s > "$cmdfile.exit-delegated" 2>/dev/null; then
+           echo "→ exit: DELEGATED to the watcher — it types /exit once this tool call (pid $RCY_CALLER_PID_ARG) has returned, so no background-work dialog is raised. End this turn now."
+           return 0
+         fi
+         echo "⚠ recycle: could not write $cmdfile.exit-delegated — typing /exit here, as before" >&2
        fi
        echo "→ exit: typed /exit — $HF_EXIT_SIG_WHY" ;;
   esac
@@ -21122,6 +21358,9 @@ recycle_fire_armed() {
   # nested recycle never inherits an outer one's cause.
   HF_RCY_TRANSPLANT_CAUSE="$RCY_TRANSPLANT_CAUSE"
   export HF_RCY_ORIG_ARGV_FILE HF_RCY_ORIG_SELF HF_RCY_ORIG_PWD HF_RCY_WATCHER_LOG HF_RCY_TRANSPLANT_CAUSE
+  # D3: the prompt the relaunch line actually `cat`s — the back-channel COPY, not $9's caller-named
+  # file — so a cron carry appended by the watcher reaches the successor.
+  HF_RCY_LAUNCH_PROMPT="${PROMPT_FILE:-}"; export HF_RCY_LAUNCH_PROMPT
   # A carried prompt box (hf_rcy_carry) goes to the watcher, which puts it back on its engaged arms.
   export HF_RCY_CARRY_DIR HF_RCY_CARRY_STATE
   # THE WATCHER'S PANE PROBE MAY BE ADVISORY (W12, B5a §5.4b) only for a move that stages a successor
