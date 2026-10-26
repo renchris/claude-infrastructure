@@ -1,0 +1,17 @@
+{
+  "paneUUID": "272",
+  "name": "lead-idle-fix-272",
+  "cwd": "/Users/chrisren/Development/.worktrees/lead-idle-fix",
+  "account": "claude-tertiary",
+  "pid": 36829,
+  "startedAt": 1792910439000,
+  "session_id": "3d1dc252-a2b7-4ef2-97d7-e178c3411846",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 06:40:32 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952105,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "lead-idle-fix"
+}

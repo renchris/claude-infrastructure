@@ -1,0 +1,17 @@
+{
+  "paneUUID": "274",
+  "name": "r27-ra-274",
+  "cwd": "/Users/chrisren/Development/.worktrees/b13/r27-ra",
+  "account": "claude-next",
+  "pid": 81082,
+  "startedAt": 1792876667000,
+  "session_id": "7396b781-d7a1-48b9-a699-06c3ae0415f5",
+  "surface": "pane",
+  "lstart": "Sat Oct 24 21:17:42 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952104,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "b13/r27-ra-f"
+}

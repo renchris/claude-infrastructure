@@ -1,0 +1,17 @@
+{
+  "paneUUID": "318",
+  "name": "lr-recon-defects-318",
+  "cwd": "/Users/chrisren/Development/.worktrees/fix/lr-recon-defects",
+  "account": "claude-quaternary",
+  "pid": 70088,
+  "startedAt": 1792902332000,
+  "session_id": "eeb8db4d-178f-49eb-8aec-aa24efb42916",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 04:25:28 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952102,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "fix/lr-recon-defects"
+}

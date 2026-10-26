@@ -1,0 +1,17 @@
+{
+  "paneUUID": "316",
+  "name": "personal-316",
+  "cwd": "/Users/chrisren/Development/personal",
+  "account": "claude-quaternary",
+  "pid": 28038,
+  "startedAt": 1792902741000,
+  "session_id": "418d940f-347a-44a6-a136-87c0ae1bc2a2",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 04:32:10 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952104,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "master"
+}

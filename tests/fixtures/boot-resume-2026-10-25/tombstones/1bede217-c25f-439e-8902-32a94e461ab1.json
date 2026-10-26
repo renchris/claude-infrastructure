@@ -1,0 +1,17 @@
+{
+  "paneUUID": "262",
+  "name": "tm2-w8copy-262",
+  "cwd": "/Users/chrisren/Development/.worktrees/tm2-w8copy",
+  "account": "claude-tertiary",
+  "pid": 51072,
+  "startedAt": 1792910454000,
+  "session_id": "1bede217-c25f-439e-8902-32a94e461ab1",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 06:40:46 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952104,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "tm2-w8copy"
+}

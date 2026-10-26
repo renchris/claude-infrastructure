@@ -1,0 +1,17 @@
+{
+  "paneUUID": "343",
+  "name": "wt-cc-033121-87992-343",
+  "cwd": "/Users/chrisren/Development/.worktrees/wt-cc-033121-87992",
+  "account": "claude-quaternary",
+  "pid": 39446,
+  "startedAt": 1792917500000,
+  "session_id": "92fc4fbe-5947-465a-842a-3069f6cbf0ea",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 08:38:03 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952106,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "cc-033121-87992"
+}

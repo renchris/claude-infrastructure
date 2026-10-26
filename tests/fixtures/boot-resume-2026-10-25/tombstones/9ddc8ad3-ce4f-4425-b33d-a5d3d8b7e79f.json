@@ -1,0 +1,17 @@
+{
+  "paneUUID": "309",
+  "name": "husk-skill-and-fix-309",
+  "cwd": "/Users/chrisren/Development/.worktrees/husk-skill-and-fix",
+  "account": "claude-quaternary",
+  "pid": 36922,
+  "startedAt": 1792913478000,
+  "session_id": "9ddc8ad3-ce4f-4425-b33d-a5d3d8b7e79f",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 07:31:13 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952106,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "husk-skill-and-fix"
+}

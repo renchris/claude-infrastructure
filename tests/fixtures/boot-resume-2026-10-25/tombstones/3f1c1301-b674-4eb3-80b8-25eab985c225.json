@@ -1,0 +1,17 @@
+{
+  "paneUUID": "297",
+  "name": "lkw-scope-floor-297",
+  "cwd": "/Users/chrisren/Development/.worktrees/lkw-scope-floor",
+  "account": "claude-tertiary",
+  "pid": 3378,
+  "startedAt": 1792889430000,
+  "session_id": "3f1c1301-b674-4eb3-80b8-25eab985c225",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 00:50:15 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952107,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "lkw-scope-floor"
+}

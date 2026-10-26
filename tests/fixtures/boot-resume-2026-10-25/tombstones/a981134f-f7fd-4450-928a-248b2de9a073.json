@@ -1,0 +1,17 @@
+{
+  "paneUUID": "3",
+  "name": "reso-web-app-3",
+  "cwd": "/Users/chrisren/Development/reso-web-app",
+  "account": "claude-quaternary",
+  "pid": 99725,
+  "startedAt": 1792896629000,
+  "session_id": "a981134f-f7fd-4450-928a-248b2de9a073",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 02:50:21 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952104,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "main"
+}

@@ -1,0 +1,17 @@
+{
+  "paneUUID": "263",
+  "name": ".publish-state-263",
+  "cwd": "/Users/chrisren/Development/.worktrees/tm-upstream-wt/.publish-state",
+  "account": "claude-quaternary",
+  "pid": 83886,
+  "startedAt": 1792909538000,
+  "session_id": "501dda01-e036-4fff-8224-abda2e6f8bc2",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 06:25:33 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952104,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "tm2/2.0"
+}

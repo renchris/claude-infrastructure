@@ -1,0 +1,17 @@
+{
+  "paneUUID": "2",
+  "name": "sevenrooms-bridge-2",
+  "cwd": "/Users/chrisren/Development/sevenrooms-bridge",
+  "account": "claude-tertiary",
+  "pid": 75944,
+  "startedAt": 1792910378000,
+  "session_id": "79076bcf-e311-47d8-bf95-e12c422b94e9",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 06:39:24 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952104,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "main"
+}

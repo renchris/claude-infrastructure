@@ -1,0 +1,17 @@
+{
+  "paneUUID": "326",
+  "name": "midturn-account-move-326",
+  "cwd": "/Users/chrisren/Development/.worktrees/research/midturn-account-move",
+  "account": "claude-quaternary",
+  "pid": 59906,
+  "startedAt": 1792911542000,
+  "session_id": "28a7b735-d941-4148-aaf8-230c2fde2fca",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 06:58:57 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952104,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "research/midturn-account-move"
+}

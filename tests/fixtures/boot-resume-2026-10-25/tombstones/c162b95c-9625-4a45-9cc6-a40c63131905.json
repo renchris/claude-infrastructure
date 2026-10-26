@@ -1,0 +1,17 @@
+{
+  "paneUUID": "323",
+  "name": "usage-levers-s2-323",
+  "cwd": "/Users/chrisren/Development/.worktrees/usage-levers-s2",
+  "account": "claude-quaternary",
+  "pid": 72866,
+  "startedAt": 1792906290000,
+  "session_id": "c162b95c-9625-4a45-9cc6-a40c63131905",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 05:31:23 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952106,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "usage-levers-s2"
+}

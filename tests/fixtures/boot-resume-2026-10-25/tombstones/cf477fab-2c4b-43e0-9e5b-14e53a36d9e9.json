@@ -1,0 +1,17 @@
+{
+  "paneUUID": "303",
+  "name": "lkw-nudge-decide-303",
+  "cwd": "/Users/chrisren/Development/.worktrees/lkw-nudge-decide",
+  "account": "claude-secondary",
+  "pid": 25920,
+  "startedAt": 1792891498000,
+  "session_id": "cf477fab-2c4b-43e0-9e5b-14e53a36d9e9",
+  "surface": "pane",
+  "lstart": "Sun Oct 25 01:24:49 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952103,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "lkw-nudge-decide"
+}

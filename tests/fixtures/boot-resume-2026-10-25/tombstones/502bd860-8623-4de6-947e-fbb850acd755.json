@@ -1,0 +1,17 @@
+{
+  "paneUUID": "271",
+  "name": "agent-context-sync-271",
+  "cwd": "/Users/chrisren/Development/agent-context-sync",
+  "account": "claude-next",
+  "pid": 91301,
+  "startedAt": 1792873206000,
+  "session_id": "502bd860-8623-4de6-947e-fbb850acd755",
+  "surface": "pane",
+  "lstart": "Sat Oct 24 20:20:01 2026",
+  "kitty_listen_on": "unix:/tmp/kitty-1881",
+  "kitty_pid": 1881,
+  "endedAt": 1792952104,
+  "endReason": "other",
+  "hostShutdown": false,
+  "branch": "main"
+}
