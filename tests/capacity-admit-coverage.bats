@@ -226,8 +226,15 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   # only spawns go through the gated batch caller below, against a throwaway kitty. bin/cc-restore
   # (7faddf57f, 2026-10-19) is prose too: it names the engine only inside a printed hint ("resumes by
   # hand: ~/.reso/bin/reso-resume-one …") and never executes it.
+  # scripts/boot-resume.sh and bin/cc-panes (both 2026-10-26) name the engine only as a PROCESS-NAME
+  # pattern they match against a kitty window's cmdline (a python tuple and a regex); neither runs it.
+  # bin/cc-resume-open (c5443a558, 2026-10-26) does run it, ONE session per call, and is gated by the
+  # engine's own body: it re-asks through refusals and never hands the engine CC_ADMIT_DONE, which is
+  # asserted right here so the exclusion cannot outlive the fact it rests on.
+  ! grep -q 'CC_ADMIT_DONE' "$REPO/bin/cc-resume-open" \
+    || { echo "cc-resume-open now sets CC_ADMIT_DONE: it bypasses the engine's gate and must be gated itself"; false; }
   callers="$(grep -rlE '^[^#]*(RESUME_ONE|reso-resume-one)' "$REPO/scripts" "$REPO/bin" 2>/dev/null \
-             | grep -v 'lr-fire-resume.sh\|lr-preseed-env.sh\|lr-select.py\|bin/reso-resume-one\|checks/restore-tree-live-verify.py\|bin/cc-restore$' || true)"
+             | grep -vE '(lr-fire-resume\.sh|lr-preseed-env\.sh|lr-select\.py|bin/reso-resume-one|checks/restore-tree-live-verify\.py|bin/cc-restore|scripts/boot-resume\.sh|bin/cc-panes|bin/cc-resume-open)$' || true)"
   # TWO gated invokers as of 2026-08-24. bin/cc-resume-layout.sh joined boot-resume-launch.sh when
   # /resume-sessions grew a per-monitor layout: it fires a BATCH, which is precisely the shape this
   # gate exists to bound. It was landed UNGATED, this case caught it, and the post-land verifier
