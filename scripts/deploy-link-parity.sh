@@ -577,6 +577,15 @@ for d in lr_recon lr_recon/tests; do
     check_one "scripts/limit-recover/$d/$(basename "$f")" "$CFG/scripts/limit-recover/$d/$(basename "$f")"
   done
 done
+# scripts/{lockwatch,forensics}/ (incident 2026-10-25 lane A), linked per file into real dirs by
+# install.sh's lockwatch/forensics leg (1bceb92c0). THE FIFTH INSTANCE: that commit extended
+# install.sh and not this mirror, and case 45 went red on trunk with the class unclaimed.
+for sub in lockwatch forensics; do
+  for f in "$REPO"/scripts/"$sub"/*; do
+    [ -f "$f" ] || continue
+    check_one "scripts/$sub/$(basename "$f")" "$CFG/scripts/$sub/$(basename "$f")"
+  done
+done
 # THE THIRD INSTANCE OF THE DEFECT THE TWO COMMENTS ABOVE RECORD, and the first one caught by the
 # coverage arm BEFORE it could sit on trunk. `scripts/jev/` landed as a new install.sh class on
 # 2026-09-19 (the Jev evaluation shim). Its author extended install.sh AND
