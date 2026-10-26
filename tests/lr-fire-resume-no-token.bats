@@ -14,6 +14,9 @@
 # The TUI is a stub on a real pty, the pane reader a stub it2 at the path the script resolves, and
 # the probe is the real lr-submit-probe.sh over an empty transcript, so it answers `none`.
 
+load helpers/pty-reap
+teardown() { pty_reap; } # no stub spawned on a pty outlives its test (tests/helpers/pty-reap.bash)
+
 setup() {
   command -v expect >/dev/null || skip "expect(1) not installed"
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
@@ -106,7 +109,7 @@ inbox_has() { # $1 = phrase → 0 once the inbox recorder holds it (bounded at 3
   export LR_SAY_LOG="$BATS_TEST_TMPDIR/say.log" LR_NOTIFY="$LR_NOTIFY_BIN"
   export CC_COMPOSER_RESIDUE_DIR="$BATS_TEST_TMPDIR/residue"
   mkdir -p "$LR_NOTE_DIR"
-  run timeout 1800 expect -f "$exp" </dev/null
+  run pty_timeout 1800 expect -f "$exp" </dev/null
   [ "$(grep -c '^GOT:\[\]$' "$LR_TEST_GOT")" -ge 1 ] || { echo "no re-Enter without a probe:"; cat -v "$LR_TEST_GOT"; cat "$LR_SAY_LOG"; false; }
   inbox_has 'UNSUBMITTED' \
     || { echo "no UNSUBMITTED verdict in the inbox:"; cat "$BATS_TEST_TMPDIR/inbox.txt" 2>&1; cat "$LR_SAY_LOG"; false; }

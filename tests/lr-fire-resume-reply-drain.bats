@@ -19,6 +19,9 @@
 # stdin BEFORE it reaches `interact`, and reads what the spawned stub actually received on its pty.
 # Red-proof: against the pre-fix subject that arm receives the reports verbatim in front of the `x`.
 
+load helpers/pty-reap
+teardown() { pty_reap; } # no stub spawned on a pty outlives its test (tests/helpers/pty-reap.bash)
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   FIRE="$REPO/scripts/limit-recover/lr-fire-resume.sh"
@@ -148,6 +151,11 @@ SH
   # subject. Everything queued on stdin before that moment is the boot-time backlog.
   export LR_CFG="$BATS_TEST_TMPDIR/cfg" LR_BIN="$STUB" LR_MODEL=m LR_EFFORT=high \
          LR_SID="00000000-0000-0000-0000-000000000000" LR_PROMPT="" LR_ASIS=1 LR_WRAP="" LR_QUIET_S=1
+  # After interact ends on stdin's EOF, lr_exit_with_claude waits LR_REAP_DRAIN_S (60 s by default)
+  # for the session's eof, and this stub reads until its pty closes, so it never gives one: the
+  # default drain alone filled the 60 s bound below and the arm read 124 every run (measured 4/4,
+  # with timeout(1) and with pty_timeout alike). A short drain, then the close that ends the stub.
+  export LR_REAP_DRAIN_S=2
   local never='ZZZ-NEVER-MATCHES-ZZZ'
   export LR_RE_MENU="$never" LR_RE_ASIS_STRONG="$never" LR_RE_ASIS="$never" \
          LR_RE_TRUST="$never" LR_RE_TRUST_RB="$never" LR_RE_FS="$never" LR_RE_FS_RB="$never" \
@@ -163,7 +171,7 @@ SH
     sleep 0.3
   }
   local rc=0
-  feed | timeout 60 expect -f "$EXP" > "$BATS_TEST_TMPDIR/out" 2>&1 || rc=$?
+  feed | pty_timeout 60 expect -f "$EXP" > "$BATS_TEST_TMPDIR/out" 2>&1 || rc=$?
   [ "$rc" -ne 124 ] || { echo "the expect program did not finish"; false; }
   [ -s "$LR_TEST_GOT" ] || { echo "the stub received nothing at all"; cat "$BATS_TEST_TMPDIR/out"; false; }
 

@@ -10,6 +10,9 @@
 #
 # FIRE may point at another copy of the script (the red-proof run against the pre-change file).
 
+load helpers/pty-reap
+teardown() { pty_reap; } # no stub spawned on a pty outlives its test (tests/helpers/pty-reap.bash)
+
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   FIRE="${FIRE:-$REPO/scripts/limit-recover/lr-fire-resume.sh}"
@@ -171,7 +174,7 @@ in_band() { awk -v x="$1" -v lo="$2" -v hi="$3" 'BEGIN { exit !(x >= lo && x <= 
 @test "schedule: the default re-sends at ~5 s and ~15 s after the first CR" {
   sched_setup
   unset LR_RECR_SCHEDULE
-  run timeout 90 expect -f "$EXP" </dev/null
+  run pty_timeout 90 expect -f "$EXP" </dev/null
   offs="$(resend_offsets)"; echo "# re-send offsets: ${offs//$'\n'/ }" >&3
   [ "$(printf '%s\n' "$offs" | grep -c .)" -eq 2 ] || { echo "re-sends: [$offs]"; cat "$LR_GOT"; false; }
   # Lower bounds prove the schedule (never early); upper bounds allow for load, because a look
@@ -183,7 +186,7 @@ in_band() { awk -v x="$1" -v lo="$2" -v hi="$3" 'BEGIN { exit !(x >= lo && x <= 
 @test "schedule: LR_RECR_SCHEDULE=2,4 re-sends at ~2 s and ~4 s" {
   sched_setup
   export LR_RECR_SCHEDULE=2,4
-  run timeout 60 expect -f "$EXP" </dev/null
+  run pty_timeout 60 expect -f "$EXP" </dev/null
   offs="$(resend_offsets)"; echo "# re-send offsets: ${offs//$'\n'/ }" >&3
   [ "$(printf '%s\n' "$offs" | grep -c .)" -eq 2 ] || { echo "re-sends: [$offs]"; cat "$LR_GOT"; false; }
   in_band "$(sed -n 1p <<<"$offs")" 1.5 7 || { echo "first re-send not at ~2 s: $offs"; false; }
@@ -203,7 +206,7 @@ in_band() { awk -v x="$1" -v lo="$2" -v hi="$3" 'BEGIN { exit !(x >= lo && x <= 
 [ -f "$LR_PROBE_T0" ] || date +%s > "$LR_PROBE_T0"
 if [ $(( $(date +%s) - $(cat "$LR_PROBE_T0") )) -ge 3 ]; then echo "submitted 2026-09-29T00:00:00.000Z"; else echo none; fi
 SH
-  run timeout 60 expect -f "$EXP" </dev/null
+  run pty_timeout 60 expect -f "$EXP" </dev/null
   [[ "$(cat "$LR_SAY_LOG")" == *"SUBMITTED"* ]] || { cat "$LR_SAY_LOG"; false; }
   [[ "$(cat "$LR_SAY_LOG")" != *"NOT SUBMITTED"* ]] || { cat "$LR_SAY_LOG"; false; }
   [ "$(grep -c ' CR$' "$LR_GOT")" = 0 ] || { echo "an Enter was sent over a draft that is not ours"; cat "$LR_GOT"; false; }

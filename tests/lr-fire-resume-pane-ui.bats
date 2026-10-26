@@ -7,6 +7,9 @@
 #   3. `ð¬ peer mail`                          — Tcl 8.5 cannot relay a 4-byte UTF-8 character
 # Every case below that is marked RED-PROOF fails on the code as it shipped that evening.
 
+load helpers/pty-reap
+teardown() { pty_reap; } # no stub spawned on a pty outlives its test (tests/helpers/pty-reap.bash)
+
 setup() {
   export CC_ADMIT_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -137,7 +140,7 @@ screen_menu() {
   printf '#!/bin/sh\ncat "%s"\n' "$BATS_TEST_TMPDIR/menu.txt" > "$IT2"; chmod +x "$IT2"
   export LR_IT2="$IT2" LR_PANE=1
 }
-run_exp() { run timeout 120 expect -f "$EXP" </dev/null; }
+run_exp() { run pty_timeout 120 expect -f "$EXP" </dev/null; }
 
 @test "RED-PROOF tty: a verdict is written to the run log and the inbox, never painted on the pane" {
   exp_setup

@@ -18,6 +18,9 @@
 # real wrapper. The verdict is the close-record the wrapper writes: a file that exists only if the
 # wrapper was interposed AND ran to completion under the pty.
 
+load helpers/pty-reap
+teardown() { pty_reap; } # no stub spawned on a pty outlives its test (tests/helpers/pty-reap.bash)
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   FIRE="$REPO/scripts/limit-recover/lr-fire-resume.sh"

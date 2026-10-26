@@ -1,5 +1,6 @@
 #!/usr/bin/env bats
 load helpers/cc-stub
+load helpers/pty-reap
 # reso-resume-one — the first test suite this file has ever had.
 #
 # It had none because until now it was not in the repo: it lived only at ~/.reso/bin/reso-resume-one
@@ -30,6 +31,8 @@ load helpers/cc-stub
 #   · fable arm → `model=claude-fable-5-1 effort=high`      : argv reads `--effort high`.
 #   · resolve_repo → the constant                         : "branch does not exist in
 #     reso-management-app", worktree never recreated.
+
+teardown() { pty_reap; } # no stub spawned on a pty outlives its test (tests/helpers/pty-reap.bash)
 
 setup() {
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -287,7 +290,7 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
   # be running at 1 s (measured 2026-10-17, red in a full run, green alone). The old code never
   # turns echo off before exit, so "some sample reads -echo" still fails on it.
   # shellcheck disable=SC2016  # the expect program reads $env(...) and $spawn_out itself
-  run env RRO="$RRO" WT="$WT" CC_RR_STUB_NO_MENU=1 timeout 90 expect -c '
+  RRO="$RRO" WT="$WT" CC_RR_STUB_NO_MENU=1 run pty_timeout 90 expect -c '
     spawn -noecho $env(RRO) next $env(WT) SID-QUIET
     set modes {}
     for {set i 0} {$i < 20} {incr i} {

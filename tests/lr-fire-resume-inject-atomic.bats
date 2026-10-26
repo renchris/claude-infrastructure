@@ -14,6 +14,9 @@
 # The pane reader shows our text only once the child has received the paste end marker, which is the
 # real dependency: a composer paints a paste after the TUI has consumed it.
 
+load helpers/pty-reap
+teardown() { pty_reap; } # no stub spawned on a pty outlives its test (tests/helpers/pty-reap.bash)
+
 setup() {
   command -v expect >/dev/null || skip "expect(1) not installed"
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
@@ -91,7 +94,7 @@ SH
 
 @test "RED-PROOF the prompt arrives inside exactly one 200~/201~ pair, and the CR in a later read" {
   exp_setup
-  run timeout 1800 expect -f "$EXP" </dev/null
+  run pty_timeout 1800 expect -f "$EXP" </dev/null
   [ -s "$LR_TEST_READS" ] || { echo "the TUI received nothing; its stages:"; cat "$LR_TEST_READS.stages" 2>&1; cat "$LR_SAY_LOG" 2>&1; echo "$output" | tail -20; false; }
   run python3 - "$LR_TEST_READS" "$LR_PROMPT" <<'PY'
 import json, sys
@@ -115,7 +118,7 @@ PY
 @test "LR_BRACKETED_PASTE=off is the old raw-keystroke delivery, exactly (the kill switch)" {
   exp_setup
   export LR_BRACKETED_PASTE=off LR_SUBMIT_PAINT_S=0
-  run timeout 1800 expect -f "$EXP" </dev/null
+  run pty_timeout 1800 expect -f "$EXP" </dev/null
   run python3 -c 'import json,sys; b=b"".join(bytes.fromhex(json.loads(l)["hex"]) for l in open(sys.argv[1]) if l.strip()); sys.exit(0 if b"\x1b[200~" not in b and sys.argv[2].encode() in b else 1)' "$LR_TEST_READS" "$LR_PROMPT"
   [ "$status" -eq 0 ] || { echo "the kill switch did not restore raw keys"; cat "$LR_TEST_READS"; false; }
 }

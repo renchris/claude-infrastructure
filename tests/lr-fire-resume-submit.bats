@@ -13,6 +13,9 @@
 # `queued` means keep waiting behind a running turn, and `none` means act — and an UNREADABLE
 # transcript is none of them, which is why it exits non-zero with empty stdout.
 
+load helpers/pty-reap
+teardown() { pty_reap; } # no stub spawned on a pty outlives its test (tests/helpers/pty-reap.bash)
+
 setup() {
   # Ambient-state pins (test-hermeticity ratchet). The subject is a read-only file scanner, but the
   # suite also greps handoff-fire.sh and lr-fire-resume.sh, whose gates read the operator's LIVE box:
@@ -467,7 +470,7 @@ lr_expect_run() { # $1 = the QUIET-BOX budget in seconds; scales it to the box t
   lpc="$(lr_load_per_core)"
   bound="$(LC_ALL=C awk -v b="$base" -v l="$lpc" 'BEGIN { m = int(l) + 1; if (m > 8) m = 8; printf "%d", b * m }')"
   t0="$(date +%s)"
-  run timeout "$bound" expect -f "$EXP" </dev/null
+  run pty_timeout "$bound" expect -f "$EXP" </dev/null
   t1="$(date +%s)"
   elapsed=$((t1 - t0))
   echo "# expect: ${elapsed}s of a ${bound}s bound at load/core $lpc (quiet-box budget ${base}s)" >&3
@@ -527,6 +530,7 @@ lr_expect_run() { # $1 = the QUIET-BOX budget in seconds; scales it to the box t
   chmod +x "$IN/bin/expect-silent" "$IN/bin/expect-noisy"
   cat > "$IN/band.bats" <<'INNER'
 setup() {
+  . "${SUBJECT%/*}/helpers/pty-reap.bash"   # lr_expect_run's pty_timeout
   eval "$(sed -n '/^lr_load_per_core() {/,/^}/p' "$SUBJECT")"
   eval "$(sed -n '/^lr_expect_run() {/,/^}/p' "$SUBJECT")"
   [ -n "$(declare -f lr_expect_run)" ] || { echo "extraction of lr_expect_run failed" >&2; return 1; }
@@ -647,7 +651,7 @@ SH
   exp_setup
   export LR_SUBMIT_PAINT_S=0 EXP LR_SUBMIT_POLL_S=4 RCY_ENGAGE_TIMEOUT=6
   screen 1 empty
-  run timeout 90 expect -c '
+  run pty_timeout 90 expect -c '
     spawn -noecho expect -f $env(EXP)
     set timeout 1; expect { -re {.+} { exp_continue } timeout {} }
     set m [exec /bin/stty -a -f $spawn_out(slave,name)]
