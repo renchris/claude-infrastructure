@@ -235,9 +235,13 @@ _d1_due() {
   case "$_out" in "recycle"$'\t'*) ;; *) return 0 ;; esac
   _out="${_out#recycle$'\t'}"; _brief="${_out%%$'\t'*}"; _rid="${_out#*$'\t'}"
   [ -f "$_brief" ] || return 0
-  # The gap's one wake is spent on this recycle, whatever handoff-fire makes of it.
-  CC_D1_RECYCLE_ID="$_rid" CC_D1_RECYCLE_SID="$_sid" \
-    "$HOME/.claude/scripts/handoff-fire.sh" --recycle --prompt-file "$_brief" </dev/null \
+  # The gap's one wake is spent on this recycle, whatever handoff-fire makes of it. The id rides the
+  # env into handoff-fire's detached recycle watcher, which writes d1_engage (hf_d1_engage).
+  export CC_D1_RECYCLE_ID="$_rid" CC_D1_RECYCLE_SID="$_sid"
+  # shellcheck source=../scripts/lib/cc-run.sh
+  # shellcheck disable=SC1091
+  if [ -f "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh" ]; then . "${BASH_SOURCE[0]%/*}/../scripts/lib/cc-run.sh"; else cc_run() { "$@"; }; fi
+  cc_run "$HOME/.claude/scripts/handoff-fire.sh" --recycle --prompt-file "$_brief" </dev/null \
     >> "${CC_IDLE_KEEPALIVE_STATE:-$HOME/.claude/state/idle-keepalive}/d1-fire.log" 2>&1 || true
   exit 0
 }
