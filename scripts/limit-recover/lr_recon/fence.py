@@ -164,9 +164,39 @@ def lstart_norm(raw: str) -> str:
     return re.sub(" +", " ", raw or "").strip()
 
 
+def _psfree_field(field: str, pid: int) -> Optional[str]:
+    """W1: ``field`` (lstart | stat) from KERN_PROC_PID; None = not readable (ask ps)."""
+    from lr_recon import proctable
+
+    return proctable.proc_lstart(pid) if field == "lstart" else proctable.proc_stat(pid)
+
+
+def _read(field: str, pid: int) -> str:
+    """One field of one pid. LR_RECON_PSFREE=on reads KERN_PROC_PID first (ps only when that read
+    fails); shadow lets ps decide and logs a disagreeing in-process read; off is ps alone."""
+    from lr_recon import proctable
+
+    mode = proctable.mode()
+    if mode == "on":
+        got = _psfree_field(field, pid)
+        if got is not None:
+            return got
+    out = _ps(field, pid)
+    if mode == "shadow" and out:
+        pf = _psfree_field(field, pid)
+        if field == "stat":  # only the zombie bit is consumed; ps's other letters are thread states
+            out_z, pf_z = out.startswith("Z"), (pf or "").startswith("Z")
+            proctable.shadow_point(
+                "fence.stat", pid, "Z" if out_z else "-", None if pf is None else ("Z" if pf_z else "-")
+            )
+        else:
+            proctable.shadow_point("fence.lstart", pid, lstart_norm(out), pf)
+    return out
+
+
 def lstart_of(pid: int) -> str:
     """The ProcId lstart (ps LSTART under TZ=UTC LC_ALL=C), collapsed; "" when gone."""
-    return lstart_norm(_ps("lstart", pid)) if pid > 0 else ""
+    return lstart_norm(_read("lstart", pid)) if pid > 0 else ""
 
 
 def proc_alive(pid: int, lstart: str) -> bool:
@@ -176,7 +206,7 @@ def proc_alive(pid: int, lstart: str) -> bool:
         return False
     if lstart_of(pid) != want:
         return False
-    stat = _ps("stat", pid)
+    stat = _read("stat", pid)
     return bool(stat) and not stat.startswith("Z")
 
 

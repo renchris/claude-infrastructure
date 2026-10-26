@@ -618,13 +618,44 @@ def inproc_lstart(pid: int) -> Optional[str]:
     return None
 
 
+def _psfree_mode() -> str:
+    """W1's LR_RECON_PSFREE (recon/ps-free.off wins); any failure to read it is off."""
+    try:
+        from lr_recon import proctable
+
+        return proctable.mode()
+    except Exception:  # noqa: BLE001
+        return "off"
+
+
 def proc_lstart(
     pid: int, run: Callable[..., Any] = run_bounded, unknown: str = ""
 ) -> str:
     """ps LSTART under TZ=UTC LC_ALL=C, so (pid, lstart) is an exact identity (§10 #12). Read in
     process first (W9); ps is the fallback, bounded. "" = no such process. A ps that timed out or
     could not start returns ``unknown`` — "" by default (the pre-W9 reading); a liveness caller
-    passes UNKNOWN so its own timeout is not read as a death."""
+    passes UNKNOWN so its own timeout is not read as a death.
+
+    W1: with LR_RECON_PSFREE=on the first read is KERN_PROC_PID, which also answers for root and
+    other-uid rows (proc_pidinfo refuses them); in shadow the answer below decides and a
+    disagreeing KERN_PROC_PID read is logged to the ps-free shadow."""
+    pf = _psfree_mode() if run is run_bounded else "off"
+    if pf == "on":
+        from lr_recon import proctable
+
+        got = proctable.proc_lstart(pid)
+        if got is not None:
+            return got
+    out = _proc_lstart_classic(pid, run, unknown)
+    if pf == "shadow" and out and out != UNKNOWN:
+        from lr_recon import proctable
+
+        proctable.shadow_point("store.proc_lstart", pid, out, proctable.proc_lstart(pid))
+    return out
+
+
+def _proc_lstart_classic(pid: int, run: Callable[..., Any], unknown: str) -> str:
+    """The pre-W1 read: proc_pidinfo in process, then a bounded ps."""
     if (
         INPROC_LSTART and run is run_bounded
     ):  # an injected ``run`` is a test's ps: honour it

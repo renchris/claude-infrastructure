@@ -503,10 +503,16 @@ class MutantsDie(Base):
         orig = O.env_rows
 
         def binds(
-            snap: Any, ttys: Any, roots: Any, failed: Any, mode: str, run: Any = None
+            snap: Any,
+            ttys: Any,
+            roots: Any,
+            failed: Any,
+            mode: str,
+            run: Any = None,
+            **kw: Any,
         ) -> Any:
             return orig(
-                snap, ttys, roots, failed, "on" if mode == "shadow" else mode, run
+                snap, ttys, roots, failed, "on" if mode == "shadow" else mode, run, **kw
             )
 
         self.dies(

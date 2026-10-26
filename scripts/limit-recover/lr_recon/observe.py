@@ -20,6 +20,7 @@ import time
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 from lr_recon import clock as _clock
+from lr_recon import proctable
 from lr_recon import store
 from lr_recon import types as T
 from lr_recon.clock import run_bounded, step
@@ -200,6 +201,94 @@ def read_ps(
     if stats is not None:
         stats["attempts"] = max(n1, n2)
     return procs, ttys
+
+
+# ── W1 (ZERO_HITL_ROTATION): the ps-free census, behind LR_RECON_PSFREE ────────────────────────────
+# off (the default) is the ps path above, unchanged. shadow keeps ps as the decider, reads the table
+# in process as well (a KERN_PROC_ALL before ps, so churn inside the ps call is not a mismatch, and
+# the full ps-free read after it) and logs one parity row a pass to recon/shadow/ps-free.jsonl —
+# counts, pids and token hashes, never argv. on reads in process and falls back to ps only when
+# KERN_PROC_ALL fails; an unread argv on a critical row degrades "ps-args" and the pass abstains.
+
+PsfreeRead = Callable[[], Tuple[Dict[int, T.ProcRow], Dict[int, str], Dict[str, Any]]]
+
+
+def _pf_info(info: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in info.items() if not k.startswith("_")}
+
+
+def read_census(
+    snap: T.Snapshot,
+    mode: str,
+    run: RunFn = run_bounded,
+    paths: Optional[T.Paths] = None,
+    stats: Optional[Dict[str, int]] = None,
+    pf_read: Optional[PsfreeRead] = None,
+    pre_read: Optional[Callable[[], Dict[int, proctable.KRow]]] = None,
+    ps_read: Optional[Callable[..., Tuple[Dict[int, T.ProcRow], Dict[int, str]]]] = None,
+) -> Tuple[Dict[int, T.ProcRow], Dict[int, str]]:
+    """(procs, ttys by pid) under ``mode``. Raises when no reader produced a table (observe degrades
+    "ps"). The pf/pre/ps seams are for tests; the defaults are the real readers."""
+    pf = pf_read or proctable.read_table
+    ps = ps_read or (lambda: read_ps(run, stats=stats))
+    if mode == "on":
+        try:
+            procs, ttys, info = pf()
+        except Exception as e:  # noqa: BLE001 — no in-process table: today's ps path decides
+            snap.degraded_why["ps-free"] = str(e)[:200] or type(e).__name__
+            proctable.shadow_log(
+                paths, {"ts": round(time.time(), 3), "mode": mode, "pf_ok": False,
+                        "pf_err": snap.degraded_why["ps-free"]},
+            )  # fmt: skip
+            return ps()
+        crit = list(info.get("critical_unread") or [])
+        if crit:
+            snap.degraded.append("ps-args")
+            snap.degraded_why["ps-args"] = "argv unread for %d critical pid(s): %s" % (
+                len(crit),
+                " ".join(str(p) for p in crit[:10]),
+            )
+        proctable.shadow_log(
+            paths, {"ts": round(time.time(), 3), "mode": mode, "pf_ok": True, "pf": _pf_info(info)}
+        )
+        return procs, ttys
+    if mode != "shadow":
+        return ps()
+    pre: Optional[Dict[int, proctable.KRow]] = None
+    try:
+        pre = (pre_read or proctable.kern_proc_all)()
+    except Exception:  # noqa: BLE001 — the bracket is optional: without it churn counts as mismatch
+        pre = None
+    t_ps = time.time()
+    m0 = time.monotonic()
+    ps_err: Optional[BaseException] = None
+    got: Optional[Tuple[Dict[int, T.ProcRow], Dict[int, str]]] = None
+    try:
+        got = ps()
+    except Exception as e:  # noqa: BLE001 — re-raised below, after the shadow row is written
+        ps_err = e
+    ps_ms = round((time.monotonic() - m0) * 1000.0, 1)
+    row: Dict[str, Any] = {
+        "ts": round(t_ps, 3), "mode": mode, "ps_ok": got is not None, "ps_ms": ps_ms,
+    }  # fmt: skip
+    try:
+        pf_procs, pf_ttys, info = pf()
+        row["pf_ok"] = True
+        row["pf"] = _pf_info(info)
+        if got is not None:
+            row["cmp"] = proctable.compare(
+                got[0], got[1], pf_procs, pf_ttys, pre=pre, young_after=int(t_ps) - 2
+            )
+    except Exception as e:  # noqa: BLE001 — the shadow never costs a pass
+        row["pf_ok"] = False
+        row["pf_err"] = str(e)[:200] or type(e).__name__
+    if ps_err is not None:
+        row["ps_err"] = str(ps_err)[:200] or type(ps_err).__name__
+    proctable.shadow_log(paths, row)
+    if ps_err is not None:
+        raise ps_err
+    assert got is not None
+    return got
 
 
 # ── C3.2-3: kitty instances and panes ────────────────────────────────────────────────────────────
@@ -543,6 +632,22 @@ def read_ps_env(
     return parse_ps_env(out)
 
 
+def _env_read(
+    run: RunFn,
+    pids: List[int],
+    psfree: str,
+    env_read: Optional[Callable[[List[int]], Dict[int, Dict[str, str]]]] = None,
+) -> Dict[int, Dict[str, str]]:
+    """KITTY_* env for ``pids``. W1 on-mode reads the KERN_PROCARGS2 env block in process (only
+    the _ENV_KEYS are extracted; the block can hold credentials) and falls back to ``ps -E`` when
+    it read nothing; every other mode is the ps read."""
+    if psfree == "on":
+        got = (env_read or (lambda ps_: proctable.read_env(ps_, tuple(sorted(_ENV_KEYS)))))(pids)
+        if got:
+            return got
+    return read_ps_env(run, pids)
+
+
 def kitty_of(pid: int, procs: Dict[int, T.ProcRow]) -> int:
     """The nearest live kitty ancestor of ``pid``, or 0."""
     for a in ancestors(pid, procs):
@@ -627,6 +732,8 @@ def env_rows(
     mode: str,
     run: RunFn = run_bounded,
     clock: Callable[[], float] = time.monotonic,
+    psfree: str = "off",
+    env_read: Optional[Callable[[List[int]], Dict[int, Dict[str, str]]]] = None,
 ) -> Dict[int, Tuple[int, int]]:
     """Judge every claude under a kitty whose ls failed (``failed``: kitty pid → its socket), plus, at
     most every PANE_BIND_ENV_HEALTHY_EVERY_S, every claude under a kitty that answered (the shadow
@@ -652,7 +759,7 @@ def env_rows(
     pids = _capped(under, failed)
     step()
     try:
-        envs = read_ps_env(run, pids)
+        envs = _env_read(run, pids, psfree, env_read)
     except Exception as e:  # noqa: BLE001 — no env read: nothing is bound, and the pass says why
         snap.degraded_why["pane-bind-env"] = str(e)[:200] or type(e).__name__
         return {}
@@ -794,15 +901,20 @@ def observe(
     rig: Optional[bool] = None,
     rig_keep: FrozenSet[str] = frozenset(),
     pane_bind_env: Optional[str] = None,
+    psfree: Optional[str] = None,
 ) -> T.Snapshot:
     """One census pass. Never raises: every instrument is fenced and degrades by name.
-    ``pane_bind_env`` overrides recon/pane-bind-env.mode (W14; tests and one-shot reads)."""
+    ``pane_bind_env`` overrides recon/pane-bind-env.mode (W14; tests and one-shot reads);
+    ``psfree`` overrides LR_RECON_PSFREE / recon/ps-free.off (W1). An injected ``run`` is a test's
+    ps, so with no explicit ``psfree`` it keeps the ps path."""
     snap = T.Snapshot(
         wall=time.time() if now is None else now, uptime_raw=_uptime_raw()
     )
     stats: Dict[str, int] = {}
+    if psfree is None:
+        psfree = proctable.mode(paths) if run is run_bounded else "off"
     try:
-        snap.procs, ttys = read_ps(run, stats=stats)
+        snap.procs, ttys = read_census(snap, psfree, run, paths, stats)
         snap.ttys = sorted(set(ttys.values()))
         snap.ps_attempts = stats.get("attempts", 0)
     except Exception as e:  # noqa: BLE001
@@ -841,6 +953,7 @@ def observe(
             failed,
             pane_bind_env_mode(paths) if pane_bind_env is None else pane_bind_env,
             run,
+            psfree=psfree,
         )
     except Exception as e:  # noqa: BLE001 — the kernel binding is advisory: it never costs a pass
         snap.degraded_why["pane-bind-env"] = str(e)[:200] or type(e).__name__
@@ -1005,6 +1118,8 @@ def untrusted(snap: T.Snapshot, prev: Optional[int]) -> str:
     least one); or the count collapsed against ``prev``, the previous pass's ps reading."""
     if "ps" in snap.degraded:
         return "ps degraded: " + snap.degraded_why.get("ps", "no reason recorded")
+    if "ps-args" in snap.degraded:  # W1 on-mode: a holder's argv was not read, so holders may undercount
+        return "ps-free args degraded: " + snap.degraded_why.get("ps-args", "no reason recorded")
     n = claude_count(snap)
     panes = sum(1 for p in snap.panes.values() if p.state == "claude")
     if n * 2 < panes:

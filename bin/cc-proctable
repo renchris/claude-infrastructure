@@ -1,0 +1,37 @@
+#!/bin/bash
+# cc-proctable — the process table read in process, never through /bin/ps (ZERO_HITL_ROTATION W1).
+#
+#   cc-proctable [--summary] [--json]     row/claude/zombie counts and read timings
+#   cc-proctable --lstart <pid>           ps LSTART of one pid (UTC, C names), root rows included
+#   cc-proctable --holders <sid>          live holders of a session: --resume argv + live registry rows
+#   cc-proctable --parity [--min N]       fold recon/shadow/ps-free.jsonl; exit 0 = ready for "on"
+#   cc-proctable --mode                   the LR_RECON_PSFREE mode the reconciler reads now
+#
+# WHY. /bin/ps is setuid root and walks every task's memory map and threads, so under 15-40/core
+# load it wedges: 15 blind reconciler passes at 42 s a call (2026-10-24), and multi-pid
+# `ps -o pid=,lstart= -p <list>` reads stuck 37-77 min (57730d18c, 19c297766). One sysctl
+# KERN_PROC_ALL reads the same table in ~3-5 ms (docs/research/midturn-account-move-2026-10-25/
+# REPORT.md §4.6). The implementation is lr_recon/proctable.py; this is its shell front door.
+#
+# Exit: 0 ok · 1 --lstart: no such process / --parity: not ready · 2 usage or unreadable ·
+#       3 the read finished but argv of a critical row (claude, kitty, a pane shell, claude's
+#       children) was not read, so a holder count may be low.
+# Never prints argv or env text: argv can carry an owed prompt and env can carry credentials.
+set -euo pipefail
+
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  dir="$(cd -P "$(dirname "$self")" && pwd)"
+  self="$(readlink "$self")"
+  case "$self" in /*) ;; *) self="$dir/$self" ;; esac
+done
+repo="$(cd -P "$(dirname "$self")/.." && pwd)"
+lr="$repo/scripts/limit-recover"
+if [ ! -f "$lr/lr_recon/proctable.py" ]; then
+  echo "cc-proctable: lr_recon/proctable.py not found under $lr" >&2
+  exit 2
+fi
+# /usr/bin/python3 is pinned, as the reconciler's plist pins it: the package is 3.9-compatible and
+# PATH may put another interpreter first.
+cd "$lr"
+exec /usr/bin/python3 -E -m lr_recon.proctable "$@"
