@@ -398,8 +398,10 @@ def build(**over):
     return r
 # The read time comes from the cache ts field (_quota_age_s), never an mtime.
 json.dump({"ts": time.time() - AGE_S, "rows": []}, open(cfg["cache_file"], "w"))
-# Local clock, as the board header prints it; two candidates absorb a minute boundary on a slow box.
-clocks = {(datetime.now() - timedelta(seconds=s)).strftime("%H:%M") for s in (AGE_S, AGE_S + 10)}
+# Local clock, as the board prints it (_hm: `9:04`, no zero pad, then AM/PM); two candidates
+# absorb a minute boundary on a slow box.
+clocks = {(lambda d: f"{d.hour % 12 or 12}:{d:%M}")(datetime.now() - timedelta(seconds=s))
+          for s in (AGE_S, AGE_S + 10)}
 WIN_OPEN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
 cells = lambda s: sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
 bad = []
