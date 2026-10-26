@@ -116,7 +116,7 @@ Only ⛔ when every remaining in-scope item waits on an open decision, and 📦 
 
 Hold test: ask "what would a successor reading only the disk get wrong?" A concrete answer (a rejected approach and why, a measurement contradicting the obvious reading, an operator preference given in words) is a real Hold, and its first action is to write that answer down, which turns it into a Recycle. No concrete answer means no Hold.
 
-A new worktree or a different account is not a reason to hand off: Recycle carries both, and `cc-lr switch` keeps the context. When choosing between recycle and handoff for a new worktree or account, read `~/.claude/commands/handoff.md`. If an account change is refused, read the refusal and fix the verb or the gate it names.
+Moving sessions between the operator's own accounts is routine: do it, never ask. A new worktree or another account is no reason to hand off: Recycle carries both and `cc-lr switch` keeps the context; to choose, read `~/.claude/commands/handoff.md`. If an account change is refused, fix the verb or gate the refusal names.
 
 ### The close message
 

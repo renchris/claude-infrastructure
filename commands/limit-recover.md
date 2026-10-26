@@ -78,6 +78,11 @@ tick or two; `claude-accounts --reset-report` shows each detection and how long 
 
 ## The fast path — `cc-lr recover <ref>`, then END THE TURN
 
+**Run every `cc-lr`, `lr-handoff.sh` and `handoff-fire.sh` command as the only command in its Bash
+call**, spelled bare `cc-lr` or `~/.claude/...`: no pipe, no `;`/`&&` chain, no `cd`, no file
+redirect (`timeout N` and `2>&1` are fine). Only that shape matches the allow rules (migration 0084);
+anything else goes to the auto-mode classifier, which refuses it during an outage.
+
 **The whole fleet, or one account, is TWO commands: one that lists, one that rotates (2026-10-06).**
 
 ```bash
