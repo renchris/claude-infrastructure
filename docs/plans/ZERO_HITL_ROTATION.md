@@ -74,6 +74,11 @@ cleared the terminal blocker; briefs now live in `~/.reso/zero-hitl-2026-10-25/b
   brief now bans prompting commands by name.
 - Next: W3-W8 wait on `69c31338d082` (recommend build-with-switches-off, 65%) and `be5c5e83800f` (pointer
   lanes, 88% after P-P1). A and B (rebalancer landing band, burn meter) are ungated and fire next.
+- **A and B DONE (2026-10-26 09:45 CDT), inert and live.** A (pane 153): `5b6a8e202` `claude-accounts --rebal-band
+  --json` (fixture sinks next4, next3; live today none, next3 already at 81%), plus trunk-red test fixes `f66b205aa`
+  and `4340ca5f2`; `bin/claude-accounts` is free for W5a. B (pane 154): `9c535609b` `lr_burn.py`, replayed hours
+  0.0% off the independent census; priced pp/h vs measured pace ranges 0.20-1.46 by account-hour, so W8 must
+  apportion with prices but meter with the account's own pace. Nothing ungated remains: W3-W8 and C-F wait on §3.
 
 ## 1. Why this shape
 
