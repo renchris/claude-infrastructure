@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""cc-billing — which account a session bills, at a time, beside its home store and identity.
+
+The CLI over scripts/lib/billing.py (wave W2, docs/plans/ZERO_HITL_ROTATION.md); run `cc-billing
+--help`. Off by default (CC_BILLING): billing then equals the home store, today's attribution.
+
+  cc-billing --sid S [--at T] [--home ACCT|DIR] [--json | --field home|billing|identity]
+  cc-billing --billed-to ACCT [--at T] [--json]
+  cc-billing --mismatched [--at T] [--json]
+  cc-billing --status [--json]
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "scripts", "lib"))
+
+import billing  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(billing.main(sys.argv[1:]))
