@@ -27,9 +27,10 @@ setup() {
   printf '{"t":100,"sid":"S1","state":"committed","billing":"next4","prev_billing":"next3"}\n' > "$LEDGER"
   # a python3 that fails, for proving the fast path never forks one
   NOPY="$BATS_TEST_TMPDIR/nopy"
+  # shellcheck source=helpers/cc-stub.bash disable=SC1091  # resolved at runtime beside this file
+  . "$BATS_TEST_DIRNAME/helpers/cc-stub.bash"
   mkdir -p "$NOPY"
-  printf '#!/bin/sh\necho python-called >&2\nexit 99\n' > "$NOPY/python3"
-  chmod +x "$NOPY/python3"
+  cc_stub "$NOPY" python3 $'#!/bin/sh\necho python-called >&2\nexit 99\n'
 }
 
 # keys <sid> <at> <home>: "billing identity home" from each face, one line per face.
