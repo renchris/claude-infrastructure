@@ -20641,6 +20641,7 @@ hf_recycle_delegate_ok() { # → 0 the watcher types the first /exit · 1 this p
   [ "${CC_RECYCLE_DELEGATE_EXIT:-on}" != off ] || return 1
   [ -n "${RCY_CALLER_PID_ARG:-}" ] && [ -n "${cmdfile:-}" ] || return 1
   [ -z "${RESUME_LAUNCHER:-}" ] && [ "${RCY_REMOTE:-0}" != 1 ] || return 1
+  # shellcheck disable=SC2031  # set by hf_recycle_defer's subshell, which IS the deferred child reading it here
   [ "${RCY_TRANSPLANTED_SOURCE:-0}" != 1 ] && [ "${RCY_DEFERRED:-0}" != 1 ] || return 1
   [ "${HF_EXIT_READBACK:-on}" != off ] || return 1
   kill -0 "$RCY_CALLER_PID_ARG" 2>/dev/null
