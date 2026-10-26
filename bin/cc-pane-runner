@@ -186,11 +186,20 @@ _husk_row() { # $1=reason [key=value …]
     [ -n "$_c" ] && [ -r "$_c" ] && { _q="$_c"; break; }
   done
   [ -n "$_q" ] || { _detail "pane kept with no retry row" "pane-close-queue.sh not found"; return 0; }
-  _t="$(tty 2>/dev/null)" || _t=""
+  _t="$(_tty_name)"
   # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
   ( . "$_q" && pcq_add husk "$KITTY_WINDOW_ID" reason="$1" "${@:2}" kitty_pid="${KITTY_PID:-}" \
       kitty_sock="${KITTY_LISTEN_ON:-}" tty="$_t" producer=cc-pane-runner ) >/dev/null 2>&1 \
     || _detail "pane kept with no retry row" "pcq_add husk failed"
+  return 0
+}
+# The path of the tty on fd 0, asked of the fd itself (fcntl F_GETPATH, 50 on Darwin), never `tty(1)`:
+# ttyname lstats /dev entries in readdir order, and on a wedged /dev that walk sleeps forever behind
+# one half-revoked node (incident 2026-10-25). Empty when fd 0 is not a tty or there is no perl; the
+# row's `tty=` then stays empty, which only costs the drainer its typed-in check for this pane.
+_tty_name() {
+  [ -t 0 ] && [ -x /usr/bin/perl ] || return 0
+  /usr/bin/perl -e 'my $b = "\0" x 1024; fcntl(STDIN, 50, $b) or exit 1; $b =~ s/\0.*//s; print $b' 2>/dev/null
   return 0
 }
 
@@ -434,7 +443,9 @@ _hold() { # $1=fs|unreadable — exits 0 only once removing this pane cannot emp
   case "$_s" in ''|*[!0-9]*) _s=5 ;; esac
   _hold_paint "$_c"; _w="$_s"
   while :; do
-    /bin/sleep "$_w"; _n=$((_n + 1))
+    _rc=0; _hold_wait "$_w" || _rc=$?
+    [ "$_rc" = 3 ] && _hold_lost
+    _n=$((_n + 1))
     if [ -n "${KITTY_PID:-}" ] && ! kill -0 "$KITTY_PID" 2>/dev/null; then _hold_done; fi
     if [ -n "${CC_PANE_HOLD_MAX_POLLS:-}" ] && [ "$_n" -gt "$CC_PANE_HOLD_MAX_POLLS" ]; then exit 1; fi
     _rc=0; _o="$(cc_run "$_GUARD" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-hold 2>&1)" || _rc=$?
@@ -461,6 +472,31 @@ _hold_paint() { # $1=fs|unreadable
   else _verdict --state "${_PV_STATE:-DONE}" --guard unreadable || _say wait "kitty didn't answer" "closes when it does"; fi
 }
 _hold_done() { _DONE=1; _pane_exit_tail closed; _detail "held pane — removing it is safe now, closing it"; exit 0; }
+# A held runner whose pty master is gone holds nothing (RCA R2, second half): the window it guarded
+# is already closed, and holding on would keep the runner and its slave alive on a dead tty until the
+# guard or KITTY_PID let go, the precondition the 2026-10-25 /dev wedge was built from. No shell is
+# exec'd onto a tty nobody can read, so it ends as a planned exit, with its own tail.
+_hold_lost() { _DONE=1; _pane_exit_tail master-lost; _detail "held pane — its terminal is gone (pty master closed), ending the hold" "nothing left to close"; exit 0; }
+# The hold's wait: $1 s, cut short with rc 3 once fd 0, the pane's pty slave, is readable with
+# nothing queued. That is the master's close (it sets TS_ZOMBIE and flushes the queues, so select
+# reports EOF); a live pane with keys typed into it is readable WITH bytes queued (FIONREAD,
+# 0x4004667f on Darwin), so nothing is ever consumed and the wait polls on each second. The fd is
+# asked, never a path. Not a tty, or no perl: a plain sleep, as before.
+_hold_wait() { # $1=seconds → rc 0 waited · 3 master lost
+  if [ -t 0 ] && [ -x /usr/bin/perl ]; then
+    /usr/bin/perl -e 'use Time::HiRes qw(time); my $end = time + $ARGV[0];
+      while ((my $left = $end - time) > 0) {
+        my $r = ""; vec($r, 0, 1) = 1;
+        next unless select($r, undef, undef, $left) > 0;
+        my $q = pack("i", 0); ioctl(STDIN, 0x4004667f, $q) or exit 0;
+        exit 3 if unpack("i", $q) == 0;
+        select(undef, undef, undef, $left < 1 ? $left : 1);
+      }
+      exit 0' "$1"
+    return
+  fi
+  /bin/sleep "$1"
+}
 
 # A non-zero exit that keeps the shell. One line, or none (one event, one line):
 #   · rc 3 / 9 from a fleet launcher — lr-fire-resume already printed the refusal and why;
@@ -502,7 +538,9 @@ _kept_line() { # $1=verb $2=rc $3=1 iff fleet launch line $4=claude_started
 #                   reader can tell its own launch's record from an older one in the same window id
 #   ts              epoch seconds at which the command returned
 #   tail            what the pane became, added once decided and rewritten as a hold moves on:
-#                   closed · hold:fs · hold:unreadable · keep:<why>. Absent = not decided yet.
+#                   closed · hold:fs · hold:unreadable · master-lost · keep:<why>. Absent = not
+#                   decided yet. master-lost: a hold ended because the pane's pty master closed
+#                   under it (the window is already gone; nothing was closed from here).
 #
 # The self-close watcher (scripts/handoff-fire.sh hf_pane_exit_tail) waits for `tail` on a record of
 # its own launch rather than reading `ts` alone, because the record is written before the decision.

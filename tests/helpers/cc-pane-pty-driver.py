@@ -13,6 +13,16 @@
 # IS STILL OPEN, reaps it, waits for the group to empty, and only then closes the master. The child's
 # pid goes to $T/pty-child-pid at once, so the bats teardown can kill the group if this process is
 # itself SIGKILLed. Seam: PTY_DRIVER_START_S, the start-up budget (default 30 s).
+#
+# PTY_DRIVER_MODE picks what is done to the child (tests/lockup-2026-10-25-preconditions.bats § 4):
+#   keys         (default) once held, type ^C ^\ ^Z, release the guard and wait for the close
+#   master-lost  once held, CLOSE THE MASTER with the child alive (RCA R2) and wait up to
+#                PTY_DRIVER_LOST_S (default 60) for it to notice; prints its exit and `tail`. The one
+#                mode whose reap runs on a closed master, so its test must start nothing that opens
+#                the slave.
+#   exit         wait up to PTY_DRIVER_START_S for the child to exit on its own; prints its exit
+# The child first writes its slave's path to $T/pty-slave-path (F_GETPATH on fd 0: no /dev walk).
+import fcntl
 import json
 import os
 import pty
@@ -24,10 +34,17 @@ import time
 T, runner = os.environ["T"], sys.argv[1]
 pid, fd = pty.fork()
 if pid == 0:
+    try:
+        with open(T + "/pty-slave-path", "w") as f:
+            path = fcntl.fcntl(0, fcntl.F_GETPATH, b"\0" * 1024).rstrip(b"\0")
+            f.write(path.decode() + "\n")
+    except Exception:
+        pass
     os.execv("/bin/bash", ["/bin/bash", runner])
 with open(T + "/pty-child-pid", "w") as f:
     f.write("%d\n" % pid)
 reaped = None  # the child's wait status once waitpid has collected it
+master_open = True  # False once master-lost closed it: the number may be reused, never close it twice
 
 
 def reap():
@@ -52,6 +69,8 @@ def reap():
         except OSError:
             break
         time.sleep(0.05)
+    if not master_open:
+        return
     try:
         os.close(fd)
     except OSError:
@@ -92,10 +111,32 @@ def ended():
     return st
 
 
+def wait_exit(
+    budget, live, why
+):  # → (wait status, seconds); `live`: the master is still open
+    t0 = time.time()
+    while True:
+        if live:
+            drain()
+        st = ended()
+        if st is not None:
+            return st, time.time() - t0
+        if time.time() > t0 + budget:
+            sys.exit(why % (budget, tail()))
+        time.sleep(0.1)
+
+
 def main():
-    end = time.time() + float(
+    global master_open
+    mode = os.environ.get("PTY_DRIVER_MODE", "keys")
+    start_s = float(
         os.environ.get("PTY_DRIVER_START_S", "30")
     )  # bash + stubs under load
+    if mode == "exit":
+        st, took = wait_exit(start_s, True, "not exited after %d s: tail %r")
+        print("exit=%d after %ds" % (os.waitstatus_to_exitcode(st), took))
+        return
+    end = time.time() + start_s
     while tail() != "hold:fs":
         drain()
         time.sleep(0.1)
@@ -110,6 +151,17 @@ def main():
                     os.path.exists(T + "/guard-log") and open(T + "/guard-log").read(),
                 )
             )
+    if mode == "master-lost":
+        os.close(fd)
+        master_open = False
+        lost_s = float(os.environ.get("PTY_DRIVER_LOST_S", "60"))
+        st, took = wait_exit(
+            lost_s, False, "still held %d s after its master closed: tail %r"
+        )
+        print(
+            "exit=%d tail=%s after %ds" % (os.waitstatus_to_exitcode(st), tail(), took)
+        )
+        return
     for ch in (b"\x03", b"\x1c", b"\x1a"):
         os.write(fd, ch)
         time.sleep(0.3)

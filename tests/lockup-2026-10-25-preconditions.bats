@@ -15,7 +15,8 @@
 #   1. children of the runner start with default dispositions for HUP INT QUIT TERM TSTP, even when
 #      the runner itself was launched with some of them ignored;
 #   2. cc-pane-verdict never opens a tty path without O_NONBLOCK, and paints through an fd it is given;
-#   3. the pty test driver leaves no member of its child's process group alive on any exit path.
+#   3. the pty test driver leaves no member of its child's process group alive on any exit path;
+#   4. a held runner ends when its pty master closes, and names its tty without a /dev walk (§ 4).
 # Each arm is RED on the pre-fix tree (751b2ed5f); the TAPs of both runs are in the commit body.
 # CC_PTY_DRIVER points arm 3 at another copy of the driver (the pre-fix replay).
 
@@ -164,4 +165,62 @@ _stub_runner() {
   wait_until 10 gone "$dpid" || { echo "the driver ignored TERM"; false; }
   g="$(cat "$T/grandchild")"
   wait_until 5 gone "$g" || { echo "pid $g of the child's group outlived the driver"; false; }
+}
+
+# ── 4. a held runner lets go of a dead tty, and never walks /dev for its name (lane F2) ─────────────
+# RCA R2, second half: the held runner did not notice its master was gone and held on a dead tty
+# until the guard or KITTY_PID let go. 4a closes the master of a REAL held runner on purpose; nothing
+# in it opens the slave (the painter paints a file through CC_PANE_RUNNER_TTY, the guard opens no tty),
+# and CC_PANE_HOLD_MAX_POLLS ends even the pre-fix runner by itself. RED on 1bceb92c0 (TAPs in the
+# commit body): 4a reads exit=7 tail=keep:fallback, 4b and 4c find tty(1) asked.
+
+_refusing_guard() { # every refuse-mode ask: the last pane of a fullscreen window
+  cc_stub "$S" fsguard '#!/bin/bash
+printf "%s\n" "$*" >> "$T/guard-log"
+echo "kitty-fullscreen-guard: refused (refused-fs) kitty window 289 scope=pane mode=refuse: state=FS" >&2
+exit 3'
+}
+_tty_spy() { # tty(1) on PATH: asking it is the defect; its answer is a name no pty has
+  cc_stub "$S" tty '#!/bin/bash
+: > "$T/tty-asked"
+echo /dev/ttys-from-tty1'
+}
+
+@test "4a: a held runner whose pty master closes ends the hold as master-lost and execs no shell" {
+  /usr/bin/python3 -I -c 'import pty' 2>/dev/null || skip "no python3 pty module (an environment precondition)"
+  _refusing_guard
+  export CC_PANE_HOLD_STEP_S=1 CC_PANE_HOLD_MAX_POLLS=4 CC_PANE_RUNNER_TTY="$T/tty"; : > "$T/tty"
+  PTY_DRIVER_MODE=master-lost PTY_DRIVER_START_S=120 PTY_DRIVER_LOST_S=120 \
+    run /usr/bin/perl -e 'alarm 300; exec { $ARGV[0] } @ARGV' /usr/bin/python3 -I "$DRIVER" "$RUNNER"
+  echo "# $output" >&3
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == "exit=0 tail=master-lost after "* ]] || { echo "$output"; false; }
+  [ ! -e "$T/shell-ran" ] || { echo "a shell was exec'd onto the dead tty"; false; }
+}
+
+@test "4b: a kept pane's husk row names its tty from fd 0, without asking tty(1)" {
+  /usr/bin/python3 -I -c 'import pty' 2>/dev/null || skip "no python3 pty module (an environment precondition)"
+  cc_stub "$S" fsguard '#!/bin/bash
+exit 2'
+  _tty_spy
+  export CC_PANE_RUNNER_TTY="$T/tty"; : > "$T/tty"
+  PTY_DRIVER_MODE=exit PTY_DRIVER_START_S=120 \
+    run /usr/bin/perl -e 'alarm 300; exec { $ARGV[0] } @ARGV' /usr/bin/python3 -I "$DRIVER" "$RUNNER"
+  [[ "$output" == "exit=7 after "* ]] || { echo "$output"; false; }
+  [ ! -e "$T/tty-asked" ] || { echo "_husk_row asked tty(1), a /dev walk"; false; }
+  want="$(cat "$T/pty-slave-path")"
+  [ -n "$want" ] || { echo "the driver's child recorded no slave path"; false; }
+  run jq -r .tty "$T/q/husk-289.json"
+  [ "$output" = "$want" ] || { echo "row tty [$output], slave [$want]"; false; }
+}
+
+@test "4c: with no tty on fd 0 the row's tty is empty and tty(1) is not asked" {
+  cc_stub "$S" fsguard '#!/bin/bash
+exit 2'
+  _tty_spy
+  run "$RUNNER" </dev/null
+  [ "$status" -eq 7 ] || { echo "$output"; false; }
+  [ ! -e "$T/tty-asked" ] || { echo "_husk_row asked tty(1), a /dev walk"; false; }
+  run jq -r .tty "$T/q/husk-289.json"
+  [ "$output" = "" ] || { echo "row tty [$output]"; false; }
 }
