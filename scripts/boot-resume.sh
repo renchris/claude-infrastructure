@@ -123,6 +123,8 @@
 #   CC_NOTIFY_BIN · CC_RESUME_LAUNCH_BIN · CC_KEEPALIVE_BIN · CC_LAUNCHCTL_BIN · CC_KEEPALIVE_INTERVAL ·
 #   CC_BACKLOG_BIN (the no-role durable fallback; a test MUST stub it or it writes the live ledger) ·
 #   CC_BOOT_RESUME_ROSTER_DIR · CC_SHUTDOWN_TOMB_DIR · CC_BOOT_RESUME_TOMB_BURST (s, default 120) ·
+#   CC_BOOT_RESUME_TOMB_AFTERLIFE_S (s, default 120: a heartbeat tick later than that after the last
+#   burst means it was not the shutdown) ·
 #   CC_RESUME_LAYOUT_BIN · CC_RESUME_CLASSIFY_BIN · CC_KITTY_SOCKET_BIN · CC_OPEN_BIN ·
 #   CC_BOOT_RESUME_KITTY_TRIES / _KITTY_POLL (wait for a kitty to come up; tests set POLL=0) ·
 #   CC_TEARDOWN_DIR (self-close markers) · CC_BOOT_RESUME_SKIP_RETIRED (off = resume a session that
@@ -604,8 +606,19 @@ esac
 #    roster unreadable here. A start EQUAL to the anchor counts (an event anchored on its own tick).
 roster=""; roster_start=0
 # What answered, for restore v2: the roster files read (their paneUUID finds a recycle's successor),
-# the heartbeat dirs (their kitty tree gives columns 8-9) and their hb.session.tsv rows.
+# the heartbeat dirs (their kitty tree gives columns 8-9) and their hb.session.tsv rows. A shutdown
+# tombstone that answered or joined is one of those files too: it is the session's registry row
+# (paneUUID included) plus endedAt, so the recycle rung and the mail carry read it like a roster row.
 SRC_FILES=""; HB_DIRS=""; HB_META=""
+# shellcheck disable=SC2016  # a jq program
+JQ_SRC_ROWS='def src_rows: .[] | if type == "array" then .[] elif (type == "object" and has("sessions")) then (.sessions // [])[] else . end;'
+tomb_files() { # <tsv rows, sid in column 3> → each row's tombstone path, one per line
+  local s
+  printf '%s\n' "$1" | cut -f3 | while IFS= read -r s; do
+    [ -n "$s" ] && [ -f "$TOMB_DIR/$s.json" ] && printf '%s\n' "$TOMB_DIR/$s.json"
+  done
+  return 0
+}
 if [ -z "$EVENT" ]; then
   for f in "$ROSTER_DIR"/reboot-*.roster.json; do
     [ -f "$f" ] || continue
@@ -765,6 +778,8 @@ if [ -n "$SOURCE" ] && { [ -z "$EVENT" ] || [ "$EVENT_PREV_BOOT" = 1 ]; } && [ -
   if [ -n "$late_rows" ]; then
     TOMB_JOINED="$(printf '%s\n' "$late_rows" | grep -c .)"
     read_rows "$late_rows"
+    SRC_FILES="${SRC_FILES}$(tomb_files "$late_rows")
+"
     # The sessions died at the shutdown, not at the snapshot: that is the classifier's anchor.
     t_last="$(printf '%s\n' "$late_rows" | awk -F'\t' '$6 > m { m = $6 } END { print m + 0 }')"
     [ "$t_last" -gt "$ANCHOR" ] && ANCHOR="$t_last"
@@ -857,6 +872,32 @@ HBD
 #    A shutdown SIGHUPs every pane together (measured: 19 sessions ended inside 4 s at 15:25:27-31
 #    on 2026-09-30), while a closed pane is a lone earlier stamp. Where the kernel had already set
 #    kern.willshutdown when the hook ran, those tombstones are taken outright instead.
+#    A burst is not the shutdown when the machine kept LIVING after it. Closing a kitty window of
+#    four panes is a burst too (4 sessions at 08:25 on 2026-10-25, then five hours of heartbeat), and
+#    if the boot that follows left no SessionEnd at all (a lockup, a power loss) that burst is the
+#    last one, so the rule above alone would resume four sessions the operator closed and miss the
+#    ones that were live. The heartbeat ticks every ~5 min (300-1500 s at load) while the box runs,
+#    and a shutdown stops it: on 2026-10-25 the last tick was 13:09:42, the burst 13:15:02-07, the
+#    next kernel 13:16:52, and no tick fell between the burst and the boot. Of the 11 earlier bursts
+#    of 2-4 sessions that census.log covers that week, each was followed by a tick 6-469 s later. So
+#    a burst with a tick more than TOMB_AFTERLIFE s after its last stamp (120: the whole 2026-10-25 shutdown, burst to new
+#    kernel, took 105 s) is a closed window, and DETECT falls through to the registry ghosts — the
+#    record a death without SessionEnd leaves. No heartbeat at all is no evidence: the burst stands.
+#    A kern.willshutdown set is the kernel's word and is not second-guessed.
+TOMB_AFTERLIFE="${CC_BOOT_RESUME_TOMB_AFTERLIFE_S:-120}"
+hb_last_tick() { # <after> → the newest heartbeat tick in (<after>, BOOT], or "": census.log and every kitty's hb.start
+  local r="${HB_ROOT:-}" f t m
+  [ -n "$r" ] && [ -d "$r" ] || return 0
+  m="$(awk -F'\t' -v a="$1" -v b="$BOOT" '$1 ~ /^[0-9]+$/ && $1 + 0 > a + 0 && $1 + 0 <= b + 0 && $1 + 0 > m + 0 { m = $1 }
+                                         END { if (m != "") print m }' "$r/census.log" 2>/dev/null)"
+  for f in "$r"/*/*/hb.start; do
+    [ -f "$f" ] || continue
+    t="$(head -n 1 "$f" 2>/dev/null | awk '{ print $1 }')"
+    case "$t" in ''|*[!0-9]*) continue ;; esac
+    [ "$t" -gt "$1" ] && [ "$t" -le "$BOOT" ] && { [ -z "$m" ] || [ "$t" -gt "$m" ]; } && m="$t"
+  done
+  printf '%s' "$m"
+}
 if [ -z "$SOURCE" ] && [ -z "$EVENT" ] && [ -d "$TOMB_DIR" ]; then
   tomb_rows="$(for t in "$TOMB_DIR"/*.json; do
                  [ -f "$t" ] && jq -c 'select(type == "object")' "$t" 2>/dev/null
@@ -869,11 +910,22 @@ if [ -z "$SOURCE" ] && [ -z "$EVENT" ] && [ -d "$TOMB_DIR" ]; then
             (map(.endedAt) | max) as $last
             | map(select(.endedAt >= $last - $burst)) | group_by(.session_id) | map(max_by(.endedAt))[]
             | [(.account|cell), (.cwd|cell), (.session_id|cell), (.name|cell), (.branch|cell),
-               (.endedAt|tostring)] | @tsv
+               (.endedAt|tostring), (.hostShutdown == true | tostring)] | @tsv
           end' 2>/dev/null)"
+  t_wsd="$(printf '%s\n' "$tomb_rows" | cut -f7 | sort -u)"
+  if [ -n "$tomb_rows" ] && [ "$t_wsd" != true ]; then   # no pipe into grep -q: under pipefail a match can read as false
+    t_end="$(printf '%s\n' "$tomb_rows" | awk -F'\t' '$6 > m { m = $6 } END { print m + 0 }')"
+    t_tick="$(hb_last_tick "$((t_end + TOMB_AFTERLIFE))")"
+    if [ -n "$t_tick" ]; then
+      echo "boot-resume: the last tombstone burst ($(printf '%s\n' "$tomb_rows" | grep -c .) session(s), ended $(date -r "$t_end" +%H:%M:%S 2>/dev/null || echo "$t_end")) is not the shutdown: the heartbeat ticked $((t_tick - t_end))s after it — a closed window, not a reboot; trying the registry" >&2
+      tomb_rows=""
+    fi
+  fi
   if [ -n "$tomb_rows" ]; then
     SOURCE=tombstones; SOURCE_LABEL="shutdown tombstones"
     ANCHOR="$(printf '%s\n' "$tomb_rows" | awk -F'\t' '$6 > m { m = $6 } END { print m + 0 }')"
+    # The tombstones ARE the roster now; a distrusted heartbeat's own (empty) roster says nothing.
+    SRC_FILES="$(tomb_files "$tomb_rows")"
     read_rows "$tomb_rows"
   fi
 fi
@@ -979,11 +1031,12 @@ recycle_successor() {
   [ -n "$eng" ] || return 0
   ets="${eng#*	}"; [ -n "${eng%%	*}" ] && pane="${eng%%	*}"
   if [ -n "$pane" ] && [ -n "$SRC_FILES" ]; then
-    s="$(printf '%s' "$SRC_FILES" | tr '\n' '\0' | xargs -0 cat 2>/dev/null | jq -rs --arg p "$pane" --arg o "$old" '
-          [ .[] | (if type == "array" then . else (.sessions // []) end)[]
+    s="$(printf '%s' "$SRC_FILES" | tr '\n' '\0' | xargs -0 cat 2>/dev/null | jq -rs --arg p "$pane" --arg o "$old" "$JQ_SRC_ROWS"'
+          [ src_rows
             | select(type == "object" and ((.paneUUID // "") | tostring) == $p
-                     and (.session_id // "") != "" and .session_id != $o) | .session_id ] | first // empty' 2>/dev/null)"
-    [ -n "$s" ] && { printf '%s (in the roster, pane %s; recycle-engaged %sZ)' "$s" "$pane" "$ets"; return 0; }
+                     and (.session_id // "") != "" and .session_id != $o)
+            | [.session_id, (if .endedAt != null then "a shutdown tombstone" else "the roster" end)] ] | first // empty | @tsv' 2>/dev/null)"
+    [ -n "$s" ] && { printf '%s (in %s, pane %s; recycle-engaged %sZ)' "${s%%	*}" "${s#*	}" "$pane" "$ets"; return 0; }
   fi
   if [ -n "$pane" ] && [ -f "$REGISTRY_DIR/$pane.json" ]; then
     s="$(jq -r --arg o "$old" --arg ts "$mts" --argjson hi "$BOOT" '
@@ -1005,6 +1058,42 @@ recycle_successor() {
   done <<EOF
 $(find "$(dirname "$4")" -maxdepth 1 -name '*.jsonl' -newer "$TEARDOWN_DIR/$old.json" 2>/dev/null)
 EOF
+  return 0
+}
+sid_live() { # <session id or pane number> → rc 0 when a session of this boot holds it
+  local k="$1" kb p
+  [ -n "$k" ] || return 1
+  [ "$RESTORE_V2" = 1 ] && grep -qxF "$k" "$EVENT_DIR/launched" 2>/dev/null && return 0
+  kb="$(boottime)"; case "$kb" in ''|*[!0-9]*) kb=0 ;; esac   # the kernel boot, also in event mode
+  for p in $(for f in "$REGISTRY_DIR"/*.json; do [ -f "$f" ] && cat "$f" && echo; done 2>/dev/null \
+             | jq -r --arg k "$k" --argjson kb "$kb" 'select(type == "object"
+                 and ((.session_id // "") == $k or ((.paneUUID // "") | tostring) == $k)
+                 and ((((.startedAt // 0) | if type == "number" then . else 0 end) / 1000) >= $kb))
+               | .pid // empty | tostring' 2>/dev/null); do
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$p" 2>/dev/null && return 0
+  done
+  return 1
+}
+# ── RESUMED THIS BOOT AND GONE SINCE (2026-10-26). The per-boot marker (same_boot) is what stops a
+#    second run for a boot that was handled; with it removed by hand, every source above still lists
+#    the sessions of the shutdown, including one the operator resumed by hand after the boot and then
+#    recycled or ended. Nothing holds it, so the launcher's holder probe reads 0 and it would come
+#    back a second time (of 5 such sessions measured on 2026-10-25, the self-close rule above would
+#    have skipped 1).
+#    The sid-keyed evidence: a user/assistant record in its transcript AFTER this boot's kernel
+#    boot, and no session of this boot holding it now. Reboots only — in an event the sessions of
+#    this boot are exactly what is being restored. ──
+BOOT_ISO="$(date -u -r "$BOOT" +%Y-%m-%dT%H:%M:%S 2>/dev/null)"
+resumed_this_boot() { # <sid> <cwd> → "<last activity>" when it was active after the boot and is not held now
+  local f a slug
+  [ -z "$EVENT" ] && iso_sec "$BOOT_ISO" && [ -n "$2" ] || return 0
+  slug="$(printf '%s' "$2" | tr -c 'A-Za-z0-9' '-')"
+  for f in "$HOME"/.claude*/projects/"$slug"/"$1".jsonl; do   # every account: a hand-resume may move it
+    [ -f "$f" ] && [ "$(stat -f %m "$f" 2>/dev/null || echo 0)" -gt "$BOOT" ] || continue
+    a="$(last_activity "$f")"
+    iso_sec "$a" && [[ "$a" > "$BOOT_ISO" ]] && ! sid_live "$1" && { printf '%s' "$a"; return 0; }
+  done
   return 0
 }
 RETIRED=""; n_retired=0
@@ -1053,6 +1142,16 @@ if [ "${CC_BOOT_RESUME_SKIP_RETIRED:-on}" != off ] && [ "$n_open" -gt 0 ]; then
           continue
         fi
       fi
+    fi
+    rb_act="$(resumed_this_boot "$r_sid" "$(unpad "$k_cwd")")"
+    if [ -n "$rb_act" ]; then
+      r_alias="$(map_account "$r_acct")"; r_launcher=""
+      command -v cc_acct_launcher_for_name >/dev/null 2>&1 && r_launcher="$(cc_acct_launcher_for_name "$r_alias")"
+      r_name="$(unpad "$k_name")"; r_cwd="$(unpad "$k_cwd")"
+      RETIRED="${RETIRED}  - ${r_name:-${r_sid:0:8}} (${r_sid}): already resumed after this boot (last activity ${rb_act}Z, boot ${BOOT_ISO}Z) and no longer running — to bring it back: cd '${r_cwd:-.}' && ${r_launcher:-claude} --resume ${r_sid}
+"
+      n_retired=$((n_retired + 1))
+      continue
     fi
     KEPT="${KEPT}${k_acct}	${k_cwd}	${k_sid}	${k_name}	${k_br}
 "
@@ -1377,22 +1476,8 @@ EARLY_TO=""; EARLY_KIND=""; BL_PID=""; BL_OUT=""
 #    "nothing was told" over 26 resumed sessions. The ladder: the reboot's owner session (the one
 #    that ran alarm-reboot-prep.sh, when it is back), else the desk role, else a lead role whose
 #    session is live (*-lead, orchestrator; re-resolved by cc-restore-rebind first), else the backlog.
-#    Live = this restore launched it, or a registry row started this boot names it with a running pid. ──
-sid_live() { # <session id or pane number> → rc 0 when a session of this boot holds it
-  local k="$1" kb p
-  [ -n "$k" ] || return 1
-  [ "$RESTORE_V2" = 1 ] && grep -qxF "$k" "$EVENT_DIR/launched" 2>/dev/null && return 0
-  kb="$(boottime)"; case "$kb" in ''|*[!0-9]*) kb=0 ;; esac   # the kernel boot, also in event mode
-  for p in $(for f in "$REGISTRY_DIR"/*.json; do [ -f "$f" ] && cat "$f" && echo; done 2>/dev/null \
-             | jq -r --arg k "$k" --argjson kb "$kb" 'select(type == "object"
-                 and ((.session_id // "") == $k or ((.paneUUID // "") | tostring) == $k)
-                 and ((((.startedAt // 0) | if type == "number" then . else 0 end) / 1000) >= $kb))
-               | .pid // empty | tostring' 2>/dev/null); do
-    case "$p" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$p" 2>/dev/null && return 0
-  done
-  return 1
-}
+#    Live = this restore launched it, or a registry row started this boot names it with a running pid
+#    (sid_live, defined before the retired filter, which asks it too). ──
 PAGE_TO=""; PAGE_KIND=""
 resolve_page_target() { # sets PAGE_TO and PAGE_KIND; rc 1 when nobody can be told
   local t r
@@ -1619,8 +1704,8 @@ EOF
   #     cursors by what landed). A pane two rows claim is carried to neither: nobody can say whose it is.
   n_mail_carried=0
   if [ "$n_adm" -gt 0 ] && [ -n "$SRC_FILES" ] && [ -f "$MAILBOX_LIB" ]; then
-    PANES="$(printf '%s' "$SRC_FILES" | tr '\n' '\0' | xargs -0 cat 2>/dev/null | jq -rs --arg adm " $(printf '%s\n' "$ADMITTED" | cut -f2 | tr '\n' ' ')" '
-        [ .[] | (if type == "array" then . else (.sessions // []) end)[]
+    PANES="$(printf '%s' "$SRC_FILES" | tr '\n' '\0' | xargs -0 cat 2>/dev/null | jq -rs --arg adm " $(printf '%s\n' "$ADMITTED" | cut -f2 | tr '\n' ' ')" "$JQ_SRC_ROWS"'
+        [ src_rows
           | select(type == "object") | (.session_id // "") as $s
           | select($s != "" and ((.paneUUID // "") | tostring | test("^[0-9]+$"))
                    and ($adm | contains(" " + $s + " ")))
