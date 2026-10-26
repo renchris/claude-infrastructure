@@ -4539,6 +4539,12 @@ hf_exit_signal() { # $1=pane $2=pane tty $3=session id → 0 claude exited on SI
   write_teardown_marker "$1" recycle "$pid" "${3:-}" || true
   emit_recycle_event recycle-exit-signal "" "$1" "SIGTERM to claude pid $pid (lstart $HF_EXIT_SIG_LSTART) of session ${3:0:8}: at rest, successor staged, nothing typed" || true
   echo "→ exit: SIGTERM to claude pid $pid (session ${3:0:8}) — at rest with our successor staged, so nothing is typed"
+  # NEVER A PTY SESSION LEADER BY PID (lockup incident 2026-10-25, RCA R3; DESIGN I9): a leader's exit
+  # revokes its tty, and the incident's trigger was a leader killed by pid while a member sat in open().
+  # STAT `s` is the session-leader flag (-x: no devname filter). Such a claude gets the typed /exit.
+  case "$(ps -x -o stat= -p "$pid" 2>/dev/null || true)" in
+    *s*) HF_EXIT_SIG_WHY="claude pid $pid is a session leader — never signalled by pid (RCA R3); typing /exit instead"; return 1 ;;
+  esac
   if ! kill -TERM "$pid" 2>/dev/null && [ "$(_hf_lstart "$pid")" = "$HF_EXIT_SIG_LSTART" ]; then
     HF_EXIT_SIG_WHY="kill -TERM $pid was refused"; return 1
   fi
@@ -12301,13 +12307,36 @@ if [ "${1:-}" = "__recycle" ]; then
     # session's command, and it reaches that session through the packet (named here) and its prompt.
     cmd="$(cat "$CMDFILE" 2>/dev/null || true)"
     if [ -n "${RCY_PACKET:-}" ]; then pk="!!   (the original session's re-fire command and token: $RCY_PACKET)"$'\n'; fi
-    # ONE printf to its own tty, opened by PATH. NOT `it2 session run`: that is the LAUNCH verb, whose
+    # ONE write to its own tty, opened by PATH. NOT `it2 session run`: that is the LAUNCH verb, whose
     # armed-pane branch writes a `$CMD_DIR/<id>.cmd` file instead of typing, so it was never sure to
     # reach the screen — and the it2 write path is the one that raced on 2026-09-19. A tty is writable
     # by path from any context, a setsid'd watcher with no controlling terminal included, and under
     # any load (memory: a verdict goes WHERE THE OPERATOR LOOKS).
-    printf '\n%s\n!! HANDOFF RECYCLE FAILED (%s) at %s\n!!   %s\n!!   The successor did not start. Run this ONE command here, exactly:\n%s\n%s%s\n' \
-      "$bar" "$1" "$(date -u +%FT%TZ)" "$2" "$cmd" "$pk" "$bar" > "$TTY_PATH" 2>/dev/null || true
+    # NEVER A BLOCKING OPEN (lockup incident 2026-10-25, RCA rank 1): `printf … > "$TTY_PATH"` opened
+    # the slave with no O_NONBLOCK, and a slave whose master is gone sleeps that opener in ptsopen's
+    # carrier wait, which is the precondition of the /dev wedge. The open is O_WRONLY|O_NONBLOCK|
+    # O_NOCTTY in a python3 -I child (8 s alarm inside it); this shell polls it for at most 10 s and
+    # then abandons it, never waiting on it past that (DESIGN I2). tests/handoff-recycle-paint-nonblock.bats
+    local _pf _pp _pi=0
+    _pf="$(mktemp "${TMPDIR:-/tmp}/hf-paint.XXXXXX" 2>/dev/null)" || _pf=""
+    if [ -n "$_pf" ] && printf '\n%s\n!! HANDOFF RECYCLE FAILED (%s) at %s\n!!   %s\n!!   The successor did not start. Run this ONE command here, exactly:\n%s\n%s%s\n' \
+      "$bar" "$1" "$(date -u +%FT%TZ)" "$2" "$cmd" "$pk" "$bar" > "$_pf" 2>/dev/null; then
+      /usr/bin/python3 -I -c '
+import os, signal, sys, time
+signal.alarm(8)
+data = open(sys.argv[2], "rb").read()
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NONBLOCK | os.O_NOCTTY, 0o644)
+end = time.time() + 5
+while data and time.time() < end:
+    try:
+        data = data[os.write(fd, data):]
+    except BlockingIOError:
+        time.sleep(0.05)
+' "$TTY_PATH" "$_pf" </dev/null >/dev/null 2>&1 &
+      _pp=$!
+      while kill -0 "$_pp" 2>/dev/null && [ "$_pi" -lt 100 ]; do sleep 0.1; _pi=$((_pi + 1)); done
+    fi
+    [ -n "$_pf" ] && rm -f "$_pf" 2>/dev/null
     echo "→ failure banner painted to $TTY_PATH"
     return 0
   }
